@@ -33,6 +33,7 @@ import { SkillsSummaryCard } from '../../components/graph/SkillsSummaryCard'
 import { useKnowledgeGraph } from '../../components/graph/useKnowledgeGraph'
 import { useNavigation } from '../../navigation'
 import { ApplicationDrawer, BuildBadge } from './ApplicationDrawer'
+import { PROFILE_SAVED_EVENT, ProfileInsightsCard } from './ProfileInsightsCard'
 import { countByStatus, DEFAULT_FILTER, filterApplications, type Filter, type SortKey } from './filter'
 import { STATUS_META } from './status'
 
@@ -234,7 +235,10 @@ export function DashboardPage() {
         </>
       )}
 
-      <DashboardSkills />
+      <SimpleGrid cols={{ base: 1, md: 2 }}>
+        <ProfileInsightsCard />
+        <DashboardSkills />
+      </SimpleGrid>
 
       <ApplicationDrawer app={open} onClose={() => setOpenId(null)} onUpdate={(p) => update(open!.id, p)} />
     </Stack>
@@ -248,9 +252,11 @@ function DashboardSkills() {
   useEffect(() => {
     const off = api.on('applications:changed', reload)
     window.addEventListener('focus', reload)
+    window.addEventListener(PROFILE_SAVED_EVENT, reload)
     return () => {
       off()
       window.removeEventListener('focus', reload)
+      window.removeEventListener(PROFILE_SAVED_EVENT, reload)
     }
   }, [reload])
   if (!graph || graph.skills.length === 0) return null

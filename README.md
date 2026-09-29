@@ -70,6 +70,7 @@ src/
 │   ├── profile/                # master-profile.md ⇄ MasterProfile (format.ts), read/save (store.ts) (+ ipc.ts)
 │   ├── applications/           # scan <role>/<company>/<job-id>/, huntgry.json tracking, huntgry-file:// previews, fs.watch
 │   ├── graph/                  # job descriptions for the knowledge graph overlay
+│   ├── insights/               # gap insights from job descriptions, dismissals, Claude-drafted evidence
 │   ├── jobs/                   # job boards: hidden-window loader, hiring.cafe / Indeed / posting parsers, .huntgry/jobs store
 │   ├── resume/                 # resume file → lines (docx, pdf, txt/md) → draft profile (parse.ts)
 │   └── cli/                    # runs the resume-tailor skill via `claude -p` (stream-json), run history
@@ -129,6 +130,16 @@ education and skills, each skill backed by evidence (the roles and projects that
 and years of use. Job descriptions of the workspace's applications are overlaid: which of
 your skills they ask for, and the technologies they ask for that the profile never
 mentions (gaps). A **Skills** view lists the same data as a sortable table.
+
+
+## Keeping the master profile up to date
+
+The Dashboard's **Master profile** card compares the profile with every job description in the
+workspace (applications and saved jobs) and lists the skills they keep asking for that the
+profile has no evidence of. **I have this** adds evidence to an experience, project or the
+skills list, optionally with a bullet Claude words from your own notes (no tools, nothing
+invented: numbers not in your notes are flagged); the change is previewed and saved to
+`master-profile.md`. **Not me** hides a gap (stored in `.huntgry/profile-insights.json`).
 
 ## Workspace
 
@@ -194,5 +205,6 @@ See [docs/changes/2-electron-workspace-shell.md](docs/changes/2-electron-workspa
 [docs/changes/7-app-shell.md](docs/changes/7-app-shell.md),
 [docs/changes/8-claude-runner.md](docs/changes/8-claude-runner.md),
 [docs/changes/9-applications-dashboard.md](docs/changes/9-applications-dashboard.md),
-[docs/changes/10-job-boards.md](docs/changes/10-job-boards.md)
-and [docs/changes/11-knowledge-graph.md](docs/changes/11-knowledge-graph.md) for the design notes.
+[docs/changes/10-job-boards.md](docs/changes/10-job-boards.md),
+[docs/changes/11-knowledge-graph.md](docs/changes/11-knowledge-graph.md)
+and [docs/changes/12-profile-insights.md](docs/changes/12-profile-insights.md) for the design notes.
