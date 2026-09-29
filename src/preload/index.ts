@@ -1,23 +1,11 @@
-import { contextBridge, ipcRenderer } from 'electron'
-import { IPC_CHANNELS, type HuntgryApi } from '@shared/workspace-types'
+import { contextBridge } from 'electron'
+import type { HuntgryApi } from '@shared/api'
+import { on } from './events'
+import { profile, workspace } from './workspace'
 
-// Sandboxed preload: only `electron` may be required. Exposes a fixed set of
-// invoke calls; the renderer never sees ipcRenderer or Node APIs.
-const api: HuntgryApi = {
-  workspace: {
-    pickDirectory: (mode) => ipcRenderer.invoke(IPC_CHANNELS.pickDirectory, mode),
-    inspect: (path) => ipcRenderer.invoke(IPC_CHANNELS.inspect, path),
-    create: (path, options) => ipcRenderer.invoke(IPC_CHANNELS.create, path, options),
-    open: (path) => ipcRenderer.invoke(IPC_CHANNELS.open, path),
-    getCurrent: () => ipcRenderer.invoke(IPC_CHANNELS.getCurrent)
-  },
-  profile: {
-    read: () => ipcRenderer.invoke(IPC_CHANNELS.profileRead),
-    save: (profile, version) => ipcRenderer.invoke(IPC_CHANNELS.profileSave, profile, version),
-    importResume: () => ipcRenderer.invoke(IPC_CHANNELS.profileImportResume),
-    openInEditor: () => ipcRenderer.invoke(IPC_CHANNELS.profileOpenInEditor),
-    reveal: () => ipcRenderer.invoke(IPC_CHANNELS.profileReveal)
-  }
-}
+// Sandboxed preload: only `electron` may be required (local modules are bundled
+// in). Exposes a fixed set of invoke calls per feature plus allowlisted event
+// subscriptions; the renderer never sees ipcRenderer or Node APIs.
+const api: HuntgryApi = { workspace, profile, on }
 
 contextBridge.exposeInMainWorld('huntgry', api)

@@ -61,34 +61,34 @@ export interface CreateOptions {
 
 export type PickMode = 'create' | 'import'
 
-export interface HuntgryApi {
-  workspace: {
-    /** Native folder picker. Resolves `null` when cancelled. */
-    pickDirectory(mode: PickMode): Promise<string | null>
-    /** Read-only inspection of a path. */
-    inspect(path: string): Promise<WorkspaceInspection>
-    /** Create a new workspace; never overwrites existing files. */
-    create(path: string, options?: CreateOptions): Promise<CreateResult>
-    /**
-     * Import: inspect and, when it has a master profile, remember as current workspace.
-     * Writes nothing inside the workspace.
-     */
-    open(path: string): Promise<WorkspaceInspection>
-    /** Re-inspect the remembered workspace, or `null` when none has been chosen yet. */
-    getCurrent(): Promise<WorkspaceInspection | null>
-  }
-  /** Master profile of the current workspace. Main resolves the file; the renderer never sends paths. */
-  profile: {
-    read(): Promise<ProfileDocument>
-    /** `version` is the one returned by the last read/save; a mismatch means the file changed on disk. */
-    save(profile: MasterProfile, version: string): Promise<SaveProfileResult>
-    /** Pick a resume file and parse it into a draft. Nothing is written. */
-    importResume(): Promise<ResumeImportResult>
-    /** Open the Markdown file in the user's default editor. */
-    openInEditor(): Promise<void>
-    /** Reveal the Markdown file in Finder / Explorer. */
-    reveal(): Promise<void>
-  }
+/** `window.huntgry.workspace`: picking, inspecting, creating and opening a workspace. */
+export interface WorkspaceApi {
+  /** Native folder picker. Resolves `null` when cancelled. */
+  pickDirectory(mode: PickMode): Promise<string | null>
+  /** Read-only inspection of a path. */
+  inspect(path: string): Promise<WorkspaceInspection>
+  /** Create a new workspace; never overwrites existing files. */
+  create(path: string, options?: CreateOptions): Promise<CreateResult>
+  /**
+   * Import: inspect and, when it has a master profile, remember as current workspace.
+   * Writes nothing inside the workspace.
+   */
+  open(path: string): Promise<WorkspaceInspection>
+  /** Re-inspect the remembered workspace, or `null` when none has been chosen yet. */
+  getCurrent(): Promise<WorkspaceInspection | null>
+}
+
+/** `window.huntgry.profile`: master profile of the current workspace. Main resolves the file; the renderer never sends paths. */
+export interface ProfileApi {
+  read(): Promise<ProfileDocument>
+  /** `version` is the one returned by the last read/save; a mismatch means the file changed on disk. */
+  save(profile: MasterProfile, version: string): Promise<SaveProfileResult>
+  /** Pick a resume file and parse it into a draft. Nothing is written. */
+  importResume(): Promise<ResumeImportResult>
+  /** Open the Markdown file in the user's default editor. */
+  openInEditor(): Promise<void>
+  /** Reveal the Markdown file in Finder / Explorer. */
+  reveal(): Promise<void>
 }
 
 export const IPC_CHANNELS = {
