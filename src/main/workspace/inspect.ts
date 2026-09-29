@@ -124,6 +124,7 @@ export async function inspectWorkspace(
   })
 }
 
+/** Classifies a path that does not exist: `missing` if its parent is a writable directory, else `invalid`. */
 async function inspectMissing(requested: string): Promise<WorkspaceInspection> {
   let parent = dirname(requested)
   let path = requested
@@ -264,6 +265,7 @@ async function countApplications(
   return count
 }
 
+/** Like readEntriesBounded, but an unreadable subdirectory counts as empty instead of failing the scan. */
 async function readEntriesSafe(dir: string, budget: ScanBudget): Promise<Dirent[]> {
   try {
     return await readEntriesBounded(dir, budget)
@@ -272,10 +274,12 @@ async function readEntriesSafe(dir: string, budget: ScanBudget): Promise<Dirent[
   }
 }
 
+/** Case-insensitive filename comparison. */
 function sameName(a: string, b: string): boolean {
   return a.toLowerCase() === b.toLowerCase()
 }
 
+/** Builds an inspection with empty defaults for every field not given. */
 function result(
   path: string,
   status: WorkspaceStatus,
@@ -293,12 +297,14 @@ function result(
   }
 }
 
+/** The Node error code (`ENOENT`, `EACCES`, ...) of a thrown value, if it has one. */
 export function errno(err: unknown): string | undefined {
   return typeof err === 'object' && err !== null && 'code' in err
     ? String((err as { code: unknown }).code)
     : undefined
 }
 
+/** Turns a filesystem error into a short, user-facing reason. */
 function describeFsError(err: unknown, prefix: string): string {
   const code = errno(err)
   if (code === 'EACCES' || code === 'EPERM') return `${prefix}: permission denied.`

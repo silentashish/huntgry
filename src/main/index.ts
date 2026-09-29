@@ -2,6 +2,7 @@ import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 import { registerIpcHandlers } from './ipc'
 
+/** Opens the sandboxed main window; the renderer reaches the filesystem only through IPC. */
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 900,
