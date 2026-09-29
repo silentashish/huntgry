@@ -1,3 +1,5 @@
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -14,7 +16,7 @@ import {
 } from './command'
 import { buildChildEnv, composePath, findSkillDir, parsePreflight } from './env'
 import { fetchPostingText, htmlToText, type Fetcher } from './posting'
-import { assertPublicUrl, isPrivateAddress, type ResolveHost } from './public-url'
+import { assertPublicUrl, isPrivateAddress, pinnedFetch, type ResolveHost } from './public-url'
 import { findOutputFolder, newRunId, runDir, RUN_ID_PATTERN } from './runs'
 
 let tmp: string
@@ -380,7 +382,7 @@ describe('posting fetch (main process, no network for Claude)', () => {
   /** Serves `routes[url]`: a redirect target string, or HTML. Records every URL requested. */
   const site = (routes: Record<string, { redirect: string } | string>, seen: string[]): Fetcher =>
     async (url, init) => {
-      expect(init.redirect).toBe('manual')
+      expect(init.addresses).toEqual(['203.0.113.10'])
       seen.push(url)
       const route = routes[url]
       if (route === undefined) return new Response('missing', { status: 404 })
@@ -437,7 +439,32 @@ describe('public URL guard', () => {
     await expect(assertPublicUrl('file:///etc/passwd', async () => [])).rejects.toThrow(/http/)
     await expect(assertPublicUrl('https://mixed.example/', async () => ['8.8.8.8', '10.0.0.1'])).rejects.toThrow(/private/)
     await expect(assertPublicUrl('https://gone.example/', async () => { throw new Error('ENOTFOUND') })).rejects.toThrow(/Could not find/)
-    expect((await assertPublicUrl('https://ok.example/p', async () => ['8.8.8.8'])).hostname).toBe('ok.example')
+    expect(await assertPublicUrl('https://ok.example/p', async () => ['8.8.8.8', '2606:4700::1111'])).toMatchObject({
+      url: new URL('https://ok.example/p'),
+      addresses: ['8.8.8.8', '2606:4700::1111']
+    })
+    expect((await assertPublicUrl('http://8.8.8.8/', async () => [])).addresses).toEqual(['8.8.8.8'])
+  })
+
+  it('connects only to the pinned address, keeping the hostname for Host', async () => {
+    // A name that does not resolve anywhere reaches the local test server only through the pin.
+    const server = createServer((req, res) => {
+      res.writeHead(req.url === '/go' ? 302 : 200, { location: '/next', 'content-type': 'text/html' })
+      res.end(req.url === '/go' ? '' : `host=${req.headers.host}`)
+    })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    const { port } = server.address() as AddressInfo
+    try {
+      const init = { signal: new AbortController().signal, headers: {}, addresses: ['127.0.0.1'] }
+      const ok = await pinnedFetch(`http://pinned.invalid:${port}/page`, init)
+      expect(ok.status).toBe(200)
+      expect(await ok.text()).toBe(`host=pinned.invalid:${port}`)
+      const redirect = await pinnedFetch(`http://pinned.invalid:${port}/go`, init)
+      expect(redirect.status).toBe(302)
+      expect(redirect.headers.get('location')).toBe('/next')
+    } finally {
+      server.close()
+    }
   })
   it('decodes entities safely', () => {
     expect(htmlToText('<p>A&#99999999;B &#x1F600; &amp;</p>')).toBe('A&#99999999;B 😀 &')

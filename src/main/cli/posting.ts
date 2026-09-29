@@ -10,6 +10,12 @@ import { assertPublicUrl, resolveHost, type ResolveHost } from './public-url'
 const MAX_BYTES = 2 * 1024 * 1024
 const TIMEOUT_MS = 15_000
 const MAX_REDIRECTS = 5
+/** Some job sites never answer a request without a browser-like User-Agent. */
+const HEADERS = {
+  accept: 'text/html,application/xhtml+xml',
+  'accept-language': 'en-US,en;q=0.9',
+  'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Huntgry'
+}
 /** Shorter than this, the page is a shell that needs JavaScript, or a bot wall. */
 export const MIN_POSTING_CHARS = 300
 
@@ -97,19 +103,20 @@ export function postingText(html: string): string {
 }
 
 /**
- * Must return redirects as-is (status 3xx with `Location`), not follow them:
- * each hop is checked before it is requested. Node's `fetch` does this with
- * `redirect: 'manual'`.
+ * Must return redirects as-is (status 3xx with `Location`), not follow them,
+ * and connect only to `init.addresses` (the addresses the hop was checked
+ * against). `pinnedFetch` in `public-url.ts` does both.
  */
 export type Fetcher = (
   url: string,
-  init: { signal: AbortSignal; redirect: 'manual'; headers: Record<string, string> }
+  init: { signal: AbortSignal; headers: Record<string, string>; addresses: readonly string[] }
 ) => Promise<Response>
 
 /**
  * Downloads `url` (http/https, public hosts only, ≤ 5 redirects, ≤ 2 MB, 15 s)
- * and returns the posting text. Every hop is checked with `assertPublicUrl`, so
- * a public URL cannot redirect the request to localhost or the private network.
+ * and returns the posting text. Every hop is checked with `assertPublicUrl` and
+ * requested at the addresses it checked, so neither a redirect nor a changed
+ * DNS answer can send the request to localhost or the private network.
  * Throws a message telling the user to paste the description when the page
  * cannot be read (blocked, needs JavaScript, not HTML).
  */
@@ -125,12 +132,12 @@ export async function fetchPostingText(
     let res: Response
     let next = url
     for (let hop = 0; ; hop++) {
-      const target = await assertPublicUrl(next, resolve)
+      const { url: target, addresses } = await assertPublicUrl(next, resolve)
       try {
         res = await fetcher(target.href, {
           signal: ctrl.signal,
-          redirect: 'manual',
-          headers: { accept: 'text/html,application/xhtml+xml' }
+          addresses,
+          headers: HEADERS
         })
       } catch {
         throw new Error(`Could not load the posting. ${paste}`)

@@ -9,6 +9,7 @@ import { buildSystemPrompt, MAX_TEXT, requireStartParams, texRootOf } from './co
 import { buildChildEnv, loginShellPath } from './env'
 import { checkEnvironment, discoverRuntime, installPythonDeps } from './environment'
 import { fetchPostingText } from './posting'
+import { pinnedFetch } from './public-url'
 import { RunManager, type RunContext } from './runner'
 import { listRuns, OUTPUT_FILES, readEvents, readRun, RUN_ID_PATTERN } from './runs'
 
@@ -21,8 +22,10 @@ const manager = new RunManager({
 })
 
 /** Kills every `claude` child; called when the app quits. */
-export function stopAllRuns(): void {
+/** Stops every run and resolves once the processes are gone and their state is on disk. */
+export async function stopAllRuns(): Promise<void> {
   manager.stopAll()
+  await manager.whenIdle()
 }
 
 function requireRunId(id: unknown): string {
@@ -127,7 +130,7 @@ export function registerRunnerIpc(): void {
     const params = requireStartParams(input)
     // Claude gets no network access, so a posting given only by URL is fetched here.
     if (!params.jobDescription?.trim() && params.jobUrl) {
-      params.jobDescription = await fetchPostingText(params.jobUrl, (url, init) => fetch(url, init)) // Node fetch: returns redirects for per-hop checks
+      params.jobDescription = await fetchPostingText(params.jobUrl, pinnedFetch)
     }
     return manager.start(params, await context())
   })
