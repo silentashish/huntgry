@@ -5,7 +5,7 @@ import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
 import { buildSystemPrompt, MAX_TEXT, requireStartParams } from './command'
 import { buildChildEnv, loginShellPath } from './env'
-import { checkEnvironment, installPythonDeps } from './environment'
+import { checkEnvironment, discoverRuntime, installPythonDeps } from './environment'
 import { RunManager, type RunContext } from './runner'
 import { listRuns, OUTPUT_FILES, readEvents, readRun, RUN_ID_PATTERN } from './runs'
 
@@ -13,7 +13,7 @@ import { listRuns, OUTPUT_FILES, readEvents, readRun, RUN_ID_PATTERN } from './r
 const venvDir = (): string => join(app.getPath('userData'), 'skill-venv')
 
 const manager = new RunManager({
-  onEvent: (runId, event) => emit('runner:event', { runId, event }),
+  onEvent: (runId, seq, event) => emit('runner:event', { runId, seq, event }),
   onRun: (run) => emit('runner:run', run)
 })
 
@@ -29,9 +29,10 @@ function requireRunId(id: unknown): string {
 
 async function context(): Promise<RunContext> {
   const workspace = await requireCurrentWorkspace()
-  const env = await checkEnvironment({ venvDir: venvDir(), workspace: workspace.path })
-  if (!env.claudePath) throw new Error(env.problems[0] ?? 'The claude CLI was not found.')
-  if (!env.skillDir) throw new Error(env.problems[0] ?? 'The resume-tailor skill was not found.')
+  // File checks only: the full preflight is for Settings and the Tailor form's warning.
+  const env = await discoverRuntime()
+  if (!env.claudePath) throw new Error('The claude CLI was not found. See Settings.')
+  if (!env.skillDir) throw new Error('The resume-tailor skill was not found. See Settings.')
   return {
     workspace: workspace.path,
     skillDir: env.skillDir,
@@ -98,7 +99,7 @@ export function registerRunnerIpc(): void {
 
   ipcMain.handle(RUNNER_CHANNELS.reply, async (_e, id: unknown, text: unknown) => {
     if (typeof text !== 'string' || !text.trim() || text.length > MAX_TEXT) throw new Error('Type a reply first.')
-    return manager.reply(requireRunId(id), text, await context())
+    return manager.reply(requireRunId(id), text, context)
   })
 
   ipcMain.handle(RUNNER_CHANNELS.stop, async (_e, id: unknown) => {
@@ -120,6 +121,11 @@ export function registerRunnerIpc(): void {
   })
 
   ipcMain.handle(RUNNER_CHANNELS.revealOutput, async (_e, id: unknown) => {
-    shell.showItemInFolder(await outputPath(requireRunId(id), 'resume.pdf').catch(() => outputPath(requireRunId(id))))
+    const runId = requireRunId(id)
+    const run = await currentRun(runId)
+    // Select a file that exists (resume.pdf when built, else whatever the skill wrote), else open the folder.
+    const file = run.outputFiles.includes('resume.pdf') ? 'resume.pdf' : run.outputFiles[0]
+    if (file) shell.showItemInFolder(await outputPath(runId, file))
+    else await shell.openPath(await outputPath(runId))
   })
 }

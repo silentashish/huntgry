@@ -5,34 +5,43 @@ import type { StartRunParams } from '@shared/runner-types'
  * of it; the renderer only sends the form fields.
  */
 
+/** The skill's entry points, the only Python Claude may run. */
+export const SKILL_SCRIPTS = ['build.py', 'preflight.py', 'verify.py', 'render.py', 'render_docx.py'] as const
+
 /**
- * Tools the skill may use without asking. Everything else is denied
+ * Tools the skill may use without asking. Everything else is refused
  * (`--permission-prompts none`): a headless run has nobody to answer a
- * permission prompt, and the skill needs nothing beyond reading the profile,
- * fetching the posting, writing the payload and running its own scripts.
+ * permission prompt.
+ *
+ * - File edits are not listed: `acceptEdits` auto-approves them inside the
+ *   working directory (the workspace) only, so Claude cannot write elsewhere,
+ *   including into the skill's own scripts.
+ * - Python is limited to the skill's scripts by absolute path; no `python3 -c`
+ *   or arbitrary scripts, since a job posting could carry a prompt injection.
+ * - Shell access is otherwise read-only helpers the skill uses.
  */
-export const ALLOWED_TOOLS = [
-  'Skill',
-  'Read',
-  'Write',
-  'Edit',
-  'Glob',
-  'Grep',
-  'WebFetch',
-  'WebSearch',
-  'TodoWrite',
-  'Bash(python3:*)',
-  'Bash(python:*)',
-  'Bash(mkdir:*)',
-  'Bash(ls:*)',
-  'Bash(cat:*)',
-  'Bash(cp:*)',
-  'Bash(cd:*)',
-  'Bash(pdftotext:*)',
-  'Bash(pdftoppm:*)',
-  'Bash(pdfinfo:*)',
-  'Bash(pdflatex:*)'
-] as const
+export function allowedTools(skillDir: string): string[] {
+  const scripts = SKILL_SCRIPTS.flatMap((script) => {
+    const path = `${skillDir}/scripts/${script}`
+    // Claude quotes a path with spaces; allow the quoted spelling too.
+    return /\s/.test(path) ? [`Bash(python3 ${path}:*)`, `Bash(python3 "${path}":*)`] : [`Bash(python3 ${path}:*)`]
+  })
+  return [
+    'Skill',
+    'Read',
+    'Glob',
+    'Grep',
+    'WebFetch',
+    'WebSearch',
+    'TodoWrite',
+    ...scripts,
+    'Bash(mkdir:*)',
+    'Bash(ls:*)',
+    'Bash(pdftotext:*)',
+    'Bash(pdftoppm:*)',
+    'Bash(pdfinfo:*)'
+  ]
+}
 
 export interface ClaudeArgsOptions {
   skillDir: string
@@ -55,9 +64,7 @@ export function buildClaudeArgs(opts: ClaudeArgsOptions): string[] {
     '--permission-prompts',
     'none',
     '--allowedTools',
-    ...ALLOWED_TOOLS,
-    '--add-dir',
-    opts.skillDir,
+    ...allowedTools(opts.skillDir),
     '--append-system-prompt',
     opts.systemPrompt
   ]
@@ -73,9 +80,10 @@ export function buildSystemPrompt(opts: { workspace: string; masterProfile: stri
     'The user reads your messages in a chat panel and answers there; they cannot see tool output unless you summarise it.',
     `CV_HOME is already set in the environment to the workspace: ${opts.workspace}`,
     `The master profile is ${opts.workspace}/${opts.masterProfile}. It is the only source of facts about the user.`,
-    `The resume-tailor skill is installed at ${opts.skillDir}. Run its scripts with plain \`python3 ${opts.skillDir}/scripts/<script>.py\` (python3, pdflatex and poppler are on PATH; do not prefix commands with environment variables).`,
+    `The resume-tailor skill is installed at ${opts.skillDir}. Run its scripts only as \`python3 ${opts.skillDir}/scripts/<script>.py …\` with that absolute path, from the workspace, one command per call (no cd, no &&, no environment-variable prefixes). python3, pdflatex and poppler are on PATH. Other shell commands, inline Python and writing files outside the workspace are blocked.`,
     'Follow the skill exactly, including its honesty rule and step 3: stop after the gap analysis, show the proposed reframings and bullets, and wait for the user to approve before writing resume_data.json.',
     'Keep role, company and job-id as short lowercase slugs so the output lands in CV_HOME/<role>/<company>/<job-id>/.',
+    `Write draft payloads (resume_data.json, cover_data.json) under ${opts.workspace}/.huntgry/drafts/<role>-<company>-<job-id>/, not elsewhere in the workspace; build.py copies what it needs into the application folder.`,
     'When the build is done, end your message with the absolute path of the application folder and the files it contains.'
   ].join('\n')
 }

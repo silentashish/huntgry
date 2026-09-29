@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, Grid, Loader, Stack, Title } from '@mantine/core'
 import type { RunDetail, RunnerEnvironment, RunSummary, StartRunParams } from '@shared/runner-types'
+import { appendLive } from '@shared/transcript'
 import { api, errorText } from '../../api'
 import type { PageParams } from '../../navigation'
 import { RunList } from './RunList'
@@ -16,6 +17,8 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
   const [environment, setEnvironment] = useState<RunnerEnvironment | null>(null)
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** Run whose events are being read from disk, with the live events that arrived meanwhile. */
+  const loading = useRef<{ id: string; buffer: { seq: number; event: unknown }[] } | null>(null)
 
   useEffect(() => {
     api.runner.listRuns().then(setRuns, (err) => setError(errorText(err)))
@@ -30,8 +33,13 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
       )
       setDetail((d) => (d && d.run.id === run.id ? { ...d, run } : d))
     })
-    const offEvent = api.on('runner:event', ({ runId, event }) => {
-      setDetail((d) => (d && d.run.id === runId ? { ...d, events: [...d.events, event] } : d))
+    const offEvent = api.on('runner:event', ({ runId, seq, event }) => {
+      // The run is still loading from disk: keep its events until the file has been read.
+      if (loading.current?.id === runId) {
+        loading.current.buffer.push({ seq, event })
+        return
+      }
+      setDetail((d) => (d && d.run.id === runId ? { ...d, events: appendLive(d.events, seq, event) } : d))
     })
     return () => {
       offRun()
@@ -43,10 +51,18 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
     setSelected(id)
     setError(null)
     if (id === null) return setDetail(null)
+    const pending = { id, buffer: [] as { seq: number; event: unknown }[] }
+    loading.current = pending
     try {
-      setDetail(await api.runner.getRun(id))
+      const loaded = await api.runner.getRun(id)
+      // Merge what streamed in while the file was read; appendLive drops what the file already had.
+      let events = loaded.events
+      for (const { seq, event } of pending.buffer.sort((a, b) => a.seq - b.seq)) events = appendLive(events, seq, event)
+      if (loading.current === pending) setDetail({ ...loaded, events })
     } catch (err) {
       setError(errorText(err))
+    } finally {
+      if (loading.current === pending) loading.current = null
     }
   }, [])
 

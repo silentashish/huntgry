@@ -2,9 +2,9 @@ import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildTranscript, LineBuffer, parseEventLine, summarizeToolInput } from '@shared/transcript'
+import { appendLive, buildTranscript, LineBuffer, parseEventLine, summarizeToolInput } from '@shared/transcript'
 import {
-  ALLOWED_TOOLS,
+  allowedTools,
   buildClaudeArgs,
   buildFirstPrompt,
   requireStartParams,
@@ -105,10 +105,23 @@ describe('command line and prompts', () => {
     expect(args).toContain('--permission-prompts')
     expect(args[args.indexOf('--permission-prompts') + 1]).toBe('none')
     expect(args).not.toContain('--dangerously-skip-permissions')
-    expect(args.slice(args.indexOf('--add-dir'), args.indexOf('--add-dir') + 2)).toEqual(['--add-dir', '/s'])
+    expect(args).not.toContain('--add-dir')
     expect(args.slice(-2)).toEqual(['--resume', 'abc'])
-    expect(ALLOWED_TOOLS.filter((t) => t.startsWith('Bash(') && !/^Bash\([a-z0-9]+:\*\)$/.test(t))).toEqual([])
     expect(buildClaudeArgs({ skillDir: '/s', systemPrompt: 'sys' })).not.toContain('--resume')
+  })
+
+  it('allows only the skill scripts as Python and no free file writes', () => {
+    const tools = allowedTools('/skills/resume-tailor')
+    expect(tools).not.toContain('Write')
+    expect(tools).not.toContain('Edit')
+    expect(tools.some((t) => /^Bash\(python3?:/.test(t) || t === 'Bash(python3:*)')).toBe(false)
+    expect(tools).toContain('Bash(python3 /skills/resume-tailor/scripts/build.py:*)')
+    expect(tools).toContain('Bash(python3 /skills/resume-tailor/scripts/preflight.py:*)')
+    for (const t of tools.filter((x) => x.startsWith('Bash(') && !x.startsWith('Bash(python3 '))) {
+      expect(t).toMatch(/^Bash\((mkdir|ls|pdftotext|pdftoppm|pdfinfo):\*\)$/)
+    }
+    const spaced = allowedTools('/Users/a b/skill')
+    expect(spaced).toContain('Bash(python3 "/Users/a b/skill/scripts/build.py":*)')
   })
 
   it('writes the first prompt with the job and the choices', () => {
@@ -215,6 +228,21 @@ describe('stream parsing and transcript', () => {
     expect(t[1]).toMatchObject({ text: 'Part one.\n\nPart two.' })
     expect(t[2]).toMatchObject({ summary: 'Build the resume', status: 'error' })
     expect(t[3]).toMatchObject({ ok: false, costUsd: 0.5, denials: ['Bash rm -rf x'] })
+  })
+
+  it('merges live events into events read from disk without duplicates', () => {
+    const fromDisk = ['e0', 'e1']
+    expect(appendLive(fromDisk, 1, 'e1')).toBe(fromDisk)
+    expect(appendLive(fromDisk, 2, 'e2')).toEqual(['e0', 'e1', 'e2'])
+    let merged: unknown[] = []
+    for (const [seq, e] of [
+      [0, 'a'],
+      [1, 'b'],
+      [1, 'b'],
+      [2, 'c']
+    ] as const)
+      merged = appendLive(merged, seq, e)
+    expect(merged).toEqual(['a', 'b', 'c'])
   })
 
   it('summarizes tool inputs', () => {

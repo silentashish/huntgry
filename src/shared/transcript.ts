@@ -174,3 +174,12 @@ export function parseEventLine(line: string): Json | null {
     return null
   }
 }
+
+/**
+ * Adds a live event (`seq` = its index in `events.jsonl`) to events loaded
+ * from disk. Events the list already holds are skipped, so a live copy of an
+ * event that was also read from the file is not shown twice.
+ */
+export function appendLive(events: readonly unknown[], seq: number, event: unknown): unknown[] {
+  return seq < events.length ? (events as unknown[]) : [...events, event]
+}

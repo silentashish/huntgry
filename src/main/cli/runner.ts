@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { RunSummary, StartRunParams } from '@shared/runner-types'
 import { LineBuffer, parseEventLine, type HuntgryEvent } from '@shared/transcript'
 import { buildClaudeArgs, buildFirstPrompt, runTitle, userMessageLine } from './command'
-import { appendEvent, findOutputFolder, newRunId, readRun, saveRun } from './runs'
+import { appendEvent, findOutputFolder, newRunId, readEvents, readRun, saveRun } from './runs'
 
 /**
  * Owns the `claude` child processes of tailoring runs. One process per run,
@@ -25,7 +25,8 @@ export interface RunContext {
 }
 
 export interface RunnerHooks {
-  onEvent(runId: string, event: unknown): void
+  /** `seq` is the event's index in the run's `events.jsonl`. */
+  onEvent(runId: string, seq: number, event: unknown): void
   onRun(run: RunSummary): void
 }
 
@@ -36,6 +37,8 @@ interface Live {
   stderr: string
   /** Serializes disk writes of this run so events keep their order. */
   queue: Promise<void>
+  /** Index the next recorded event gets in `events.jsonl`. */
+  seq: number
   stopping: boolean
   finishing: boolean
   turnStartedAt: number
@@ -75,19 +78,25 @@ export class RunManager {
       live: true
     }
     await saveRun(ctx.workspace, run)
-    this.spawnFor(run, ctx, null)
+    this.spawnFor(run, ctx, null, 0)
     await this.send(run.id, buildFirstPrompt(params))
     return { ...run }
   }
 
-  /** Sends a reply; resumes the session in a new process when the old one is gone. */
-  async reply(id: string, text: string, ctx: RunContext): Promise<RunSummary> {
+  /**
+   * Sends a reply. A live process gets it on stdin right away; otherwise the
+   * session is resumed in a new process, and only then is `context` resolved.
+   */
+  async reply(id: string, text: string, context: () => Promise<RunContext>): Promise<RunSummary> {
     let entry = this.live.get(id)
     if (!entry) {
+      const ctx = await context()
       const run = await readRun(ctx.workspace, id)
       if (!run.sessionId) throw new Error('This run has no Claude session to resume.')
       run.error = undefined
-      this.spawnFor(run, ctx, run.sessionId)
+      const existing = (await readEvents(ctx.workspace, id)).length
+      // Another reply may have resumed it while we were reading.
+      if (!this.live.has(id)) this.spawnFor(run, ctx, run.sessionId, existing)
       entry = this.live.get(id)!
     }
     await this.send(id, text)
@@ -130,7 +139,7 @@ export class RunManager {
     await this.live.get(id)?.queue
   }
 
-  private spawnFor(run: RunSummary, ctx: RunContext, resumeSessionId: string | null): void {
+  private spawnFor(run: RunSummary, ctx: RunContext, resumeSessionId: string | null, seq: number): void {
     const args = [
       ...(ctx.commandPrefixArgs ?? []),
       ...buildClaudeArgs({ skillDir: ctx.skillDir, resumeSessionId, systemPrompt: ctx.systemPrompt, model: ctx.model })
@@ -142,6 +151,7 @@ export class RunManager {
       ctx,
       stderr: '',
       queue: Promise.resolve(),
+      seq,
       stopping: false,
       finishing: false,
       turnStartedAt: Date.now()
@@ -235,10 +245,11 @@ export class RunManager {
   private record(entry: Live, event: unknown): void {
     const { workspace } = entry.ctx
     const id = entry.run.id
+    const seq = entry.seq++
     entry.queue = entry.queue
       .then(() => appendEvent(workspace, id, event))
       .catch((err) => console.error('Run log write failed:', err))
-    this.hooks.onEvent(id, event)
+    this.hooks.onEvent(id, seq, event)
   }
 
   /** Persists and broadcasts the run summary after pending writes. */

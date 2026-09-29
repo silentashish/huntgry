@@ -123,8 +123,12 @@ export const RUNNER_CHANNELS = {
 
 /** Payloads of the runner's main → renderer events. */
 export interface RunnerEvents {
-  /** One raw stream-json event (or a Huntgry-recorded one) of a run. */
-  'runner:event': { runId: string; event: unknown }
+  /**
+   * One raw stream-json event (or a Huntgry-recorded one) of a run. `seq` is
+   * its index in `events.jsonl`, so a renderer that loaded the file can tell
+   * which live events it already has.
+   */
+  'runner:event': { runId: string; seq: number; event: unknown }
   /** The run's summary changed (status, session id, output folder, cost). */
   'runner:run': RunSummary
   /** A line of `pip`/`venv` output while installing Python dependencies. */

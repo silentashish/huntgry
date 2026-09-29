@@ -46,6 +46,20 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * Just what a run needs to start: where `claude`, the skill and TeX are.
+ * Cheap (file checks only, cached login PATH), unlike `checkEnvironment`,
+ * which also runs `claude --version` and the skill's preflight.
+ */
+export async function discoverRuntime(): Promise<{
+  claudePath: string | null
+  skillDir: string | null
+  texBin: string | null
+}> {
+  const [claudePath, skillDir, texBin] = await Promise.all([findClaude(), findSkillDir(), findTexBin()])
+  return { claudePath, skillDir, texBin }
+}
+
 export async function checkEnvironment(opts: {
   venvDir: string
   workspace: string | null

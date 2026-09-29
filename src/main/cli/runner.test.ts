@@ -19,6 +19,7 @@ const params: StartRunParams = {
 let ws: string
 let runs: RunSummary[]
 let manager: RunManager
+let live: { runId: string; seq: number }[]
 
 function ctx(): RunContext {
   return {
@@ -45,7 +46,8 @@ async function until(id: string, pred: (r: RunSummary) => boolean, ms = 5000): P
 beforeEach(async () => {
   ws = await mkdtemp(join(tmpdir(), 'huntgry-runner-'))
   runs = []
-  manager = new RunManager({ onEvent: () => {}, onRun: (r) => runs.push(r) })
+  live = []
+  manager = new RunManager({ onEvent: (runId, seq) => live.push({ runId, seq }), onRun: (r) => runs.push(r) })
 })
 
 afterEach(async () => {
@@ -79,7 +81,7 @@ describe('RunManager against a fake claude', () => {
   it('continues the same process on reply and finds the application folder', async () => {
     const { id } = await manager.start(params, ctx())
     await until(id, (r) => r.status === 'waiting')
-    await manager.reply(id, 'Approved. WRITE_OUTPUT', ctx())
+    await manager.reply(id, 'Approved. WRITE_OUTPUT', async () => ctx())
     const done = await until(id, (r) => r.status === 'waiting' && r.outputFolder !== null)
     expect(done.outputFolder).toBe(join('software-engineer', 'acme', '42'))
     expect(done.outputFiles).toEqual(['build-report.json', 'resume.pdf'])
@@ -93,12 +95,16 @@ describe('RunManager against a fake claude', () => {
     await until(id, (r) => r.status === 'finished' && !r.live)
     expect(manager.isLive(id)).toBe(false)
 
-    await manager.reply(id, 'one more change', ctx())
+    await manager.reply(id, 'one more change', async () => ctx())
     const resumed = await until(id, (r) => r.status === 'waiting' && r.live)
     expect(resumed.sessionId).toBe('sess-fake-1')
     await manager.flush(id)
-    const users = buildTranscript(await readEvents(ws, id)).filter((i) => i.kind === 'user')
+    const events = await readEvents(ws, id)
+    const users = buildTranscript(events).filter((i) => i.kind === 'user')
     expect(users).toHaveLength(2)
+    // seq keeps counting across the resumed process: every live event's seq is its line in events.jsonl.
+    const seqs = live.filter((l) => l.runId === id).map((l) => l.seq)
+    expect(seqs).toEqual(events.map((_, i) => i))
   })
 
   it('stop kills the process and records it', async () => {
