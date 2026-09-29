@@ -1,3 +1,4 @@
+import type { ApplicationsApi } from './applications-types'
 import type { Subscribe } from './events'
 import type { RunnerApi } from './runner-types'
 import type { ProfileApi, WorkspaceApi } from './workspace-types'
@@ -11,6 +12,8 @@ export interface HuntgryApi {
   profile: ProfileApi
   /** The resume-tailor Claude skill: environment checks and tailoring runs. */
   runner: RunnerApi
+  /** Generated applications in the workspace: list, tracking, files. */
+  applications: ApplicationsApi
   /** Main → renderer events, restricted to `EVENT_CHANNELS`. */
   on: Subscribe
 }
