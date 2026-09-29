@@ -2,6 +2,9 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, lstat, realpath, rm, symlink,
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { isProfileEmpty } from '@shared/master-profile'
+import { canImport, createMode } from '@shared/workspace-types'
+import { parseMasterProfile } from '../profile/format'
 import { CLAUDE_FILE, COVER_LETTER_FILE, MASTER_PROFILE_FILE, MAX_SCAN_ENTRIES } from './constants'
 import {
   createWorkspace,
@@ -12,7 +15,6 @@ import {
   saveSettings
 } from './index'
 import { readEntriesBounded } from './inspect'
-import masterProfileTemplate from './templates/master-profile.md?raw'
 
 let tmp: string
 
@@ -299,8 +301,10 @@ describe('bounded directory reads (AC15)', () => {
 describe('createWorkspace', () => {
   async function expectSkeleton(root: string): Promise<void> {
     const profile = await readFile(join(root, MASTER_PROFILE_FILE), 'utf8')
+    expect(isProfileEmpty(parseMasterProfile(profile).profile)).toBe(true)
     for (const section of [
       'Contact',
+      'Summary',
       'Experience',
       'Education',
       'Skills',
@@ -324,7 +328,9 @@ describe('createWorkspace', () => {
     const r = await createWorkspace(root)
     expect(r.ok).toBe(true)
     expect(r.created).toEqual(['.', MASTER_PROFILE_FILE, COVER_LETTER_FILE, CLAUDE_FILE])
+    expect(r.skipped).toEqual([])
     expect(r.inspection.status).toBe('valid')
+    expect(canImport(r.inspection)).toBe(true)
     await expectSkeleton(root)
     expect((await inspectWorkspace(root)).status).toBe('valid')
   })
@@ -347,19 +353,64 @@ describe('createWorkspace', () => {
 
   it.each([
     ['valid', v3Fixture],
+    ['legacy', async (root: string) => write(join(root, 'master_profile.md'), '# old')]
+  ] as const)('refuses a %s dir that already has a master profile, even when confirmed', async (status, fixture) => {
+    await fixture(tmp)
+    const before = await snapshot(tmp)
+    for (const allowNonEmpty of [false, true]) {
+      const r = await createWorkspace(tmp, { allowNonEmpty })
+      expect(r).toMatchObject({ ok: false, created: [], skipped: [] })
+      expect(r.needsConfirmation).toBeUndefined()
+      expect(r.inspection.status).toBe(status)
+      expect(r.error).toMatch(/already has a master profile.*Import/)
+    }
+    expect(await snapshot(tmp)).toEqual(before)
+  })
+
+  it.each([
     ['legacy', legacyFixture],
-    ['legacy', async (root: string) => write(join(root, 'master_profile.md'), '# old')],
     ['not-a-workspace', async (root: string) => write(join(root, 'notes.txt'), 'mine')]
-  ] as const)('refuses a %s dir and writes nothing (AC13)', async (status, fixture) => {
+  ] as const)('asks for confirmation before adding a workspace to a non-empty %s dir', async (status, fixture) => {
     await fixture(tmp)
     const before = await snapshot(tmp)
     const r = await createWorkspace(tmp)
-    expect(r.ok).toBe(false)
-    expect(r.error).toBeTruthy()
-    expect(r.created).toEqual([])
+    expect(r).toMatchObject({ ok: false, needsConfirmation: true, created: [] })
     expect(r.inspection.status).toBe(status)
-    if (status !== 'not-a-workspace') expect(r.error).toMatch(/Import/)
     expect(await snapshot(tmp)).toEqual(before)
+  })
+
+  it.each([
+    ['legacy', legacyFixture],
+    ['not-a-workspace', async (root: string) => write(join(root, 'notes.txt'), 'mine')]
+  ] as const)('adds the workspace to a confirmed %s dir without touching existing files', async (_status, fixture) => {
+    await fixture(tmp)
+    const before = await snapshot(tmp)
+    const r = await createWorkspace(tmp, { allowNonEmpty: true })
+    expect(r.ok).toBe(true)
+    expect(r.created).toEqual([MASTER_PROFILE_FILE, COVER_LETTER_FILE, CLAUDE_FILE])
+    expect(r.inspection.status).toBe('valid')
+    await expectSkeleton(tmp)
+    const after = await snapshot(tmp)
+    for (const [key, value] of Object.entries(before)) {
+      if (key !== '.') expect(after[key], key).toBe(value)
+    }
+  })
+
+  it('skips skeleton files that already exist and reports them', async () => {
+    await write(join(tmp, CLAUDE_FILE), 'my own instructions')
+    const r = await createWorkspace(tmp, { allowNonEmpty: true })
+    expect(r.ok).toBe(true)
+    expect(r.created).toEqual([MASTER_PROFILE_FILE, COVER_LETTER_FILE])
+    expect(r.skipped).toEqual([CLAUDE_FILE])
+    expect(await readFile(join(tmp, CLAUDE_FILE), 'utf8')).toBe('my own instructions')
+  })
+
+  it('fails when something that is not a file already uses the master profile name', async () => {
+    await mkdir(join(tmp, MASTER_PROFILE_FILE))
+    const r = await createWorkspace(tmp, { allowNonEmpty: true })
+    expect(r.ok).toBe(false)
+    expect(r.skipped).toContain(MASTER_PROFILE_FILE)
+    expect(r.error).toMatch(/already uses that name/)
   })
 
   it('refuses invalid targets and writes nothing (AC13)', async () => {
@@ -388,13 +439,32 @@ describe('openWorkspace (Import)', () => {
   })
 })
 
-describe('master profile template', () => {
-  it('credits the skill source and ships no real personal data (AC17)', () => {
-    expect(masterProfileTemplate).toContain(
-      'silentashish/claude-resume-generator-skill@712bee3/assets/master_profile.example.md'
-    )
-    for (const personal of ['Ashish', 'NASA', 'Houzz', 'Huntsville', 'Atlanta', 'UAH']) {
-      expect(masterProfileTemplate).not.toContain(personal)
+describe('canImport / createMode', () => {
+  it('imports only folders with a master profile and offers Create for the rest', async () => {
+    const v3 = join(tmp, 'v3')
+    await v3Fixture(v3)
+    const oldName = join(tmp, 'old-name')
+    await write(join(oldName, 'master_profile.md'), '# old')
+    const appsOnly = join(tmp, 'apps-only')
+    await legacyFixture(appsOnly)
+    const other = join(tmp, 'other')
+    await write(join(other, 'notes.txt'))
+    const empty = join(tmp, 'empty')
+    await mkdir(empty)
+
+    const cases: Array<[string, boolean, ReturnType<typeof createMode>]> = [
+      [v3, true, null],
+      [oldName, true, null],
+      [appsOnly, false, 'confirm'],
+      [other, false, 'confirm'],
+      [empty, false, 'direct'],
+      [join(tmp, 'missing'), false, 'direct'],
+      [join(tmp, 'nope', 'child'), false, null]
+    ]
+    for (const [path, importable, mode] of cases) {
+      const r = await inspectWorkspace(path)
+      expect(canImport(r), path).toBe(importable)
+      expect(createMode(r), path).toBe(mode)
     }
   })
 })

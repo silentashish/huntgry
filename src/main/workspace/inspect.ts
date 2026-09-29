@@ -95,7 +95,7 @@ export async function inspectWorkspace(
       )
     } else {
       warnings.push(
-        `No master profile found. Add ${MASTER_PROFILE_FILE} at the workspace root before generating resumes.`
+        `No master profile found. Use Create New Workspace on this folder to add ${MASTER_PROFILE_FILE}; existing application folders are kept.`
       )
     }
     return result(root, 'legacy', {

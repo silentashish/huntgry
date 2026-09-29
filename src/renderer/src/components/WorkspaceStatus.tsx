@@ -3,13 +3,13 @@ import type { WorkspaceInspection, WorkspaceStatus as Status } from '@shared/wor
 
 const STATUS_META: Record<Status, { color: string; label: string; hint: string }> = {
   valid: { color: 'green', label: 'valid', hint: 'Ready for the resume-tailor skill.' },
-  legacy: { color: 'yellow', label: 'legacy', hint: 'Older Resume Tailor layout. Usable as is.' },
+  legacy: { color: 'yellow', label: 'legacy', hint: 'Older Resume Tailor layout. Importable as is.' },
   empty: { color: 'blue', label: 'empty', hint: 'Empty folder. Create a new workspace here.' },
   missing: { color: 'blue', label: 'missing', hint: 'Folder does not exist yet. Create will make it.' },
   'not-a-workspace': {
     color: 'orange',
     label: 'not-a-workspace',
-    hint: 'Folder has unrelated content. Pick an empty folder or an existing workspace.'
+    hint: 'Folder has other content and no master profile. Create can add a workspace here after you confirm.'
   },
   unverified: {
     color: 'orange',
@@ -20,7 +20,10 @@ const STATUS_META: Record<Status, { color: string; label: string; hint: string }
 }
 
 export function WorkspaceStatus({ inspection }: { inspection: WorkspaceInspection }) {
-  const meta = STATUS_META[inspection.status]
+  const meta =
+    inspection.status === 'legacy' && !inspection.masterProfile
+      ? { ...STATUS_META.legacy, hint: 'Application folders but no master profile. Create adds one; Import needs one.' }
+      : STATUS_META[inspection.status]
   return (
     <Card withBorder radius="md" padding="lg" aria-live="polite">
       <Stack gap="sm">
