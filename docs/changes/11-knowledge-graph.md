@@ -17,7 +17,7 @@ mentions.
 | Graph builder | `src/shared/knowledge-graph.ts` | Pure `buildKnowledgeGraph(profile, jobs?)`. Nodes: person, role (experience), company, project, skill, education, certification, publication, job. Edges: held_role, worked_at, used, built, studied_at, certified, published, has_skill, asks_for. Every skill carries **evidence** (technologies fields, highlights that mention it, the skills list) and **years** (merged date ranges, overlaps counted once). Known technologies the profile writes about without listing them (e.g. "Built RAG pipelines") count as skills, not gaps. |
 | Jobs overlay | `src/main/graph/{jobs,ipc}.ts`, `src/preload/graph.ts`, `src/shared/graph-types.ts` | `window.huntgry.graph.jobDescriptions()` reads `job-description.md` from every `<role>/<company>/<job-id>/` folder (bounded, hidden folders skipped). The builder marks which skills each posting asks for; a technology a posting names that the profile lacks is a **gap**. |
 | Page | `src/renderer/src/pages/graph/index.tsx`, `components/graph/*` | Force-directed graph (colour by kind, size by connections, labels on zoom, weak gravity so separate components stay in view), search highlight, jobs-overlay toggle, legend. Clicking a node highlights its neighbours and opens a panel: a skill's years, evidence (click through to the role or project) and the jobs asking for it; for other nodes, their skills and links. **Edit in master profile** opens the right tab. A **Skills** view is a sortable table (years, evidence, jobs asking). Empty state for a sparse profile. |
-| Dashboard card | `components/graph/SkillsSummaryCard.tsx` | "Strongest evidence / asked for, missing" card, exported for the Dashboard (#9) and shown under the graph. |
+| Dashboard card | `components/graph/SkillsSummaryCard.tsx` | "Strongest evidence / asked for, missing" card, shown at the bottom of the Dashboard (#9) and under the graph. |
 | Navigation | `src/renderer/src/App.tsx` | The graph page receives its `{ nodeId }` param. |
 
 ```mermaid
@@ -76,6 +76,7 @@ folders from earlier runs):
 
 ## Follow-ups
 
-- Put `SkillsSummaryCard` on the Dashboard once #9 is merged.
 - Include saved jobs from the Jobs board (#10) in the overlay.
 - #12 uses the gaps to drive master profile updates.
+
+![Skills card on the Dashboard](assets/11-dashboard-skills.png)
