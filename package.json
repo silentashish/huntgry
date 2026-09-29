@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
-    "typecheck:web": "tsc --noEmit -p tsconfig.web.json"
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "postinstall": "node -e \"require('electron')\""
   },
   "devDependencies": {
     "@types/node": "^26.6.3",
