@@ -161,6 +161,54 @@ describe('inspectWorkspace', () => {
     expect(r.applicationCount).toBe(0)
   })
 
+  it('ignores a dangling master-profile.md symlink', async () => {
+    const ws = join(tmp, 'ws')
+    await mkdir(ws)
+    await symlink(join(tmp, 'nowhere.md'), join(ws, MASTER_PROFILE_FILE))
+    const r = await inspectWorkspace(ws)
+    expect(r).toMatchObject({ status: 'not-a-workspace', masterProfile: null })
+    expect(r.warnings.join(' ')).toMatch(/target does not exist/)
+  })
+
+  it('ignores a master-profile.md symlink that points to a directory', async () => {
+    const ws = join(tmp, 'ws')
+    await mkdir(join(tmp, 'some-dir'))
+    await mkdir(ws)
+    await symlink(join(tmp, 'some-dir'), join(ws, MASTER_PROFILE_FILE))
+    const r = await inspectWorkspace(ws)
+    expect(r).toMatchObject({ status: 'not-a-workspace', masterProfile: null })
+    expect(r.warnings.join(' ')).toMatch(/does not point to a regular file/)
+  })
+
+  it('ignores a directory named master-profile.md and falls back to the legacy file', async () => {
+    const ws = join(tmp, 'ws')
+    await mkdir(join(ws, MASTER_PROFILE_FILE), { recursive: true })
+    await write(join(ws, 'master_profile.md'), '# old')
+    const r = await inspectWorkspace(ws)
+    expect(r).toMatchObject({ status: 'legacy', masterProfile: 'master_profile.md' })
+    expect(r.warnings.join(' ')).toMatch(/is not a file/)
+  })
+
+  it('accepts a master-profile.md symlink to a readable file outside the workspace, with a warning', async () => {
+    const external = join(tmp, 'dotfiles', 'profile.md')
+    await write(external, '# Me')
+    const ws = join(tmp, 'ws')
+    await mkdir(ws)
+    await symlink(external, join(ws, MASTER_PROFILE_FILE))
+    const r = await inspectWorkspace(ws)
+    expect(r).toMatchObject({ status: 'valid', masterProfile: MASTER_PROFILE_FILE })
+    expect(r.warnings.join(' ')).toContain(`symlink to ${external}`)
+  })
+
+  it.skipIf(isRoot)('ignores an unreadable master-profile.md', async () => {
+    const ws = join(tmp, 'ws')
+    await write(join(ws, MASTER_PROFILE_FILE), '# Me')
+    await chmod(join(ws, MASTER_PROFILE_FILE), 0o000)
+    const r = await inspectWorkspace(ws)
+    expect(r).toMatchObject({ status: 'not-a-workspace', masterProfile: null })
+    expect(r.warnings.join(' ')).toMatch(/not readable/)
+  })
+
   it('resolves a symlinked root to its real path', async () => {
     const real = join(tmp, 'real')
     await write(join(real, MASTER_PROFILE_FILE))

@@ -53,11 +53,13 @@ export async function inspectWorkspace(inputPath: string): Promise<WorkspaceInsp
   const meaningful = entries.filter((e) => !IGNORED_ENTRIES.has(e.name))
   if (meaningful.length === 0) return result(root, 'empty')
 
-  const masterProfile = findMasterProfile(meaningful)
+  const profile = await findMasterProfile(root, meaningful)
+  const masterProfile = profile.name
   const scan = await scanApplications(root)
-  const warnings = scan.truncated
-    ? [`Scan stopped after ${MAX_SCAN_ENTRIES} entries; the application count may be incomplete.`]
-    : []
+  const warnings = [...profile.warnings]
+  if (scan.truncated) {
+    warnings.push(`Scan stopped after ${MAX_SCAN_ENTRIES} entries; the application count may be incomplete.`)
+  }
 
   if (masterProfile && sameName(masterProfile, MASTER_PROFILE_FILE)) {
     if (!meaningful.some((e) => sameName(e.name, COVER_LETTER_FILE))) {
@@ -119,13 +121,48 @@ async function inspectMissing(requested: string): Promise<WorkspaceInspection> {
   return result(path, 'missing')
 }
 
-/** Case-insensitive match (APFS/NTFS are case-insensitive by default). v3 name wins over legacy. */
-function findMasterProfile(entries: Dirent[]): string | null {
+interface MasterProfileResult {
+  name: string | null
+  warnings: string[]
+}
+
+/**
+ * Case-insensitive match (APFS/NTFS are case-insensitive by default); v3 name
+ * wins over legacy. A candidate only counts if it is a readable regular file.
+ * A symlink is resolved explicitly (this one well-known file, not a scan) and
+ * accepted only when its target is a readable regular file; dangling links and
+ * links to directories are ignored with a warning.
+ */
+async function findMasterProfile(root: string, entries: Dirent[]): Promise<MasterProfileResult> {
+  const warnings: string[] = []
   for (const wanted of [MASTER_PROFILE_FILE, LEGACY_MASTER_PROFILE_FILE]) {
-    const hit = entries.find((e) => (e.isFile() || e.isSymbolicLink()) && sameName(e.name, wanted))
-    if (hit) return hit.name
+    for (const e of entries.filter((e) => sameName(e.name, wanted))) {
+      const path = join(root, e.name)
+      if (!e.isFile() && !e.isSymbolicLink()) {
+        warnings.push(`${e.name} is not a file; ignored.`)
+        continue
+      }
+      try {
+        const info = await stat(path)
+        if (!info.isFile()) throw Object.assign(new Error('not a file'), { code: 'ENOTFILE' })
+        await access(path, fsConstants.R_OK)
+      } catch (err) {
+        const why =
+          errno(err) === 'ENOENT'
+            ? 'is a symlink whose target does not exist'
+            : errno(err) === 'ENOTFILE'
+              ? 'does not point to a regular file'
+              : 'is not readable'
+        warnings.push(`${e.name} ${why}; ignored.`)
+        continue
+      }
+      if (e.isSymbolicLink()) {
+        warnings.push(`${e.name} is a symlink to ${await realpath(path)}.`)
+      }
+      return { name: e.name, warnings }
+    }
   }
-  return null
+  return { name: null, warnings }
 }
 
 interface ScanResult {
