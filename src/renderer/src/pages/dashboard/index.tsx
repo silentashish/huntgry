@@ -47,14 +47,18 @@ export function DashboardPage() {
   // Bumped by every successful tracking update; a list() that started before it may hold stale tracking.
   const generation = useRef(0)
 
+  // Mount, focus and file-watch events can overlap; only the latest list call may update the page.
+  const latestLoad = useRef(0)
   const load = useCallback(async () => {
+    const request = ++latestLoad.current
     const started = generation.current
     try {
       const next = await api.applications.list()
-      if (generation.current !== started) return
+      if (latestLoad.current !== request || generation.current !== started) return
       setList(next)
       setError(null)
     } catch (err) {
+      if (latestLoad.current !== request) return
       setError(errorText(err))
     }
   }, [])
