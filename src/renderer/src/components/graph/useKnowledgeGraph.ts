@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { buildKnowledgeGraph, type JobText, type KnowledgeGraph } from '@shared/knowledge-graph'
 import type { MasterProfile } from '@shared/master-profile'
 import { api, errorText } from '../../api'
@@ -38,5 +38,6 @@ export function useKnowledgeGraph(includeJobs = true): {
     () => (profile ? buildKnowledgeGraph(profile, includeJobs ? jobs : []) : null),
     [profile, jobs, includeJobs]
   )
-  return { graph, jobs, error, reload: () => setTick((t) => t + 1) }
+  const reload = useCallback(() => setTick((t) => t + 1), [])
+  return { graph, jobs, error, reload }
 }

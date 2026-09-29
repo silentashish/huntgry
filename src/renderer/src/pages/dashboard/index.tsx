@@ -243,7 +243,16 @@ export function DashboardPage() {
 
 /** The knowledge graph's "Strongest evidence / asked for, missing" card; nothing until the profile has skills. */
 function DashboardSkills() {
-  const { graph } = useKnowledgeGraph()
+  const { graph, reload } = useKnowledgeGraph()
+  // Same triggers as the application list: new or changed job descriptions change the job counts and gaps.
+  useEffect(() => {
+    const off = api.on('applications:changed', reload)
+    window.addEventListener('focus', reload)
+    return () => {
+      off()
+      window.removeEventListener('focus', reload)
+    }
+  }, [reload])
   if (!graph || graph.skills.length === 0) return null
   return <SkillsSummaryCard graph={graph} />
 }
