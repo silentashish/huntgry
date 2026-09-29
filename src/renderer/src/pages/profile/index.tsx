@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Center, Loader } from '@mantine/core'
 import type { MasterProfile, ProfileDocument } from '@shared/master-profile'
+import { api } from '../../api'
 import { ProfileEditor } from '../../components/ProfileEditor'
 import { useNavigation, type PageParams } from '../../navigation'
 
@@ -29,6 +31,34 @@ export function ProfilePage({ params, document, initialDraft, onDocumentChange, 
   const leave = useRef(onLeave)
   leave.current = onLeave
   useEffect(() => () => leave.current(), [])
+
+  // Other pages can save the profile too (the Dashboard's "I have this"): start from the file, not
+  // from the copy loaded at startup. An import draft is shown as is.
+  const [ready, setReady] = useState(initialDraft !== undefined)
+  const change = useRef(onDocumentChange)
+  change.current = onDocumentChange
+  useEffect(() => {
+    if (ready) return
+    let alive = true
+    api.profile
+      .read()
+      .then((fresh) => {
+        if (alive && fresh.version !== document.version) change.current(fresh)
+      })
+      .catch(() => undefined)
+      .finally(() => alive && setReady(true))
+    return () => {
+      alive = false
+    }
+    // Only on arrival: later document changes come from the editor itself.
+  }, [])
+  if (!ready) {
+    return (
+      <Center py="xl">
+        <Loader />
+      </Center>
+    )
+  }
   return (
     <ProfileEditor
       key={`${document.path}#${params?.section ?? ''}`}
