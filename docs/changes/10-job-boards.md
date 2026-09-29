@@ -102,7 +102,7 @@ Manual, live, in the built app:
 
 ## Follow-ups
 
-- After #9: write `jobUrl`/`source` into the application's `huntgry.json` and show "already
-  applied" from the application folders.
+- Show "already applied" on a job from the application folders' `huntgry.json` (`jobUrl`
+  is now recorded there).
 - After #11: include saved jobs in the knowledge graph's gaps overlay (#12 uses them too).
 - Pagination (hiring.cafe returns about 100, Indeed about 15–40 per search).
