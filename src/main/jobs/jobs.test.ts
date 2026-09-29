@@ -8,8 +8,8 @@ import type { LoadResult } from './loader'
 import { addByUrl, addPasted, fetchDetails, searchJobs, updateJob, validateQuery } from './service'
 import { hiringCafeSearchUrl, matchesLocation, parseHiringCafeHits } from './sources/hiringcafe'
 import { indeedSearchUrl, parseIndeedCards } from './sources/indeed'
-import { findJobPosting, parsePosting, urlJobId, type PageData } from './sources/posting'
-import { dedupeAcrossBoards, jobFileName, listJobs, mergeJob, recentSearches } from './store'
+import { findJobPosting, isoDate, parsePosting, urlJobId, type PageData } from './sources/posting'
+import { canonicalize, canonicalKey, jobFileName, listJobs, mergeJob, recentSearches, saveJob } from './store'
 import { htmlToText } from './text'
 
 const fixture = async (name: string) => JSON.parse(await readFile(join(__dirname, 'fixtures', name), 'utf8'))
@@ -134,6 +134,21 @@ describe('blocked pages and text', () => {
     expect(isBlockedPage({ title: 'Platform Engineer Jobs', text: '38 results' })).toBe(false)
   })
 
+  it('never throws on bad entities or dates', () => {
+    expect(htmlToText('A&#99999999;B&#x1F600;')).toBe('A&#99999999;B😀')
+    expect(isoDate('Posted 3 days ago')).toBeNull()
+    expect(isoDate('2026-09-20')).toBe('2026-09-20T00:00:00.000Z')
+    const page = {
+      url: 'https://a.com/j',
+      title: 'T',
+      text: '',
+      ld: [
+        JSON.stringify({ '@type': 'JobPosting', title: 'SRE', datePosted: 'yesterday', description: 'x'.repeat(300) })
+      ]
+    }
+    expect(parsePosting(page)?.postedAt).toBeNull()
+  })
+
   it('turns posting HTML into readable text', () => {
     expect(htmlToText('<p>One&nbsp;two</p><ul><li>A &amp; B</li><li>C</li></ul><script>x()</script>')).toBe(
       'One two\n\n- A & B\n- C'
@@ -178,16 +193,78 @@ describe('store', () => {
     })
   })
 
-  it('dedupes the same job across boards, preferring the full description', () => {
-    const a = base({ id: 'indeed:1', title: 'Platform Engineer', company: 'Acme, Inc.' })
+  it('merges the same job across boards into one deterministic canonical record', () => {
+    const a = base({
+      id: 'indeed:1',
+      title: 'Platform Engineer',
+      company: 'Acme, Inc.',
+      location: 'Austin, TX',
+      fetchedAt: '2026-09-01T00:00:00Z',
+      salary: '$1'
+    })
     const b = base({
       id: 'hiring.cafe:2',
+      source: 'hiring.cafe',
       title: 'platform engineer',
       company: 'Acme Inc',
+      location: 'Austin, Texas, United States',
       description: 'full',
-      descriptionComplete: true
+      descriptionComplete: true,
+      fetchedAt: '2026-09-02T00:00:00Z',
+      tailoredAt: '2026-09-03T00:00:00Z',
+      tags: ['Go']
     })
-    expect(dedupeAcrossBoards([a, b]).map((j) => j.id)).toEqual(['hiring.cafe:2'])
+    const other = base({ id: 'url:3', title: 'Other', company: '' })
+    for (const input of [
+      [a, b, other],
+      [b, other, a]
+    ]) {
+      const out = canonicalize(input)
+      expect(out).toHaveLength(2)
+      const job = out.find((j) => j.id === 'indeed:1')!
+      // The first-saved record keeps its id; the best description and user state are merged in.
+      expect(job).toMatchObject({
+        aliases: ['hiring.cafe:2'],
+        description: 'full',
+        descriptionComplete: true,
+        salary: '$1',
+        tailoredAt: '2026-09-03T00:00:00Z',
+        tags: ['Go']
+      })
+    }
+    expect(canonicalKey({ title: 'X', company: '', location: '', remote: false })).toBeNull()
+    // Same title and company in two cities, or twice on one board: separate jobs.
+    const herndon = base({
+      id: 'hiring.cafe:h',
+      source: 'hiring.cafe',
+      title: 'PE',
+      company: 'NS2',
+      location: 'Herndon, Virginia, United States'
+    })
+    const chantilly = base({
+      id: 'hiring.cafe:c',
+      source: 'hiring.cafe',
+      title: 'PE',
+      company: 'NS2',
+      location: 'Chantilly, Virginia, United States'
+    })
+    const sameBoard = base({
+      id: 'hiring.cafe:h2',
+      source: 'hiring.cafe',
+      title: 'PE',
+      company: 'NS2',
+      location: 'Herndon, VA'
+    })
+    const indeedHerndon = base({
+      id: 'indeed:h',
+      title: 'PE',
+      company: 'NS2',
+      location: 'Herndon, VA 20171',
+      fetchedAt: '2026-09-09T00:00:00Z'
+    })
+    const merged = canonicalize([herndon, chantilly, sameBoard, indeedHerndon])
+    expect(merged).toHaveLength(3)
+    expect(merged.find((j) => j.id === 'hiring.cafe:h')?.aliases).toEqual(['indeed:h'])
   })
 
   it('makes safe file names', () => {
@@ -273,9 +350,33 @@ describe('service with a stub loader', () => {
     expect(jobDescriptionFor(t)).toMatch(/^# ML Engineer\n\nGlobex\n\nBuild ranking/)
 
     const indeed = parseIndeedCards(await fixture('indeed-jobcards.json'))[0]
-    const { saveJob } = await import('./store')
     await saveJob(ws, indeed)
     await expect(fetchDetails(ws, indeed.id, load)).rejects.toThrow(/human check/)
+  })
+
+  it('lists and updates a job found on two boards as one', async () => {
+    const hc = await fixture('hiringcafe-next-data.json')
+    const hcJob = parseHiringCafeHits({ hits: hc.props.pageProps.ssrHits })[0]
+    const card = {
+      ...parseIndeedCards(await fixture('indeed-jobcards.json'))[0],
+      title: hcJob.title,
+      company: hcJob.company,
+      location: 'Herndon, VA',
+      fetchedAt: '2030-01-01T00:00:00Z'
+    }
+    await saveJob(ws, hcJob)
+    await saveJob(ws, card)
+    const listed = await listJobs(ws)
+    expect(listed.filter((j) => j.title === hcJob.title && j.company === hcJob.company)).toHaveLength(1)
+    const canonical = listed.find((j) => j.id === hcJob.id)!
+    expect(canonical.aliases).toEqual([card.id])
+    // An update through the alias id reaches every copy.
+    await updateJob(ws, card.id, { dismissed: true, tailored: true })
+    for (const id of [hcJob.id, card.id]) {
+      const raw = JSON.parse(await readFile(join(ws, '.huntgry/jobs', jobFileName(id)), 'utf8'))
+      expect(raw.dismissed).toBe(true)
+      expect(raw.tailoredAt).toBeTruthy()
+    }
   })
 
   it('validates queries', () => {

@@ -38,6 +38,8 @@ export interface Job {
   /** Set when the user sent the job to the resume tailor. */
   tailoredAt?: string
   dismissed?: boolean
+  /** Ids of the same job found on other boards, merged into this record (see `canonicalize`). */
+  aliases?: string[]
 }
 
 export interface JobQuery {

@@ -74,8 +74,94 @@ export async function saveJobs(workspace: string, jobs: readonly Job[]): Promise
   return out
 }
 
-/** Every saved job, newest posting first; unreadable files are skipped. */
+/** Every saved job, cross-board duplicates merged (`canonicalize`), newest posting first. */
 export async function listJobs(workspace: string): Promise<Job[]> {
+  return canonicalize(await listRaw(workspace)).sort((a, b) =>
+    (b.postedAt ?? b.fetchedAt).localeCompare(a.postedAt ?? a.fetchedAt)
+  )
+}
+
+/**
+ * Normalized (title, company, city) of a job, or `null` when there is no
+ * company to match on. The city is the first part of the location, so
+ * "Herndon, VA" and "Herndon, Virginia, United States" agree, while the same
+ * title in two cities stays two jobs.
+ */
+export function canonicalKey(job: Pick<Job, 'title' | 'company' | 'location' | 'remote'>): string | null {
+  const norm = (x: string) =>
+    x
+      .toLowerCase()
+      .replace(/\b(inc|llc|ltd|corp|corporation|co|gmbh)\b\.?/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+  const company = norm(job.company)
+  const city = job.remote && !job.location.trim() ? 'remote' : norm(job.location.split(',')[0] ?? '')
+  return company ? `${norm(job.title)}|${company}|${city}` : null
+}
+
+/**
+ * The same job often appears on several boards under different ids. Jobs with
+ * the same (title, company, city) from **different** boards are merged; two
+ * records from one board are always distinct postings. The merged record is
+ * the one saved first (then the smallest id), so its id never changes; it
+ * lists the others as `aliases`, takes the best description of the group and
+ * merges user state (tailored if any copy was; dismissed follows the
+ * canonical copy, since updates are written to every file of the group).
+ * Deterministic: the same files always give the same result.
+ */
+export function canonicalize(jobs: readonly Job[]): Job[] {
+  const byKey = new Map<string, Job[]>()
+  const out: Job[] = []
+  for (const j of jobs) {
+    const k = canonicalKey(j)
+    if (!k) {
+      out.push(j)
+      continue
+    }
+    const g = byKey.get(k)
+    if (g) g.push(j)
+    else byKey.set(k, [j])
+  }
+  // Within a key, form clusters with at most one job per board.
+  const groups: Job[][] = []
+  for (const g of byKey.values()) {
+    const clusters: Job[][] = []
+    for (const j of [...g].sort((a, b) => a.fetchedAt.localeCompare(b.fetchedAt) || a.id.localeCompare(b.id))) {
+      const home = clusters.find((c) => !c.some((x) => x.source === j.source))
+      if (home) home.push(j)
+      else clusters.push([j])
+    }
+    groups.push(...clusters)
+  }
+  for (const sorted of groups) {
+    const [first, ...rest] = sorted
+    if (rest.length === 0) {
+      out.push(first)
+      continue
+    }
+    const fullest =
+      sorted.find((j) => j.descriptionComplete) ??
+      sorted.reduce((a, b) => (b.description.length > a.description.length ? b : a))
+    const tailored = sorted
+      .map((j) => j.tailoredAt)
+      .filter((t): t is string => !!t)
+      .sort()[0]
+    out.push({
+      ...first,
+      description: fullest.description,
+      descriptionComplete: fullest.descriptionComplete,
+      salary: first.salary || rest.find((j) => j.salary)?.salary || '',
+      location: first.location || rest.find((j) => j.location)?.location || '',
+      tags: [...new Set(sorted.flatMap((j) => j.tags))],
+      tailoredAt: tailored,
+      aliases: rest.map((j) => j.id)
+    })
+  }
+  return out
+}
+
+/** Raw saved records (one per file), not canonicalized. */
+async function listRaw(workspace: string): Promise<Job[]> {
   let names: string[]
   try {
     names = await readdir(jobsDir(workspace))
@@ -93,40 +179,12 @@ export async function listJobs(workspace: string): Promise<Job[]> {
         }
       })
   )
-  return jobs
-    .filter((j): j is Job => j !== null && typeof j.id === 'string')
-    .sort((a, b) => (b.postedAt ?? b.fetchedAt).localeCompare(a.postedAt ?? a.fetchedAt))
+  return jobs.filter((j): j is Job => j !== null && typeof j.id === 'string')
 }
 
-/**
- * The same job often appears on several boards. Keeps one per
- * (normalized title, company), preferring the one with the fuller description.
- */
-export function dedupeAcrossBoards(jobs: readonly Job[]): Job[] {
-  const key = (j: Job) =>
-    `${j.title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .trim()}|${j.company
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .trim()}`
-  const best = new Map<string, Job>()
-  for (const j of jobs) {
-    if (!j.company) {
-      best.set(`${j.id}`, j)
-      continue
-    }
-    const k = key(j)
-    const cur = best.get(k)
-    if (
-      !cur ||
-      (j.descriptionComplete && !cur.descriptionComplete) ||
-      (j.description.length > cur.description.length && j.descriptionComplete === cur.descriptionComplete)
-    )
-      best.set(k, j)
-  }
-  return [...best.values()]
+/** The canonical job containing `id` (its own id or an alias), or `null`. */
+export async function findCanonical(workspace: string, id: string): Promise<Job | null> {
+  return canonicalize(await listRaw(workspace)).find((j) => j.id === id || j.aliases?.includes(id)) ?? null
 }
 
 const MAX_SEARCHES = 10

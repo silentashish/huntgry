@@ -84,6 +84,13 @@ export function urlJobId(url: string): string {
   return createHash('sha256').update(key).digest('hex').slice(0, 16)
 }
 
+/** ISO string for a parseable date, else `null` (some pages publish "Posted 3 days ago"). */
+export function isoDate(value: string): string | null {
+  if (!value) return null
+  const t = Date.parse(value)
+  return Number.isFinite(t) ? new Date(t).toISOString() : null
+}
+
 export interface PageData {
   ld: string[]
   title: string
@@ -109,7 +116,7 @@ export function parsePosting(page: PageData, source: JobSourceId = 'url', now = 
       location,
       remote,
       salary: salaryOf(posting),
-      postedAt: str(posting.datePosted) ? new Date(str(posting.datePosted)).toISOString() : null,
+      postedAt: isoDate(str(posting.datePosted)),
       url,
       boardUrl: null,
       description,

@@ -18,10 +18,16 @@ const EMPTY_GRACE_MS = 8000
 const lastLoad = new Map<string, number>()
 let queue: Promise<unknown> = Promise.resolve()
 
+let configured: Electron.Session | null = null
+
+/** The job-board session, configured once (it is the same object on every call). */
 function configureSession(): Electron.Session {
+  if (configured) return configured
   const s = session.fromPartition(PARTITION)
-  // The board pages never need camera, notifications or the like.
+  // The board pages never need camera, notifications or the like, nor downloads.
   s.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))
+  s.on('will-download', (e) => e.preventDefault())
+  configured = s
   return s
 }
 
@@ -66,7 +72,6 @@ async function load(url: string, extract: string, timeoutMs: number): Promise<Lo
   })
   // Pages must not open popups or download files.
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  win.webContents.session.on('will-download', (e) => e.preventDefault())
   let status: number | null = null
   win.webContents.on('did-navigate', (_e, _url, code) => {
     status = code
@@ -79,6 +84,23 @@ async function load(url: string, extract: string, timeoutMs: number): Promise<Lo
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 1000))
       if (win.isDestroyed()) return { status: 'error', message: 'The page closed.' }
+      lastPage = await win.webContents
+        .executeJavaScript(
+          '({ title: document.title, text: document.body ? document.body.innerText.slice(0, 3000) : "" })',
+          true
+        )
+        .catch(() => lastPage)
+      // Never read data from a bot wall (a generic extract would happily return its text).
+      if (isBlockedPage({ ...lastPage, status })) {
+        // A challenge page may clear itself after a few seconds; only give up on it later.
+        if (Date.now() > deadline - timeoutMs / 2) {
+          return {
+            status: 'blocked',
+            message: `${host} asked for a human check (${lastPage.title || `HTTP ${status}`}).`
+          }
+        }
+        continue
+      }
       const raw = await win.webContents.executeJavaScript(extract, true).catch(() => null)
       if (typeof raw === 'string' && raw) {
         try {
@@ -87,19 +109,6 @@ async function load(url: string, extract: string, timeoutMs: number): Promise<Lo
           if (!empty || Date.now() - started > EMPTY_GRACE_MS) return { status: 'ok', data }
         } catch {
           // keep polling
-        }
-      }
-      lastPage = await win.webContents
-        .executeJavaScript(
-          '({ title: document.title, text: document.body ? document.body.innerText.slice(0, 3000) : "" })',
-          true
-        )
-        .catch(() => lastPage)
-      // A challenge page may clear itself after a few seconds; only give up on it near the end.
-      if (isBlockedPage({ ...lastPage, status }) && Date.now() > deadline - timeoutMs / 2) {
-        return {
-          status: 'blocked',
-          message: `${host} asked for a human check (${lastPage.title || `HTTP ${status}`}).`
         }
       }
     }

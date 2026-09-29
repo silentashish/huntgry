@@ -4,7 +4,7 @@ import type { LoadResult } from './loader'
 import { HIRINGCAFE_EXTRACT, hiringCafeSearchUrl, matchesLocation, parseHiringCafeHits } from './sources/hiringcafe'
 import { INDEED_EXTRACT, indeedSearchUrl, parseIndeedCards } from './sources/indeed'
 import { parsePosting, POSTING_EXTRACT, type PageData } from './sources/posting'
-import { listJobs, readJob, recordSearch, saveJob, saveJobs, writeJobFile } from './store'
+import { findCanonical, listJobs, readJob, recordSearch, saveJob, saveJobs, writeJobFile } from './store'
 
 /** Loads a page and reads data from it; the hidden-window loader in the app, a stub in tests. */
 export type Loader = (url: string, extract: string) => Promise<LoadResult>
@@ -62,7 +62,10 @@ export async function searchJobs(workspace: string, query: JobQuery, load: Loade
       message: saved.length === 0 ? 'No results for this search.' : undefined
     })
   }
-  return { jobs: found, sources }
+  // Report each job once, as its canonical record (a job seen on both boards is one job).
+  const ids = new Set(found.map((j) => j.id))
+  const canonical = (await listJobs(workspace)).filter((j) => ids.has(j.id) || j.aliases?.some((a) => ids.has(a)))
+  return { jobs: canonical, sources }
 }
 
 /** Fetches a posting page and saves it as a job. */
@@ -81,7 +84,7 @@ export async function addByUrl(workspace: string, url: string, load: Loader): Pr
  * Indeed: its job pages are behind a human check, so this reports that.
  */
 export async function fetchDetails(workspace: string, id: string, load: Loader): Promise<Job> {
-  const job = await readJob(workspace, id)
+  const job = await findCanonical(workspace, id)
   if (!job) throw new Error('This job is no longer saved.')
   if (job.descriptionComplete) return job
   if (job.source === 'indeed') {
@@ -97,13 +100,14 @@ export async function fetchDetails(workspace: string, id: string, load: Loader):
   if (!posting || (!posting.descriptionComplete && posting.description.length <= job.description.length)) {
     throw new Error("The employer's page did not have a readable description. Open the posting to read it.")
   }
-  return saveJob(workspace, {
-    ...job,
+  await saveJob(workspace, {
+    ...((await readJob(workspace, job.id)) ?? job),
     description: posting.description,
     descriptionComplete: posting.descriptionComplete,
     salary: job.salary || posting.salary,
     location: job.location || posting.location
   })
+  return (await findCanonical(workspace, job.id)) ?? job
 }
 
 export async function addPasted(workspace: string, input: unknown): Promise<Job> {
@@ -145,12 +149,19 @@ export async function updateJob(
   id: string,
   patch: { dismissed?: boolean; tailored?: boolean }
 ): Promise<Job> {
-  const job = await readJob(workspace, id)
-  if (!job) throw new Error('This job is no longer saved.')
-  const next: Job = { ...job }
-  if (typeof patch.dismissed === 'boolean') next.dismissed = patch.dismissed
-  if (patch.tailored === true) next.tailoredAt = new Date().toISOString()
-  return writeJobFile(workspace, next)
+  const canonical = await findCanonical(workspace, id)
+  if (!canonical) throw new Error('This job is no longer saved.')
+  const tailoredAt = patch.tailored === true ? new Date().toISOString() : undefined
+  // The same state goes to every copy of the job, so the canonical view stays consistent.
+  for (const fileId of [canonical.id, ...(canonical.aliases ?? [])]) {
+    const raw = await readJob(workspace, fileId)
+    if (!raw) continue
+    const next: Job = { ...raw }
+    if (typeof patch.dismissed === 'boolean') next.dismissed = patch.dismissed
+    if (tailoredAt) next.tailoredAt = tailoredAt
+    await writeJobFile(workspace, next)
+  }
+  return (await findCanonical(workspace, canonical.id)) ?? canonical
 }
 
 export { listJobs }

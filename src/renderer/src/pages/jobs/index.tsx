@@ -252,7 +252,7 @@ export function JobsPage() {
           placeholder="Add a job by its posting URL (company careers page, Greenhouse, Lever, …)"
           value={url}
           onChange={(e) => setUrl(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === 'Enter' && url.trim() && void addUrl()}
+          onKeyDown={(e) => e.key === 'Enter' && /^https?:\/\//i.test(url.trim()) && !adding && void addUrl()}
         />
         <Button variant="default" onClick={addUrl} loading={adding} disabled={!/^https?:\/\//i.test(url.trim())}>
           Add
