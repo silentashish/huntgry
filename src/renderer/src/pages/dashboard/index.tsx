@@ -1,11 +1,349 @@
-import { PagePlaceholder } from '../../components/shell/PagePlaceholder'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  ActionIcon,
+  Alert,
+  Anchor,
+  Badge,
+  Button,
+  Card,
+  Center,
+  Group,
+  Loader,
+  MultiSelect,
+  Paper,
+  Select,
+  SimpleGrid,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+  Title,
+  Tooltip
+} from '@mantine/core'
+import { IconExternalLink, IconFileTypePdf, IconFolder, IconRefresh, IconSearch } from '@tabler/icons-react'
+import {
+  APPLICATION_STATUSES,
+  type ApplicationRecord,
+  type ApplicationsList,
+  type ApplicationStatus,
+  type ApplicationTracking
+} from '@shared/applications-types'
+import { api, errorText } from '../../api'
+import { useNavigation } from '../../navigation'
+import { ApplicationDrawer, BuildBadge } from './ApplicationDrawer'
+import { countByStatus, DEFAULT_FILTER, filterApplications, type Filter, type SortKey } from './filter'
+import { STATUS_META } from './status'
 
-/** Every generated resume and cover letter in the workspace, with links to the job postings. */
+const SUMMARY: ApplicationStatus[] = ['generated', 'applied', 'interviewing', 'offer', 'rejected']
+
+/** Every generated resume and cover letter in the workspace, with tracking and links to the job postings. */
 export function DashboardPage() {
+  const { navigate } = useNavigation()
+  const [list, setList] = useState<ApplicationsList | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [filter, setFilter] = useState<Filter>(DEFAULT_FILTER)
+  const [openId, setOpenId] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      setList(await api.applications.list())
+      setError(null)
+    } catch (err) {
+      setError(errorText(err))
+    }
+  }, [])
+
+  // Initial load, then re-list when the workspace changes on disk or the window regains focus.
+  useEffect(() => {
+    void load()
+    const off = api.on('applications:changed', () => void load())
+    const onFocus = () => void load()
+    window.addEventListener('focus', onFocus)
+    return () => {
+      off()
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [load])
+
+  const apps = useMemo(() => list?.applications ?? [], [list])
+  const shown = useMemo(() => filterApplications(apps, filter), [apps, filter])
+  const counts = useMemo(() => countByStatus(apps), [apps])
+  const open = apps.find((a) => a.id === openId) ?? null
+
+  async function update(id: string, patch: Partial<ApplicationTracking>) {
+    const next = await api.applications.updateTracking(id, patch)
+    setList((l) => l && { ...l, applications: l.applications.map((a) => (a.id === id ? next : a)) })
+  }
+
+  async function act(fn: () => Promise<unknown>) {
+    try {
+      await fn()
+    } catch (err) {
+      setError(errorText(err))
+    }
+  }
+
   return (
-    <PagePlaceholder
-      title="Dashboard"
-      description="Every tailored resume and cover letter in this workspace, their status, and links back to the job postings."
-    />
+    <Stack gap="md">
+      <Group justify="space-between">
+        <Title order={2}>Dashboard</Title>
+        <Group gap="xs">
+          <Button variant="default" leftSection={<IconRefresh size={16} />} onClick={load}>
+            Refresh
+          </Button>
+          <Button onClick={() => navigate('tailor')}>New tailored resume</Button>
+        </Group>
+      </Group>
+
+      {error && (
+        <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
+
+      {list === null && !error && (
+        <Center py="xl">
+          <Loader />
+        </Center>
+      )}
+
+      {list && apps.length === 0 && (
+        <Card withBorder radius="md" padding="xl">
+          <Stack align="center" gap="xs" py="lg">
+            <Title order={3}>No applications yet</Title>
+            <Text c="dimmed" ta="center" maw={520}>
+              Every resume the skill builds lands in this workspace as <code>role/company/job-id/</code> and shows up
+              here. Find a job or paste one to get started.
+            </Text>
+            <Group mt="sm">
+              <Button variant="light" onClick={() => navigate('jobs')}>
+                Find jobs
+              </Button>
+              <Button onClick={() => navigate('tailor')}>Tailor for a job</Button>
+            </Group>
+          </Stack>
+        </Card>
+      )}
+
+      {list && apps.length > 0 && (
+        <>
+          <SimpleGrid cols={{ base: 3, md: 6 }}>
+            <StatCard
+              label="Total"
+              value={apps.length}
+              active={filter.statuses.length === 0}
+              onClick={() => setFilter({ ...filter, statuses: [] })}
+            />
+            {SUMMARY.map((s) => (
+              <StatCard
+                key={s}
+                label={STATUS_META[s].label}
+                color={STATUS_META[s].color}
+                value={counts[s]}
+                active={filter.statuses.length === 1 && filter.statuses[0] === s}
+                onClick={() => setFilter({ ...filter, statuses: [s] })}
+              />
+            ))}
+          </SimpleGrid>
+
+          <Group gap="sm" align="flex-end">
+            <TextInput
+              style={{ flex: 1 }}
+              leftSection={<IconSearch size={16} />}
+              placeholder="Search company, role, title, notes"
+              value={filter.text}
+              onChange={(e) => setFilter({ ...filter, text: e.currentTarget.value })}
+            />
+            <MultiSelect
+              w={260}
+              placeholder={filter.statuses.length ? undefined : 'All but archived'}
+              data={APPLICATION_STATUSES.map((s) => ({ value: s, label: STATUS_META[s].label }))}
+              value={filter.statuses}
+              onChange={(v) => setFilter({ ...filter, statuses: v as ApplicationStatus[] })}
+              clearable
+            />
+            <Select
+              w={150}
+              data={[
+                { value: 'newest', label: 'Newest first' },
+                { value: 'oldest', label: 'Oldest first' },
+                { value: 'company', label: 'Company' }
+              ]}
+              value={filter.sort}
+              allowDeselect={false}
+              onChange={(v) => v && setFilter({ ...filter, sort: v as SortKey })}
+            />
+          </Group>
+
+          {list.truncated && (
+            <Alert color="yellow" variant="light">
+              The workspace is large; the scan stopped early and some applications may be missing.
+            </Alert>
+          )}
+
+          <Paper withBorder radius="md">
+            <Table highlightOnHover verticalSpacing="sm">
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Application</Table.Th>
+                  <Table.Th w={120}>Created</Table.Th>
+                  <Table.Th w={160}>Status</Table.Th>
+                  <Table.Th w={150}>Build</Table.Th>
+                  <Table.Th w={150} />
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {shown.map((a) => (
+                  <Row
+                    key={a.id}
+                    app={a}
+                    onOpen={() => setOpenId(a.id)}
+                    onUpdate={(p) => act(() => update(a.id, p))}
+                    onAct={act}
+                  />
+                ))}
+                {shown.length === 0 && (
+                  <Table.Tr>
+                    <Table.Td colSpan={5}>
+                      <Text c="dimmed" ta="center" py="md">
+                        Nothing matches.{' '}
+                        <Anchor component="button" onClick={() => setFilter(DEFAULT_FILTER)}>
+                          Clear filters
+                        </Anchor>
+                      </Text>
+                    </Table.Td>
+                  </Table.Tr>
+                )}
+              </Table.Tbody>
+            </Table>
+          </Paper>
+        </>
+      )}
+
+      <ApplicationDrawer app={open} onClose={() => setOpenId(null)} onUpdate={(p) => update(open!.id, p)} />
+    </Stack>
+  )
+}
+
+function StatCard(props: { label: string; value: number; color?: string; active: boolean; onClick(): void }) {
+  return (
+    <Card
+      withBorder
+      radius="md"
+      padding="sm"
+      onClick={props.onClick}
+      style={{ cursor: 'pointer', borderColor: props.active ? 'var(--mantine-primary-color-filled)' : undefined }}
+    >
+      <Text size="xs" c="dimmed" tt="uppercase" fw={600}>
+        {props.label}
+      </Text>
+      <Text size="xl" fw={700} c={props.color && props.color !== 'gray' && props.value > 0 ? props.color : undefined}>
+        {props.value}
+      </Text>
+    </Card>
+  )
+}
+
+interface RowProps {
+  app: ApplicationRecord
+  onOpen(): void
+  onUpdate(patch: Partial<ApplicationTracking>): void
+  onAct(fn: () => Promise<unknown>): void
+}
+
+function Row({ app, onOpen, onUpdate, onAct }: RowProps) {
+  const has = (f: string) => app.files.includes(f)
+  // Controls inside the row must not also open the drawer.
+  const stop = (e: React.MouseEvent) => e.stopPropagation()
+  const dot = `var(--mantine-color-${STATUS_META[app.tracking.status].color}-filled)`
+  return (
+    <Table.Tr onClick={onOpen} style={{ cursor: 'pointer' }}>
+      <Table.Td>
+        <Text fw={600} size="sm">
+          {app.company}
+        </Text>
+        <Text size="sm">{app.role}</Text>
+        {app.jobTitle && app.jobTitle !== app.role && (
+          <Text size="xs" c="dimmed" lineClamp={1}>
+            {app.jobTitle}
+          </Text>
+        )}
+        {app.tracking.source && (
+          <Badge size="xs" variant="outline" color="gray" mt={4}>
+            {app.tracking.source}
+          </Badge>
+        )}
+      </Table.Td>
+      <Table.Td>
+        <Text size="sm">{new Date(app.createdAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}</Text>
+        {app.tracking.appliedAt && (
+          <Text size="xs" c="dimmed">
+            applied {app.tracking.appliedAt}
+          </Text>
+        )}
+      </Table.Td>
+      <Table.Td onClick={stop}>
+        <Select
+          size="xs"
+          data={APPLICATION_STATUSES.map((s) => ({ value: s, label: STATUS_META[s].label }))}
+          value={app.tracking.status}
+          allowDeselect={false}
+          onChange={(v) => v && onUpdate({ status: v as ApplicationStatus })}
+          leftSection={<span style={{ width: 8, height: 8, borderRadius: 4, background: dot }} />}
+        />
+      </Table.Td>
+      <Table.Td>
+        <BuildBadge app={app} short />
+      </Table.Td>
+      <Table.Td onClick={stop}>
+        <Group gap={4} justify="flex-end" wrap="nowrap">
+          <Tooltip label="Open resume PDF">
+            <ActionIcon
+              variant="subtle"
+              disabled={!has('resume.pdf')}
+              onClick={() => onAct(() => api.applications.openFile(app.id, 'resume.pdf'))}
+              aria-label="Open resume"
+            >
+              <IconFileTypePdf size={18} />
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Open cover letter PDF">
+            <ActionIcon
+              variant="subtle"
+              color="grape"
+              disabled={!has('cover.pdf')}
+              onClick={() => onAct(() => api.applications.openFile(app.id, 'cover.pdf'))}
+              aria-label="Open cover letter"
+            >
+              <IconFileTypePdf size={18} />
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label={app.jobUrl ?? 'No posting URL'}>
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              disabled={!app.jobUrl}
+              component="a"
+              href={app.jobUrl ?? undefined}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Open job posting"
+            >
+              <IconExternalLink size={18} />
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Show in Finder">
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              onClick={() => onAct(() => api.applications.reveal(app.id))}
+              aria-label="Show in Finder"
+            >
+              <IconFolder size={18} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
+      </Table.Td>
+    </Table.Tr>
   )
 }
