@@ -1,5 +1,6 @@
 import { registerApplicationsIpc } from './applications/ipc'
 import { registerRunnerIpc } from './cli/ipc'
+import { registerGraphIpc } from './graph/ipc'
 import { registerProfileIpc } from './profile/ipc'
 import { registerWorkspaceIpc } from './workspace/ipc'
 
@@ -12,4 +13,5 @@ export function registerIpcHandlers(): void {
   registerProfileIpc()
   registerApplicationsIpc()
   registerRunnerIpc()
+  registerGraphIpc()
 }

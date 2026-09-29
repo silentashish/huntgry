@@ -29,6 +29,8 @@ import {
   type ApplicationTracking
 } from '@shared/applications-types'
 import { api, errorText } from '../../api'
+import { SkillsSummaryCard } from '../../components/graph/SkillsSummaryCard'
+import { useKnowledgeGraph } from '../../components/graph/useKnowledgeGraph'
 import { useNavigation } from '../../navigation'
 import { ApplicationDrawer, BuildBadge } from './ApplicationDrawer'
 import { countByStatus, DEFAULT_FILTER, filterApplications, type Filter, type SortKey } from './filter'
@@ -232,9 +234,27 @@ export function DashboardPage() {
         </>
       )}
 
+      <DashboardSkills />
+
       <ApplicationDrawer app={open} onClose={() => setOpenId(null)} onUpdate={(p) => update(open!.id, p)} />
     </Stack>
   )
+}
+
+/** The knowledge graph's "Strongest evidence / asked for, missing" card; nothing until the profile has skills. */
+function DashboardSkills() {
+  const { graph, reload } = useKnowledgeGraph()
+  // Same triggers as the application list: new or changed job descriptions change the job counts and gaps.
+  useEffect(() => {
+    const off = api.on('applications:changed', reload)
+    window.addEventListener('focus', reload)
+    return () => {
+      off()
+      window.removeEventListener('focus', reload)
+    }
+  }, [reload])
+  if (!graph || graph.skills.length === 0) return null
+  return <SkillsSummaryCard graph={graph} />
 }
 
 function StatCard(props: { label: string; value: number; color?: string; active: boolean; onClick(): void }) {

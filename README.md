@@ -69,6 +69,7 @@ src/
 │   ├── workspace/              # all filesystem logic, Electron-free and unit-tested (+ ipc.ts)
 │   ├── profile/                # master-profile.md ⇄ MasterProfile (format.ts), read/save (store.ts) (+ ipc.ts)
 │   ├── applications/           # scan <role>/<company>/<job-id>/, huntgry.json tracking, huntgry-file:// previews, fs.watch
+│   ├── graph/                  # job descriptions for the knowledge graph overlay
 │   ├── resume/                 # resume file → lines (docx, pdf, txt/md) → draft profile (parse.ts)
 │   └── cli/                    # runs the resume-tailor skill via `claude -p` (stream-json), run history
 ├── preload/                    # index.ts composes window.huntgry from <feature>.ts + events.ts
@@ -111,6 +112,14 @@ its approval question, and open the resulting `resume.pdf` / `cover.pdf`. Runs a
 needs `pdflatex` (TinyTeX works without admin rights), poppler (`brew install poppler`) and
 a few Python modules, which **Install Python dependencies** puts in a venv in the app's
 data folder. You do not have to change your shell PATH.
+
+## Knowledge graph
+
+**Knowledge graph** draws the master profile as a graph: roles, companies, projects,
+education and skills, each skill backed by evidence (the roles and projects that use it)
+and years of use. Job descriptions of the workspace's applications are overlaid: which of
+your skills they ask for, and the technologies they ask for that the profile never
+mentions (gaps). A **Skills** view lists the same data as a sortable table.
 
 ## Workspace
 
@@ -174,5 +183,6 @@ archived), previews the pages, and refreshes when folders change on disk.
 See [docs/changes/2-electron-workspace-shell.md](docs/changes/2-electron-workspace-shell.md),
 [docs/changes/4-master-profile-flow.md](docs/changes/4-master-profile-flow.md),
 [docs/changes/7-app-shell.md](docs/changes/7-app-shell.md),
-[docs/changes/8-claude-runner.md](docs/changes/8-claude-runner.md)
-and [docs/changes/9-applications-dashboard.md](docs/changes/9-applications-dashboard.md) for the design notes.
+[docs/changes/8-claude-runner.md](docs/changes/8-claude-runner.md),
+[docs/changes/9-applications-dashboard.md](docs/changes/9-applications-dashboard.md)
+and [docs/changes/11-knowledge-graph.md](docs/changes/11-knowledge-graph.md) for the design notes.

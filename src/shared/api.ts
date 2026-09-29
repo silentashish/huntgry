@@ -1,6 +1,7 @@
 import type { ApplicationsApi } from './applications-types'
 import type { Subscribe } from './events'
 import type { RunnerApi } from './runner-types'
+import type { GraphApi } from './graph-types'
 import type { ProfileApi, WorkspaceApi } from './workspace-types'
 
 /**
@@ -14,6 +15,8 @@ export interface HuntgryApi {
   runner: RunnerApi
   /** Generated applications in the workspace: list, tracking, files. */
   applications: ApplicationsApi
+  /** Inputs of the knowledge graph beyond the master profile. */
+  graph: GraphApi
   /** Main → renderer events, restricted to `EVENT_CHANNELS`. */
   on: Subscribe
 }
