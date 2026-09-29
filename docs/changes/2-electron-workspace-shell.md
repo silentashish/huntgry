@@ -55,7 +55,7 @@ convention, and the skill versions disagree about it:
 - **Q1, master profile filename.** Create writes `master-profile.md`, the name the v3 README uses.
   Import also accepts `master_profile.md`, matched case-insensitively, and reports it as `legacy`.
 - **Q2, pointing the skill at a non-`~/cv` workspace.** Create writes a `CLAUDE.md` that
-  says this folder is `CV_HOME`, shows the `--cv-home "<path>"` / `CV_HOME=` usage, and
+  says this folder is `CV_HOME`, shows the `--cv-home '<path>'` / `CV_HOME=` usage, and
   names the master profile. Claude Code loads this file automatically when it runs in
   the workspace. Import never writes it.
 
@@ -152,9 +152,30 @@ Create and Import behaviour per status:
   the same imports.
 - **Refuse rather than merge.** Create never touches a non-empty directory with unknown
   content, and never "tops up" an existing workspace. Every file is written with
-  `flag: 'wx'`, so even a race cannot overwrite user data. Nothing is ever deleted.
+  `flag: 'wx'`, so even a race cannot overwrite user data. The only thing Create ever
+  deletes is its own output, when a run fails (see below).
+- **The path in `CLAUDE.md` is data, not text to interpret.** The workspace path is chosen by
+  the user (typed or picked), and `CLAUDE.md` is read by an agent that may run the commands it
+  shows. So the path appears once in a fenced `text` block, and in the shell examples it is
+  POSIX single-quoted (`'` becomes `'\''`), so `$(…)`, backticks and `"` in a folder name are never
+  expanded. Paths containing control characters (a line break could start new "instructions")
+  are refused by Create. Placeholders are filled in one pass, so a folder literally named
+  `{{MASTER_PROFILE}}` is not rewritten.
+- **Create is all-or-nothing.** `CLAUDE.md` and `cover-letter.md` are written first and
+  `master-profile.md` last, because the profile is what makes a folder `valid`. If any write
+  fails, the files this run created (and the root, if it made it) are removed, so the folder
+  returns to `missing`/`empty` and Create can simply be retried. A hard crash between writes
+  can leave `CLAUDE.md`/`cover-letter.md` without a profile; that shows up as
+  `not-a-workspace` rather than as a `valid` workspace silently missing its `CLAUDE.md`.
+- **Re-check before writing.** Create inspects the target, then writes by path. To narrow the
+  gap where another process swaps the target for a symlink, a `missing` root is made with a
+  non-recursive `mkdir` (the parent is known to exist; `EEXIST` means something appeared, so
+  Create stops), and `realpath(root)` must still equal the inspected path right before the
+  first write. Node has no `openat()`, so a swap between that check and the writes is still
+  possible in theory; `wx` still guarantees nothing is overwritten.
 - **Import is exactly `inspect`.** `openWorkspace` is an alias of `inspectWorkspace`.
-  Remembering the current workspace goes to `userData/settings.json`, outside the workspace.
+  Remembering the current workspace goes to `userData/settings.json`, outside the workspace,
+  written to a temp file and renamed over the old one so it is never left half-written.
   Tests snapshot mode, size, mtime and content before and after.
 - **Symlinks.** A symlinked *root* is resolved with `realpath`, and the target is inspected and
   displayed. A *dangling* root symlink is `invalid`, not `missing`, so Create is never offered
@@ -186,13 +207,13 @@ Create and Import behaviour per status:
   `workspace/settings.ts`, with the path injected by `ipc.ts`. That keeps every fs call in
   one tested, Electron-free module.
 - **No Playwright yet.** The logic worth testing is the pure workspace module, which has
-  35 tests. An Electron smoke test belongs with packaging.
+  44 tests. An Electron smoke test belongs with packaging.
 
 ## How to test
 
 ```bash
 npm install
-npm test            # 35 vitest cases, temp dirs, no Electron
+npm test            # 44 vitest cases, temp dirs, no Electron
 npm run typecheck
 npm run build
 npm run dev         # manual check
