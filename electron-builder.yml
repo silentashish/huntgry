@@ -1,0 +1,20 @@
+# Packaged builds: `npm run dist` → release/. The bundle is named Huntgry and
+# uses resources/icon.icns (macOS) / resources/icon.png (Linux, Windows).
+appId: com.silentashish.huntgry
+productName: Huntgry
+directories:
+  buildResources: resources
+  output: release
+files:
+  - out/**
+  - resources/icon.png # window/dock/About icon, loaded by the main process at runtime
+  - package.json
+mac:
+  category: public.app-category.productivity
+  icon: resources/icon.icns
+  target: [dmg, zip]
+win:
+  icon: resources/icon.png
+linux:
+  icon: resources/icon.png
+  target: AppImage
