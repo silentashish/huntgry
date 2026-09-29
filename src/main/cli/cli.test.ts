@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { appendLive, buildTranscript, LineBuffer, parseEventLine, summarizeToolInput } from '@shared/transcript'
 import {
   allowedTools,
-  fetchHostOf,
   texRootOf,
   buildClaudeArgs,
   buildFirstPrompt,
@@ -14,6 +13,7 @@ import {
   userMessageLine
 } from './command'
 import { buildChildEnv, composePath, findSkillDir, parsePreflight } from './env'
+import { fetchPostingText, htmlToText, type Fetcher } from './posting'
 import { findOutputFolder, newRunId, runDir, RUN_ID_PATTERN } from './runs'
 
 let tmp: string
@@ -128,11 +128,8 @@ describe('command line and prompts', () => {
     const tools = allowedTools('/skills/resume-tailor')
     for (const bare of ['Write', 'Edit', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'])
       expect(tools).not.toContain(bare)
-    expect(tools.some((t) => t.startsWith('WebFetch'))).toBe(false)
-    expect(allowedTools('/s', ['jobs.example.com'])).toContain('WebFetch(domain:jobs.example.com)')
-    expect(fetchHostOf('https://jobs.example.com/a?b=1')).toBe('jobs.example.com')
-    expect(fetchHostOf('file:///etc/passwd')).toBeNull()
-    expect(fetchHostOf(undefined)).toBeNull()
+    // No network tool at all: the posting text arrives in the first message.
+    expect(tools.some((t) => /^Web(Fetch|Search)/.test(t))).toBe(false)
     expect(tools).toContain('Read(//skills/resume-tailor/**)')
     expect(tools).toContain('Bash(python3 /skills/resume-tailor/scripts/build.py:*)')
     expect(tools).toContain('Bash(python3 /skills/resume-tailor/scripts/preflight.py:*)')
@@ -187,7 +184,7 @@ describe('command line and prompts', () => {
     expect(p).toContain('Date style: inline')
     expect(p).toContain('<job_description>\n## Senior Engineer\nGo, Kafka\n</job_description>')
     const fromUrl = buildFirstPrompt({ jobUrl: 'https://x.com/j/1', coverLetter: true, dateStyle: 'right' })
-    expect(fromUrl).toContain('Fetch the posting from the URL above')
+    expect(fromUrl).not.toMatch(/fetch/i)
   })
 
   it('titles runs from role/company, URL host or the description', () => {
@@ -328,5 +325,46 @@ describe('run store', () => {
       folder: join('eng', 'new-co', '2'),
       files: ['job-description.md', 'resume_data.json']
     })
+  })
+})
+
+describe('posting fetch (main process, no network for Claude)', () => {
+  const page =
+    (body: string, type = 'text/html; charset=utf-8', status = 200): Fetcher =>
+    async () =>
+      new Response(body, { status, headers: { 'content-type': type } })
+  const long = 'We build the routing platform for 2,000 vans. '.repeat(10)
+
+  it('prefers the JSON-LD JobPosting description', async () => {
+    const html = `<html><head><script type="application/ld+json">${JSON.stringify({ '@graph': [{ '@type': 'JobPosting', title: 'SRE', hiringOrganization: { name: 'Acme' }, description: `<p>${long}</p><ul><li>Kubernetes &amp; Go</li></ul>` }] })}</script></head><body>nav junk</body></html>`
+    const text = await fetchPostingText('https://jobs.example.com/1', page(html))
+    expect(text.startsWith('# SRE\n\nAcme\n\nWe build')).toBe(true)
+    expect(text).toContain('- Kubernetes & Go')
+    expect(text).not.toContain('nav junk')
+  })
+
+  it('falls back to the page text and refuses pages without content', async () => {
+    const text = await fetchPostingText(
+      'https://a.example/j',
+      page(`<body><main><h1>Data Engineer</h1><p>${long}</p></main><script>x()</script></body>`)
+    )
+    expect(text).toContain('Data Engineer')
+    expect(text).not.toContain('x()')
+    await expect(fetchPostingText('https://a.example/j', page('<body><div id="root"></div></body>'))).rejects.toThrow(
+      /needs JavaScript.*Paste/
+    )
+    await expect(fetchPostingText('https://a.example/j', page('nope', 'text/html', 403))).rejects.toThrow(/403.*Paste/)
+    await expect(fetchPostingText('https://a.example/j', page('%PDF', 'application/pdf'))).rejects.toThrow(
+      /not a web page/
+    )
+    await expect(
+      fetchPostingText('https://a.example/j', async () => {
+        throw new Error('ENOTFOUND')
+      })
+    ).rejects.toThrow(/Could not load/)
+  })
+
+  it('decodes entities safely', () => {
+    expect(htmlToText('<p>A&#99999999;B &#x1F600; &amp;</p>')).toBe('A&#99999999;B 😀 &')
   })
 })

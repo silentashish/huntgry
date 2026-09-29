@@ -19,10 +19,11 @@ export const SKILL_SCRIPTS = ['build.py', 'preflight.py', 'verify.py', 'render.p
  * - Shell: only the skill's scripts, by absolute path (no `python3 -c`, no
  *   other commands), and every command runs in the OS sandbox from
  *   `buildSandboxSettings`.
- * - Network: WebFetch only to the job posting's host (`fetchHosts`); no
- *   WebSearch.
+ * - Network: none. Huntgry fetches the posting itself (`posting.ts`) and puts
+ *   its text in the first message; any fetch tool, even one limited to the
+ *   posting's host, would let a malicious posting receive profile data.
  */
-export function allowedTools(skillDir: string, fetchHosts: readonly string[] = []): string[] {
+export function allowedTools(skillDir: string): string[] {
   const scripts = SKILL_SCRIPTS.flatMap((script) => {
     const path = `${skillDir}/scripts/${script}`
     // Claude quotes a path with spaces; allow the quoted spelling too.
@@ -31,9 +32,6 @@ export function allowedTools(skillDir: string, fetchHosts: readonly string[] = [
   return [
     // Permission rules use `//` for an absolute path.
     `Read(/${skillDir}/**)`,
-    // The network is limited to the posting's own site: an unrestricted fetch could
-    // carry master-profile data to any host a prompt-injected posting names.
-    ...fetchHosts.map((host) => `WebFetch(domain:${host})`),
     'TodoWrite',
     ...scripts
   ]
@@ -93,20 +91,7 @@ export interface ClaudeArgsOptions {
   resumeSessionId?: string | null
   systemPrompt: string
   sandbox: SandboxPaths
-  /** Hosts WebFetch may reach without asking: the job posting's site. */
-  fetchHosts?: readonly string[]
   model?: string
-}
-
-/** The host of a job posting URL, for the WebFetch rule; `null` for anything but http(s). */
-export function fetchHostOf(url: string | undefined): string | null {
-  if (!url) return null
-  try {
-    const u = new URL(url)
-    return u.protocol === 'https:' || u.protocol === 'http:' ? u.hostname : null
-  } catch {
-    return null
-  }
 }
 
 export function buildClaudeArgs(opts: ClaudeArgsOptions): string[] {
@@ -122,7 +107,7 @@ export function buildClaudeArgs(opts: ClaudeArgsOptions): string[] {
     '--permission-prompts',
     'none',
     '--allowedTools',
-    ...allowedTools(opts.skillDir, opts.fetchHosts),
+    ...allowedTools(opts.skillDir),
     // No user, project or local settings: their hooks and permission rules must not widen
     // (or rewrite) what this headless run may do. Everything it needs is passed here.
     '--setting-sources',
@@ -144,7 +129,7 @@ export function buildSystemPrompt(opts: { workspace: string; masterProfile: stri
     'The user reads your messages in a chat panel and answers there; they cannot see tool output unless you summarise it.',
     `CV_HOME is already set in the environment to the workspace: ${opts.workspace}`,
     `The master profile is ${opts.workspace}/${opts.masterProfile}. It is the only source of facts about the user.`,
-    `The resume-tailor skill is at ${opts.skillDir}: read ${opts.skillDir}/SKILL.md first and follow it (its references/ and assets/ are there too). Run its scripts only as \`python3 ${opts.skillDir}/scripts/<script>.py …\` with that absolute path, from the workspace, one command per call (no cd, no &&, no environment-variable prefixes). python3, pdflatex and poppler are on PATH. Other shell commands, inline Python, file access outside the workspace and web access beyond the job posting's site are blocked.`,
+    `The resume-tailor skill is at ${opts.skillDir}: read ${opts.skillDir}/SKILL.md first and follow it (its references/ and assets/ are there too). Run its scripts only as \`python3 ${opts.skillDir}/scripts/<script>.py …\` with that absolute path, from the workspace, one command per call (no cd, no &&, no environment-variable prefixes). python3, pdflatex and poppler are on PATH. Other shell commands, inline Python, file access outside the workspace and web access are blocked; the job description is in the first message.`,
     'Follow the skill exactly, including its honesty rule and step 3: stop after the gap analysis, show the proposed reframings and bullets, and wait for the user to approve before writing resume_data.json.',
     'Keep role, company and job-id as short lowercase slugs so the output lands in CV_HOME/<role>/<company>/<job-id>/.',
     `Write draft payloads (resume_data.json, cover_data.json) under ${opts.workspace}/.huntgry/drafts/<role>-<company>-<job-id>/, not elsewhere in the workspace; build.py copies what it needs into the application folder.`,
@@ -173,8 +158,6 @@ export function buildFirstPrompt(params: StartRunParams): string {
       params.jobDescription.trim(),
       '</job_description>'
     )
-  } else if (params.jobUrl) {
-    lines.push('', 'Fetch the posting from the URL above and save it verbatim as job-description.md.')
   }
   return lines.join('\n')
 }

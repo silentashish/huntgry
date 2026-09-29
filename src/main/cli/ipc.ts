@@ -1,4 +1,4 @@
-import { app, ipcMain, shell } from 'electron'
+import { app, ipcMain, net, shell } from 'electron'
 import { readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
@@ -8,6 +8,7 @@ import { emit } from '../events'
 import { buildSystemPrompt, MAX_TEXT, requireStartParams, texRootOf } from './command'
 import { buildChildEnv, loginShellPath } from './env'
 import { checkEnvironment, discoverRuntime, installPythonDeps } from './environment'
+import { fetchPostingText } from './posting'
 import { RunManager, type RunContext } from './runner'
 import { listRuns, OUTPUT_FILES, readEvents, readRun, RUN_ID_PATTERN } from './runs'
 
@@ -73,7 +74,9 @@ async function preferredModel(): Promise<string | undefined> {
     const settings = JSON.parse(await readFile(join(homedir(), '.claude', 'settings.json'), 'utf8')) as {
       model?: unknown
     }
-    return typeof settings.model === 'string' && /^[\w.[\]:-]{1,80}$/.test(settings.model) ? settings.model : undefined
+    return typeof settings.model === 'string' && /^[\w.[\]:/@-]{1,300}$/.test(settings.model)
+      ? settings.model
+      : undefined
   } catch {
     return undefined
   }
@@ -120,9 +123,14 @@ export function registerRunnerIpc(): void {
     return { run: await currentRun(runId), events: await readEvents(workspace.path, runId) }
   })
 
-  ipcMain.handle(RUNNER_CHANNELS.start, async (_e, params: unknown) =>
-    manager.start(requireStartParams(params), await context())
-  )
+  ipcMain.handle(RUNNER_CHANNELS.start, async (_e, input: unknown) => {
+    const params = requireStartParams(input)
+    // Claude gets no network access, so a posting given only by URL is fetched here.
+    if (!params.jobDescription?.trim() && params.jobUrl) {
+      params.jobDescription = await fetchPostingText(params.jobUrl, (url, init) => net.fetch(url, init))
+    }
+    return manager.start(params, await context())
+  })
 
   ipcMain.handle(RUNNER_CHANNELS.reply, async (_e, id: unknown, text: unknown) => {
     if (typeof text !== 'string' || !text.trim() || text.length > MAX_TEXT) throw new Error('Type a reply first.')

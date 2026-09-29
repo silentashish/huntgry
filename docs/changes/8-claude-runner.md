@@ -16,6 +16,7 @@ approval, so a one-shot `claude -p` is not enough.
 | Area | Files | Why |
 | --- | --- | --- |
 | Environment | `src/main/cli/env.ts`, `environment.ts` | Finds `claude` (well-known folders, the login-shell PATH, then the app's PATH, since a GUI app starts with a minimal PATH), the installed skill (bounded search under `~/.claude/skills` and `~/.claude/plugins`; personal beats synced), and TeX (TinyTeX, then BasicTeX/MacTeX). Builds the child env: the venv's `python3` first, then TeX and the CLI folders, `CV_HOME` = workspace; nested-session variables (`CLAUDECODE`, `CLAUDE_CODE_*`) removed. Runs the skill's own `scripts/preflight.py` with that env and parses it. Installs the Python modules into `<userData>/skill-venv`. |
+| Posting fetch | `src/main/cli/posting.ts` | A posting given only by URL is fetched by main (bounded, JSON-LD first) and becomes the job description, so the run needs no network. |
 | Command | `src/main/cli/command.ts` | `claude -p --input-format stream-json --output-format stream-json --verbose --permission-mode acceptEdits --permission-prompts none --allowedTools …` (see below) plus an appended system prompt (Huntgry context, CV_HOME, master profile, "stop at step 3", "end with the output folder", drafts in `.huntgry/drafts/`). The first message holds the job and the options. Input validation for the start form lives here so it is unit-tested. |
 | Runner | `src/main/cli/runner.ts` | `RunManager`: one `claude` process per run, **kept alive between turns** so replies go straight to stdin. A run whose process is gone (finished, app restarted) is resumed with `--resume <session-id>`. Every stdout line goes to `events.jsonl` and to the renderer. After each turn it looks for the application folder the skill wrote. Stop sends SIGTERM (SIGKILL after 3 s); Finish closes stdin. |
 | Storage | `src/main/cli/runs.ts`, `workspace/constants.ts` | `<workspace>/.huntgry/runs/<id>/run.json` (summary, atomic writes) + `events.jsonl` (append-only raw stream). No database; runs travel with the workspace. `.huntgry` is ignored by the workspace scan. |
@@ -63,17 +64,18 @@ sequenceDiagram
   the sandbox must start (`failIfUnavailable`) and commands cannot retry outside it. Even an
   allowed script therefore cannot read `~/.ssh` or copy a file in from elsewhere
   (`build.py --jd <path>`), which matters because a job posting can carry a prompt injection.
-  **Network**: WebFetch is allowed only to the job posting's own host (`WebFetch(domain:…)`),
-  and WebSearch is off, so a posting cannot make Claude send profile data to another site.
+  **Network: none.** When only a posting URL is given, Huntgry fetches it itself (`posting.ts`:
+  JSON-LD `JobPosting` description, else the page text; ≤ 2 MB, 15 s) and puts the text in the
+  first message. Claude has no WebFetch or WebSearch, because any fetch tool, even one limited
+  to the posting's host, would let a malicious posting receive profile data in a URL. Pages
+  that need JavaScript are refused with "paste the description instead".
   **Settings isolation**: `--setting-sources ""` loads no user, project or local settings, so
   inherited hooks or permission rules cannot widen (or rewrite) what the run may do. The model
   from `~/.claude/settings.json` is passed with `--model`, and Claude reads the skill's
   `SKILL.md` from its folder. `--dangerously-skip-permissions` was rejected. Refused calls
   appear in the transcript. Real runs under the final rules: a pasted posting built resume +
-  cover PDFs with zero refusals. A URL-only run on a JavaScript-rendered Ashby page could not
-  read the posting; its attempt to reach another host (`api.ashbyhq.com`) was refused, and
-  Claude asked for the text instead of guessing. The Tailor form now says to paste such
-  pages or add them on the Jobs page.
+  cover PDFs with zero refusals. JavaScript-rendered pages (Ashby, Workday) are refused before the run starts, and the Tailor
+  form says to paste them or add them on the Jobs page.
 - **Runs in the workspace, the venv in userData.** Runs are records of applications and
   belong with them. The venv is machine-specific and shared by every workspace.
 - **Markdown via `react-markdown` + `remark-gfm`** (new dependencies): Claude's gap
@@ -114,10 +116,11 @@ Backend Engineer posting:
 
 ## Known limitations / follow-ups
 
-- Your global Claude Code hooks still apply to the child. On the dev machine an `rtk` hook
-  rewrote `ls` to `rtk ls`, which the allowlist refused; Claude retried with a plain
-  command. Adding a wrapper like `rtk` to the allowlist would allow any command, so it is
-  left out on purpose.
+- The child loads no Claude Code settings files (`--setting-sources ""`), so your hooks and
+  permission rules do not apply to it. Earlier in development an `rtk` hook rewrote `ls` to
+  `rtk ls`; that no longer happens. The preferred `model` is still honoured.
+- Claude cannot research the company's engineering blog (the skill's optional step), because
+  it has no network. The tailoring itself only needs the posting and the master profile.
 - On macOS, closing the window keeps the app (and a running `claude`) alive, as macOS apps
   usually do. Quitting kills it.
 - #9 (Dashboard) will list the generated applications; #10 (Jobs) will start runs through

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { RunSummary, StartRunParams } from '@shared/runner-types'
 import { LineBuffer, parseEventLine, type HuntgryEvent } from '@shared/transcript'
-import { buildClaudeArgs, buildFirstPrompt, fetchHostOf, runTitle, userMessageLine, type SandboxPaths } from './command'
+import { buildClaudeArgs, buildFirstPrompt, runTitle, userMessageLine, type SandboxPaths } from './command'
 import { appendEvent, findOutputFolder, newRunId, readEvents, readRun, saveRun } from './runs'
 
 /**
@@ -149,7 +149,6 @@ export class RunManager {
         resumeSessionId,
         systemPrompt: ctx.systemPrompt,
         sandbox: ctx.sandbox,
-        fetchHosts: [fetchHostOf(run.params.jobUrl)].filter((h): h is string => h !== null),
         model: ctx.model
       })
     ]
