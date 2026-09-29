@@ -1,0 +1,120 @@
+{
+ "results": [
+  {
+   "jobkey": "83646eeb4bc9897a",
+   "title": "Platform Engineer",
+   "displayTitle": "Platform Engineer",
+   "company": "Capgemini",
+   "formattedLocation": "Alpharetta, GA",
+   "snippet": "<ul style=\"list-style-type:circle;margin-top: 0px;margin-bottom: 0px;padding-left:20px;\">\n <li>Build self-service portals, infrastructure <b>platform</b> catalogs, reusable components, and automation that simplify adoption of approved <b>platform</b> capabilities.</li>\n</ul>",
+   "salarySnippet": {
+    "currency": "USD",
+    "salaryTextFormatted": false,
+    "source": "EXTRACTION",
+    "text": "$34.67 - $54.18 an hour"
+   },
+   "extractedSalary": {
+    "max": 54.18,
+    "min": 34.67,
+    "type": "HOURLY"
+   },
+   "pubDate": 1790571600000,
+   "formattedRelativeTime": "Just posted",
+   "remoteLocation": false,
+   "jobTypes": [
+    "Contract"
+   ],
+   "taxonomyAttributes": [
+    {
+     "attributes": [
+      {
+       "label": "Contract",
+       "suid": "NJXCK"
+      }
+     ],
+     "label": "job-types"
+    },
+    {
+     "attributes": [],
+     "label": "remote"
+    }
+   ]
+  },
+  {
+   "jobkey": "55bac87da3cf7432",
+   "title": "Platform Engineer",
+   "displayTitle": "Platform Engineer",
+   "company": "Bain & Company Inc",
+   "formattedLocation": "Atlanta, GA 30309",
+   "snippet": "<ul style=\"list-style-type:circle;margin-top: 0px;margin-bottom: 0px;padding-left:20px;\">\n <li style=\"margin-bottom:0px;\">Implement backend features and service endpoints in existing <b>platform</b> services under the guidance of senior engineers.</li>\n <li>Generative AI and agentic systems.</li>\n</ul>",
+   "salarySnippet": {
+    "currency": "USD",
+    "salaryTextFormatted": false,
+    "source": "EXTRACTION",
+    "text": "$64,000 - $80,500 a year"
+   },
+   "extractedSalary": {
+    "max": 80500,
+    "min": 64000,
+    "type": "YEARLY"
+   },
+   "pubDate": 1787029200000,
+   "formattedRelativeTime": "30+ days ago",
+   "remoteLocation": false,
+   "jobTypes": [],
+   "taxonomyAttributes": [
+    {
+     "attributes": [
+      {
+       "label": "Full-time",
+       "suid": "CF3CP"
+      }
+     ],
+     "label": "job-types"
+    },
+    {
+     "attributes": [],
+     "label": "remote"
+    }
+   ]
+  },
+  {
+   "jobkey": "0fa2fd922bb47b39",
+   "title": "Data Platform Engineer",
+   "displayTitle": "Data Platform Engineer",
+   "company": "Primerica",
+   "formattedLocation": "Duluth, GA 30099",
+   "snippet": "<ul style=\"list-style-type:circle;margin-top: 0px;margin-bottom: 0px;padding-left:20px;\">\n <li>Ability to collaborate effectively with cloud <b>engineers</b>, software <b>engineers</b>, data <b>engineers</b>, analysts, and business stakeholders.</li>\n</ul>",
+   "salarySnippet": {
+    "currency": "USD",
+    "salaryTextFormatted": false,
+    "source": "EXTRACTION",
+    "text": "$120,000 - $140,000 a year"
+   },
+   "extractedSalary": {
+    "max": 140000,
+    "min": 120000,
+    "type": "YEARLY"
+   },
+   "pubDate": 1789966800000,
+   "formattedRelativeTime": "7 days ago",
+   "remoteLocation": false,
+   "jobTypes": [],
+   "taxonomyAttributes": [
+    {
+     "attributes": [
+      {
+       "label": "Full-time",
+       "suid": "CF3CP"
+      }
+     ],
+     "label": "job-types"
+    },
+    {
+     "attributes": [],
+     "label": "remote"
+    }
+   ]
+  }
+ ]
+}

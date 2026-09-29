@@ -1,0 +1,6 @@
+{
+  "url": "https://careers.example.org/jobs/42",
+  "title": "Data Engineer | Initech Careers",
+  "ld": ["{not json", "{\"@type\":\"Organization\",\"name\":\"Initech\"}"],
+  "text": "Data Engineer\n\n\n\nInitech is hiring a Data Engineer to build batch and streaming pipelines.\n\nResponsibilities\n- Build ETL pipelines with Airflow and dbt\n- Model data in Snowflake\n- Work with analysts on reporting\n\nRequirements\n- 3+ years with SQL and Python\n- Experience with Kafka is a plus\n\nThis role is hybrid in Austin, TX, with two office days a week. Remote candidates in Texas may be considered."
+}

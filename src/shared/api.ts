@@ -1,4 +1,5 @@
 import type { Subscribe } from './events'
+import type { JobsApi } from './jobs-types'
 import type { ProfileApi, WorkspaceApi } from './workspace-types'
 
 /**
@@ -8,6 +9,8 @@ import type { ProfileApi, WorkspaceApi } from './workspace-types'
 export interface HuntgryApi {
   workspace: WorkspaceApi
   profile: ProfileApi
+  /** Job boards: search, saved jobs, add by URL or pasted text. */
+  jobs: JobsApi
   /** Main → renderer events, restricted to `EVENT_CHANNELS`. */
   on: Subscribe
 }

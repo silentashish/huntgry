@@ -1,0 +1,146 @@
+{
+ "props": {
+  "pageProps": {
+   "ssrHits": [
+    {
+     "id": "adp___bf746f1c-7843-49be-99d0-3cae18372ef7___594192",
+     "source": "adp",
+     "apply_url": "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=bf746f1c-7843-49be-99d0-3cae18372ef7&ccId=19000101_000001&jobId=594192&lang=en_US",
+     "is_expired": false,
+     "job_information": {
+      "title": "Platform Engineer"
+     },
+     "v5_processed_job_data": {
+      "core_job_title": "Platform Engineer",
+      "requirements_summary": "Bachelor's degree or equivalent experience, professional data or platform engineering experience, Palantir Foundry or comparable platform experience, Python and PySpark proficiency, ETL, data governance, DevOps, and TS/SCI with FS clearance.",
+      "technical_tools": [
+       "Palantir Foundry",
+       "ETL",
+       "Python",
+       "PySpark",
+       "DevOps",
+       "AI/ML"
+      ],
+      "role_activities": [
+       "developing pipelines",
+       "monitoring workflows",
+       "validating products"
+      ],
+      "commitment": [
+       "Full Time"
+      ],
+      "role_type": "Individual Contributor",
+      "seniority_level": "Senior Level",
+      "workplace_type": "Onsite",
+      "formatted_workplace_location": "Herndon, Virginia, United States",
+      "yearly_min_compensation": 131644,
+      "yearly_max_compensation": 190789,
+      "listed_compensation_currency": "USD",
+      "listed_compensation_frequency": "Yearly",
+      "estimated_publish_date": "2026-09-03T21:38:00.000Z",
+      "company_name": "NS2 Mission",
+      "company_website": "sapns2.com",
+      "visa_sponsorship": false,
+      "min_industry_and_role_yoe": null
+     },
+     "enriched_company_data": {
+      "name": "NS2 Mission"
+     }
+    },
+    {
+     "id": "adp___bf746f1c-7843-49be-99d0-3cae18372ef7___591906",
+     "source": "adp",
+     "apply_url": "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=bf746f1c-7843-49be-99d0-3cae18372ef7&ccId=19000101_000001&jobId=591906&lang=en_US",
+     "is_expired": false,
+     "job_information": {
+      "title": "Platform Engineer"
+     },
+     "v5_processed_job_data": {
+      "core_job_title": "Platform Engineer",
+      "requirements_summary": "Design, implement, and maintain secure cloud platform infrastructure; manage Kubernetes, Terraform, Ansible/Puppet, Helm; administer Red Hat Linux; build CI/CD and enforce AWS IAM security.",
+      "technical_tools": [
+       "Kubernetes",
+       "Terraform",
+       "Ansible",
+       "Puppet",
+       "Red Hat Linux",
+       "Helm",
+       "AWS Identity and Access Management (IAM)"
+      ],
+      "role_activities": [
+       "designing infrastructure",
+       "managing kubernetes",
+       "automating deployments"
+      ],
+      "commitment": [
+       "Full Time"
+      ],
+      "role_type": "Individual Contributor",
+      "seniority_level": "Mid Level",
+      "workplace_type": "Onsite",
+      "formatted_workplace_location": "Chantilly, Virginia, United States",
+      "yearly_min_compensation": null,
+      "yearly_max_compensation": null,
+      "listed_compensation_currency": "USD",
+      "listed_compensation_frequency": "Yearly",
+      "estimated_publish_date": "2026-07-08T19:11:00.000Z",
+      "company_name": "NS2 Mission",
+      "company_website": null,
+      "visa_sponsorship": false,
+      "min_industry_and_role_yoe": null
+     },
+     "enriched_company_data": {
+      "name": "NS2 Mission"
+     }
+    },
+    {
+     "id": "adp___bf746f1c-7843-49be-99d0-3cae18372ef7___594444",
+     "source": "adp",
+     "apply_url": "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=bf746f1c-7843-49be-99d0-3cae18372ef7&ccId=19000101_000001&jobId=594444&lang=en_US",
+     "is_expired": false,
+     "job_information": {
+      "title": "Infrastructure Engineer"
+     },
+     "v5_processed_job_data": {
+      "core_job_title": "Infrastructure Engineer",
+      "requirements_summary": "Requires 5+ years of DevOps, infrastructure, platform, or systems engineering experience; bachelor's or technology degree or equivalent; Kubernetes, Helm, Linux, containers, DevSecOps, and configuration-as-code experience; TS/SCI with FSPS clearance.",
+      "technical_tools": [
+       "Kubernetes",
+       "Helm",
+       "Linux",
+       "Apache Kafka",
+       "Elastic Stack",
+       "Elasticsearch",
+       "Kibana"
+      ],
+      "role_activities": [
+       "operating workloads",
+       "supporting clusters",
+       "automating infrastructure"
+      ],
+      "commitment": [
+       "Full Time"
+      ],
+      "role_type": "Individual Contributor",
+      "seniority_level": "Senior Level",
+      "workplace_type": "Onsite",
+      "formatted_workplace_location": "Chantilly, Virginia, United States",
+      "yearly_min_compensation": 131644,
+      "yearly_max_compensation": 190789,
+      "listed_compensation_currency": "USD",
+      "listed_compensation_frequency": "Yearly",
+      "estimated_publish_date": "2026-09-11T21:34:00.000Z",
+      "company_name": "NS2 Mission",
+      "company_website": "sapns2.com",
+      "visa_sponsorship": false,
+      "min_industry_and_role_yoe": 5
+     },
+     "enriched_company_data": {
+      "name": "NS2 Mission"
+     }
+    }
+   ],
+   "ssrTotalCount": 94
+  }
+ }
+}
