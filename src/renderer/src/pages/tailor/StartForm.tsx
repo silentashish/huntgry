@@ -78,7 +78,7 @@ export function StartForm({ prefill, environment, busy, onStart }: Props) {
         />
         <Textarea
           label="Job description"
-          description="Paste the full posting. Leave empty to let Claude fetch it from the URL."
+          description="Paste the full posting. Leave empty to let Claude fetch it from the URL; pages that need JavaScript (Ashby, Workday, …) come back empty, so paste those, or add them on the Jobs page, which opens them in a real browser."
           autosize
           minRows={8}
           maxRows={18}

@@ -63,9 +63,17 @@ sequenceDiagram
   the sandbox must start (`failIfUnavailable`) and commands cannot retry outside it. Even an
   allowed script therefore cannot read `~/.ssh` or copy a file in from elsewhere
   (`build.py --jd <path>`), which matters because a job posting can carry a prompt injection.
-  `--dangerously-skip-permissions` was rejected. Refused calls appear in the transcript. A real
-  run under these rules (preflight, build, resume + cover PDFs) completed; the only refusal was
-  an `ls`, which Claude replaced with the Read tool.
+  **Network**: WebFetch is allowed only to the job posting's own host (`WebFetch(domain:…)`),
+  and WebSearch is off, so a posting cannot make Claude send profile data to another site.
+  **Settings isolation**: `--setting-sources ""` loads no user, project or local settings, so
+  inherited hooks or permission rules cannot widen (or rewrite) what the run may do. The model
+  from `~/.claude/settings.json` is passed with `--model`, and Claude reads the skill's
+  `SKILL.md` from its folder. `--dangerously-skip-permissions` was rejected. Refused calls
+  appear in the transcript. Real runs under the final rules: a pasted posting built resume +
+  cover PDFs with zero refusals. A URL-only run on a JavaScript-rendered Ashby page could not
+  read the posting; its attempt to reach another host (`api.ashbyhq.com`) was refused, and
+  Claude asked for the text instead of guessing. The Tailor form now says to paste such
+  pages or add them on the Jobs page.
 - **Runs in the workspace, the venv in userData.** Runs are records of applications and
   belong with them. The venv is machine-specific and shared by every workspace.
 - **Markdown via `react-markdown` + `remark-gfm`** (new dependencies): Claude's gap

@@ -74,7 +74,7 @@ describe('RunManager against a fake claude', () => {
     expect((t[0] as { text: string }).text).toContain('Build APIs at Acme.')
     expect(t.find((i) => i.kind === 'tool')).toMatchObject({ name: 'Read', status: 'ok' })
     expect(t.find((i) => i.kind === 'assistant')).toMatchObject({
-      text: expect.stringContaining('echo: Use the resume-tailor')
+      text: expect.stringContaining('echo: Follow the resume-tailor')
     })
     expect(t[t.length - 1]).toMatchObject({ kind: 'result', ok: true })
   })

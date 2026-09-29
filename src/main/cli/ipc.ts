@@ -1,5 +1,6 @@
 import { app, ipcMain, shell } from 'electron'
-import { realpath } from 'node:fs/promises'
+import { readFile, realpath } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { RUNNER_CHANNELS, type RunSummary } from '@shared/runner-types'
 import { requireCurrentWorkspace } from '../current-workspace'
@@ -54,11 +55,27 @@ async function context(): Promise<RunContext> {
       texBin: env.texBin,
       loginPath: await loginShellPath()
     }),
+    model: await preferredModel(),
     systemPrompt: buildSystemPrompt({
       workspace: workspace.path,
       masterProfile: workspace.masterProfile,
       skillDir: env.skillDir
     })
+  }
+}
+
+/**
+ * The model the user chose for Claude Code (`model` in ~/.claude/settings.json).
+ * Runs load no settings files, so it is passed explicitly; `undefined` = Claude's default.
+ */
+async function preferredModel(): Promise<string | undefined> {
+  try {
+    const settings = JSON.parse(await readFile(join(homedir(), '.claude', 'settings.json'), 'utf8')) as {
+      model?: unknown
+    }
+    return typeof settings.model === 'string' && /^[\w.[\]:-]{1,80}$/.test(settings.model) ? settings.model : undefined
+  } catch {
+    return undefined
   }
 }
 

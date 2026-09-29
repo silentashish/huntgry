@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { appendLive, buildTranscript, LineBuffer, parseEventLine, summarizeToolInput } from '@shared/transcript'
 import {
   allowedTools,
+  fetchHostOf,
   texRootOf,
   buildClaudeArgs,
   buildFirstPrompt,
@@ -114,13 +115,24 @@ describe('command line and prompts', () => {
     expect(args[args.indexOf('--permission-prompts') + 1]).toBe('none')
     expect(args).not.toContain('--dangerously-skip-permissions')
     expect(args).not.toContain('--add-dir')
+    // No inherited user/project/local settings (hooks, permission rules).
+    expect(args.slice(args.indexOf('--setting-sources'), args.indexOf('--setting-sources') + 2)).toEqual([
+      '--setting-sources',
+      ''
+    ])
     expect(args.slice(-2)).toEqual(['--resume', 'abc'])
     expect(buildClaudeArgs({ skillDir: '/s', systemPrompt: 'sys', sandbox: SANDBOX })).not.toContain('--resume')
   })
 
   it('allows only the skill scripts in the shell, reads only the skill folder, and no file writes', () => {
     const tools = allowedTools('/skills/resume-tailor')
-    for (const bare of ['Write', 'Edit', 'Read', 'Glob', 'Grep']) expect(tools).not.toContain(bare)
+    for (const bare of ['Write', 'Edit', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'])
+      expect(tools).not.toContain(bare)
+    expect(tools.some((t) => t.startsWith('WebFetch'))).toBe(false)
+    expect(allowedTools('/s', ['jobs.example.com'])).toContain('WebFetch(domain:jobs.example.com)')
+    expect(fetchHostOf('https://jobs.example.com/a?b=1')).toBe('jobs.example.com')
+    expect(fetchHostOf('file:///etc/passwd')).toBeNull()
+    expect(fetchHostOf(undefined)).toBeNull()
     expect(tools).toContain('Read(//skills/resume-tailor/**)')
     expect(tools).toContain('Bash(python3 /skills/resume-tailor/scripts/build.py:*)')
     expect(tools).toContain('Bash(python3 /skills/resume-tailor/scripts/preflight.py:*)')
