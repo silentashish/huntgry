@@ -1,3 +1,4 @@
+import type { ApplicationsApi } from './applications-types'
 import type { Subscribe } from './events'
 import type { ProfileApi, WorkspaceApi } from './workspace-types'
 
@@ -8,6 +9,8 @@ import type { ProfileApi, WorkspaceApi } from './workspace-types'
 export interface HuntgryApi {
   workspace: WorkspaceApi
   profile: ProfileApi
+  /** Generated applications in the workspace: list, tracking, files. */
+  applications: ApplicationsApi
   /** Main → renderer events, restricted to `EVENT_CHANNELS`. */
   on: Subscribe
 }
