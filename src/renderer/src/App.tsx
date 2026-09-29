@@ -78,7 +78,7 @@ export function App() {
             case 'tailor':
               return <TailorPage params={paramsFor(location, 'tailor')} />
             case 'graph':
-              return <GraphPage />
+              return <GraphPage params={paramsFor(location, 'graph')} />
             case 'settings':
               return <SettingsPage />
             case 'profile':

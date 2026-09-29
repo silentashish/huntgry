@@ -1,0 +1,55 @@
+import { Badge, Button, NavLink, ScrollArea, Stack, Text } from '@mantine/core'
+import { IconPlus } from '@tabler/icons-react'
+import type { RunSummary } from '@shared/runner-types'
+import { STATUS_LABEL } from './status'
+
+interface Props {
+  runs: RunSummary[]
+  selected: string | null
+  onSelect(id: string | null): void
+}
+
+/** Past and active runs of this workspace, newest first. */
+export function RunList({ runs, selected, onSelect }: Props) {
+  return (
+    <Stack gap="xs">
+      <Button
+        leftSection={<IconPlus size={16} />}
+        variant={selected === null ? 'filled' : 'light'}
+        onClick={() => onSelect(null)}
+      >
+        New run
+      </Button>
+      <ScrollArea.Autosize mah="calc(100vh - 180px)">
+        {runs.length === 0 && (
+          <Text size="sm" c="dimmed" p="xs">
+            No runs yet in this workspace.
+          </Text>
+        )}
+        {runs.map((r) => (
+          <NavLink
+            key={r.id}
+            active={r.id === selected}
+            onClick={() => onSelect(r.id)}
+            label={
+              <Text size="sm" fw={500} truncate>
+                {r.title}
+              </Text>
+            }
+            description={
+              <Stack gap={2}>
+                <Text size="xs" c="dimmed">
+                  {new Date(r.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+                </Text>
+                <Badge size="xs" variant="light" color={STATUS_LABEL[r.status].color}>
+                  {STATUS_LABEL[r.status].label}
+                </Badge>
+              </Stack>
+            }
+            style={{ borderRadius: 'var(--mantine-radius-md)' }}
+          />
+        ))}
+      </ScrollArea.Autosize>
+    </Stack>
+  )
+}

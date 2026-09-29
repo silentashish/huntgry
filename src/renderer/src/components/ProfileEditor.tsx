@@ -74,7 +74,9 @@ export function ProfileEditor({
 
   const dirty = useMemo(() => JSON.stringify(normalize(draft)) !== JSON.stringify(normalize(doc.profile)), [draft, doc])
 
-  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange])
+  useEffect(() => {
+    onDirtyChange?.(dirty)
+  }, [dirty, onDirtyChange])
 
   // Warn before the window closes with unsaved edits.
   useEffect(() => {
