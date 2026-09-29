@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Anchor, Badge, Button, Card, Collapse, Group, Stack, Text, Title, Tooltip } from '@mantine/core'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Alert, Anchor, Badge, Button, Card, Collapse, Group, Stack, Text, Title, Tooltip } from '@mantine/core'
 import type { GapInsight, ProfileInsights } from '@shared/insights-types'
 import { api, errorText } from '../../api'
 import { useNavigation, type ProfileSection } from '../../navigation'
@@ -41,15 +41,20 @@ export function ProfileInsightsCard() {
   const [showDismissed, setShowDismissed] = useState(false)
   const [editing, setEditing] = useState<GapInsight | null>(null)
 
-  const load = useCallback(() => {
-    api.insights
-      .get()
+  // Loads, dismissals and restores all return the full insights; only the latest request's result applies,
+  // so a slow focus reload cannot bring back a gap that was just dismissed.
+  const latest = useRef(0)
+  const apply = useCallback((request: Promise<ProfileInsights>) => {
+    const mine = ++latest.current
+    request
       .then((d) => {
+        if (latest.current !== mine) return
         setData(d)
         setError(null)
       })
-      .catch((e) => setError(errorText(e)))
+      .catch((e) => latest.current === mine && setError(errorText(e)))
   }, [])
+  const load = useCallback(() => apply(api.insights.get()), [apply])
 
   useEffect(() => {
     load()
@@ -61,7 +66,6 @@ export function ProfileInsightsCard() {
     }
   }, [load])
 
-  const act = (p: Promise<ProfileInsights>) => p.then(setData).catch((e) => setError(errorText(e)))
 
   if (error && !data) {
     return (
@@ -90,6 +94,12 @@ export function ProfileInsightsCard() {
         </Button>
       </Group>
 
+      {error && (
+        <Alert color="red" variant="light" mb="sm" withCloseButton onClose={() => setError(null)}>
+          Could not refresh: {error}
+        </Alert>
+      )}
+
       {data.profile.emptySections.length > 0 && (
         <Group gap={6} mb="sm">
           <Text size="xs" c="dimmed">
@@ -98,9 +108,11 @@ export function ProfileInsightsCard() {
           {data.profile.emptySections.map((s) => (
             <Badge
               key={s}
+              component="button"
+              type="button"
               variant="light"
               color="yellow"
-              style={{ cursor: 'pointer' }}
+              style={{ cursor: 'pointer', border: 0 }}
               onClick={() => navigate('profile', { section: s })}
             >
               {SECTION_LABEL[s]}
@@ -136,7 +148,7 @@ export function ProfileInsightsCard() {
                 <Button size="compact-xs" variant="light" onClick={() => setEditing(g)}>
                   I have this
                 </Button>
-                <Button size="compact-xs" variant="subtle" color="gray" onClick={() => act(api.insights.dismiss(g.key, g.skill))}>
+                <Button size="compact-xs" variant="subtle" color="gray" onClick={() => apply(api.insights.dismiss(g.key, g.skill))}>
                   Not me
                 </Button>
               </Group>
@@ -170,7 +182,7 @@ export function ProfileInsightsCard() {
                       variant="outline"
                       color="gray"
                       rightSection={
-                        <Anchor size="xs" component="button" onClick={() => act(api.insights.restore(d.key))}>
+                        <Anchor size="xs" component="button" onClick={() => apply(api.insights.restore(d.key))}>
                           restore
                         </Anchor>
                       }

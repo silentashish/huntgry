@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Button,
@@ -63,8 +63,11 @@ export function EvidenceModal({ gap, onClose, onSaved }: Props) {
   const [warning, setWarning] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  // Each opening is a session; results of reads, drafts and saves from an earlier one are dropped.
+  const session = useRef(0)
 
   useEffect(() => {
+    const mine = ++session.current
     if (!gap) return
     setDoc(null)
     setTarget(null)
@@ -77,12 +80,18 @@ export function EvidenceModal({ gap, onClose, onSaved }: Props) {
     api.profile
       .read()
       .then((d) => {
+        if (session.current !== mine) return
         setDoc(d)
         setTarget(d.profile.experience.length > 0 ? 'experience:0' : d.profile.projects.length > 0 ? 'project:0' : 'skills')
         setCategory(d.profile.skills[0]?.category ?? 'Other')
       })
-      .catch((e) => setError(errorText(e)))
+      .catch((e) => session.current === mine && setError(errorText(e)))
   }, [gap])
+
+  function close() {
+    session.current++
+    onClose()
+  }
 
   const options = useMemo(() => {
     if (!doc) return []
@@ -113,11 +122,13 @@ export function EvidenceModal({ gap, onClose, onSaved }: Props) {
 
   async function draft() {
     if (!gap || !t) return
+    const mine = session.current
     setDrafting(true)
     setError(null)
     setWarning(null)
     try {
       const d = await api.insights.draft({ skill: gap.skill, target: t, notes })
+      if (session.current !== mine) return
       setBullet(d.bullet)
       if (d.unsupportedNumbers.length > 0) {
         setWarning(
@@ -125,34 +136,37 @@ export function EvidenceModal({ gap, onClose, onSaved }: Props) {
         )
       }
     } catch (e) {
-      setError(errorText(e))
+      if (session.current === mine) setError(errorText(e))
     } finally {
-      setDrafting(false)
+      if (session.current === mine) setDrafting(false)
     }
   }
 
   async function save() {
     if (!doc || !preview.next) return
+    const mine = session.current
     setSaving(true)
     setError(null)
     try {
       const res = await api.profile.save(preview.next, doc.version)
+      // The profile was written either way; only this session's form reacts.
+      if (res.ok) onSaved()
+      if (session.current !== mine) return
       if (!res.ok) {
         setError(res.conflict ? 'master-profile.md changed since this opened. Close and try again.' : res.error)
         return
       }
-      onSaved()
-      onClose()
+      close()
     } catch (e) {
-      setError(errorText(e))
+      if (session.current === mine) setError(errorText(e))
     } finally {
-      setSaving(false)
+      if (session.current === mine) setSaving(false)
     }
   }
 
   const entryTarget = t && t.kind !== 'skills'
   return (
-    <Modal opened={gap !== null} onClose={onClose} title={gap ? `Add evidence for ${gap.skill}` : ''} size="lg" centered>
+    <Modal opened={gap !== null} onClose={close} title={gap ? `Add evidence for ${gap.skill}` : ''} size="lg" centered>
       {!doc && !error && <Loader size="sm" />}
       {doc && gap && (
         <Stack gap="sm">
@@ -230,7 +244,7 @@ export function EvidenceModal({ gap, onClose, onSaved }: Props) {
             </Alert>
           )}
           <Group justify="flex-end">
-            <Button variant="default" onClick={onClose}>
+            <Button variant="default" onClick={close}>
               Cancel
             </Button>
             <Button onClick={save} loading={saving} disabled={!preview.next || preview.lines.length === 0}>

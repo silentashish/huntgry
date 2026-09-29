@@ -51,9 +51,10 @@ describe('Claude draft', () => {
   })
 
   it('returns the bullet and flags numbers the notes do not contain', async () => {
-    // The fixture is an executable Node script standing in for `claude`.
+    // A Node script standing in for `claude`, run through node so it works on every platform.
     const script = join(__dirname, 'fixtures/fake-claude-draft.mjs')
-    const withScript = (notes: string) => draftEvidence(req(notes), profile, { command: script, env: fake.env })
+    const withScript = (notes: string) =>
+      draftEvidence(req(notes), profile, { command: process.execPath, args: [script], env: fake.env })
     const honest = await withScript('I wrote consumers for 12 topics in Go')
     expect(honest).toMatchObject({ bullet: 'Wrote Kafka consumers (12 topics) in Go.', unsupportedNumbers: [], costUsd: 0.002 })
     const invented = await withScript('I wrote some consumers in Go')

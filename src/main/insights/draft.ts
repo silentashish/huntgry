@@ -84,7 +84,8 @@ export function parseDraftOutput(stdout: string): { bullet: string; costUsd: num
 export async function draftEvidence(
   req: DraftRequest,
   profile: MasterProfile,
-  claude: { command: string; env: NodeJS.ProcessEnv }
+  /** `args` go before the draft arguments (e.g. a script path when `command` is node). */
+  claude: { command: string; args?: readonly string[]; env: NodeJS.ProcessEnv }
 ): Promise<EvidenceDraft> {
   if (req.notes.trim().length < 10) throw new Error('Describe what you did with it in a sentence or two first.')
   const label = targetLabel(profile, req.target)
@@ -93,7 +94,7 @@ export async function draftEvidence(
     const stdout = await new Promise<string>((resolve, reject) => {
       const child = execFile(
         claude.command,
-        draftArgs(),
+        [...(claude.args ?? []), ...draftArgs()],
         { cwd, env: claude.env, timeout: TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
         (err, out, errOut) => {
           if (err && !out) reject(new Error(`claude failed: ${(errOut || err.message).trim().slice(0, 300)}`))
