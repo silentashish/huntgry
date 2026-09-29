@@ -1,3 +1,4 @@
+import { registerRunnerIpc } from './cli/ipc'
 import { registerProfileIpc } from './profile/ipc'
 import { registerWorkspaceIpc } from './workspace/ipc'
 
@@ -8,4 +9,5 @@ import { registerWorkspaceIpc } from './workspace/ipc'
 export function registerIpcHandlers(): void {
   registerWorkspaceIpc()
   registerProfileIpc()
+  registerRunnerIpc()
 }
