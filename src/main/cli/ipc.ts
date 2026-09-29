@@ -1,4 +1,4 @@
-import { app, ipcMain, net, shell } from 'electron'
+import { app, ipcMain, shell } from 'electron'
 import { readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
@@ -127,7 +127,7 @@ export function registerRunnerIpc(): void {
     const params = requireStartParams(input)
     // Claude gets no network access, so a posting given only by URL is fetched here.
     if (!params.jobDescription?.trim() && params.jobUrl) {
-      params.jobDescription = await fetchPostingText(params.jobUrl, (url, init) => net.fetch(url, init))
+      params.jobDescription = await fetchPostingText(params.jobUrl, (url, init) => fetch(url, init)) // Node fetch: returns redirects for per-hop checks
     }
     return manager.start(params, await context())
   })

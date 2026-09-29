@@ -5,8 +5,11 @@
  * make Claude send master-profile data there (e.g. in a URL).
  */
 
+import { assertPublicUrl, resolveHost, type ResolveHost } from './public-url'
+
 const MAX_BYTES = 2 * 1024 * 1024
 const TIMEOUT_MS = 15_000
+const MAX_REDIRECTS = 5
 /** Shorter than this, the page is a shell that needs JavaScript, or a bot wall. */
 export const MIN_POSTING_CHARS = 300
 
@@ -93,30 +96,50 @@ export function postingText(html: string): string {
   return htmlToText(main)
 }
 
+/**
+ * Must return redirects as-is (status 3xx with `Location`), not follow them:
+ * each hop is checked before it is requested. Node's `fetch` does this with
+ * `redirect: 'manual'`.
+ */
 export type Fetcher = (
   url: string,
-  init: { signal: AbortSignal; redirect: 'follow'; headers: Record<string, string> }
+  init: { signal: AbortSignal; redirect: 'manual'; headers: Record<string, string> }
 ) => Promise<Response>
 
 /**
- * Downloads `url` (http/https, ≤ 2 MB, 15 s) and returns the posting text.
+ * Downloads `url` (http/https, public hosts only, ≤ 5 redirects, ≤ 2 MB, 15 s)
+ * and returns the posting text. Every hop is checked with `assertPublicUrl`, so
+ * a public URL cannot redirect the request to localhost or the private network.
  * Throws a message telling the user to paste the description when the page
  * cannot be read (blocked, needs JavaScript, not HTML).
  */
-export async function fetchPostingText(url: string, fetcher: Fetcher): Promise<string> {
+export async function fetchPostingText(
+  url: string,
+  fetcher: Fetcher,
+  resolve: ResolveHost = resolveHost
+): Promise<string> {
   const paste = 'Paste the job description instead.'
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
   try {
     let res: Response
-    try {
-      res = await fetcher(url, {
-        signal: ctrl.signal,
-        redirect: 'follow',
-        headers: { accept: 'text/html,application/xhtml+xml' }
-      })
-    } catch {
-      throw new Error(`Could not load the posting. ${paste}`)
+    let next = url
+    for (let hop = 0; ; hop++) {
+      const target = await assertPublicUrl(next, resolve)
+      try {
+        res = await fetcher(target.href, {
+          signal: ctrl.signal,
+          redirect: 'manual',
+          headers: { accept: 'text/html,application/xhtml+xml' }
+        })
+      } catch {
+        throw new Error(`Could not load the posting. ${paste}`)
+      }
+      const location = res.headers.get('location')
+      if (res.status < 300 || res.status >= 400 || !location) break
+      await res.body?.cancel()
+      if (hop >= MAX_REDIRECTS) throw new Error(`The posting URL redirects too many times. ${paste}`)
+      next = new URL(location, target).href
     }
     if (!res.ok) throw new Error(`The job site answered ${res.status}. ${paste}`)
     const type = res.headers.get('content-type') ?? ''

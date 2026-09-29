@@ -14,6 +14,7 @@ import {
 } from './command'
 import { buildChildEnv, composePath, findSkillDir, parsePreflight } from './env'
 import { fetchPostingText, htmlToText, type Fetcher } from './posting'
+import { assertPublicUrl, isPrivateAddress, type ResolveHost } from './public-url'
 import { findOutputFolder, newRunId, runDir, RUN_ID_PATTERN } from './runs'
 
 let tmp: string
@@ -334,10 +335,15 @@ describe('posting fetch (main process, no network for Claude)', () => {
     async () =>
       new Response(body, { status, headers: { 'content-type': type } })
   const long = 'We build the routing platform for 2,000 vans. '.repeat(10)
+  /** Every test host resolves to a public documentation address unless listed. */
+  const dns =
+    (overrides: Record<string, string[]> = {}): ResolveHost =>
+    async (host) =>
+      overrides[host] ?? ['203.0.113.10']
 
   it('prefers the JSON-LD JobPosting description', async () => {
     const html = `<html><head><script type="application/ld+json">${JSON.stringify({ '@graph': [{ '@type': 'JobPosting', title: 'SRE', hiringOrganization: { name: 'Acme' }, description: `<p>${long}</p><ul><li>Kubernetes &amp; Go</li></ul>` }] })}</script></head><body>nav junk</body></html>`
-    const text = await fetchPostingText('https://jobs.example.com/1', page(html))
+    const text = await fetchPostingText('https://jobs.example.com/1', page(html), dns())
     expect(text.startsWith('# SRE\n\nAcme\n\nWe build')).toBe(true)
     expect(text).toContain('- Kubernetes & Go')
     expect(text).not.toContain('nav junk')
@@ -346,24 +352,93 @@ describe('posting fetch (main process, no network for Claude)', () => {
   it('falls back to the page text and refuses pages without content', async () => {
     const text = await fetchPostingText(
       'https://a.example/j',
-      page(`<body><main><h1>Data Engineer</h1><p>${long}</p></main><script>x()</script></body>`)
+      page(`<body><main><h1>Data Engineer</h1><p>${long}</p></main><script>x()</script></body>`),
+      dns()
     )
     expect(text).toContain('Data Engineer')
     expect(text).not.toContain('x()')
-    await expect(fetchPostingText('https://a.example/j', page('<body><div id="root"></div></body>'))).rejects.toThrow(
-      /needs JavaScript.*Paste/
+    await expect(
+      fetchPostingText('https://a.example/j', page('<body><div id="root"></div></body>'), dns())
+    ).rejects.toThrow(/needs JavaScript.*Paste/)
+    await expect(fetchPostingText('https://a.example/j', page('nope', 'text/html', 403), dns())).rejects.toThrow(
+      /403.*Paste/
     )
-    await expect(fetchPostingText('https://a.example/j', page('nope', 'text/html', 403))).rejects.toThrow(/403.*Paste/)
-    await expect(fetchPostingText('https://a.example/j', page('%PDF', 'application/pdf'))).rejects.toThrow(
+    await expect(fetchPostingText('https://a.example/j', page('%PDF', 'application/pdf'), dns())).rejects.toThrow(
       /not a web page/
     )
     await expect(
-      fetchPostingText('https://a.example/j', async () => {
-        throw new Error('ENOTFOUND')
-      })
+      fetchPostingText(
+        'https://a.example/j',
+        async () => {
+          throw new Error('ENOTFOUND')
+        },
+        dns()
+      )
     ).rejects.toThrow(/Could not load/)
   })
 
+  /** Serves `routes[url]`: a redirect target string, or HTML. Records every URL requested. */
+  const site = (routes: Record<string, { redirect: string } | string>, seen: string[]): Fetcher =>
+    async (url, init) => {
+      expect(init.redirect).toBe('manual')
+      seen.push(url)
+      const route = routes[url]
+      if (route === undefined) return new Response('missing', { status: 404 })
+      if (typeof route === 'string') return new Response(route, { headers: { 'content-type': 'text/html' } })
+      return new Response(null, { status: 302, headers: { location: route.redirect } })
+    }
+
+  it('follows public redirects, checking every hop', async () => {
+    const seen: string[] = []
+    const text = await fetchPostingText(
+      'https://short.example/x',
+      site({ 'https://short.example/x': { redirect: '/job' }, 'https://short.example/job': `<main>${long}</main>` }, seen),
+      dns()
+    )
+    expect(text).toContain('routing platform')
+    expect(seen).toEqual(['https://short.example/x', 'https://short.example/job'])
+  })
+
+  it('refuses redirects to loopback, private IPs and names that resolve to them', async () => {
+    for (const target of ['http://127.0.0.1:8080/admin', 'http://[::1]/', 'http://169.254.169.254/latest/meta-data', 'http://localhost/', 'http://intranet.example/']) {
+      const seen: string[] = []
+      await expect(
+        fetchPostingText(
+          'https://jobs.example/1',
+          site({ 'https://jobs.example/1': { redirect: target } }, seen),
+          dns({ 'intranet.example': ['10.0.0.5'] })
+        )
+      ).rejects.toThrow(/local or private-network/)
+      expect(seen).toEqual(['https://jobs.example/1'])
+    }
+  })
+
+  it('refuses a private start URL before any request and stops redirect loops', async () => {
+    const seen: string[] = []
+    await expect(fetchPostingText('http://192.168.1.1/', site({}, seen), dns())).rejects.toThrow(/private-network/)
+    expect(seen).toEqual([])
+    await expect(
+      fetchPostingText('https://loop.example/a', site({ 'https://loop.example/a': { redirect: '/a' } }, seen), dns())
+    ).rejects.toThrow(/redirects too many times/)
+  })
+})
+
+describe('public URL guard', () => {
+  it('classifies private and public addresses', () => {
+    for (const a of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.0.10', '169.254.169.254', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:127.0.0.1', 'not-an-ip']) {
+      expect(isPrivateAddress(a), a).toBe(true)
+    }
+    for (const a of ['8.8.8.8', '203.0.113.10', '2606:4700::1111', '::ffff:8.8.8.8']) {
+      expect(isPrivateAddress(a), a).toBe(false)
+    }
+  })
+
+  it('rejects non-http schemes and names resolving to any private address', async () => {
+    await expect(assertPublicUrl('file:///etc/passwd', async () => [])).rejects.toThrow(/http/)
+    await expect(assertPublicUrl('https://mixed.example/', async () => ['8.8.8.8', '10.0.0.1'])).rejects.toThrow(/private/)
+    await expect(assertPublicUrl('https://gone.example/', async () => { throw new Error('ENOTFOUND') })).rejects.toThrow(/Could not find/)
+    expect((await assertPublicUrl('https://ok.example/p', async () => ['8.8.8.8'])).hostname).toBe('ok.example')
+  })
   it('decodes entities safely', () => {
     expect(htmlToText('<p>A&#99999999;B &#x1F600; &amp;</p>')).toBe('A&#99999999;B 😀 &')
   })
