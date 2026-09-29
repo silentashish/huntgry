@@ -148,7 +148,9 @@ export function StartForm({ prefill, environment, busy, onStart }: Props) {
                 jobId: jobId.trim() || undefined,
                 notes: notes.trim() || undefined,
                 coverLetter,
-                dateStyle
+                dateStyle,
+                // Kept from the Jobs page; a URL typed here is a manual entry.
+                source: prefill?.source ?? (jobUrl.trim() ? 'manual' : undefined)
               })
             }
           >

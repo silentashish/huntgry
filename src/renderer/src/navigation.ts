@@ -1,3 +1,4 @@
+import type { JobSourceTag } from '@shared/runner-types'
 import { createContext, useContext } from 'react'
 
 /**
@@ -10,7 +11,17 @@ export interface PageParams {
   dashboard: undefined
   jobs: undefined
   /** Pre-fills the Tailor form, e.g. from a job found on the Jobs page. */
-  tailor: { jobDescription?: string; jobUrl?: string; company?: string; role?: string; jobId?: string } | undefined
+  tailor:
+    | {
+        jobDescription?: string
+        jobUrl?: string
+        company?: string
+        role?: string
+        jobId?: string
+        /** Job board the job came from, recorded with the application. */
+        source?: JobSourceTag
+      }
+    | undefined
   graph: { nodeId?: string } | undefined
   profile: { section?: ProfileSection } | undefined
   settings: undefined

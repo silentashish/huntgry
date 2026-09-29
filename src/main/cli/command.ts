@@ -1,4 +1,4 @@
-import type { StartRunParams } from '@shared/runner-types'
+import { JOB_SOURCE_TAGS, type JobSourceTag, type StartRunParams } from '@shared/runner-types'
 
 /**
  * The `claude` command line and prompts for a tailoring run. Main builds all
@@ -202,7 +202,8 @@ export function requireStartParams(input: unknown): StartRunParams {
     jobId: optionalText(p.jobId, 'job id', 200),
     notes: optionalText(p.notes, 'notes', 20_000),
     coverLetter: p.coverLetter === true,
-    dateStyle: p.dateStyle === 'inline' ? 'inline' : 'right'
+    dateStyle: p.dateStyle === 'inline' ? 'inline' : 'right',
+    source: (JOB_SOURCE_TAGS as readonly unknown[]).includes(p.source) ? (p.source as JobSourceTag) : undefined
   }
   if (params.jobUrl && !/^https?:\/\//i.test(params.jobUrl))
     throw new Error('The job URL must start with http:// or https://.')
