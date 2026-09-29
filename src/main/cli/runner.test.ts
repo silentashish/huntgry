@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { RunSummary, StartRunParams } from '@shared/runner-types'
 import { buildTranscript } from '@shared/transcript'
 import { RunManager, type RunContext } from './runner'
-import { listRuns, readEvents, readRun } from './runs'
+import { listRuns, readEvents, readRun, saveRun } from './runs'
 
 const FAKE = join(__dirname, 'fixtures/fake-claude.mjs')
 const params: StartRunParams = {
@@ -106,6 +106,23 @@ describe('RunManager against a fake claude', () => {
     // seq keeps counting across the resumed process: every live event's seq is its line in events.jsonl.
     const seqs = live.filter((l) => l.runId === id).map((l) => l.seq)
     expect(seqs).toEqual(events.map((_, i) => i))
+  })
+
+  it('marks a resumed run failed when claude cannot be started', async () => {
+    // reply() sets the run to "running" before the spawn error arrives, so the close handler fails it.
+    const { id } = await manager.start(params, ctx())
+    await until(id, (r) => r.status === 'waiting')
+    manager.finish(id)
+    await until(id, (r) => r.status === 'finished' && !r.live)
+    await manager.whenIdle()
+    // As after an app restart mid-conversation: waiting for the user, no process.
+    await saveRun(ws, { ...(await readRun(ws, id)), status: 'waiting', live: false })
+
+    await manager.reply(id, 'go on', async () => ({ ...ctx(), command: join(ws, 'no-such-claude'), commandPrefixArgs: [] }))
+    const failed = await until(id, (r) => r.status === 'failed' && !r.live)
+    expect(failed.error).toMatch(/ENOENT/)
+    await manager.whenIdle()
+    expect((await readRun(ws, id)).status).toBe('failed')
   })
 
   it('stop kills the process and records it', async () => {

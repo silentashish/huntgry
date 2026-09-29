@@ -78,8 +78,20 @@ app.whenReady().then(() => {
   })
 })
 
-// Never leave a `claude` child running after the app is gone.
-app.on('before-quit', stopAllRuns)
+// Never leave a `claude` child running after the app is gone. Electron does not
+// wait for async listeners, so hold the first quit until the runs are stopped
+// and saved, then quit again (the guard lets that second quit through).
+let runsStopped = false
+app.on('before-quit', (event) => {
+  if (runsStopped) return
+  event.preventDefault()
+  void stopAllRuns()
+    .catch((err: unknown) => console.error('Stopping runs before quit failed:', err))
+    .finally(() => {
+      runsStopped = true
+      app.quit()
+    })
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
