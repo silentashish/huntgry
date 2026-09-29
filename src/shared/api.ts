@@ -2,6 +2,7 @@ import type { ApplicationsApi } from './applications-types'
 import type { Subscribe } from './events'
 import type { RunnerApi } from './runner-types'
 import type { GraphApi } from './graph-types'
+import type { InsightsApi } from './insights-types'
 import type { JobsApi } from './jobs-types'
 import type { ProfileApi, WorkspaceApi } from './workspace-types'
 
@@ -20,6 +21,8 @@ export interface HuntgryApi {
   graph: GraphApi
   /** Job boards: search, saved jobs, add by URL or pasted text. */
   jobs: JobsApi
+  /** Gaps job descriptions keep asking for, and Claude-drafted evidence for the master profile. */
+  insights: InsightsApi
   /** Main → renderer events, restricted to `EVENT_CHANNELS`. */
   on: Subscribe
 }
