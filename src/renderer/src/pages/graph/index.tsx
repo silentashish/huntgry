@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Alert,
   Button,
@@ -35,6 +35,11 @@ export function GraphPage({ params }: { params: PageParams['graph'] }) {
   const [search, setSearch] = useState('')
   const [showJobs, setShowJobs] = useState(true)
   const { graph, jobs, error, reload } = useKnowledgeGraph(showJobs)
+
+  // A selected node can disappear (overlay turned off, profile edited): drop the selection with it.
+  useEffect(() => {
+    if (graph && selected && !graph.nodes.some((n) => n.id === selected)) setSelected(null)
+  }, [graph, selected])
 
   const hiddenKinds = useMemo(() => new Set<NodeKind>(), [])
   const matches = useMemo(() => {

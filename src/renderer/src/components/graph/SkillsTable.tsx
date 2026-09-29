@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Badge, Table, Text, UnstyledButton } from '@mantine/core'
+import { Anchor, Badge, Table, Text, UnstyledButton } from '@mantine/core'
 import type { KnowledgeGraph, SkillInfo } from '@shared/knowledge-graph'
 
 type SortKey = 'name' | 'years' | 'evidence' | 'jobs'
@@ -58,24 +58,24 @@ export function SkillsTable({
       </Table.Thead>
       <Table.Tbody>
         {rows.map((s) => (
-          <Table.Tr
-            key={s.id}
-            onClick={() => onSelect(s.id)}
-            // Rows are keyboard-operable: Tab to a row, Enter or Space opens its details.
-            tabIndex={0}
-            role="button"
-            aria-label={`Show details for ${s.name}`}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                onSelect(s.id)
-              }
-            }}
-            style={{ cursor: 'pointer' }}
-          >
+          <Table.Tr key={s.id} onClick={() => onSelect(s.id)} style={{ cursor: 'pointer' }}>
             <Table.Td>
               <Text size="sm" fw={500}>
-                {s.name}{' '}
+                {/* The row stays a table row for screen readers; the name is the keyboard-operable control. */}
+                <Anchor
+                  component="button"
+                  type="button"
+                  size="sm"
+                  fw={500}
+                  c="inherit"
+                  aria-label={`Show details for ${s.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onSelect(s.id)
+                  }}
+                >
+                  {s.name}
+                </Anchor>{' '}
                 {s.gap && (
                   <Badge size="xs" color="orange" variant="light">
                     gap

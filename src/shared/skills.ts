@@ -202,8 +202,9 @@ export function displaySkill(name: string): string {
 const SLASH_NAMES = ['CI/CD', 'TCP/IP', 'PL/SQL', 'UI/UX', 'A/B testing', 'I/O']
 
 export function splitSkills(field: string): string[] {
-  // Shield known slash names with a placeholder, split, then restore them.
-  let shielded = field
+  // Drop annotations first ("AWS (EKS/EC2)"), so their slashes and commas do not split.
+  // Then shield known slash names with a placeholder, split, and restore them.
+  let shielded = field.replace(/\([^()]*\)/g, ' ')
   SLASH_NAMES.forEach((name, i) => {
     shielded = shielded.replace(
       new RegExp(escapeRegExp(name), 'gi'),
@@ -213,7 +214,7 @@ export function splitSkills(field: string): string[] {
   return shielded
     .split(/[,;|/•·]|\s+and\s+/i)
     .map((s) => s.replace(/\u0000\d+:([^\u0000]*)\u0000/g, (_m, name: string) => name.replace('\u0001', '/')))
-    .map((s) => s.replace(/\(.*?\)/g, '').trim())
+    .map((s) => s.trim())
     .filter((s) => s.length > 0 && s.length <= 40)
 }
 
@@ -256,13 +257,30 @@ export function mentionPatterns(display: string): RegExp[] {
 /** Words that turn a mention around: "no production Rust", "without Kafka", "limited Go". */
 const NEGATION = /\b(no|not|never|without|lacks?|lacking|limited|little|none|zero|haven't|hasn't|don't|didn't)\b/i
 
+/** Where one clause ends and the next begins, so a negation does not reach past it. */
+const CLAUSE_BOUNDARY = /[,;:()]|\b(?:but|however|while|although|though|whereas|yet)\b/i
+
 /**
- * Whether `text` mentions the skill affirmatively: at least one sentence
- * mentions it without a negation, so "No production Rust experience" is not
- * evidence of Rust.
+ * Whether `text` mentions the skill affirmatively: at least one mention is not
+ * negated. A mention is negated when a negation appears in the few words
+ * before it within the same clause, so "No production Rust experience" is not
+ * evidence of Rust, while "Used Python but not Rust" still is evidence of Python.
  */
 export function mentionsAffirmatively(text: string, display: string): boolean {
-  return text.split(/(?<=[.!?;])\s+|\n+/).some((sentence) => mentions(sentence, display) && !NEGATION.test(sentence))
+  for (const re of mentionPatterns(display)) {
+    re.lastIndex = 0
+    for (const m of text.matchAll(re)) {
+      const before =
+        text
+          .slice(0, m.index)
+          .split(/(?<=[.!?])\s+|\n+/)
+          .pop() ?? ''
+      const clause = before.split(CLAUSE_BOUNDARY).pop() ?? ''
+      const nearby = clause.trim().split(/\s+/).slice(-5).join(' ')
+      if (!NEGATION.test(nearby)) return true
+    }
+  }
+  return false
 }
 
 /** Whether `text` mentions the skill (any spelling). */

@@ -76,6 +76,7 @@ describe('skill names', () => {
   it('splits technology fields but keeps names with a slash', () => {
     expect(splitSkills('Python, Go / Kafka; AWS (EKS) and Docker')).toEqual(['Python', 'Go', 'Kafka', 'AWS', 'Docker'])
     expect(splitSkills('CI/CD, Python / ci/cd, UI/UX')).toEqual(['CI/CD', 'Python', 'ci/cd', 'UI/UX'])
+    expect(splitSkills('AWS (EKS/EC2), Go (1.22, generics)')).toEqual(['AWS', 'Go'])
   })
 
   it('matches three-letter names in any case, but ordinary-word names only as written', () => {
@@ -85,6 +86,11 @@ describe('skill names', () => {
     expect(mentions('distributed training on Ray', 'Ray')).toBe(true)
     expect(mentionsAffirmatively('No production Rust experience. Some Go.', 'Rust')).toBe(false)
     expect(mentionsAffirmatively('Wrote Rust services.', 'Rust')).toBe(true)
+    // A negation only covers the skill it describes.
+    expect(mentionsAffirmatively('Used Python but not Rust.', 'Python')).toBe(true)
+    expect(mentionsAffirmatively('Used Python but not Rust.', 'Rust')).toBe(false)
+    expect(mentionsAffirmatively('No Kafka; built the pipeline in Airflow.', 'Airflow')).toBe(true)
+    expect(mentionsAffirmatively('Rust at work, no Rust at home', 'Rust')).toBe(true)
   })
 
   it('finds mentions without matching ordinary words or longer names', () => {
@@ -204,7 +210,9 @@ describe('buildKnowledgeGraph', () => {
 
   it('keeps ISO dates whole when computing project years', () => {
     const p = profile()
-    p.projects = [{ name: 'Tool', link: '', dates: '2022-03 – 2024-03', technologies: 'Rust', description: '', highlights: [] }]
+    p.projects = [
+      { name: 'Tool', link: '', dates: '2022-03 – 2024-03', technologies: 'Rust', description: '', highlights: [] }
+    ]
     const byName = Object.fromEntries(buildKnowledgeGraph(p, [], NOW).skills.map((s) => [s.name, s]))
     expect(byName.Rust.years).toBe(2)
   })
