@@ -379,6 +379,40 @@ describe('service with a stub loader', () => {
     }
   })
 
+  it('fetches details through the hiring.cafe copy when the Indeed copy is canonical', async () => {
+    const hc = await fixture('hiringcafe-next-data.json')
+    const hcJob = { ...parseHiringCafeHits({ hits: hc.props.pageProps.ssrHits })[0], fetchedAt: '2030-01-02T00:00:00Z' }
+    // Saved first, so the Indeed record is the canonical one.
+    const card = {
+      ...parseIndeedCards(await fixture('indeed-jobcards.json'))[0],
+      title: hcJob.title,
+      company: hcJob.company,
+      location: 'Herndon, VA',
+      fetchedAt: '2030-01-01T00:00:00Z'
+    }
+    await saveJob(ws, card)
+    await saveJob(ws, hcJob)
+    const canonical = (await listJobs(ws)).find((j) => j.id === card.id)!
+    expect(canonical.aliases).toEqual([hcJob.id])
+
+    const posting = await fixture('jsonld-posting.json')
+    const requested: string[] = []
+    const viaHc = async (url: string): Promise<LoadResult> => {
+      requested.push(url)
+      return url === hcJob.url ? { status: 'ok', data: { ...posting, url } } : { status: 'error', message: 'unexpected url' }
+    }
+    for (const id of [card.id, hcJob.id]) {
+      const full = await fetchDetails(ws, id, viaHc)
+      expect(full.id).toBe(card.id)
+      expect(full.descriptionComplete).toBe(true)
+      expect(full.description).toContain('routing platform')
+    }
+    // Loaded once from the hiring.cafe copy's URL (the second call finds it complete), saved to the canonical file.
+    expect(requested).toEqual([hcJob.url])
+    const raw = JSON.parse(await readFile(join(ws, '.huntgry/jobs', jobFileName(card.id)), 'utf8'))
+    expect(raw.descriptionComplete).toBe(true)
+  })
+
   it('validates queries', () => {
     expect(() => validateQuery({ keywords: ' ', sources: ['indeed'] })).toThrow(/keywords/)
     expect(() => validateQuery({ keywords: 'x', sources: ['monster'] })).toThrow(/job board/)

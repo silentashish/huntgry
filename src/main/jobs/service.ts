@@ -80,22 +80,27 @@ export async function addByUrl(workspace: string, url: string, load: Loader): Pr
 }
 
 /**
- * Full description for a saved job. hiring.cafe: the employer's posting page.
- * Indeed: its job pages are behind a human check, so this reports that.
+ * Full description for a saved job, from the employer's posting page of the
+ * first copy of the job that can be loaded. hiring.cafe and URL copies can;
+ * Indeed job pages are behind a human check, so a job known only from Indeed
+ * reports that. The description is saved to the canonical record.
  */
 export async function fetchDetails(workspace: string, id: string, load: Loader): Promise<Job> {
   const job = await findCanonical(workspace, id)
   if (!job) throw new Error('This job is no longer saved.')
   if (job.descriptionComplete) return job
-  if (job.source === 'indeed') {
+  // A job seen on several boards: the canonical copy may be Indeed's while another board's copy has a loadable URL.
+  const copies = [job, ...(await Promise.all((job.aliases ?? []).map((a) => readJob(workspace, a))))]
+  const fetchable = copies.find((c): c is Job => !!c && c.source !== 'indeed' && /^https?:\/\//i.test(c.url))
+  if (!fetchable) {
     throw new Error(
       'Indeed shows full job descriptions only after a human check. Open the posting and paste the description.'
     )
   }
-  const res = await load(job.url, POSTING_EXTRACT)
+  const res = await load(fetchable.url, POSTING_EXTRACT)
   if (res.status !== 'ok')
     throw new Error(`${res.message} The summary from the job board is kept; open the posting to read it all.`)
-  const posting = parsePosting(res.data as PageData, job.source)
+  const posting = parsePosting(res.data as PageData, fetchable.source)
   // A complete posting always wins; otherwise only take it if it says more than the board's summary.
   if (!posting || (!posting.descriptionComplete && posting.description.length <= job.description.length)) {
     throw new Error("The employer's page did not have a readable description. Open the posting to read it.")
