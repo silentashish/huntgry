@@ -46,7 +46,14 @@ export async function searchJobs(workspace: string, query: JobQuery, load: Loade
   const found: Job[] = []
   for (const s of query.sources) {
     const src = SOURCES[s]
-    const res = await load(src.url(query), src.extract)
+    let res: LoadResult
+    try {
+      res = await load(src.url(query), src.extract)
+    } catch (err) {
+      // One board failing must not hide the others' results.
+      sources.push({ source: s, status: 'error', count: 0, message: err instanceof Error ? err.message : String(err) })
+      continue
+    }
     if (res.status !== 'ok') {
       sources.push({ source: s, status: res.status, count: 0, message: res.message })
       continue
@@ -97,7 +104,7 @@ export async function fetchDetails(workspace: string, id: string, load: Loader):
       'Indeed shows full job descriptions only after a human check. Open the posting and paste the description.'
     )
   }
-  // Try each loadable copy in turn; the first readable posting wins, otherwise report the last failure.
+  // Try each loadable copy in turn until one gives a complete posting; a longer partial one is the fallback.
   let posting: Job | null = null
   let failure = ''
   for (const copy of fetchable) {
@@ -107,13 +114,14 @@ export async function fetchDetails(workspace: string, id: string, load: Loader):
       continue
     }
     const parsed = parsePosting(res.data as PageData, copy.source)
-    // A complete posting always wins; otherwise only take it if it says more than the board's summary.
-    if (!parsed || (!parsed.descriptionComplete && parsed.description.length <= job.description.length)) {
-      failure = "The employer's page did not have a readable description. Open the posting to read it."
-      continue
+    if (parsed?.descriptionComplete) {
+      posting = parsed
+      break
     }
-    posting = parsed
-    break
+    // An incomplete posting is only worth keeping if it says more than what is saved already.
+    const best = posting?.description.length ?? job.description.length
+    if (parsed && parsed.description.length > best) posting = parsed
+    else if (!posting) failure = "The employer's page did not have a readable description. Open the posting to read it."
   }
   if (!posting) throw new Error(failure)
   await saveJob(workspace, {

@@ -9,7 +9,7 @@ import { addByUrl, addPasted, fetchDetails, searchJobs, updateJob, validateQuery
 import { hiringCafeSearchUrl, matchesLocation, parseHiringCafeHits } from './sources/hiringcafe'
 import { indeedSearchUrl, parseIndeedCards } from './sources/indeed'
 import { findJobPosting, isoDate, parsePosting, urlJobId, type PageData } from './sources/posting'
-import { canonicalize, canonicalKey, jobFileName, listJobs, mergeJob, recentSearches, saveJob } from './store'
+import { canonicalize, canonicalKey, jobFileName, listJobs, mergeJob, recentSearches, saveJob, writeJobFile } from './store'
 import { htmlToText } from './text'
 
 const fixture = async (name: string) => JSON.parse(await readFile(join(__dirname, 'fixtures', name), 'utf8'))
@@ -127,6 +127,19 @@ describe('postings by URL', () => {
     expect(job.descriptionComplete).toBe(true)
     // Short page text too: the JSON-LD description is kept (and marked incomplete).
     expect(parsePosting({ ...plain, ld: [stub], text: 'Apply now' })!.description).toBe('See below.')
+  })
+
+  it('keeps a short JSON-LD description when the page text is something else', async () => {
+    const plain: PageData = await fixture('plain-posting.json')
+    const short = 'Own the ranking stack for marketplace search: PyTorch models, Spark features, online A/B tests.'
+    const ld = JSON.stringify({ '@type': 'JobPosting', title: 'Search Ranking Engineer', description: short })
+    // The page text is a different posting (or a site footer): it neither names this job nor contains its description.
+    const job = parsePosting({ ...plain, ld: [ld] })!
+    expect(job.description).toBe(short)
+    expect(job.descriptionComplete).toBe(false)
+    // Same title but the text doesn't contain the description either: still kept.
+    const sameTitle = parsePosting({ ...plain, ld: [JSON.stringify({ '@type': 'JobPosting', title: 'Data Engineer', description: short })] })!
+    expect(sameTitle.description).toBe(short)
   })
 
   it('ignores tracking parameters in URL ids', () => {
@@ -285,11 +298,26 @@ describe('store', () => {
 })
 
 describe('service with a stub loader', () => {
+  const readJobRaw = async (id: string): Promise<Job> =>
+    JSON.parse(await readFile(join(ws, '.huntgry/jobs', jobFileName(id)), 'utf8'))
   const pages: Record<string, LoadResult> = {}
   const load = async (url: string): Promise<LoadResult> => {
     for (const [prefix, res] of Object.entries(pages)) if (url.startsWith(prefix)) return res
     return { status: 'error', message: 'unexpected url' }
   }
+
+  it('reports a board whose loader throws and still searches the others', async () => {
+    const hc = await fixture('hiringcafe-next-data.json')
+    const flaky = async (url: string): Promise<LoadResult> => {
+      if (url.includes('indeed')) throw new Error('The page closed.')
+      return { status: 'ok', data: { hits: hc.props.pageProps.ssrHits } }
+    }
+    const res = await searchJobs(ws, validateQuery({ keywords: 'x', sources: ['indeed', 'hiring.cafe'] }), flaky)
+    expect(res.sources).toEqual([
+      { source: 'indeed', status: 'error', count: 0, message: 'The page closed.' },
+      { source: 'hiring.cafe', status: 'ok', count: 3, message: undefined }
+    ])
+  })
 
   it('searches both boards, saves results and reports a blocked board', async () => {
     const hc = await fixture('hiringcafe-next-data.json')
@@ -440,6 +468,18 @@ describe('service with a stub loader', () => {
     }
     const full = await fetchDetails(ws, hcJob.id, firstFails)
     expect(full.descriptionComplete).toBe(true)
+    expect(requested).toEqual([hcJob.url, urlCopy.url])
+
+    // A first copy with only a partial description does not stop the search for a complete one.
+    const partial = { ...(await fixture('plain-posting.json')), ld: [JSON.stringify({ '@type': 'JobPosting', title: 'X', description: 'Short blurb.' })], text: '' }
+    await writeJobFile(ws, { ...(await readJobRaw(hcJob.id)), description: '', descriptionComplete: false })
+    await writeJobFile(ws, { ...(await readJobRaw(urlCopy.id)), description: '', descriptionComplete: false })
+    requested.length = 0
+    const partialFirst = async (url: string): Promise<LoadResult> => {
+      requested.push(url)
+      return { status: 'ok', data: url === hcJob.url ? { ...partial, url } : { ...posting, url } }
+    }
+    expect((await fetchDetails(ws, hcJob.id, partialFirst)).descriptionComplete).toBe(true)
     expect(requested).toEqual([hcJob.url, urlCopy.url])
 
     // When every copy fails, the last failure is reported.

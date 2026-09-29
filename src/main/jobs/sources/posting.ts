@@ -98,6 +98,17 @@ export interface PageData {
   url: string
 }
 
+const squash = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim()
+
+/** Whether the page text is the job posting itself, not unrelated page content. */
+function pageTextIsPosting(text: string, title: string, ldDescription: string): boolean {
+  const page = squash(text)
+  if (!title || !page.includes(squash(title))) return false
+  // A real (if short) description must appear on the page; a placeholder like "See below." need not.
+  const ld = squash(ldDescription)
+  return ld.length < 40 || page.includes(ld.slice(0, 60))
+}
+
 /** Builds a job from an extracted page. `null` when the page has no usable content. */
 export function parsePosting(page: PageData, source: JobSourceId = 'url', now = new Date()): Job | null {
   const posting = findJobPosting(page.ld)
@@ -106,9 +117,13 @@ export function parsePosting(page: PageData, source: JobSourceId = 'url', now = 
   if (posting) {
     const { location, remote } = locationOf(posting)
     const ldDescription = htmlToText(str(posting.description))
-    // Some pages ship JobPosting metadata with an empty or stub description; the page text is then the posting.
-    const description = ldDescription.length > 200 || text.length < 200 ? ldDescription : text
     const title = str(posting.title) || page.title
+    // Some pages ship JobPosting metadata with an empty or stub description; the page text is then the posting,
+    // but only when it evidently is: it names the job and contains the JSON-LD description's opening words.
+    const description =
+      ldDescription.length <= 200 && text.length >= 200 && pageTextIsPosting(text, title, ldDescription)
+        ? text
+        : ldDescription
     if (!title) return null
     return {
       id: `${source}:${urlJobId(url)}`,
