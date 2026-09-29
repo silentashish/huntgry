@@ -11,14 +11,14 @@ export const SKILL_SCRIPTS = ['build.py', 'preflight.py', 'verify.py', 'render.p
 /**
  * Tools the skill may use without asking. Everything else is refused
  * (`--permission-prompts none`): a headless run has nobody to answer a
- * permission prompt.
+ * permission prompt, and a job posting could carry a prompt injection.
  *
- * - File edits are not listed: `acceptEdits` auto-approves them inside the
- *   working directory (the workspace) only, so Claude cannot write elsewhere,
- *   including into the skill's own scripts.
- * - Python is limited to the skill's scripts by absolute path; no `python3 -c`
- *   or arbitrary scripts, since a job posting could carry a prompt injection.
- * - Shell access is otherwise read-only helpers the skill uses.
+ * - Files: reads and edits inside the working directory (the workspace) need
+ *   no rule; the only extra read access is the skill folder. Nothing outside
+ *   the workspace can be edited, including the skill's own scripts.
+ * - Shell: only the skill's scripts, by absolute path (no `python3 -c`, no
+ *   other commands), and every command runs in the OS sandbox from
+ *   `buildSandboxSettings`.
  */
 export function allowedTools(skillDir: string): string[] {
   const scripts = SKILL_SCRIPTS.flatMap((script) => {
@@ -28,19 +28,61 @@ export function allowedTools(skillDir: string): string[] {
   })
   return [
     'Skill',
-    'Read',
-    'Glob',
-    'Grep',
+    // Permission rules use `//` for an absolute path.
+    `Read(/${skillDir}/**)`,
     'WebFetch',
     'WebSearch',
     'TodoWrite',
-    ...scripts,
-    'Bash(mkdir:*)',
-    'Bash(ls:*)',
-    'Bash(pdftotext:*)',
-    'Bash(pdftoppm:*)',
-    'Bash(pdfinfo:*)'
+    ...scripts
   ]
+}
+
+export interface SandboxPaths {
+  workspace: string
+  skillDir: string
+  venvDir: string
+  /** TeX distribution root (e.g. `~/Library/TinyTeX`), or `null` when TeX is not found. */
+  texRoot: string | null
+  /** More readable paths, e.g. the real targets of symlinked ones. */
+  extraRead?: string[]
+}
+
+/**
+ * Claude Code's OS-level sandbox for the child's shell commands (Seatbelt on
+ * macOS). Reads of the home folder are denied except the workspace, the skill,
+ * the venv and TeX; writes stay in the workspace and the per-user temp folder.
+ * It must start (`failIfUnavailable`) and commands cannot retry outside it,
+ * so even an allowed script cannot read `~/.ssh` or copy a file in from
+ * elsewhere. Commands still need the allowlist (`autoAllowBashIfSandboxed: false`).
+ */
+export function buildSandboxSettings(paths: SandboxPaths): Record<string, unknown> {
+  return {
+    sandbox: {
+      enabled: true,
+      failIfUnavailable: true,
+      allowUnsandboxedCommands: false,
+      autoAllowBashIfSandboxed: false,
+      filesystem: {
+        denyRead: ['~/'],
+        allowRead: [
+          ...new Set([
+            paths.workspace,
+            paths.skillDir,
+            paths.venvDir,
+            ...(paths.texRoot ? [paths.texRoot] : []),
+            ...(paths.extraRead ?? [])
+          ])
+        ]
+      }
+    }
+  }
+}
+
+/** The TeX root for a bin folder: `…/TinyTeX/bin/universal-darwin` → `…/TinyTeX`; system folders need no entry. */
+export function texRootOf(texBin: string | null): string | null {
+  if (!texBin) return null
+  const m = /^(.*\/(?:\.?TinyTeX|texlive\/\d{4}))\/bin\/[^/]+\/?$/.exec(texBin)
+  return m ? m[1] : texBin.startsWith('/Library/TeX') || texBin.startsWith('/usr/') ? null : texBin
 }
 
 export interface ClaudeArgsOptions {
@@ -48,6 +90,7 @@ export interface ClaudeArgsOptions {
   /** Continue this Claude session (after an app restart or a finished process). */
   resumeSessionId?: string | null
   systemPrompt: string
+  sandbox: SandboxPaths
   model?: string
 }
 
@@ -65,6 +108,8 @@ export function buildClaudeArgs(opts: ClaudeArgsOptions): string[] {
     'none',
     '--allowedTools',
     ...allowedTools(opts.skillDir),
+    '--settings',
+    JSON.stringify(buildSandboxSettings(opts.sandbox)),
     '--append-system-prompt',
     opts.systemPrompt
   ]
@@ -80,7 +125,7 @@ export function buildSystemPrompt(opts: { workspace: string; masterProfile: stri
     'The user reads your messages in a chat panel and answers there; they cannot see tool output unless you summarise it.',
     `CV_HOME is already set in the environment to the workspace: ${opts.workspace}`,
     `The master profile is ${opts.workspace}/${opts.masterProfile}. It is the only source of facts about the user.`,
-    `The resume-tailor skill is installed at ${opts.skillDir}. Run its scripts only as \`python3 ${opts.skillDir}/scripts/<script>.py …\` with that absolute path, from the workspace, one command per call (no cd, no &&, no environment-variable prefixes). python3, pdflatex and poppler are on PATH. Other shell commands, inline Python and writing files outside the workspace are blocked.`,
+    `The resume-tailor skill is installed at ${opts.skillDir}. Run its scripts only as \`python3 ${opts.skillDir}/scripts/<script>.py …\` with that absolute path, from the workspace, one command per call (no cd, no &&, no environment-variable prefixes). python3, pdflatex and poppler are on PATH. Other shell commands, inline Python and file access outside the workspace are blocked by a sandbox.`,
     'Follow the skill exactly, including its honesty rule and step 3: stop after the gap analysis, show the proposed reframings and bullets, and wait for the user to approve before writing resume_data.json.',
     'Keep role, company and job-id as short lowercase slugs so the output lands in CV_HOME/<role>/<company>/<job-id>/.',
     `Write draft payloads (resume_data.json, cover_data.json) under ${opts.workspace}/.huntgry/drafts/<role>-<company>-<job-id>/, not elsewhere in the workspace; build.py copies what it needs into the application folder.`,

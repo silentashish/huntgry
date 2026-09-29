@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { appendLive, buildTranscript, LineBuffer, parseEventLine, summarizeToolInput } from '@shared/transcript'
 import {
   allowedTools,
+  texRootOf,
   buildClaudeArgs,
   buildFirstPrompt,
   requireStartParams,
@@ -90,9 +91,16 @@ describe('child environment', () => {
   })
 })
 
+const SANDBOX = {
+  workspace: '/Users/x/cv',
+  skillDir: '/s',
+  venvDir: '/Users/x/venv',
+  texRoot: '/Users/x/Library/TinyTeX'
+}
+
 describe('command line and prompts', () => {
   it('builds a headless, scoped claude invocation', () => {
-    const args = buildClaudeArgs({ skillDir: '/s', systemPrompt: 'sys', resumeSessionId: 'abc' })
+    const args = buildClaudeArgs({ skillDir: '/s', systemPrompt: 'sys', resumeSessionId: 'abc', sandbox: SANDBOX })
     expect(args.slice(0, 7)).toEqual([
       '-p',
       '--input-format',
@@ -107,21 +115,51 @@ describe('command line and prompts', () => {
     expect(args).not.toContain('--dangerously-skip-permissions')
     expect(args).not.toContain('--add-dir')
     expect(args.slice(-2)).toEqual(['--resume', 'abc'])
-    expect(buildClaudeArgs({ skillDir: '/s', systemPrompt: 'sys' })).not.toContain('--resume')
+    expect(buildClaudeArgs({ skillDir: '/s', systemPrompt: 'sys', sandbox: SANDBOX })).not.toContain('--resume')
   })
 
-  it('allows only the skill scripts as Python and no free file writes', () => {
+  it('allows only the skill scripts in the shell, reads only the skill folder, and no file writes', () => {
     const tools = allowedTools('/skills/resume-tailor')
-    expect(tools).not.toContain('Write')
-    expect(tools).not.toContain('Edit')
-    expect(tools.some((t) => /^Bash\(python3?:/.test(t) || t === 'Bash(python3:*)')).toBe(false)
+    for (const bare of ['Write', 'Edit', 'Read', 'Glob', 'Grep']) expect(tools).not.toContain(bare)
+    expect(tools).toContain('Read(//skills/resume-tailor/**)')
     expect(tools).toContain('Bash(python3 /skills/resume-tailor/scripts/build.py:*)')
     expect(tools).toContain('Bash(python3 /skills/resume-tailor/scripts/preflight.py:*)')
-    for (const t of tools.filter((x) => x.startsWith('Bash(') && !x.startsWith('Bash(python3 '))) {
-      expect(t).toMatch(/^Bash\((mkdir|ls|pdftotext|pdftoppm|pdfinfo):\*\)$/)
+    // Every shell rule is one of the skill's scripts.
+    for (const t of tools.filter((x) => x.startsWith('Bash('))) {
+      expect(t).toMatch(/^Bash\(python3 \/skills\/resume-tailor\/scripts\/[a-z_]+\.py:\*\)$/)
     }
     const spaced = allowedTools('/Users/a b/skill')
     expect(spaced).toContain('Bash(python3 "/Users/a b/skill/scripts/build.py":*)')
+  })
+
+  it('runs shell commands in a mandatory sandbox that cannot read the home folder', () => {
+    const args = buildClaudeArgs({
+      skillDir: '/s',
+      systemPrompt: 'sys',
+      sandbox: { ...SANDBOX, extraRead: ['/private/real/venv', '/s'] }
+    })
+    const settings = JSON.parse(args[args.indexOf('--settings') + 1])
+    expect(settings.sandbox).toMatchObject({
+      enabled: true,
+      failIfUnavailable: true,
+      allowUnsandboxedCommands: false,
+      autoAllowBashIfSandboxed: false
+    })
+    expect(settings.sandbox.filesystem.denyRead).toEqual(['~/'])
+    expect(settings.sandbox.filesystem.allowRead).toEqual([
+      '/Users/x/cv',
+      '/s',
+      '/Users/x/venv',
+      '/Users/x/Library/TinyTeX',
+      '/private/real/venv'
+    ])
+  })
+
+  it('finds the TeX root to allow', () => {
+    expect(texRootOf('/Users/x/Library/TinyTeX/bin/universal-darwin')).toBe('/Users/x/Library/TinyTeX')
+    expect(texRootOf('/Users/x/.TinyTeX/bin/x86_64-linux')).toBe('/Users/x/.TinyTeX')
+    expect(texRootOf('/Library/TeX/texbin')).toBeNull()
+    expect(texRootOf(null)).toBeNull()
   })
 
   it('writes the first prompt with the job and the choices', () => {

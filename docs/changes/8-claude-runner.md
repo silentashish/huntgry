@@ -52,16 +52,20 @@ sequenceDiagram
   xterm) would show everything, but the app could not tell when the run waits for the
   user, what it cost, or where the output went. It would also add a native module to
   build. Stream-json gives structured events, and multi-turn works by keeping stdin open.
-- **Deny by default, confined to the workspace.** `--permission-prompts none` means
-  nothing can hang on a prompt nobody sees. File edits are not allowlisted, so
-  `acceptEdits` approves them only inside the working directory (the workspace).
-  Python is allowed only as the skill's own scripts by absolute path (`build.py`,
-  `preflight.py`, `verify.py`, `render.py`, `render_docx.py`); `python3 -c` and other
-  scripts are refused, because a job posting could carry a prompt injection. The remaining
-  shell access is `mkdir`, `ls` and poppler's read tools. Read, Glob, Grep, WebFetch,
-  WebSearch and Skill are allowed. `--dangerously-skip-permissions` was rejected. Refused
-  calls appear in the transcript. A second real run under these rules (preflight, two
-  builds, resume + cover) had zero refusals.
+- **Deny by default, confined to the workspace, OS-sandboxed.** `--permission-prompts none`
+  means nothing can hang on a prompt nobody sees. Reads and edits need no rule inside the
+  workspace (the working directory); the only extra read access is the skill folder
+  (`Read(//<skill>/**)`). The shell may run **only the skill's scripts** by absolute path
+  (`build.py`, `preflight.py`, `verify.py`, `render.py`, `render_docx.py`): no `python3 -c`,
+  no other commands. On top of that, every shell command runs in **Claude Code's OS sandbox**
+  (Seatbelt on macOS), passed with `--settings`: reads of `~/` are denied except the
+  workspace, the skill, the venv and TeX; writes stay in the workspace and the temp folder;
+  the sandbox must start (`failIfUnavailable`) and commands cannot retry outside it. Even an
+  allowed script therefore cannot read `~/.ssh` or copy a file in from elsewhere
+  (`build.py --jd <path>`), which matters because a job posting can carry a prompt injection.
+  `--dangerously-skip-permissions` was rejected. Refused calls appear in the transcript. A real
+  run under these rules (preflight, build, resume + cover PDFs) completed; the only refusal was
+  an `ls`, which Claude replaced with the Read tool.
 - **Runs in the workspace, the venv in userData.** Runs are records of applications and
   belong with them. The venv is machine-specific and shared by every workspace.
 - **Markdown via `react-markdown` + `remark-gfm`** (new dependencies): Claude's gap

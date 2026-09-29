@@ -25,6 +25,7 @@ function ctx(): RunContext {
   return {
     workspace: ws,
     skillDir: '/skills/resume-tailor',
+    sandbox: { workspace: ws, skillDir: '/skills/resume-tailor', venvDir: '/venv', texRoot: null },
     command: process.execPath,
     commandPrefixArgs: [FAKE],
     env: { ...process.env },

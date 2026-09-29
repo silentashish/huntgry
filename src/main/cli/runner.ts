@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { RunSummary, StartRunParams } from '@shared/runner-types'
 import { LineBuffer, parseEventLine, type HuntgryEvent } from '@shared/transcript'
-import { buildClaudeArgs, buildFirstPrompt, runTitle, userMessageLine } from './command'
+import { buildClaudeArgs, buildFirstPrompt, runTitle, userMessageLine, type SandboxPaths } from './command'
 import { appendEvent, findOutputFolder, newRunId, readEvents, readRun, saveRun } from './runs'
 
 /**
@@ -15,6 +15,8 @@ import { appendEvent, findOutputFolder, newRunId, readEvents, readRun, saveRun }
 export interface RunContext {
   workspace: string
   skillDir: string
+  /** Paths the child's OS sandbox may read (see `buildSandboxSettings`). */
+  sandbox: SandboxPaths
   /** Executable to spawn (the `claude` binary; a fake script in tests). */
   command: string
   /** Arguments placed before the Claude arguments (e.g. the fake script path). */
@@ -142,7 +144,13 @@ export class RunManager {
   private spawnFor(run: RunSummary, ctx: RunContext, resumeSessionId: string | null, seq: number): void {
     const args = [
       ...(ctx.commandPrefixArgs ?? []),
-      ...buildClaudeArgs({ skillDir: ctx.skillDir, resumeSessionId, systemPrompt: ctx.systemPrompt, model: ctx.model })
+      ...buildClaudeArgs({
+        skillDir: ctx.skillDir,
+        resumeSessionId,
+        systemPrompt: ctx.systemPrompt,
+        sandbox: ctx.sandbox,
+        model: ctx.model
+      })
     ]
     const child = spawn(ctx.command, args, { cwd: ctx.workspace, env: ctx.env, stdio: ['pipe', 'pipe', 'pipe'] })
     const entry: Live = {

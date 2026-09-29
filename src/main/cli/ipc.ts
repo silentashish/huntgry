@@ -1,9 +1,10 @@
 import { app, ipcMain, shell } from 'electron'
+import { realpath } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { RUNNER_CHANNELS, type RunSummary } from '@shared/runner-types'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
-import { buildSystemPrompt, MAX_TEXT, requireStartParams } from './command'
+import { buildSystemPrompt, MAX_TEXT, requireStartParams, texRootOf } from './command'
 import { buildChildEnv, loginShellPath } from './env'
 import { checkEnvironment, discoverRuntime, installPythonDeps } from './environment'
 import { RunManager, type RunContext } from './runner'
@@ -33,9 +34,18 @@ async function context(): Promise<RunContext> {
   const env = await discoverRuntime()
   if (!env.claudePath) throw new Error('The claude CLI was not found. See Settings.')
   if (!env.skillDir) throw new Error('The resume-tailor skill was not found. See Settings.')
+  // Sandbox rules apply to real paths; allow the given spelling and its target (the venv may be a symlink).
+  const real = async (p: string) => [p, await realpath(p).catch(() => p)]
+  const texRoot = texRootOf(env.texBin)
+  const allow = [
+    ...new Set(
+      (await Promise.all([workspace.path, env.skillDir, venvDir(), ...(texRoot ? [texRoot] : [])].map(real))).flat()
+    )
+  ]
   return {
     workspace: workspace.path,
     skillDir: env.skillDir,
+    sandbox: { workspace: workspace.path, skillDir: env.skillDir, venvDir: venvDir(), texRoot, extraRead: allow },
     command: env.claudePath,
     env: buildChildEnv({
       base: process.env,
