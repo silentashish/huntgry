@@ -11,6 +11,7 @@ import {
   openWorkspace,
   saveSettings
 } from './index'
+import { readEntriesBounded } from './inspect'
 import masterProfileTemplate from './templates/master-profile.md?raw'
 
 let tmp: string
@@ -242,6 +243,40 @@ describe('inspectWorkspace', () => {
     const r = await inspectWorkspace(tmp)
     expect(r.status).toBe('valid')
     expect(r.warnings.join(' ')).toMatch(/Scan stopped/)
+  })
+})
+
+describe('bounded directory reads (AC15)', () => {
+  it('readEntriesBounded stops reading once the budget is spent', async () => {
+    const dir = join(tmp, 'many')
+    await mkdir(dir)
+    await Promise.all(Array.from({ length: 300 }, (_, i) => writeFile(join(dir, `f${i}`), '')))
+
+    const small = { remaining: 50, exhausted: false }
+    expect(await readEntriesBounded(dir, small)).toHaveLength(50)
+    expect(small).toEqual({ remaining: 0, exhausted: true })
+
+    const exact = { remaining: 300, exhausted: false }
+    expect(await readEntriesBounded(dir, exact)).toHaveLength(300)
+    expect(exact.exhausted).toBe(false)
+  })
+
+  it('caps the root listing too and still finds the master profile by direct lookup', async () => {
+    await Promise.all(Array.from({ length: 200 }, (_, i) => writeFile(join(tmp, `junk${i}`), '')))
+    await write(join(tmp, MASTER_PROFILE_FILE))
+    const r = await inspectWorkspace(tmp, { maxEntries: 20 })
+    expect(r).toMatchObject({ status: 'valid', masterProfile: MASTER_PROFILE_FILE })
+    expect(r.warnings.join(' ')).toMatch(/Scan stopped after 20 entries/)
+  })
+
+  it('shares one budget between the root and nested application folders', async () => {
+    await write(join(tmp, 'master_profile.md'))
+    for (let i = 0; i < 10; i++) await write(join(tmp, `role${i}/co/job/job-description.md`))
+    expect((await inspectWorkspace(tmp)).applicationCount).toBe(10)
+    const capped = await inspectWorkspace(tmp, { maxEntries: 25 })
+    expect(capped.status).toBe('legacy')
+    expect(capped.applicationCount).toBeLessThan(10)
+    expect(capped.warnings.join(' ')).toMatch(/Scan stopped/)
   })
 })
 

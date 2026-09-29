@@ -1,5 +1,5 @@
 import { constants as fsConstants, type Dirent } from 'node:fs'
-import { access, lstat, readdir, realpath, stat } from 'node:fs/promises'
+import { access, lstat, opendir, realpath, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { WorkspaceInspection, WorkspaceStatus } from '@shared/workspace-types'
 import {
@@ -16,7 +16,11 @@ import {
  * Read-only inspection of a candidate workspace directory. Never writes,
  * never follows symlinks below the root, and bounds the directory scan.
  */
-export async function inspectWorkspace(inputPath: string): Promise<WorkspaceInspection> {
+export async function inspectWorkspace(
+  inputPath: string,
+  options: { maxEntries?: number } = {}
+): Promise<WorkspaceInspection> {
+  const maxEntries = options.maxEntries ?? MAX_SCAN_ENTRIES
   if (!isAbsolute(inputPath)) {
     return result(inputPath, 'invalid', { errors: ['Path must be absolute.'] })
   }
@@ -51,22 +55,25 @@ export async function inspectWorkspace(inputPath: string): Promise<WorkspaceInsp
     })
   }
 
-  let entries: Dirent[]
+  // One budget for the whole inspection, root listing included, so a huge folder is never read in full.
+  const budget: ScanBudget = { remaining: maxEntries, exhausted: false }
+  let entries: EntryLike[]
   try {
-    entries = await readdir(root, { withFileTypes: true })
+    entries = await readEntriesBounded(root, budget)
   } catch (err) {
     return result(root, 'invalid', { errors: [describeFsError(err, 'Cannot list directory')] })
   }
+  if (budget.exhausted) entries = entries.concat(await probeWellKnown(root, entries))
 
   const meaningful = entries.filter((e) => !IGNORED_ENTRIES.has(e.name))
-  if (meaningful.length === 0) return result(root, 'empty')
+  if (meaningful.length === 0 && !budget.exhausted) return result(root, 'empty')
 
   const profile = await findMasterProfile(root, meaningful)
   const masterProfile = profile.name
-  const scan = await scanApplications(root)
+  const applicationCount = await countApplications(root, meaningful, budget)
   const warnings = [...profile.warnings]
-  if (scan.truncated) {
-    warnings.push(`Scan stopped after ${MAX_SCAN_ENTRIES} entries; the application count may be incomplete.`)
+  if (budget.exhausted) {
+    warnings.push(`Scan stopped after ${maxEntries} entries; the application count may be incomplete.`)
   }
 
   if (masterProfile && sameName(masterProfile, MASTER_PROFILE_FILE)) {
@@ -76,12 +83,12 @@ export async function inspectWorkspace(inputPath: string): Promise<WorkspaceInsp
     return result(root, 'valid', {
       masterProfile,
       layout: 'v3',
-      applicationCount: scan.count,
+      applicationCount,
       warnings
     })
   }
 
-  if (masterProfile || scan.count > 0) {
+  if (masterProfile || applicationCount > 0) {
     if (masterProfile) {
       warnings.push(
         `Uses the older ${LEGACY_MASTER_PROFILE_FILE} name; the current skill README uses ${MASTER_PROFILE_FILE}.`
@@ -94,7 +101,7 @@ export async function inspectWorkspace(inputPath: string): Promise<WorkspaceInsp
     return result(root, 'legacy', {
       masterProfile,
       layout: 'legacy',
-      applicationCount: scan.count,
+      applicationCount,
       warnings
     })
   }
@@ -141,7 +148,7 @@ interface MasterProfileResult {
  * accepted only when its target is a readable regular file; dangling links and
  * links to directories are ignored with a warning.
  */
-async function findMasterProfile(root: string, entries: Dirent[]): Promise<MasterProfileResult> {
+async function findMasterProfile(root: string, entries: EntryLike[]): Promise<MasterProfileResult> {
   const warnings: string[] = []
   for (const wanted of [MASTER_PROFILE_FILE, LEGACY_MASTER_PROFILE_FILE]) {
     for (const e of entries.filter((e) => sameName(e.name, wanted))) {
@@ -173,45 +180,86 @@ async function findMasterProfile(root: string, entries: Dirent[]): Promise<Maste
   return { name: null, warnings }
 }
 
-interface ScanResult {
-  count: number
-  truncated: boolean
+/** The parts of a Dirent the inspection uses; lets lstat() probes stand in for listing entries. */
+type EntryLike = Pick<Dirent, 'name' | 'isFile' | 'isDirectory' | 'isSymbolicLink'>
+
+export interface ScanBudget {
+  remaining: number
+  /** Set once an entry had to be skipped because the budget ran out. */
+  exhausted: boolean
+}
+
+/**
+ * Streams a directory with opendir() and stops reading as soon as the shared
+ * budget is spent, so a folder with millions of entries is never loaded whole.
+ * Dirent types have lstat semantics: symlinks are reported, never followed.
+ */
+export async function readEntriesBounded(dir: string, budget: ScanBudget): Promise<Dirent[]> {
+  const out: Dirent[] = []
+  // for await closes the handle on completion and on break.
+  for await (const entry of await opendir(dir, { bufferSize: 64 })) {
+    if (budget.remaining <= 0) {
+      budget.exhausted = true
+      break
+    }
+    budget.remaining--
+    out.push(entry)
+  }
+  return out
+}
+
+/** When the root listing was cut short, look up the well-known files directly. */
+async function probeWellKnown(root: string, seen: EntryLike[]): Promise<EntryLike[]> {
+  const found: EntryLike[] = []
+  for (const name of [MASTER_PROFILE_FILE, LEGACY_MASTER_PROFILE_FILE, COVER_LETTER_FILE]) {
+    if (seen.some((e) => sameName(e.name, name))) continue
+    const info = await lstat(join(root, name)).catch(() => null)
+    if (!info) continue
+    found.push({
+      name,
+      isFile: () => info.isFile(),
+      isDirectory: () => info.isDirectory(),
+      isSymbolicLink: () => info.isSymbolicLink()
+    })
+  }
+  return found
 }
 
 /**
  * Counts `<role>/<company>/<job-id>/` folders holding at least one build.py
- * artifact. Uses Dirent types (lstat semantics), so symlinks are never followed.
+ * artifact, starting from the already-read root entries. Symlinks are never
+ * followed and every read draws from the same budget.
  */
-async function scanApplications(root: string): Promise<ScanResult> {
-  let visited = 0
-  let count = 0
-  let frontier = [root]
+async function countApplications(
+  root: string,
+  rootEntries: EntryLike[],
+  budget: ScanBudget
+): Promise<number> {
+  const subdirs = (dir: string, entries: EntryLike[]): string[] =>
+    entries.filter((e) => e.isDirectory() && !IGNORED_ENTRIES.has(e.name)).map((e) => join(dir, e.name))
 
-  for (let depth = 1; depth <= APPLICATION_DEPTH; depth++) {
+  let frontier = subdirs(root, rootEntries)
+  for (let depth = 2; depth <= APPLICATION_DEPTH; depth++) {
     const next: string[] = []
     for (const dir of frontier) {
-      const entries = await readdirSafe(dir)
-      visited += entries.length
-      if (visited > MAX_SCAN_ENTRIES) return { count, truncated: true }
-      for (const e of entries) {
-        if (e.isDirectory() && !IGNORED_ENTRIES.has(e.name)) next.push(join(dir, e.name))
-      }
+      if (budget.exhausted) return 0
+      next.push(...subdirs(dir, await readEntriesSafe(dir, budget)))
     }
     frontier = next
   }
 
+  let count = 0
   for (const dir of frontier) {
-    const entries = await readdirSafe(dir)
-    visited += entries.length
-    if (visited > MAX_SCAN_ENTRIES) return { count, truncated: true }
+    if (budget.exhausted) break
+    const entries = await readEntriesSafe(dir, budget)
     if (entries.some((e) => e.isFile() && APPLICATION_MARKERS.has(e.name))) count++
   }
-  return { count, truncated: false }
+  return count
 }
 
-async function readdirSafe(dir: string): Promise<Dirent[]> {
+async function readEntriesSafe(dir: string, budget: ScanBudget): Promise<Dirent[]> {
   try {
-    return await readdir(dir, { withFileTypes: true })
+    return await readEntriesBounded(dir, budget)
   } catch {
     return []
   }
