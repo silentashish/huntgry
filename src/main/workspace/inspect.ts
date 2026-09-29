@@ -1,5 +1,5 @@
 import { constants as fsConstants, type Dirent } from 'node:fs'
-import { access, readdir, realpath, stat } from 'node:fs/promises'
+import { access, lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { WorkspaceInspection, WorkspaceStatus } from '@shared/workspace-types'
 import {
@@ -27,7 +27,15 @@ export async function inspectWorkspace(inputPath: string): Promise<WorkspaceInsp
     // A symlinked root is resolved and its target inspected; the real path is what we report.
     root = await realpath(requested)
   } catch (err) {
-    if (errno(err) === 'ENOENT') return inspectMissing(requested)
+    if (errno(err) === 'ENOENT') {
+      // realpath() also fails with ENOENT for a dangling symlink; that path exists, so it is not "missing".
+      if (await lstat(requested).then((s) => s.isSymbolicLink(), () => false)) {
+        return result(requested, 'invalid', {
+          errors: ['Path is a symlink whose target does not exist.']
+        })
+      }
+      return inspectMissing(requested)
+    }
     return result(requested, 'invalid', { errors: [describeFsError(err, 'Cannot access path')] })
   }
 

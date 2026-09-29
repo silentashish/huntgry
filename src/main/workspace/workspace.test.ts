@@ -209,6 +209,20 @@ describe('inspectWorkspace', () => {
     expect(r.warnings.join(' ')).toMatch(/not readable/)
   })
 
+  it('returns invalid (not missing) for a dangling symlink root, and Create writes nothing', async () => {
+    const link = join(tmp, 'dangling')
+    await symlink(join(tmp, 'gone'), link)
+    const r = await inspectWorkspace(link)
+    expect(r.status).toBe('invalid')
+    expect(r.errors[0]).toMatch(/symlink whose target does not exist/)
+
+    const before = await snapshot(tmp)
+    const c = await createWorkspace(link)
+    expect(c.ok).toBe(false)
+    expect(c.inspection.status).toBe('invalid')
+    expect(await snapshot(tmp)).toEqual(before)
+  })
+
   it('resolves a symlinked root to its real path', async () => {
     const real = join(tmp, 'real')
     await write(join(real, MASTER_PROFILE_FILE))
