@@ -482,6 +482,17 @@ describe('service with a stub loader', () => {
     expect((await fetchDetails(ws, hcJob.id, partialFirst)).descriptionComplete).toBe(true)
     expect(requested).toEqual([hcJob.url, urlCopy.url])
 
+    // A partial description from the first copy is still saved when the next load rejects.
+    await writeJobFile(ws, { ...(await readJobRaw(hcJob.id)), description: '', descriptionComplete: false })
+    await writeJobFile(ws, { ...(await readJobRaw(urlCopy.id)), description: '', descriptionComplete: false })
+    const partialThenThrow = async (url: string): Promise<LoadResult> => {
+      if (url === urlCopy.url) throw new Error('The page closed.')
+      return { status: 'ok', data: { ...partial, url } }
+    }
+    const kept = await fetchDetails(ws, hcJob.id, partialThenThrow)
+    expect(kept.description).toBe('Short blurb.')
+    expect(kept.descriptionComplete).toBe(false)
+
     // When every copy fails, the last failure is reported.
     await saveJob(ws, { ...parseHiringCafeHits({ hits: hc.props.pageProps.ssrHits })[1] })
     const other = parseHiringCafeHits({ hits: hc.props.pageProps.ssrHits })[1]

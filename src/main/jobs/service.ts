@@ -108,7 +108,14 @@ export async function fetchDetails(workspace: string, id: string, load: Loader):
   let posting: Job | null = null
   let failure = ''
   for (const copy of fetchable) {
-    const res = await load(copy.url, POSTING_EXTRACT)
+    let res: LoadResult
+    try {
+      res = await load(copy.url, POSTING_EXTRACT)
+    } catch (err) {
+      // Keep going: a later copy may load, and a partial description found so far is still saved.
+      failure = `${err instanceof Error ? err.message : String(err)} The summary from the job board is kept; open the posting to read it all.`
+      continue
+    }
     if (res.status !== 'ok') {
       failure = `${res.message} The summary from the job board is kept; open the posting to read it all.`
       continue
