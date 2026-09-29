@@ -34,6 +34,7 @@
   "dependencies": {
     "@mantine/core": "^9.6.3",
     "@mantine/hooks": "^9.6.3",
+    "@tabler/icons-react": "^3.48.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "unpdf": "^1.8.1"

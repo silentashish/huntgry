@@ -4,9 +4,16 @@ import { isProfileEmpty, type MasterProfile, type ProfileDocument } from '@share
 import { canImport, type WorkspaceInspection } from '@shared/workspace-types'
 import { api, errorText } from './api'
 import logo from './assets/logo.svg'
-import { ProfileEditor } from './components/ProfileEditor'
 import { ProfileSetup } from './components/ProfileSetup'
+import { AppLayout } from './components/shell/AppLayout'
 import { WorkspacePicker } from './components/WorkspacePicker'
+import { locationOf, paramsFor, type Location } from './navigation'
+import { DashboardPage } from './pages/dashboard'
+import { GraphPage } from './pages/graph'
+import { JobsPage } from './pages/jobs'
+import { ProfilePage } from './pages/profile'
+import { SettingsPage } from './pages/settings'
+import { TailorPage } from './pages/tailor'
 
 type Draft = { profile: MasterProfile; fileName: string; warnings: string[] }
 type PickerNotice = { color: 'red' | 'yellow'; text: string; offerCreate?: string }
@@ -15,11 +22,11 @@ type View =
   | { name: 'loading' }
   | { name: 'picker'; notice?: PickerNotice }
   | { name: 'setup'; inspection: WorkspaceInspection; doc: ProfileDocument }
-  | { name: 'editor'; inspection: WorkspaceInspection; doc: ProfileDocument; draft?: Draft }
+  | { name: 'shell'; inspection: WorkspaceInspection; doc: ProfileDocument; draft?: Draft; start?: Location }
 
 /**
  * Flow: pick or create a workspace → (new or empty profile) set it up from a
- * resume or by hand → edit the master profile. The Markdown file in the
+ * resume or by hand → the app shell with its pages. The Markdown file in the
  * workspace is the only store; every screen reads it through main.
  */
 export function App() {
@@ -28,7 +35,7 @@ export function App() {
   async function open(inspection: WorkspaceInspection, created: boolean) {
     try {
       const doc = await api.profile.read()
-      setView(created || isProfileEmpty(doc.profile) ? { name: 'setup', inspection, doc } : { name: 'editor', inspection, doc })
+      setView(created || isProfileEmpty(doc.profile) ? { name: 'setup', inspection, doc } : { name: 'shell', inspection, doc })
     } catch (err) {
       setView({ name: 'picker', notice: { color: 'red', text: errorText(err) } })
     }
@@ -53,9 +60,45 @@ export function App() {
       .catch((err: unknown) => setView({ name: 'picker', notice: { color: 'red', text: errorText(err) } }))
   }, [])
 
-  const wide = view.name === 'editor'
+  if (view.name === 'shell') {
+    const switchWorkspace = () => setView({ name: 'picker' })
+    return (
+      <AppLayout
+        key={view.inspection.path}
+        workspacePath={view.inspection.path}
+        initialLocation={view.start}
+        onSwitchWorkspace={switchWorkspace}
+      >
+        {(location) => {
+          switch (location.page) {
+            case 'dashboard':
+              return <DashboardPage />
+            case 'jobs':
+              return <JobsPage />
+            case 'tailor':
+              return <TailorPage params={paramsFor(location, 'tailor')} />
+            case 'graph':
+              return <GraphPage />
+            case 'settings':
+              return <SettingsPage />
+            case 'profile':
+              return (
+                <ProfilePage
+                  params={paramsFor(location, 'profile')}
+                  document={view.doc}
+                  initialDraft={view.draft}
+                  onDocumentChange={(doc) => setView({ ...view, doc, draft: undefined })}
+                  onSwitchWorkspace={switchWorkspace}
+                />
+              )
+          }
+        }}
+      </AppLayout>
+    )
+  }
+
   return (
-    <Container size={wide ? 960 : 'sm'} py="xl">
+    <Container size="sm" py="xl">
       <Stack gap="lg">
         <Group gap="sm" wrap="nowrap">
           <Image src={logo} alt="" w={40} h={40} />
@@ -64,9 +107,9 @@ export function App() {
               Huntgry
             </Title>
             <Text c="dimmed" size="sm">
-              {view.name === 'picker'
-                ? 'Set up the working directory for the Claude resume-tailor skill.'
-                : 'Your master profile: every tailored resume is picked from it.'}
+              {view.name === 'setup'
+                ? 'Your master profile: every tailored resume is picked from it.'
+                : 'Set up the working directory for the Claude resume-tailor skill.'}
             </Text>
           </div>
         </Group>
@@ -82,18 +125,10 @@ export function App() {
         {view.name === 'setup' && (
           <ProfileSetup
             workspacePath={view.inspection.path}
-            onImported={(draft) => setView({ name: 'editor', inspection: view.inspection, doc: view.doc, draft })}
-            onManual={() => setView({ name: 'editor', inspection: view.inspection, doc: view.doc })}
-          />
-        )}
-
-        {view.name === 'editor' && (
-          <ProfileEditor
-            key={view.doc.path}
-            document={view.doc}
-            initialDraft={view.draft}
-            onDocumentChange={(doc) => setView({ ...view, doc, draft: undefined })}
-            onSwitchWorkspace={() => setView({ name: 'picker' })}
+            onImported={(draft) =>
+              setView({ name: 'shell', inspection: view.inspection, doc: view.doc, draft, start: locationOf('profile') })
+            }
+            onManual={() => setView({ name: 'shell', inspection: view.inspection, doc: view.doc, start: locationOf('profile') })}
           />
         )}
       </Stack>

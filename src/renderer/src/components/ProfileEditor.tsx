@@ -36,6 +36,10 @@ interface Props {
   initialDraft?: { profile: MasterProfile; fileName: string; warnings: string[] }
   onDocumentChange(doc: ProfileDocument): void
   onSwitchWorkspace(): void
+  /** Called whenever the form starts or stops differing from the file. */
+  onDirtyChange?(dirty: boolean): void
+  /** Tab to open first, e.g. when another page deep-links into a section. */
+  initialTab?: string
 }
 
 /**
@@ -43,7 +47,14 @@ interface Props {
  * the Markdown file; the file is re-read afterwards so the form always shows
  * exactly what is on disk.
  */
-export function ProfileEditor({ document: doc, initialDraft, onDocumentChange, onSwitchWorkspace }: Props) {
+export function ProfileEditor({
+  document: doc,
+  initialDraft,
+  onDocumentChange,
+  onSwitchWorkspace,
+  onDirtyChange,
+  initialTab
+}: Props) {
   const [draft, setDraft] = useState<MasterProfile>(initialDraft?.profile ?? doc.profile)
   const [notice, setNotice] = useState<Notice>(
     initialDraft
@@ -59,9 +70,11 @@ export function ProfileEditor({ document: doc, initialDraft, onDocumentChange, o
   const [conflict, setConflict] = useState(false)
   const [pendingImport, setPendingImport] = useState<{ profile: MasterProfile; fileName: string; warnings: string[] } | null>(null)
   const [confirmLeave, setConfirmLeave] = useState(false)
-  const [tab, setTab] = useState<string | null>('contact')
+  const [tab, setTab] = useState<string | null>(initialTab ?? 'contact')
 
   const dirty = useMemo(() => JSON.stringify(normalize(draft)) !== JSON.stringify(normalize(doc.profile)), [draft, doc])
+
+  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange])
 
   // Warn before the window closes with unsaved edits.
   useEffect(() => {
@@ -144,7 +157,7 @@ export function ProfileEditor({ document: doc, initialDraft, onDocumentChange, o
   }
 
   return (
-    <Stack gap="md" pb={80}>
+    <Stack gap="md">
       <Card withBorder radius="md" padding="lg">
         <Group justify="space-between" align="flex-start" wrap="nowrap">
           <Stack gap={2} style={{ minWidth: 0 }}>
@@ -275,9 +288,10 @@ export function ProfileEditor({ document: doc, initialDraft, onDocumentChange, o
         withBorder
         shadow="sm"
         p="sm"
-        style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 10, borderRadius: 0 }}
+        radius="md"
+        style={{ position: 'sticky', bottom: 'var(--mantine-spacing-md)', zIndex: 10 }}
       >
-        <Group justify="flex-end" maw={960} mx="auto" px="md">
+        <Group justify="flex-end">
           <Text size="sm" c="dimmed" mr="auto">
             {dirty ? 'Unsaved changes' : `Saved in ${fileName(doc.path)}`}
           </Text>

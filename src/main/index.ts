@@ -11,10 +11,10 @@ app.setName('Huntgry')
 /** Opens the sandboxed main window; the renderer reaches the filesystem only through IPC. */
 function createWindow(): void {
   const win = new BrowserWindow({
-    width: 900,
-    height: 680,
-    minWidth: 640,
-    minHeight: 480,
+    width: 1200,
+    height: 800,
+    minWidth: 900,
+    minHeight: 600,
     show: false,
     title: 'Huntgry',
     icon,
