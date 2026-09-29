@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, rename, writeFile } from 'node:fs/promises'
 
 /**
  * App-level settings (which workspace is current), stored in a JSON file
@@ -13,6 +13,7 @@ export interface AppSettings {
   currentWorkspace?: string
 }
 
+/** Reads the settings file; a missing or corrupt file yields empty settings. */
 export async function loadSettings(file: string): Promise<AppSettings> {
   try {
     const parsed: unknown = JSON.parse(await readFile(file, 'utf8'))
@@ -22,7 +23,13 @@ export async function loadSettings(file: string): Promise<AppSettings> {
   }
 }
 
+/**
+ * Merges `patch` into the stored settings. Written to a temp file and renamed
+ * over the original, so a crash mid-write never leaves a truncated file.
+ */
 export async function saveSettings(file: string, patch: AppSettings): Promise<void> {
   const next = { ...(await loadSettings(file)), ...patch }
-  await writeFile(file, JSON.stringify(next, null, 2), 'utf8')
+  const tmp = `${file}.${process.pid}.tmp`
+  await writeFile(tmp, JSON.stringify(next, null, 2), 'utf8')
+  await rename(tmp, file)
 }

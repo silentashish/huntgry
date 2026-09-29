@@ -8,6 +8,7 @@ import { registerIpcHandlers } from './ipc'
 // scripts/brand-dev-electron.cjs plus the dock icon set below.
 app.setName('Huntgry')
 
+/** Opens the sandboxed main window; the renderer reaches the filesystem only through IPC. */
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 900,
