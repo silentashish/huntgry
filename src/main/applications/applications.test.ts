@@ -14,6 +14,7 @@ import {
   summarizeBuild
 } from './scan'
 import { normalizeTracking, readTracking, recordJobSource, updateTracking } from './tracking'
+import { resolveApplicationFile, resolveApplicationFolder } from './safe-path'
 import { isHidden } from './watch'
 
 let ws: string
@@ -178,5 +179,61 @@ describe('helpers', () => {
     expect(isHidden('.huntgry/runs/x/events.jsonl')).toBe(true)
     expect(isHidden('eng/acme/1/.huntgry.json.ab12.tmp')).toBe(true)
     expect(isHidden('eng/acme/1/resume.pdf')).toBe(false)
+  })
+})
+
+describe('confinement against symlinks', () => {
+  it('refuses symlinked application folders and files that point outside the workspace', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'huntgry-outside-'))
+    try {
+      await writeFile(join(outside, 'secret.txt'), 'secret')
+      const dir = await app('eng/acme/1', { 'resume.pdf': '%PDF', 'job-description.md': 'Job' })
+      await symlink(join(outside, 'secret.txt'), join(dir, 'resume-page-1.jpg'))
+      await symlink(join(outside, 'secret.txt'), join(dir, 'cover.pdf'))
+      await mkdir(join(ws, 'eng/evil'), { recursive: true })
+      await symlink(outside, join(ws, 'eng/evil/2'))
+
+      expect(await resolveApplicationFile(ws, 'eng/acme/1', 'resume.pdf')).toBe(join(dir, 'resume.pdf'))
+      await expect(resolveApplicationFile(ws, 'eng/acme/1', 'resume-page-1.jpg')).rejects.toThrow(/regular file/)
+      await expect(resolveApplicationFile(ws, 'eng/acme/1', 'cover.pdf')).rejects.toThrow(/regular file/)
+      await expect(resolveApplicationFile(ws, 'eng/acme/1', 'huntgry.json')).rejects.toThrow(/Unknown file/)
+      await expect(resolveApplicationFolder(ws, 'eng/evil/2')).rejects.toThrow(/Invalid application folder/)
+      await expect(resolveApplicationFolder(ws, 'eng/acme/9')).rejects.toThrow(/no longer exists/)
+    } finally {
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('does not read a symlinked job description or tracking file', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'huntgry-outside-'))
+    try {
+      await writeFile(join(outside, 'jd.md'), '# Secret title https://evil.example.com')
+      await writeFile(join(outside, 'track.json'), '{"status": "offer", "notes": "secret"}')
+      const dir = await app('eng/acme/3', { 'resume_data.json': '{}' })
+      await symlink(join(outside, 'jd.md'), join(dir, 'job-description.md'))
+      await symlink(join(outside, 'track.json'), join(dir, 'huntgry.json'))
+      const [rec] = (await scanApplications(ws)).applications
+      expect(rec.jobTitle).toBe('')
+      expect(rec.jobUrl).toBeNull()
+      expect(rec.tracking).toEqual({ status: 'generated', notes: '' })
+    } finally {
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('tracking writes', () => {
+  it('serializes concurrent updates of one folder so none is lost', async () => {
+    const dir = await app('eng/acme/4', {})
+    await Promise.all([
+      updateTracking(dir, { notes: 'first' }),
+      updateTracking(dir, { status: 'interviewing' }),
+      updateTracking(dir, { jobUrl: 'https://example.com/j' })
+    ])
+    expect(await readTracking(dir)).toMatchObject({
+      notes: 'first',
+      status: 'interviewing',
+      jobUrl: 'https://example.com/j'
+    })
   })
 })

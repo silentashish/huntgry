@@ -102,8 +102,9 @@ export async function readApplication(workspace: string, folder: string): Promis
   }
   if (!Number.isFinite(created)) created = updated
   const [jd, report, tracking] = await Promise.all([
-    readText(join(folder, 'job-description.md')),
-    readText(join(folder, 'build-report.json')),
+    // `names` holds regular files only (Dirent.isFile is false for symlinks), so a symlinked file is never read.
+    names.includes('job-description.md') ? readText(join(folder, 'job-description.md')) : null,
+    names.includes('build-report.json') ? readText(join(folder, 'build-report.json')) : null,
     readTracking(folder)
   ])
   const pages = (kind: 'resume' | 'cover') =>

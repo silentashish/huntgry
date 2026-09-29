@@ -1,9 +1,9 @@
 import { net, protocol } from 'electron'
 import { pathToFileURL } from 'node:url'
-import { join } from 'node:path'
 import { FILE_SCHEME } from '@shared/applications-types'
 import { requireCurrentWorkspace } from '../current-workspace'
-import { applicationFolder, isServableFile, parseFileUrl } from './scan'
+import { resolveApplicationFile } from './safe-path'
+import { isServableFile, parseFileUrl } from './scan'
 
 /**
  * `huntgry-file://app/<role>/<company>/<job-id>/<file>` serves files of the
@@ -26,7 +26,8 @@ export function handleFileScheme(): void {
     if (!parsed || !isServableFile(parsed.file)) return new Response('Not found', { status: 404 })
     try {
       const workspace = await requireCurrentWorkspace()
-      const path = join(applicationFolder(workspace.path, parsed.id), parsed.file)
+      // Resolves symlinks: only a regular file inside a real application folder of the workspace is served.
+      const path = await resolveApplicationFile(workspace.path, parsed.id, parsed.file)
       return await net.fetch(pathToFileURL(path).toString())
     } catch {
       return new Response('Not found', { status: 404 })

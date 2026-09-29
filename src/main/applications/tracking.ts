@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { lstat, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   APPLICATION_STATUSES,
@@ -31,10 +31,12 @@ export function normalizeTracking(input: unknown): ApplicationTracking {
   return t
 }
 
-/** Tracking for a folder; defaults when `huntgry.json` is missing or unreadable. */
+/** Tracking for a folder; defaults when `huntgry.json` is missing, unreadable or not a regular file. */
 export async function readTracking(folder: string): Promise<ApplicationTracking> {
   try {
-    return normalizeTracking(JSON.parse(await readFile(join(folder, TRACKING_FILE), 'utf8')))
+    const path = join(folder, TRACKING_FILE)
+    if (!(await lstat(path)).isFile()) return { ...DEFAULT_TRACKING }
+    return normalizeTracking(JSON.parse(await readFile(path, 'utf8')))
   } catch {
     return { ...DEFAULT_TRACKING }
   }
@@ -45,10 +47,28 @@ export async function readTracking(folder: string): Promise<ApplicationTracking>
  * `appliedAt` is set to today the first time the status becomes `applied`.
  * Empty strings clear optional fields.
  */
-export async function updateTracking(
+export function updateTracking(
   folder: string,
   patch: Partial<ApplicationTracking>,
   today = new Date()
+): Promise<ApplicationTracking> {
+  // One read-merge-write at a time per folder, so quick successive edits cannot overwrite each other.
+  const previous = locks.get(folder) ?? Promise.resolve()
+  const run = previous.catch(() => undefined).then(() => writeMerged(folder, patch, today))
+  const tail = run.catch(() => undefined)
+  locks.set(folder, tail)
+  void tail.then(() => {
+    if (locks.get(folder) === tail) locks.delete(folder)
+  })
+  return run
+}
+
+const locks = new Map<string, Promise<unknown>>()
+
+async function writeMerged(
+  folder: string,
+  patch: Partial<ApplicationTracking>,
+  today: Date
 ): Promise<ApplicationTracking> {
   const current = await readTracking(folder)
   const merged: Record<string, unknown> = { ...current, ...patch }

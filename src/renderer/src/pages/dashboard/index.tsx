@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActionIcon,
   Alert,
@@ -44,9 +44,15 @@ export function DashboardPage() {
   const [filter, setFilter] = useState<Filter>(DEFAULT_FILTER)
   const [openId, setOpenId] = useState<string | null>(null)
 
+  // Bumped by every successful tracking update; a list() that started before it may hold stale tracking.
+  const generation = useRef(0)
+
   const load = useCallback(async () => {
+    const started = generation.current
     try {
-      setList(await api.applications.list())
+      const next = await api.applications.list()
+      if (generation.current !== started) return
+      setList(next)
       setError(null)
     } catch (err) {
       setError(errorText(err))
@@ -72,6 +78,7 @@ export function DashboardPage() {
 
   async function update(id: string, patch: Partial<ApplicationTracking>) {
     const next = await api.applications.updateTracking(id, patch)
+    generation.current++
     setList((l) => l && { ...l, applications: l.applications.map((a) => (a.id === id ? next : a)) })
   }
 

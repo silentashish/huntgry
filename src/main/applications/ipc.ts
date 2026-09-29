@@ -1,10 +1,10 @@
 import { ipcMain, shell } from 'electron'
-import { join } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { APPLICATIONS_CHANNELS, type ApplicationTracking } from '@shared/applications-types'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
-import { applicationFolder, isServableFile, readApplication, scanApplications } from './scan'
+import { resolveApplicationFile, resolveApplicationFolder } from './safe-path'
+import { readApplication, scanApplications } from './scan'
 import { updateTracking } from './tracking'
 import { WorkspaceWatcher } from './watch'
 
@@ -15,9 +15,8 @@ function requireId(id: unknown): string {
   return id
 }
 
-async function folderOf(id: unknown): Promise<{ workspace: string; folder: string }> {
-  const workspace = (await requireCurrentWorkspace()).path
-  return { workspace, folder: applicationFolder(workspace, requireId(id)) }
+async function currentWorkspace(): Promise<string> {
+  return (await requireCurrentWorkspace()).path
 }
 
 function requirePatch(input: unknown): Partial<ApplicationTracking> {
@@ -46,29 +45,31 @@ export function registerApplicationsIpc(): void {
   })
 
   ipcMain.handle(APPLICATIONS_CHANNELS.updateTracking, async (_e, id: unknown, patch: unknown) => {
-    const { workspace, folder } = await folderOf(id)
+    const workspace = await currentWorkspace()
+    const folder = await resolveApplicationFolder(workspace, requireId(id))
     await updateTracking(folder, requirePatch(patch))
     return readApplication(workspace, folder)
   })
 
   ipcMain.handle(APPLICATIONS_CHANNELS.readJobDescription, async (_e, id: unknown) => {
-    const { folder } = await folderOf(id)
-    try {
-      return await readFile(join(folder, 'job-description.md'), 'utf8')
-    } catch {
-      throw new Error('This application has no job-description.md.')
-    }
+    const path = await resolveApplicationFile(await currentWorkspace(), requireId(id), 'job-description.md').catch(
+      () => {
+        throw new Error('This application has no job-description.md.')
+      }
+    )
+    return readFile(path, 'utf8')
   })
 
   ipcMain.handle(APPLICATIONS_CHANNELS.openFile, async (_e, id: unknown, file: unknown) => {
-    if (typeof file !== 'string' || !isServableFile(file)) throw new Error('Unknown file.')
-    const { folder } = await folderOf(id)
-    const error = await shell.openPath(join(folder, file))
+    if (typeof file !== 'string') throw new Error('Unknown file.')
+    const error = await shell.openPath(await resolveApplicationFile(await currentWorkspace(), requireId(id), file))
     if (error) throw new Error(error)
   })
 
   ipcMain.handle(APPLICATIONS_CHANNELS.reveal, async (_e, id: unknown) => {
-    const { folder } = await folderOf(id)
-    shell.openPath(folder).catch(() => shell.showItemInFolder(folder))
+    const folder = await resolveApplicationFolder(await currentWorkspace(), requireId(id))
+    // openPath resolves with an error string instead of rejecting.
+    const error = await shell.openPath(folder)
+    if (error) shell.showItemInFolder(folder)
   })
 }
