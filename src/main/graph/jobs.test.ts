@@ -30,4 +30,12 @@ describe('readJobDescriptions', () => {
     ])
     expect(jobs[0].text).toContain('Kafka')
   })
+
+  it('reads at most 256 KB of a huge job description', async () => {
+    await mkdir(join(ws, 'eng/big/1'), { recursive: true })
+    await writeFile(join(ws, 'eng/big/1/job-description.md'), `# Big\n${'é'.repeat(400_000)}`)
+    const [job] = await readJobDescriptions(ws)
+    expect(Buffer.byteLength(job.text, 'utf8')).toBeLessThanOrEqual(256 * 1024)
+    expect(job.text.endsWith('\uFFFD')).toBe(false)
+  })
 })

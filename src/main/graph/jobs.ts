@@ -1,10 +1,26 @@
-import { opendir, readFile } from 'node:fs/promises'
+import { open, opendir } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import type { JobText } from '@shared/knowledge-graph'
 import { APPLICATION_DEPTH, IGNORED_ENTRIES, MAX_SCAN_ENTRIES } from '../workspace/constants'
 
 /** Longest job description read for the overlay; postings are far shorter. */
 const MAX_JD_BYTES = 256 * 1024
+
+/** Reads at most `max` bytes of a file, so a huge file never lands in memory whole. */
+async function readHead(path: string, max: number): Promise<string> {
+  const handle = await open(path, 'r')
+  try {
+    const buf = Buffer.alloc(max)
+    const { bytesRead } = await handle.read(buf, 0, max, 0)
+    // A cut may split a multi-byte character; drop the replacement character it leaves.
+    return buf
+      .subarray(0, bytesRead)
+      .toString('utf8')
+      .replace(/\uFFFD$/, '')
+  } finally {
+    await handle.close()
+  }
+}
 
 /**
  * Reads `<role>/<company>/<job-id>/job-description.md` from every application
@@ -28,7 +44,7 @@ export async function readJobDescriptions(workspace: string): Promise<JobText[]>
       if (depth === APPLICATION_DEPTH) {
         if (e.isFile() && e.name === 'job-description.md') {
           try {
-            const text = (await readFile(join(dir, e.name), 'utf8')).slice(0, MAX_JD_BYTES)
+            const text = await readHead(join(dir, e.name), MAX_JD_BYTES)
             const id = relative(workspace, dir).split(sep).join('/')
             const first =
               text

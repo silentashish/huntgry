@@ -1,4 +1,4 @@
-import { Badge, Button, Card, Divider, Group, Stack, Text, Title } from '@mantine/core'
+import { Anchor, Badge, Button, Card, Divider, Group, Stack, Text, Title, UnstyledButton } from '@mantine/core'
 import type { GraphNode, KnowledgeGraph } from '@shared/knowledge-graph'
 import { useNavigation } from '../../navigation'
 import { KIND_COLOR, KIND_LABEL } from './colors'
@@ -54,9 +54,15 @@ export function NodePanel({ graph, id, onSelect }: { graph: KnowledgeGraph; id: 
                   <div key={i}>
                     <Text size="xs" fw={600}>
                       {ev.nodeId ? (
-                        <Text span inherit c="blue" style={{ cursor: 'pointer' }} onClick={() => onSelect(ev.nodeId!)}>
+                        <Anchor
+                          component="button"
+                          type="button"
+                          size="xs"
+                          fw={600}
+                          onClick={() => onSelect(ev.nodeId!)}
+                        >
                           {ev.source}
-                        </Text>
+                        </Anchor>
                       ) : (
                         ev.source
                       )}
@@ -80,15 +86,11 @@ export function NodePanel({ graph, id, onSelect }: { graph: KnowledgeGraph; id: 
               {linkedSkills.map((s) => {
                 const info = graph.skills.find((x) => x.id === s.id)
                 return (
-                  <Badge
-                    key={s.id}
-                    variant="light"
-                    color={info?.gap ? 'orange' : 'green'}
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => onSelect(s.id)}
-                  >
-                    {s.label}
-                  </Badge>
+                  <UnstyledButton key={s.id} onClick={() => onSelect(s.id)} aria-label={`Show ${s.label}`}>
+                    <Badge variant="light" color={info?.gap ? 'orange' : 'green'} style={{ cursor: 'pointer' }}>
+                      {s.label}
+                    </Badge>
+                  </UnstyledButton>
                 )
               })}
             </Group>
@@ -100,12 +102,14 @@ export function NodePanel({ graph, id, onSelect }: { graph: KnowledgeGraph; id: 
             <Divider />
             <Stack gap={4}>
               {linkedOther.map((n) => (
-                <Text key={n.id} size="sm" style={{ cursor: 'pointer' }} onClick={() => onSelect(n.id)}>
-                  <Text span c={KIND_COLOR[n.kind]} fw={600} size="xs" mr={6}>
-                    {KIND_LABEL[n.kind]}
+                <UnstyledButton key={n.id} onClick={() => onSelect(n.id)}>
+                  <Text size="sm">
+                    <Text span c={KIND_COLOR[n.kind]} fw={600} size="xs" mr={6}>
+                      {KIND_LABEL[n.kind]}
+                    </Text>
+                    {n.label}
                   </Text>
-                  {n.label}
-                </Text>
+                </UnstyledButton>
               ))}
             </Stack>
           </>

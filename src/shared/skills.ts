@@ -171,7 +171,6 @@ export const TECH_VOCABULARY: readonly string[] = [
   'Observability',
   'Data pipelines',
   'ETL',
-  'Streaming',
   'Distributed systems'
 ]
 
@@ -199,12 +198,31 @@ export function displaySkill(name: string): string {
 }
 
 /** Splits a technologies field (`Python, Go / Kafka; AWS`) into names. */
+/** Names that contain a slash and must survive splitting on `/`. */
+const SLASH_NAMES = ['CI/CD', 'TCP/IP', 'PL/SQL', 'UI/UX', 'A/B testing', 'I/O']
+
 export function splitSkills(field: string): string[] {
-  return field
+  // Shield known slash names with a placeholder, split, then restore them.
+  let shielded = field
+  SLASH_NAMES.forEach((name, i) => {
+    shielded = shielded.replace(
+      new RegExp(escapeRegExp(name), 'gi'),
+      (m) => `\u0000${i}:${m.replace('/', '\u0001')}\u0000`
+    )
+  })
+  return shielded
     .split(/[,;|/•·]|\s+and\s+/i)
+    .map((s) => s.replace(/\u0000\d+:([^\u0000]*)\u0000/g, (_m, name: string) => name.replace('\u0001', '/')))
     .map((s) => s.replace(/\(.*?\)/g, '').trim())
     .filter((s) => s.length > 0 && s.length <= 40)
 }
+
+/**
+ * Names that are also ordinary English words; they only count when written
+ * with their capitalization ("Go", "Ray", "Spring"), so "go live" or "a ray of"
+ * are not mentions. Everything else matches case-insensitively ("aws", "sql").
+ */
+const CASE_SENSITIVE = new Set(['Go', 'Ray', 'Spring', 'Vault', 'Lambda', 'Helm', 'Swift', 'Ruby', 'Rust', 'Flask'])
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -230,9 +248,21 @@ export function mentionPatterns(display: string): RegExp[] {
     const body = escapeRegExp(s)
     // Word boundaries that also work for names ending in symbols (C++, C#, .NET, Node.js).
     const re = `(?<![A-Za-z0-9+#.])${body}(?![A-Za-z0-9+#]|\\.[A-Za-z0-9])`
-    patterns.push(new RegExp(re, s.length <= 3 ? 'g' : 'gi'))
+    patterns.push(new RegExp(re, s.length <= 2 || CASE_SENSITIVE.has(s) ? 'g' : 'gi'))
   }
   return patterns
+}
+
+/** Words that turn a mention around: "no production Rust", "without Kafka", "limited Go". */
+const NEGATION = /\b(no|not|never|without|lacks?|lacking|limited|little|none|zero|haven't|hasn't|don't|didn't)\b/i
+
+/**
+ * Whether `text` mentions the skill affirmatively: at least one sentence
+ * mentions it without a negation, so "No production Rust experience" is not
+ * evidence of Rust.
+ */
+export function mentionsAffirmatively(text: string, display: string): boolean {
+  return text.split(/(?<=[.!?;])\s+|\n+/).some((sentence) => mentions(sentence, display) && !NEGATION.test(sentence))
 }
 
 /** Whether `text` mentions the skill (any spelling). */

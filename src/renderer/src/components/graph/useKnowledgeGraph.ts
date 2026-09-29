@@ -7,7 +7,7 @@ import { api, errorText } from '../../api'
  * Loads the master profile and the workspace's job descriptions, then builds
  * the graph. Re-reads on mount, so a saved profile shows up on the next visit.
  */
-export function useKnowledgeGraph(): {
+export function useKnowledgeGraph(includeJobs = true): {
   graph: KnowledgeGraph | null
   jobs: JobText[]
   error: string | null
@@ -33,6 +33,10 @@ export function useKnowledgeGraph(): {
     }
   }, [tick])
 
-  const graph = useMemo(() => (profile ? buildKnowledgeGraph(profile, jobs) : null), [profile, jobs])
+  // With the overlay off, nothing job-derived (job nodes, gaps, job counts) is in the graph at all.
+  const graph = useMemo(
+    () => (profile ? buildKnowledgeGraph(profile, includeJobs ? jobs : []) : null),
+    [profile, jobs, includeJobs]
+  )
   return { graph, jobs, error, reload: () => setTick((t) => t + 1) }
 }

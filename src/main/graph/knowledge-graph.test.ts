@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { parseMasterProfile } from '../profile/format'
 import { buildKnowledgeGraph, mergedYears, parseProfileDate } from '@shared/knowledge-graph'
 import { emptyProfile, type MasterProfile } from '@shared/master-profile'
-import { displaySkill, mentions, skillKey, splitSkills } from '@shared/skills'
+import { displaySkill, mentions, mentionsAffirmatively, skillKey, splitSkills } from '@shared/skills'
 
 const NOW = new Date(2026, 8, 29)
 
@@ -73,8 +73,18 @@ describe('skill names', () => {
     expect(displaySkill('  Some   Tool ')).toBe('Some Tool')
   })
 
-  it('splits technology fields', () => {
+  it('splits technology fields but keeps names with a slash', () => {
     expect(splitSkills('Python, Go / Kafka; AWS (EKS) and Docker')).toEqual(['Python', 'Go', 'Kafka', 'AWS', 'Docker'])
+    expect(splitSkills('CI/CD, Python / ci/cd, UI/UX')).toEqual(['CI/CD', 'Python', 'ci/cd', 'UI/UX'])
+  })
+
+  it('matches three-letter names in any case, but ordinary-word names only as written', () => {
+    expect(mentions('experience with aws and sql', 'AWS')).toBe(true)
+    expect(mentions('experience with aws and sql', 'SQL')).toBe(true)
+    expect(mentions('a ray of hope', 'Ray')).toBe(false)
+    expect(mentions('distributed training on Ray', 'Ray')).toBe(true)
+    expect(mentionsAffirmatively('No production Rust experience. Some Go.', 'Rust')).toBe(false)
+    expect(mentionsAffirmatively('Wrote Rust services.', 'Rust')).toBe(true)
   })
 
   it('finds mentions without matching ordinary words or longer names', () => {
@@ -179,6 +189,24 @@ describe('buildKnowledgeGraph', () => {
     expect(byName.RAG).toMatchObject({ gap: false, jobs: ['ml/co/1'] })
     expect(byName.RAG.evidence[0]).toMatchObject({ nodeId: 'experience:0', text: 'Built RAG pipelines with LangGraph' })
     expect(byName.Kafka.gap).toBe(true)
+  })
+
+  it('keeps negated mentions and stated gaps out of the skills', () => {
+    const p = profile()
+    p.summary = 'Backend engineer. No production Rust experience yet.'
+    p.gaps = ['Kafka: never used it in production']
+    p.experience[0].highlights.push('Evaluated Kafka but shipped without it')
+    const g = buildKnowledgeGraph(p, [{ id: 'j/1', title: 'J', text: 'Rust and Kafka required.' }], NOW)
+    const byName = Object.fromEntries(g.skills.map((s) => [s.name, s]))
+    expect(byName.Rust).toMatchObject({ gap: true, evidence: [] })
+    expect(byName.Kafka).toMatchObject({ gap: true, evidence: [] })
+  })
+
+  it('keeps ISO dates whole when computing project years', () => {
+    const p = profile()
+    p.projects = [{ name: 'Tool', link: '', dates: '2022-03 – 2024-03', technologies: 'Rust', description: '', highlights: [] }]
+    const byName = Object.fromEntries(buildKnowledgeGraph(p, [], NOW).skills.map((s) => [s.name, s]))
+    expect(byName.Rust.years).toBe(2)
   })
 
   it('handles an empty profile', () => {

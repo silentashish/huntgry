@@ -1,5 +1,5 @@
 import type { MasterProfile } from './master-profile'
-import { displaySkill, mentions, skillKey, splitSkills, TECH_VOCABULARY } from './skills'
+import { displaySkill, mentions, mentionsAffirmatively, skillKey, splitSkills, TECH_VOCABULARY } from './skills'
 
 /**
  * The person knowledge graph: what the master profile says the person did,
@@ -124,6 +124,14 @@ export function buildKnowledgeGraph(
     }
   }
 
+  // Technologies the profile's "Gaps & notes" says the person lacks: never evidence, always a gap.
+  const gapText = profile.gaps.join('\n')
+  const statedGaps = new Set(
+    [...new Set([...profile.skills.flatMap((g) => g.items), ...TECH_VOCABULARY])]
+      .filter((t) => mentions(gapText, t))
+      .map(skillKey)
+  )
+
   // Known technologies the profile writes about without listing them ("Built RAG pipelines")
   // are skills too; without this they would later show up as gaps.
   const profileText = [
@@ -132,7 +140,8 @@ export function buildKnowledgeGraph(
     ...profile.projects.flatMap((p) => [p.description, ...p.highlights])
   ].join('\n')
   for (const tech of TECH_VOCABULARY) {
-    if (!skills.has(skillKey(tech)) && mentions(profileText, tech)) skill(tech)
+    if (!skills.has(skillKey(tech)) && !statedGaps.has(skillKey(tech)) && mentionsAffirmatively(profileText, tech))
+      skill(tech)
   }
 
   // Vocabulary for finding mentions in free text: the profile's own skills first.
@@ -155,7 +164,8 @@ export function buildKnowledgeGraph(
     for (const name of vocabulary()) {
       const key = skillKey(name)
       if (found.has(key)) continue
-      const hit = texts.find((t) => mentions(t, name))
+      if (statedGaps.has(key)) continue
+      const hit = texts.find((t) => mentionsAffirmatively(t, name))
       if (hit) found.set(key, { nodeId: ownerId, source, text: hit })
     }
     for (const [key, ev] of found) {
@@ -208,7 +218,7 @@ export function buildKnowledgeGraph(
       section: 'projects'
     })
     addEdge(person, id, 'built')
-    const [start, end] = p.dates.split(/\s*[-–—]\s*|\s+to\s+/i)
+    const [start, end] = p.dates.split(RANGE_SEPARATOR)
     withEvidence(
       id,
       p.name.trim(),
@@ -281,7 +291,7 @@ export function buildKnowledgeGraph(
       if (seen.has(key) || !mentions(job.text, name)) continue
       seen.add(key)
       const s = skill(name)
-      if (!profileKeys.has(key)) s.gap = true
+      if (!profileKeys.has(key) || statedGaps.has(key)) s.gap = true
       if (!s.jobs.includes(job.id)) s.jobs.push(job.id)
       addNode({
         id: s.id,
@@ -309,6 +319,12 @@ export function buildKnowledgeGraph(
   }
 }
 
+/**
+ * Separates the two ends of a date range: a spaced hyphen ("2019 - 2022"), an
+ * en/em dash or "to". An unspaced hyphen belongs to the date ("2022-03").
+ */
+const RANGE_SEPARATOR = /\s+-\s+|\s*[–—]\s*|\s+to\s+/i
+
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
 /**
@@ -332,7 +348,7 @@ export function parseProfileDate(text: string, now = new Date(), end = false): n
 
 function interval(start: string, end: string, now: Date): [number, number] | null {
   // "2022 - Present | Atlanta" style strings sometimes arrive in one field.
-  const [s, e] = end.trim() ? [start, end] : start.split(/\s*[-–—]\s*|\s+to\s+/i)
+  const [s, e] = end.trim() ? [start, end] : start.split(RANGE_SEPARATOR)
   const a = parseProfileDate(s ?? '', now)
   const b = parseProfileDate((e ?? '').split('|')[0], now, true) ?? a
   if (a === null || b === null || b < a) return null

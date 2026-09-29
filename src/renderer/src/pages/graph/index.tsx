@@ -9,6 +9,7 @@ import {
   Group,
   Loader,
   SegmentedControl,
+  Select,
   Stack,
   Text,
   TextInput,
@@ -29,13 +30,13 @@ const LEGEND: NodeKind[] = ['person', 'experience', 'company', 'project', 'skill
 /** Skills, roles, companies and projects from the master profile as a navigable graph, plus a skills table. */
 export function GraphPage({ params }: { params: PageParams['graph'] }) {
   const { navigate } = useNavigation()
-  const { graph, jobs, error, reload } = useKnowledgeGraph()
   const [view, setView] = useState<'graph' | 'skills'>('graph')
   const [selected, setSelected] = useState<string | null>(params?.nodeId ?? null)
   const [search, setSearch] = useState('')
   const [showJobs, setShowJobs] = useState(true)
+  const { graph, jobs, error, reload } = useKnowledgeGraph(showJobs)
 
-  const hiddenKinds = useMemo(() => new Set<NodeKind>(showJobs ? [] : ['job']), [showJobs])
+  const hiddenKinds = useMemo(() => new Set<NodeKind>(), [])
   const matches = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q || !graph) return null
@@ -104,6 +105,20 @@ export function GraphPage({ params }: { params: PageParams['graph'] }) {
               value={search}
               onChange={(e) => setSearch(e.currentTarget.value)}
             />
+            {view === 'graph' && (
+              // Keyboard (and screen reader) way to select a node; the canvas itself is pointer-only.
+              <Select
+                w={240}
+                searchable
+                clearable
+                placeholder="Jump to…"
+                aria-label="Select a node of the graph"
+                data={graph.nodes.map((n) => ({ value: n.id, label: `${KIND_LABEL[n.kind]}: ${n.label}` }))}
+                value={selected}
+                onChange={setSelected}
+                limit={50}
+              />
+            )}
             <Chip checked={showJobs} onChange={setShowJobs} disabled={jobs.length === 0}>
               Jobs overlay ({jobs.length})
             </Chip>

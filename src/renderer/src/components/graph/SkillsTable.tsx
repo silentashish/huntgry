@@ -58,7 +58,21 @@ export function SkillsTable({
       </Table.Thead>
       <Table.Tbody>
         {rows.map((s) => (
-          <Table.Tr key={s.id} onClick={() => onSelect(s.id)} style={{ cursor: 'pointer' }}>
+          <Table.Tr
+            key={s.id}
+            onClick={() => onSelect(s.id)}
+            // Rows are keyboard-operable: Tab to a row, Enter or Space opens its details.
+            tabIndex={0}
+            role="button"
+            aria-label={`Show details for ${s.name}`}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onSelect(s.id)
+              }
+            }}
+            style={{ cursor: 'pointer' }}
+          >
             <Table.Td>
               <Text size="sm" fw={500}>
                 {s.name}{' '}
