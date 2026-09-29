@@ -28,6 +28,7 @@ function requirePath(input: unknown): string {
   return normalizeInputPath(input) ?? input
 }
 
+/** Saves a usable workspace as current; other statuses leave the setting unchanged. */
 async function remember(inspection: WorkspaceInspection): Promise<void> {
   if (USABLE_STATUSES.includes(inspection.status)) {
     await saveSettings(settingsFile(), { currentWorkspace: inspection.path })

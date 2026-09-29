@@ -19,6 +19,7 @@ const STATUS_META: Record<Status, { color: string; label: string; hint: string }
   invalid: { color: 'red', label: 'invalid', hint: 'This path cannot be used.' }
 }
 
+/** Card with the inspected path, status badge, master profile, application count, warnings and errors. */
 export function WorkspaceStatus({ inspection }: { inspection: WorkspaceInspection }) {
   const meta = STATUS_META[inspection.status]
   return (

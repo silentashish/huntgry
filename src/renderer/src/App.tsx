@@ -13,6 +13,7 @@ type Notice = { color: 'green' | 'red' | 'yellow'; text: string } | null
 
 const api = window.huntgry.workspace
 
+/** Startup screen: Create/Import actions, a typed-path field and the inspected workspace card. */
 export function App() {
   const [typedPath, setTypedPath] = useState('')
   const [debouncedPath] = useDebouncedValue(typedPath, 300)
@@ -48,6 +49,7 @@ export function App() {
       })
   }, [debouncedPath])
 
+  /** Starts a new generation and clears the card so it never shows a stale folder. */
   function onTypedPathChange(value: string) {
     generation.current++
     setTypedPath(value)
@@ -55,6 +57,7 @@ export function App() {
     setNotice(null)
   }
 
+  /** Creates a workspace at `path`, unless the target changed meanwhile (`gen`). */
   async function runCreate(path: string, gen: number) {
     const result = await api.create(path)
     if (gen !== generation.current) return
@@ -68,6 +71,7 @@ export function App() {
     }
   }
 
+  /** Imports the workspace at `path` and explains why when it is not usable. */
   async function runImport(path: string, gen: number) {
     const result = await api.open(path)
     if (gen !== generation.current) return
@@ -87,6 +91,7 @@ export function App() {
     }
   }
 
+  /** Runs Create or Import for `path`, or for a folder picked in the native dialog. */
   async function run(mode: PickMode, path?: string) {
     setBusy(mode)
     try {
@@ -177,6 +182,7 @@ export function App() {
   )
 }
 
+/** Readable message for an error thrown across IPC. */
 function errorText(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err)
   // ipcRenderer.invoke prefixes main-process errors; keep only the useful part.
