@@ -118,6 +118,17 @@ describe('postings by URL', () => {
     expect(parsePosting({ ld: [], title: 'Login', text: 'Sign in', url: 'https://x.com' })).toBeNull()
   })
 
+  it('uses the page text when the JobPosting description is a stub', async () => {
+    const plain: PageData = await fixture('plain-posting.json')
+    const stub = JSON.stringify({ '@type': 'JobPosting', title: 'Data Engineer', hiringOrganization: { name: 'Initech' }, description: 'See below.' })
+    const job = parsePosting({ ...plain, ld: [stub] })!
+    expect(job.company).toBe('Initech')
+    expect(job.description).toContain('Build ETL pipelines with Airflow')
+    expect(job.descriptionComplete).toBe(true)
+    // Short page text too: the JSON-LD description is kept (and marked incomplete).
+    expect(parsePosting({ ...plain, ld: [stub], text: 'Apply now' })!.description).toBe('See below.')
+  })
+
   it('ignores tracking parameters in URL ids', () => {
     expect(urlJobId('https://a.com/j/1?utm_source=x&gh_src=y')).toBe(urlJobId('https://a.com/j/1'))
     expect(urlJobId('https://a.com/j/1?id=2')).not.toBe(urlJobId('https://a.com/j/1'))
@@ -411,6 +422,32 @@ describe('service with a stub loader', () => {
     expect(requested).toEqual([hcJob.url])
     const raw = JSON.parse(await readFile(join(ws, '.huntgry/jobs', jobFileName(card.id)), 'utf8'))
     expect(raw.descriptionComplete).toBe(true)
+  })
+
+  it('tries the next loadable copy when the first one fails', async () => {
+    const hc = await fixture('hiringcafe-next-data.json')
+    const hcJob = { ...parseHiringCafeHits({ hits: hc.props.pageProps.ssrHits })[0], fetchedAt: '2030-01-01T00:00:00Z' }
+    const urlCopy = { ...hcJob, id: 'url:acme-1', source: 'url' as const, sourceId: 'acme-1', url: 'https://careers.example.com/acme-1', fetchedAt: '2030-01-02T00:00:00Z' }
+    await saveJob(ws, hcJob)
+    await saveJob(ws, urlCopy)
+    expect((await listJobs(ws)).find((j) => j.id === hcJob.id)?.aliases).toEqual([urlCopy.id])
+
+    const posting = await fixture('jsonld-posting.json')
+    const requested: string[] = []
+    const firstFails = async (url: string): Promise<LoadResult> => {
+      requested.push(url)
+      return url === urlCopy.url ? { status: 'ok', data: { ...posting, url } } : { status: 'error', message: 'timed out.' }
+    }
+    const full = await fetchDetails(ws, hcJob.id, firstFails)
+    expect(full.descriptionComplete).toBe(true)
+    expect(requested).toEqual([hcJob.url, urlCopy.url])
+
+    // When every copy fails, the last failure is reported.
+    await saveJob(ws, { ...parseHiringCafeHits({ hits: hc.props.pageProps.ssrHits })[1] })
+    const other = parseHiringCafeHits({ hits: hc.props.pageProps.ssrHits })[1]
+    await expect(
+      fetchDetails(ws, other.id, async () => ({ status: 'error', message: 'timed out.' }))
+    ).rejects.toThrow(/timed out\. The summary from the job board is kept/)
   })
 
   it('validates queries', () => {

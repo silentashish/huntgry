@@ -80,7 +80,8 @@ export function JobDrawer({ job, onClose, onChange, onTailor }: Props) {
             >
               Open posting
             </Button>
-            {!job.descriptionComplete && job.source !== 'indeed' && (
+            {/* An Indeed job can still be fetched through a copy of it found on another board. */}
+            {!job.descriptionComplete && (job.source !== 'indeed' || (job.aliases?.length ?? 0) > 0) && (
               <Button
                 variant="light"
                 leftSection={<IconDownload size={16} />}

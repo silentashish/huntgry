@@ -102,9 +102,12 @@ export interface PageData {
 export function parsePosting(page: PageData, source: JobSourceId = 'url', now = new Date()): Job | null {
   const posting = findJobPosting(page.ld)
   const url = page.url
+  const text = page.text.replace(/\n{3,}/g, '\n\n').trim()
   if (posting) {
     const { location, remote } = locationOf(posting)
-    const description = htmlToText(str(posting.description))
+    const ldDescription = htmlToText(str(posting.description))
+    // Some pages ship JobPosting metadata with an empty or stub description; the page text is then the posting.
+    const description = ldDescription.length > 200 || text.length < 200 ? ldDescription : text
     const title = str(posting.title) || page.title
     if (!title) return null
     return {
@@ -125,7 +128,6 @@ export function parsePosting(page: PageData, source: JobSourceId = 'url', now = 
       fetchedAt: now.toISOString()
     }
   }
-  const text = page.text.replace(/\n{3,}/g, '\n\n').trim()
   if (text.length < 200) return null
   const title = page.title.split(/\s[|–—-]\s/)[0].trim() || 'Job posting'
   return {
