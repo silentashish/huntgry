@@ -88,6 +88,7 @@ export function App() {
                   document={view.doc}
                   initialDraft={view.draft}
                   onDocumentChange={(doc) => setView({ ...view, doc, draft: undefined })}
+                  onLeave={() => setView((v) => (v.name === 'shell' && v.draft ? { ...v, draft: undefined } : v))}
                   onSwitchWorkspace={switchWorkspace}
                 />
               )
