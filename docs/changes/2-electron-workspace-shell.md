@@ -104,7 +104,9 @@ flowchart TD
     start(["inspectWorkspace(path)"]) --> abs{absolute path?}
     abs -- no --> invalid[invalid]
     abs -- yes --> exists{"realpath() ok?"}
-    exists -- ENOENT --> parent{"parent is a<br/>writable dir?"}
+    exists -- ENOENT --> dangling{"dangling symlink?<br/>(lstat)"}
+    dangling -- yes --> invalid
+    dangling -- no --> parent{"parent is a<br/>writable dir?"}
     parent -- yes --> missing[missing]
     parent -- no --> invalid
     exists -- other error --> invalid
@@ -112,7 +114,7 @@ flowchart TD
     dir -- no --> invalid
     dir -- yes --> entries{"entries other than<br/>.DS_Store/.git/…?"}
     entries -- none --> empty[empty]
-    entries -- some --> mp{master profile at root?}
+    entries -- some --> mp{"readable regular-file<br/>master profile at root?"}
     mp -- "master-profile.md" --> valid["valid (v3)"]
     mp -- "master_profile.md" --> legacy["legacy"]
     mp -- none --> apps{"≥1 role/company/job-id<br/>folder with a build.py artifact?"}
@@ -154,8 +156,22 @@ Create and Import behaviour per status:
   Remembering the current workspace goes to `userData/settings.json`, outside the workspace.
   Tests snapshot mode, size, mtime and content before and after.
 - **Symlinks.** A symlinked *root* is resolved with `realpath`, and the target is inspected and
-  displayed. Inside the scan, `Dirent` types are used (lstat semantics), so symlinks are never
-  followed. The scan is bounded to depth 3 and 5,000 entries, so picking `~` or `/` cannot hang.
+  displayed. A *dangling* root symlink is `invalid`, not `missing`, so Create is never offered
+  on a path where `mkdir` would fail. Inside the scan, `Dirent` types are used (lstat
+  semantics), so symlinks are never followed.
+- **Master profile must be a readable regular file.** A directory, a dangling link or an
+  unreadable file named `master-profile.md` is ignored with a warning, and detection falls
+  through to `master_profile.md` or application folders. A symlink is resolved explicitly (this
+  one well-known file, not a traversal) and accepted only if its target is a readable regular
+  file, even one outside the workspace, such as a dotfiles repo. A warning shows where it points.
+- **Bounded reads.** Directories are streamed with `opendir()` rather than loaded with
+  `readdir()`. One budget of 5,000 entries covers the root listing and the depth-3
+  application scan, and reading stops the moment it runs out, so picking `~` or `/` cannot
+  hang or allocate a huge array. If the root listing is cut short, the master profile and
+  cover letter are looked up by name, and the truncation is reported as a warning.
+- **No stale actions in the UI.** Changing the typed path clears the status card at once, and
+  results of older in-flight inspections are dropped (generation counter). "Create workspace
+  here" and "Import this workspace" therefore always refer to the folder in the input.
 - **Typed path input.** macOS folder pickers can only return existing folders (their "New
   Folder" button creates the folder at once). To cover "a new directory that does not yet
   exist", the UI also accepts a typed path with live read-only status and a contextual
@@ -164,13 +180,13 @@ Create and Import behaviour per status:
   `workspace/settings.ts`, with the path injected by `ipc.ts`. That keeps every fs call in
   one tested, Electron-free module.
 - **No Playwright yet.** The logic worth testing is the pure workspace module, which has
-  24 tests. An Electron smoke test belongs with packaging.
+  33 tests. An Electron smoke test belongs with packaging.
 
 ## How to test
 
 ```bash
 npm install
-npm test            # 24 vitest cases, temp dirs, no Electron
+npm test            # 33 vitest cases, temp dirs, no Electron
 npm run typecheck
 npm run build
 npm run dev         # manual check
