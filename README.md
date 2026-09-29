@@ -70,7 +70,7 @@ src/
 │   ├── profile/                # master-profile.md ⇄ MasterProfile (format.ts), read/save (store.ts) (+ ipc.ts)
 │   ├── applications/           # scan <role>/<company>/<job-id>/, huntgry.json tracking, huntgry-file:// previews, fs.watch
 │   ├── resume/                 # resume file → lines (docx, pdf, txt/md) → draft profile (parse.ts)
-│   └── cli/                    # placeholder for the `claude` CLI integration
+│   └── cli/                    # runs the resume-tailor skill via `claude -p` (stream-json), run history
 ├── preload/                    # index.ts composes window.huntgry from <feature>.ts + events.ts
 └── renderer/src/               # React 19 + Mantine UI, no Node access
     ├── navigation.ts           # pages, typed params, navigate(), leave guard
@@ -99,6 +99,18 @@ Features only add files, plus one line in each registry:
    `PageParams`/`PAGES` (`navigation.ts`), the navbar (`AppLayout.tsx`) and the switch in
    `App.tsx`. Open other pages with `useNavigation().navigate(page, params)`; call
    `setLeaveGuard(message)` while the page has unsaved work.
+
+## Tailoring a resume
+
+**Tailor** runs the installed resume-tailor skill through the `claude` CLI, in the open
+workspace: paste a job description or a posting URL, follow Claude's gap analysis, answer
+its approval question, and open the resulting `resume.pdf` / `cover.pdf`. Runs are kept in
+`<workspace>/.huntgry/runs/` and can be reopened and continued after a restart.
+
+**Settings** shows whether `claude`, the skill and its dependencies are found. The skill
+needs `pdflatex` (TinyTeX works without admin rights), poppler (`brew install poppler`) and
+a few Python modules, which **Install Python dependencies** puts in a venv in the app's
+data folder. You do not have to change your shell PATH.
 
 ## Workspace
 
@@ -161,5 +173,6 @@ archived), previews the pages, and refreshes when folders change on disk.
 
 See [docs/changes/2-electron-workspace-shell.md](docs/changes/2-electron-workspace-shell.md),
 [docs/changes/4-master-profile-flow.md](docs/changes/4-master-profile-flow.md),
-[docs/changes/7-app-shell.md](docs/changes/7-app-shell.md)
+[docs/changes/7-app-shell.md](docs/changes/7-app-shell.md),
+[docs/changes/8-claude-runner.md](docs/changes/8-claude-runner.md)
 and [docs/changes/9-applications-dashboard.md](docs/changes/9-applications-dashboard.md) for the design notes.
