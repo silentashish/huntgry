@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Alert, Button, Container, Group, Stack, Text, TextInput, Title } from '@mantine/core'
 import { useDebouncedValue } from '@mantine/hooks'
 import {
@@ -20,10 +20,15 @@ export function App() {
   const [currentPath, setCurrentPath] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice>(null)
   const [busy, setBusy] = useState<PickMode | null>(null)
+  // Bumped whenever the target changes (typing, picking). Async results from an
+  // older generation are dropped, so the card and its buttons always match the
+  // current input and never act on a previously inspected folder.
+  const generation = useRef(0)
 
   useEffect(() => {
+    const gen = generation.current
     void api.getCurrent().then((current) => {
-      if (!current) return
+      if (!current || gen !== generation.current) return
       setInspection(current)
       setCurrentPath(current.path)
     })
@@ -32,22 +37,27 @@ export function App() {
   // Live, read-only status for a typed path.
   useEffect(() => {
     if (!debouncedPath.trim()) return
-    let stale = false
+    const gen = generation.current
     api
       .inspect(debouncedPath)
-      .then((r) => !stale && setInspection(r))
+      .then((r) => gen === generation.current && setInspection(r))
       .catch((err: unknown) => {
-        if (stale) return
+        if (gen !== generation.current) return
         setInspection(null)
         setNotice({ color: 'red', text: errorText(err) })
       })
-    return () => {
-      stale = true
-    }
   }, [debouncedPath])
 
-  async function runCreate(path: string) {
+  function onTypedPathChange(value: string) {
+    generation.current++
+    setTypedPath(value)
+    setInspection(null) // hide the old card and its action buttons immediately
+    setNotice(null)
+  }
+
+  async function runCreate(path: string, gen: number) {
     const result = await api.create(path)
+    if (gen !== generation.current) return
     setInspection(result.inspection)
     if (result.ok) {
       setCurrentPath(result.inspection.path)
@@ -58,8 +68,9 @@ export function App() {
     }
   }
 
-  async function runImport(path: string) {
+  async function runImport(path: string, gen: number) {
     const result = await api.open(path)
+    if (gen !== generation.current) return
     setInspection(result)
     if (USABLE_STATUSES.includes(result.status)) {
       setCurrentPath(result.path)
@@ -76,8 +87,14 @@ export function App() {
     try {
       const target = path ?? (await api.pickDirectory(mode))
       if (!target) return // picker cancelled: change nothing
+      if (path === undefined) {
+        // A picked folder replaces whatever was typed, so input and card never disagree.
+        generation.current++
+        setTypedPath('')
+      }
       setNotice(null)
-      await (mode === 'create' ? runCreate(target) : runImport(target))
+      const gen = generation.current
+      await (mode === 'create' ? runCreate(target, gen) : runImport(target, gen))
     } catch (err) {
       setNotice({ color: 'red', text: errorText(err) })
     } finally {
@@ -117,10 +134,7 @@ export function App() {
           description="Absolute path or ~/…; a folder that does not exist yet can be created."
           placeholder="~/cv"
           value={typedPath}
-          onChange={(e) => {
-            setTypedPath(e.currentTarget.value)
-            setNotice(null)
-          }}
+          onChange={(e) => onTypedPathChange(e.currentTarget.value)}
         />
 
         {notice && (
