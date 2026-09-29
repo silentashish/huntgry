@@ -58,7 +58,8 @@ export function DashboardPage() {
       setList(next)
       setError(null)
     } catch (err) {
-      if (latestLoad.current !== request) return
+      // A newer load or a tracking update has superseded this request: its error is stale too.
+      if (latestLoad.current !== request || generation.current !== started) return
       setError(errorText(err))
     }
   }, [])
