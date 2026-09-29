@@ -30,6 +30,7 @@ import { useNavigation } from '../../navigation'
 import { JobDrawer } from './JobDrawer'
 import { ago, SOURCE_LABEL } from './labels'
 import { PasteModal } from './PasteModal'
+import { mergeJobs } from './merge'
 
 type Show = 'search' | 'all' | 'new' | 'tailored' | 'dismissed'
 
@@ -59,12 +60,7 @@ export function JobsPage() {
     api.jobs.recentSearches().then(setRecent, () => undefined)
   }, [])
 
-  const upsert = (list: Job[]) =>
-    setJobs((cur) => {
-      const byId = new Map((cur ?? []).map((j) => [j.id, j]))
-      for (const j of list) byId.set(j.id, j)
-      return [...byId.values()].sort((a, b) => (b.postedAt ?? b.fetchedAt).localeCompare(a.postedAt ?? a.fetchedAt))
-    })
+  const upsert = (list: Job[]) => setJobs((cur) => mergeJobs(cur ?? [], list))
 
   async function search(q?: JobQuery) {
     const query: JobQuery = q ?? { keywords, location, remoteOnly, sources }
