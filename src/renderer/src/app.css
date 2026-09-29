@@ -1,0 +1,9 @@
+@keyframes huntgry-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.huntgry-spin {
+  animation: huntgry-spin 1s linear infinite;
+}

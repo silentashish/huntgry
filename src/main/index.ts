@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, shell } from 'electron'
 import { join } from 'node:path'
 import icon from '../../resources/icon.png?asset'
+import { stopAllRuns } from './cli/ipc'
 import { registerIpcHandlers } from './ipc'
 
 // Menus, the About panel and userData use this name. Packaged builds take the
@@ -75,6 +76,21 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+// Never leave a `claude` child running after the app is gone. Electron does not
+// wait for async listeners, so hold the first quit until the runs are stopped
+// and saved, then quit again (the guard lets that second quit through).
+let runsStopped = false
+app.on('before-quit', (event) => {
+  if (runsStopped) return
+  event.preventDefault()
+  void stopAllRuns()
+    .catch((err: unknown) => console.error('Stopping runs before quit failed:', err))
+    .finally(() => {
+      runsStopped = true
+      app.quit()
+    })
 })
 
 app.on('window-all-closed', () => {

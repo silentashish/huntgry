@@ -110,7 +110,7 @@ export function AppLayout({ workspacePath, initialLocation, onSwitchWorkspace, c
               </Text>
               <Tooltip label={workspacePath} multiline maw={360} openDelay={400}>
                 <Text size="xs" ff="monospace" truncate="start">
-                  {workspacePath}
+                  <bdi>{workspacePath}</bdi>
                 </Text>
               </Tooltip>
               <Button

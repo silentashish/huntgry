@@ -18,8 +18,12 @@ export const COVER_LETTER_FILE = 'cover-letter.md'
 /** Tells Claude Code that this directory is CV_HOME. Written by Create only, never by Import. */
 export const CLAUDE_FILE = 'CLAUDE.md'
 
+/** Huntgry's own data inside a workspace (runs, saved jobs, tracking); never an application folder. */
+export const HUNTGRY_DIR = '.huntgry'
+
 /** Entries that do not make a directory "non-empty" and are skipped by the scan. */
 export const IGNORED_ENTRIES: ReadonlySet<string> = new Set([
+  HUNTGRY_DIR,
   '.DS_Store',
   '.git',
   'Thumbs.db',
