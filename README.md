@@ -70,6 +70,7 @@ src/
 │   ├── profile/                # master-profile.md ⇄ MasterProfile (format.ts), read/save (store.ts) (+ ipc.ts)
 │   ├── applications/           # scan <role>/<company>/<job-id>/, huntgry.json tracking, huntgry-file:// previews, fs.watch
 │   ├── graph/                  # job descriptions for the knowledge graph overlay
+│   ├── jobs/                   # job boards: hidden-window loader, hiring.cafe / Indeed / posting parsers, .huntgry/jobs store
 │   ├── resume/                 # resume file → lines (docx, pdf, txt/md) → draft profile (parse.ts)
 │   └── cli/                    # runs the resume-tailor skill via `claude -p` (stream-json), run history
 ├── preload/                    # index.ts composes window.huntgry from <feature>.ts + events.ts
@@ -100,6 +101,14 @@ Features only add files, plus one line in each registry:
    `PageParams`/`PAGES` (`navigation.ts`), the navbar (`AppLayout.tsx`) and the switch in
    `App.tsx`. Open other pages with `useNavigation().navigate(page, params)`; call
    `setLeaveGuard(message)` while the page has unsaved work.
+
+## Finding jobs
+
+**Jobs** searches hiring.cafe and Indeed when you click Search. Each board's search page is
+opened once in a hidden browser window, because both reject plain HTTP clients. You can
+also add any posting by URL, or paste it. Saved jobs live in `<workspace>/.huntgry/jobs/`.
+**Tailor resume** sends a job to the Tailor page. Indeed shows full descriptions only
+after a human check, so for Indeed jobs open the posting and paste the text.
 
 ## Tailoring a resume
 
@@ -184,5 +193,6 @@ See [docs/changes/2-electron-workspace-shell.md](docs/changes/2-electron-workspa
 [docs/changes/4-master-profile-flow.md](docs/changes/4-master-profile-flow.md),
 [docs/changes/7-app-shell.md](docs/changes/7-app-shell.md),
 [docs/changes/8-claude-runner.md](docs/changes/8-claude-runner.md),
-[docs/changes/9-applications-dashboard.md](docs/changes/9-applications-dashboard.md)
+[docs/changes/9-applications-dashboard.md](docs/changes/9-applications-dashboard.md),
+[docs/changes/10-job-boards.md](docs/changes/10-job-boards.md)
 and [docs/changes/11-knowledge-graph.md](docs/changes/11-knowledge-graph.md) for the design notes.

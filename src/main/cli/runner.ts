@@ -1,7 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { join } from 'node:path'
 import type { RunSummary, StartRunParams } from '@shared/runner-types'
 import { LineBuffer, parseEventLine, type HuntgryEvent } from '@shared/transcript'
 import { buildClaudeArgs, buildFirstPrompt, runTitle, userMessageLine, type SandboxPaths } from './command'
+import { recordJobSource } from '../applications/tracking'
 import { appendEvent, findOutputFolder, newRunId, readEvents, readRun, saveRun } from './runs'
 
 /**
@@ -243,6 +245,13 @@ export class RunManager {
         if (out) {
           r.outputFolder = out.folder
           r.outputFiles = out.files
+          // Let the Dashboard link the application back to its posting and board.
+          const { jobUrl, source } = r.params
+          if (jobUrl) {
+            await recordJobSource(join(entry.ctx.workspace, out.folder), jobUrl, source ?? 'manual').catch((err) =>
+              console.error('Recording the job source failed:', err)
+            )
+          }
         }
       })
       this.touch(entry)

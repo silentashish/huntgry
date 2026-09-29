@@ -1,0 +1,8 @@
+{
+  "url": "https://jobs.example.com/acme/senior-backend-engineer?utm_source=linkedin",
+  "title": "Senior Backend Engineer - Acme | Careers",
+  "text": "Senior Backend Engineer ...",
+  "ld": [
+    "{\"@context\":\"https://schema.org\",\"@graph\":[{\"@type\":\"Organization\",\"name\":\"Acme\"},{\"@type\":\"JobPosting\",\"title\":\"Senior Backend Engineer\",\"datePosted\":\"2026-09-20\",\"hiringOrganization\":{\"@type\":\"Organization\",\"name\":\"Acme Corp\"},\"jobLocation\":[{\"@type\":\"Place\",\"address\":{\"@type\":\"PostalAddress\",\"addressLocality\":\"Atlanta\",\"addressRegion\":\"GA\",\"addressCountry\":\"US\"}}],\"baseSalary\":{\"@type\":\"MonetaryAmount\",\"currency\":\"USD\",\"value\":{\"@type\":\"QuantitativeValue\",\"minValue\":150000,\"maxValue\":185000,\"unitText\":\"YEAR\"}},\"description\":\"<p>We build the routing platform for <b>2,000</b> vans.</p><h3>What you will do</h3><ul><li>Design Python and Go services on AWS</li><li>Own Kafka pipelines &amp; observability</li></ul><h3>You have</h3><ul><li>5+ years of backend experience</li><li>Kubernetes in production</li></ul><p>We offer equity, health insurance and a remote-friendly office. This paragraph pads the description so it counts as the full posting text rather than a short summary.</p>\"}]}"
+  ]
+}

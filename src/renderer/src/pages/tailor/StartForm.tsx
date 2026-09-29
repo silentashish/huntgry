@@ -148,7 +148,13 @@ export function StartForm({ prefill, environment, busy, onStart }: Props) {
                 jobId: jobId.trim() || undefined,
                 notes: notes.trim() || undefined,
                 coverLetter,
-                dateStyle
+                dateStyle,
+                // The Jobs page's board applies only while the URL is still that job's; anything else is manual.
+                source: jobUrl.trim()
+                  ? prefill?.source && jobUrl.trim() === prefill.jobUrl?.trim()
+                    ? prefill.source
+                    : 'manual'
+                  : undefined
               })
             }
           >

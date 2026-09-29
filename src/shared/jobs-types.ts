@@ -1,0 +1,113 @@
+/**
+ * Jobs found on job boards (hiring.cafe, Indeed) or added by URL / pasted
+ * text, normalized to one shape and saved in the workspace
+ * (`.huntgry/jobs/<source>-<id>.json`).
+ */
+
+export type JobSourceId = 'hiring.cafe' | 'indeed' | 'url' | 'pasted'
+
+export const SEARCH_SOURCES = ['hiring.cafe', 'indeed'] as const
+export type SearchSource = (typeof SEARCH_SOURCES)[number]
+
+export interface Job {
+  /** `<source>:<source id>`; stable across searches, used for dedupe. */
+  id: string
+  source: JobSourceId
+  sourceId: string
+  title: string
+  company: string
+  location: string
+  remote: boolean
+  /** Human-readable pay, e.g. `$120,000 – $140,000 / year`. */
+  salary: string
+  /** ISO date the posting went up, when known. */
+  postedAt: string | null
+  /** Where the job can be read and applied to. */
+  url: string
+  /** Board page for the job, when different from `url`. */
+  boardUrl: string | null
+  /**
+   * Job description as plain text / Markdown. Search results carry only a
+   * summary; `descriptionComplete` says whether this is the full posting.
+   */
+  description: string
+  descriptionComplete: boolean
+  /** Technologies the board extracted (hiring.cafe), if any. */
+  tags: string[]
+  fetchedAt: string
+  /** Set when the user sent the job to the resume tailor. */
+  tailoredAt?: string
+  dismissed?: boolean
+  /** Ids of the same job found on other boards, merged into this record (see `canonicalize`). */
+  aliases?: string[]
+}
+
+export interface JobQuery {
+  keywords: string
+  location: string
+  remoteOnly: boolean
+  sources: SearchSource[]
+}
+
+/** Result of one source for one search. */
+export interface SourceResult {
+  source: SearchSource
+  status: 'ok' | 'blocked' | 'error'
+  /** Jobs this source returned (already saved and deduped). */
+  count: number
+  message?: string
+}
+
+export interface SearchResult {
+  jobs: Job[]
+  sources: SourceResult[]
+}
+
+export interface SavedSearch {
+  query: JobQuery
+  at: string
+}
+
+export interface JobsApi {
+  /** Saved jobs of the workspace, newest first (dismissed ones included, flagged). */
+  list(): Promise<Job[]>
+  /** Searches the selected boards now (rate-limited), saves the results, returns them. */
+  search(query: JobQuery): Promise<SearchResult>
+  /** Fetches the full description for a saved job and saves it. */
+  fetchDetails(id: string): Promise<Job>
+  /** Fetches any job posting URL and saves it as a job. */
+  addByUrl(url: string): Promise<Job>
+  /** Saves pasted posting text as a job. */
+  addPasted(input: { title: string; company: string; url: string; text: string }): Promise<Job>
+  update(id: string, patch: { dismissed?: boolean; tailored?: boolean }): Promise<Job>
+  recentSearches(): Promise<SavedSearch[]>
+}
+
+export const JOBS_CHANNELS = {
+  list: 'jobs:list',
+  search: 'jobs:search',
+  fetchDetails: 'jobs:fetch-details',
+  addByUrl: 'jobs:add-by-url',
+  addPasted: 'jobs:add-pasted',
+  update: 'jobs:update',
+  recentSearches: 'jobs:recent-searches'
+} as const
+
+/** Builds the job description handed to the resume tailor. */
+export function jobDescriptionFor(job: Job): string {
+  const head = [
+    `# ${job.title}`,
+    '',
+    [job.company, job.location, job.remote ? 'Remote' : '', job.salary].filter(Boolean).join(' · ')
+  ]
+  if (job.url) head.push('', `Posting: ${job.url}`)
+  // Pasted postings often start with their own title heading; do not repeat it.
+  const lines = job.description.trim().split('\n')
+  const same = (l: string) =>
+    l
+      .replace(/^#+\s*/, '')
+      .trim()
+      .toLowerCase() === job.title.trim().toLowerCase()
+  const body = lines.length > 0 && same(lines[0]) ? lines.slice(1).join('\n').trim() : job.description.trim()
+  return [...head, '', body].join('\n')
+}

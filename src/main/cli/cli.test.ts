@@ -204,6 +204,8 @@ describe('command line and prompts', () => {
     expect(() => requireStartParams({ coverLetter: true })).toThrow(/job description/)
     expect(() => requireStartParams({ jobUrl: 'file:///etc/passwd' })).toThrow(/http/)
     expect(() => requireStartParams({ jobDescription: 5 })).toThrow(/Invalid job description/)
+    expect(requireStartParams({ jobDescription: 'x', source: 'indeed' }).source).toBe('indeed')
+    expect(requireStartParams({ jobDescription: 'x', source: '../../etc' }).source).toBeUndefined()
     expect(requireStartParams({ jobDescription: 'x', dateStyle: 'weird', coverLetter: 'yes' })).toMatchObject({
       dateStyle: 'right',
       coverLetter: false

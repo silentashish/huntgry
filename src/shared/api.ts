@@ -2,6 +2,7 @@ import type { ApplicationsApi } from './applications-types'
 import type { Subscribe } from './events'
 import type { RunnerApi } from './runner-types'
 import type { GraphApi } from './graph-types'
+import type { JobsApi } from './jobs-types'
 import type { ProfileApi, WorkspaceApi } from './workspace-types'
 
 /**
@@ -17,6 +18,8 @@ export interface HuntgryApi {
   applications: ApplicationsApi
   /** Inputs of the knowledge graph beyond the master profile. */
   graph: GraphApi
+  /** Job boards: search, saved jobs, add by URL or pasted text. */
+  jobs: JobsApi
   /** Main → renderer events, restricted to `EVENT_CHANNELS`. */
   on: Subscribe
 }

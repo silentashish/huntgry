@@ -89,6 +89,26 @@ describe('RunManager against a fake claude', () => {
     expect((await readRun(ws, id)).outputFolder).toBe(done.outputFolder)
   })
 
+  it('records where the job came from in the application folder', async () => {
+    const fromJobs = { ...params, jobUrl: 'https://hiring.cafe/job/abc', source: 'hiring.cafe' as const }
+    const { id } = await manager.start(fromJobs, ctx())
+    await until(id, (r) => r.status === 'waiting')
+    await manager.reply(id, 'Approved. WRITE_OUTPUT', async () => ctx())
+    const done = await until(id, (r) => r.status === 'waiting' && r.outputFolder !== null)
+    await manager.flush(id)
+    const tracking = JSON.parse(await readFile(join(ws, done.outputFolder!, 'huntgry.json'), 'utf8'))
+    expect(tracking).toMatchObject({ jobUrl: 'https://hiring.cafe/job/abc', source: 'hiring.cafe' })
+  })
+
+  it('writes no tracking file for a run without a posting URL', async () => {
+    const { id } = await manager.start(params, ctx())
+    await until(id, (r) => r.status === 'waiting')
+    await manager.reply(id, 'Approved. WRITE_OUTPUT', async () => ctx())
+    const done = await until(id, (r) => r.status === 'waiting' && r.outputFolder !== null)
+    await manager.flush(id)
+    await expect(readFile(join(ws, done.outputFolder!, 'huntgry.json'), 'utf8')).rejects.toThrow(/ENOENT/)
+  })
+
   it('finishes cleanly when the user ends the run, then resumes the session on a new reply', async () => {
     const { id } = await manager.start(params, ctx())
     await until(id, (r) => r.status === 'waiting')
