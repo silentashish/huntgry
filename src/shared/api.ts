@@ -1,4 +1,5 @@
 import type { Subscribe } from './events'
+import type { GraphApi } from './graph-types'
 import type { ProfileApi, WorkspaceApi } from './workspace-types'
 
 /**
@@ -8,6 +9,8 @@ import type { ProfileApi, WorkspaceApi } from './workspace-types'
 export interface HuntgryApi {
   workspace: WorkspaceApi
   profile: ProfileApi
+  /** Inputs of the knowledge graph beyond the master profile. */
+  graph: GraphApi
   /** Main → renderer events, restricted to `EVENT_CHANNELS`. */
   on: Subscribe
 }
