@@ -269,6 +269,22 @@ describe('bounded directory reads (AC15)', () => {
     expect(r.warnings.join(' ')).toMatch(/Scan stopped after 20 entries/)
   })
 
+  it('keeps application folders already found when the budget runs out (no profile)', async () => {
+    for (let i = 0; i < 10; i++) await write(join(tmp, `role${i}/co/job/job-description.md`))
+    // root listing costs 10, each application folder costs 3 more (role, company, job-id reads)
+    const r = await inspectWorkspace(tmp, { maxEntries: 25 })
+    expect(r.applicationCount).toBe(5)
+    expect(r.status).toBe('legacy')
+    expect(r.warnings.join(' ')).toMatch(/Scan stopped/)
+  })
+
+  it('returns unverified, not not-a-workspace, when the scan stops before finding anything', async () => {
+    await Promise.all(Array.from({ length: 100 }, (_, i) => writeFile(join(tmp, `junk${i}`), '')))
+    const r = await inspectWorkspace(tmp, { maxEntries: 20 })
+    expect(r.status).toBe('unverified')
+    expect(r.errors[0]).toMatch(/Scan stopped after 20 entries/)
+  })
+
   it('shares one budget between the root and nested application folders', async () => {
     await write(join(tmp, 'master_profile.md'))
     for (let i = 0; i < 10; i++) await write(join(tmp, `role${i}/co/job/job-description.md`))

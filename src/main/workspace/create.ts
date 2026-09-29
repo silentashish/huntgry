@@ -25,6 +25,7 @@ export async function createWorkspace(inputPath: string): Promise<CreateResult> 
         error: 'This folder is already a Resume Tailor workspace. Use Import Existing Workspace instead.'
       }
     case 'not-a-workspace':
+    case 'unverified':
     case 'invalid':
       return {
         ok: false,

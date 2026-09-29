@@ -14,6 +14,11 @@ export type WorkspaceStatus =
   | 'missing'
   /** Non-empty directory with unrelated content. Neither Create nor Import will touch it. */
   | 'not-a-workspace'
+  /**
+   * Too large to classify: the bounded scan stopped before finding a master profile or
+   * application folders. Neither Create nor Import will use it (it may be `~` or `/`).
+   */
+  | 'unverified'
   /** Not a directory, unreadable/unwritable, relative path, or parent missing. */
   | 'invalid'
 

@@ -106,6 +106,16 @@ export async function inspectWorkspace(
     })
   }
 
+  if (budget.exhausted) {
+    // Nothing found yet, but the scan stopped early: we cannot tell, so do not claim "not a workspace".
+    return result(root, 'unverified', {
+      warnings,
+      errors: [
+        `Scan stopped after ${maxEntries} entries before finding a master profile or application folders. Pick the workspace folder itself (the one holding ${MASTER_PROFILE_FILE} or the <role>/<company>/<job-id> folders).`
+      ]
+    })
+  }
+
   return result(root, 'not-a-workspace', {
     warnings,
     errors: [
@@ -235,25 +245,22 @@ async function countApplications(
   rootEntries: EntryLike[],
   budget: ScanBudget
 ): Promise<number> {
-  const subdirs = (dir: string, entries: EntryLike[]): string[] =>
-    entries.filter((e) => e.isDirectory() && !IGNORED_ENTRIES.has(e.name)).map((e) => join(dir, e.name))
-
-  let frontier = subdirs(root, rootEntries)
-  for (let depth = 2; depth <= APPLICATION_DEPTH; depth++) {
-    const next: string[] = []
-    for (const dir of frontier) {
-      if (budget.exhausted) return 0
-      next.push(...subdirs(dir, await readEntriesSafe(dir, budget)))
-    }
-    frontier = next
-  }
-
+  // Depth-first, so each application folder is counted as soon as it is read
+  // and a budget that runs out mid-scan keeps the folders already found.
   let count = 0
-  for (const dir of frontier) {
-    if (budget.exhausted) break
-    const entries = await readEntriesSafe(dir, budget)
-    if (entries.some((e) => e.isFile() && APPLICATION_MARKERS.has(e.name))) count++
+  async function visit(dir: string, entries: EntryLike[], depth: number): Promise<void> {
+    if (depth === APPLICATION_DEPTH) {
+      if (entries.some((e) => e.isFile() && APPLICATION_MARKERS.has(e.name))) count++
+      return
+    }
+    for (const e of entries) {
+      if (budget.exhausted) return
+      if (!e.isDirectory() || IGNORED_ENTRIES.has(e.name)) continue
+      const sub = join(dir, e.name)
+      await visit(sub, await readEntriesSafe(sub, budget), depth + 1)
+    }
   }
+  await visit(root, rootEntries, 0)
   return count
 }
 

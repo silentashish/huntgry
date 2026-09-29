@@ -119,7 +119,8 @@ flowchart TD
     mp -- "master_profile.md" --> legacy["legacy"]
     mp -- none --> apps{"≥1 role/company/job-id<br/>folder with a build.py artifact?"}
     apps -- yes --> legacyWarn["legacy + warning<br/>'No master profile found'"]
-    apps -- no --> nw[not-a-workspace]
+    apps -- "no, scan complete" --> nw[not-a-workspace]
+    apps -- "no, entry budget ran out" --> unv[unverified]
 
     missing & empty -.->|Create allowed| createOk(["create(): mkdir + write skeleton ('wx')"])
     valid & legacy & legacyWarn -.->|Import allowed| importOk(["open(): zero writes, remember path"])
@@ -132,7 +133,7 @@ Create and Import behaviour per status:
 | `missing` | `mkdir` and write the skeleton | refused; suggests Create |
 | `empty` | write the skeleton; leaves `.DS_Store`/`.git` alone | refused; suggests Create |
 | `valid` / `legacy` | refused, writes nothing; "use Import" | accepted, zero writes |
-| `not-a-workspace` / `invalid` | refused, writes nothing | refused |
+| `not-a-workspace` / `unverified` / `invalid` | refused, writes nothing | refused |
 
 ## Design decisions & rejected alternatives
 
@@ -168,7 +169,12 @@ Create and Import behaviour per status:
   `readdir()`. One budget of 5,000 entries covers the root listing and the depth-3
   application scan, and reading stops the moment it runs out, so picking `~` or `/` cannot
   hang or allocate a huge array. If the root listing is cut short, the master profile and
-  cover letter are looked up by name, and the truncation is reported as a warning.
+  cover letter are looked up by name, and the truncation is reported as a warning. The
+  application scan is depth-first, so the folders found before the budget runs out are still
+  counted. When the scan stops before finding a profile or any application folder, the result
+  is `unverified` rather than `not-a-workspace`: the app cannot tell, and it will not guess.
+  `unverified` is deliberately not importable, because a folder that large is most likely `~`
+  or a shared drive, and making it `CV_HOME` would scatter application folders there.
 - **No stale actions in the UI.** Changing the typed path clears the status card at once, and
   results of older in-flight inspections are dropped (generation counter). "Create workspace
   here" and "Import this workspace" therefore always refer to the folder in the input.
@@ -180,13 +186,13 @@ Create and Import behaviour per status:
   `workspace/settings.ts`, with the path injected by `ipc.ts`. That keeps every fs call in
   one tested, Electron-free module.
 - **No Playwright yet.** The logic worth testing is the pure workspace module, which has
-  33 tests. An Electron smoke test belongs with packaging.
+  35 tests. An Electron smoke test belongs with packaging.
 
 ## How to test
 
 ```bash
 npm install
-npm test            # 33 vitest cases, temp dirs, no Electron
+npm test            # 35 vitest cases, temp dirs, no Electron
 npm run typecheck
 npm run build
 npm run dev         # manual check

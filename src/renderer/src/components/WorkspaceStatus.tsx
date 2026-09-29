@@ -11,6 +11,11 @@ const STATUS_META: Record<Status, { color: string; label: string; hint: string }
     label: 'not-a-workspace',
     hint: 'Folder has unrelated content. Pick an empty folder or an existing workspace.'
   },
+  unverified: {
+    color: 'orange',
+    label: 'unverified',
+    hint: 'Folder is too large to check. Pick the workspace folder itself.'
+  },
   invalid: { color: 'red', label: 'invalid', hint: 'This path cannot be used.' }
 }
 

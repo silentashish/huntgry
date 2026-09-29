@@ -77,6 +77,11 @@ export function App() {
       setNotice({ color: 'green', text: 'Workspace imported. Nothing inside it was changed.' })
     } else if (CREATABLE_STATUSES.includes(result.status)) {
       setNotice({ color: 'yellow', text: 'No workspace here yet. Use “Create workspace here” to set one up.' })
+    } else if (result.status === 'unverified') {
+      setNotice({
+        color: 'yellow',
+        text: 'This folder is too large to verify, so it was not imported. Pick the workspace folder itself.'
+      })
     } else {
       setNotice({ color: 'red', text: 'This folder cannot be imported as a Resume Tailor workspace.' })
     }
