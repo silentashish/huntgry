@@ -16,7 +16,7 @@ approval, so a one-shot `claude -p` is not enough.
 | Area | Files | Why |
 | --- | --- | --- |
 | Environment | `src/main/cli/env.ts`, `environment.ts` | Finds `claude` (well-known folders, the login-shell PATH, then the app's PATH, since a GUI app starts with a minimal PATH), the installed skill (bounded search under `~/.claude/skills` and `~/.claude/plugins`; personal beats synced), and TeX (TinyTeX, then BasicTeX/MacTeX). Builds the child env: the venv's `python3` first, then TeX and the CLI folders, `CV_HOME` = workspace; nested-session variables (`CLAUDECODE`, `CLAUDE_CODE_*`) removed. Runs the skill's own `scripts/preflight.py` with that env and parses it. Installs the Python modules into `<userData>/skill-venv`. |
-| Command | `src/main/cli/command.ts` | `claude -p --input-format stream-json --output-format stream-json --verbose --permission-mode acceptEdits --permission-prompts none --allowedTools … --add-dir <skill>` plus an appended system prompt (Huntgry context, CV_HOME, master profile, "stop at step 3", "end with the output folder"). The first message holds the job and the options. Input validation for the start form lives here so it is unit-tested. |
+| Command | `src/main/cli/command.ts` | `claude -p --input-format stream-json --output-format stream-json --verbose --permission-mode acceptEdits --permission-prompts none --allowedTools …` (see below) plus an appended system prompt (Huntgry context, CV_HOME, master profile, "stop at step 3", "end with the output folder", drafts in `.huntgry/drafts/`). The first message holds the job and the options. Input validation for the start form lives here so it is unit-tested. |
 | Runner | `src/main/cli/runner.ts` | `RunManager`: one `claude` process per run, **kept alive between turns** so replies go straight to stdin. A run whose process is gone (finished, app restarted) is resumed with `--resume <session-id>`. Every stdout line goes to `events.jsonl` and to the renderer. After each turn it looks for the application folder the skill wrote. Stop sends SIGTERM (SIGKILL after 3 s); Finish closes stdin. |
 | Storage | `src/main/cli/runs.ts`, `workspace/constants.ts` | `<workspace>/.huntgry/runs/<id>/run.json` (summary, atomic writes) + `events.jsonl` (append-only raw stream). No database; runs travel with the workspace. `.huntgry` is ignored by the workspace scan. |
 | IPC / events | `src/main/cli/ipc.ts`, `src/preload/runner.ts`, `src/shared/runner-types.ts`, `events.ts`, `api.ts` | `window.huntgry.runner.*` plus the `runner:event`, `runner:run` and `runner:install-log` events (the per-feature pattern from #7). Main builds every path and command; the renderer sends form fields and run ids (pattern-checked). Output files can be opened only if they are in the run's list and inside the workspace. `before-quit` kills every child. |
@@ -52,11 +52,16 @@ sequenceDiagram
   xterm) would show everything, but the app could not tell when the run waits for the
   user, what it cost, or where the output went. It would also add a native module to
   build. Stream-json gives structured events, and multi-turn works by keeping stdin open.
-- **Deny by default.** `--permission-prompts none` means nothing can hang on a prompt
-  nobody sees. The allowlist is the skill's actual needs: file tools, WebFetch/WebSearch
-  for the posting and company research, and `python3`/`mkdir`/`ls`/`cat`/`cp`/`cd`/poppler/
-  `pdflatex`. `--dangerously-skip-permissions` was rejected. Refused calls appear in the
-  transcript, and Claude has recovered from them in testing.
+- **Deny by default, confined to the workspace.** `--permission-prompts none` means
+  nothing can hang on a prompt nobody sees. File edits are not allowlisted, so
+  `acceptEdits` approves them only inside the working directory (the workspace).
+  Python is allowed only as the skill's own scripts by absolute path (`build.py`,
+  `preflight.py`, `verify.py`, `render.py`, `render_docx.py`); `python3 -c` and other
+  scripts are refused, because a job posting could carry a prompt injection. The remaining
+  shell access is `mkdir`, `ls` and poppler's read tools. Read, Glob, Grep, WebFetch,
+  WebSearch and Skill are allowed. `--dangerously-skip-permissions` was rejected. Refused
+  calls appear in the transcript. A second real run under these rules (preflight, two
+  builds, resume + cover) had zero refusals.
 - **Runs in the workspace, the venv in userData.** Runs are records of applications and
   belong with them. The venv is machine-specific and shared by every workspace.
 - **Markdown via `react-markdown` + `remark-gfm`** (new dependencies): Claude's gap
