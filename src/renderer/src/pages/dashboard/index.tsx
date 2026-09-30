@@ -35,6 +35,8 @@ import { SkillsSummaryCard } from '../../components/graph/SkillsSummaryCard'
 import { useKnowledgeGraph } from '../../components/graph/useKnowledgeGraph'
 import { useNavigation } from '../../navigation'
 import { ApplicationDrawer, BuildBadge } from './ApplicationDrawer'
+import { LastPipelineCard } from './LastPipelineCard'
+import { ReviewBadge } from './ReviewBadge'
 import { PROFILE_SAVED_EVENT, ProfileInsightsCard } from './ProfileInsightsCard'
 import { countByStatus, DEFAULT_FILTER, filterApplications, type Filter, type SortKey } from './filter'
 import { STATUS_META } from './status'
@@ -124,6 +126,8 @@ export function DashboardPage() {
           <Loader />
         </Center>
       )}
+
+      {list && <LastPipelineCard />}
 
       {list && apps.length === 0 && (
         <Card withBorder radius="md" padding="xl">
@@ -350,7 +354,10 @@ function Row({ app, onOpen, onUpdate, onAct, onApply, applying }: RowProps) {
         />
       </Table.Td>
       <Table.Td>
-        <BuildBadge app={app} short />
+        <Group gap={4}>
+          <BuildBadge app={app} short />
+          <ReviewBadge app={app} short />
+        </Group>
       </Table.Td>
       <Table.Td onClick={stop}>
         <Group gap={4} justify="flex-end" wrap="nowrap">
