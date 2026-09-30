@@ -1,23 +1,29 @@
 import { app, ipcMain, shell } from 'electron'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
-import { RUNNER_CHANNELS, type RunSummary } from '@shared/runner-types'
+import { isAgentId, RUNNER_CHANNELS, type AgentId, type RunSummary } from '@shared/runner-types'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
 import { MAX_TEXT } from './command'
-import { findClaude } from './env'
+import { installAgentSkill } from './agents/skills'
+import { findClaude, findSkillDir } from './env'
 import { checkEnvironment, installPythonDeps } from './environment'
 import { claudeInstallKind, exclusive, installClaude, updateClaude } from './install-claude'
 import { installSkill } from './install-skill'
 import { listRuns, OUTPUT_FILES, readEvents, readRun, RUN_ID_PATTERN } from './runs'
 import { replyThroughQueue } from '../queue/ipc'
-import { context, manager, startTailorRun, venvDir } from './start'
+import { contextForRun, defaultAgent, manager, setDefaultAgent, startTailorRun, venvDir } from './start'
 
 /** Which skill release Huntgry installed (see `install-skill.ts`). */
 const skillRecordPath = (): string => join(app.getPath('userData'), 'skill-install.json')
 const installLog = (line: string): void => emit('runner:install-log', line)
 
 export { stopAllRuns } from './start'
+
+function requireAgent(agent: unknown): AgentId {
+  if (!isAgentId(agent)) throw new Error('Unknown agent.')
+  return agent
+}
 
 function requireRunId(id: unknown): string {
   if (typeof id !== 'string' || !RUN_ID_PATTERN.test(id)) throw new Error('Invalid run id.')
@@ -45,8 +51,19 @@ async function outputPath(id: string, file?: string): Promise<string> {
 export function registerRunnerIpc(): void {
   ipcMain.handle(RUNNER_CHANNELS.environment, async () => {
     const workspace = await requireCurrentWorkspace().catch(() => null)
-    return checkEnvironment({ venvDir: venvDir(), workspace: workspace?.path ?? null, skillRecordPath: skillRecordPath() })
+    return checkEnvironment({
+      venvDir: venvDir(),
+      workspace: workspace?.path ?? null,
+      skillRecordPath: skillRecordPath(),
+      defaultAgent: await defaultAgent()
+    })
   })
+
+  ipcMain.handle(RUNNER_CHANNELS.setDefaultAgent, (_e, agent: unknown) => setDefaultAgent(requireAgent(agent)))
+
+  ipcMain.handle(RUNNER_CHANNELS.linkSkill, async (_e, agent: unknown) =>
+    installAgentSkill(requireAgent(agent), await findSkillDir(), homedir())
+  )
 
   ipcMain.handle(RUNNER_CHANNELS.installPythonDeps, () => installPythonDeps(venvDir(), installLog))
 
@@ -97,7 +114,7 @@ export function registerRunnerIpc(): void {
     // A bulk run's reply may have to wait for a free slot (the queue's concurrency).
     const viaQueue = await replyThroughQueue(runId, text)
     if (viaQueue === 'held') return currentRun(runId)
-    return viaQueue ?? manager.reply(runId, text, context)
+    return viaQueue ?? manager.reply(runId, text, () => contextForRun(runId))
   })
 
   ipcMain.handle(RUNNER_CHANNELS.stop, async (_e, id: unknown) => {
@@ -108,8 +125,13 @@ export function registerRunnerIpc(): void {
 
   ipcMain.handle(RUNNER_CHANNELS.finish, async (_e, id: unknown) => {
     const runId = requireRunId(id)
-    manager.finish(runId)
-    return currentRun(runId)
+    if (manager.isLive(runId)) {
+      manager.finish(runId)
+      return currentRun(runId)
+    }
+    // Between turns of an exec agent (or after a restart) there is no process to close.
+    const workspace = await requireCurrentWorkspace()
+    return (await manager.finishIdle(workspace.path, runId)) ?? currentRun(runId)
   })
 
   ipcMain.handle(RUNNER_CHANNELS.openOutput, async (_e, id: unknown, file: unknown) => {

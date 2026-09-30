@@ -3,6 +3,8 @@ import { RUNNER_CHANNELS, type RunnerApi } from '@shared/runner-types'
 
 export const runner: RunnerApi = {
   environment: () => ipcRenderer.invoke(RUNNER_CHANNELS.environment),
+  setDefaultAgent: (agent) => ipcRenderer.invoke(RUNNER_CHANNELS.setDefaultAgent, agent),
+  linkSkill: (agent) => ipcRenderer.invoke(RUNNER_CHANNELS.linkSkill, agent),
   installPythonDeps: () => ipcRenderer.invoke(RUNNER_CHANNELS.installPythonDeps),
   installClaude: () => ipcRenderer.invoke(RUNNER_CHANNELS.installClaude),
   updateClaude: () => ipcRenderer.invoke(RUNNER_CHANNELS.updateClaude),

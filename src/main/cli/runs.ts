@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { appendFile, mkdir, opendir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
-import type { RunSummary } from '@shared/runner-types'
+import { DEFAULT_AGENT, isAgentId, type RunSummary } from '@shared/runner-types'
 import { parseEventLine } from '@shared/transcript'
 import { APPLICATION_DEPTH, HUNTGRY_DIR, IGNORED_ENTRIES, MAX_SCAN_ENTRIES } from '../workspace/constants'
 
@@ -48,7 +48,8 @@ export async function readRun(workspace: string, id: string): Promise<RunSummary
   const run = JSON.parse(await readFile(join(runDir(workspace, id), 'run.json'), 'utf8')) as RunSummary
   // A run that was active when the app quit is no longer running.
   if (run.status === 'running') run.status = 'stopped'
-  return { ...run, live: false }
+  // Runs recorded before agents could be chosen were Claude runs.
+  return { ...run, agent: isAgentId(run.agent) ? run.agent : DEFAULT_AGENT, live: false }
 }
 
 export async function readEvents(workspace: string, id: string): Promise<unknown[]> {
