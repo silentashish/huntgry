@@ -1,7 +1,13 @@
 import type { ApplicationRecord, ApplicationTracking } from '@shared/applications-types'
+import { reviewBlocker } from '@shared/review-types'
 
 /** Why Apply is not possible for an application yet, or `null` when it is (pure, unit-tested). */
-export function applyBlocker(app: Pick<ApplicationRecord, 'files' | 'jobUrl'>): string | null {
+export function applyBlocker(
+  app: Pick<ApplicationRecord, 'files' | 'jobUrl'> & { tracking?: Pick<ApplicationTracking, 'review'> }
+): string | null {
+  // Same rule as ApplyService.open(): an unattended result stays out of Apply until it is approved (#31).
+  const review = reviewBlocker(app.tracking?.review)
+  if (review) return review
   if (!app.files.includes('resume.pdf')) return 'No resume.pdf yet: build the resume in Tailor first.'
   if (!app.jobUrl) return 'No posting URL: add it in the application drawer first.'
   return null

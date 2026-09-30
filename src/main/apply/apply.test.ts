@@ -200,6 +200,21 @@ describe('ApplyService', () => {
     expect(service.current()).toBeNull()
   })
 
+  it('refuses an unattended result until it is approved on the Review page (#31 gate)', async () => {
+    const review = (state: string) =>
+      JSON.stringify({ status: 'generated', notes: '', review: { state, runId: '20260930-000000-aaaaaa', at: '2026-09-30T00:00:00.000Z' } })
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF', 'huntgry.json': review('unreviewed') })
+    const { service } = setup(new FakeTab('', GH_URL))
+    await expect(service.start(ID)).rejects.toThrow(/Unreviewed.*Review page/)
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF', 'huntgry.json': review('needs-attention') })
+    await expect(service.start(ID)).rejects.toThrow(/needs attention/)
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF', 'huntgry.json': review('discarded') })
+    await expect(service.start(ID)).rejects.toThrow(/discarded/)
+    expect(service.current()).toBeNull()
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF', 'huntgry.json': review('approved') })
+    await expect(service.start(ID)).resolves.toMatchObject({ status: 'opened' })
+  })
+
   it('refuses a symlinked resume.pdf and ids outside the workspace', async () => {
     const outside = join(ws, 'secret.pdf')
     await writeFile(outside, '%PDF secret')
