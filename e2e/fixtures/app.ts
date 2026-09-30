@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -67,6 +68,7 @@ export function appEnv(sandbox: Sandbox, extra: Record<string, string> = {}): Re
     PATH: `${sandbox.bin}:${SYSTEM_PATH}`,
     HUNTGRY_E2E: '1',
     HUNTGRY_ALLOW_LOCAL_URLS: '1',
+    HUNTGRY_E2E_LOOPBACK_ONLY: '1',
     ...extra
   }
 }
@@ -79,21 +81,82 @@ export interface LaunchedApp {
 }
 
 /**
+ * Processes the app spawned that are not Electron itself (its helpers live
+ * under `node_modules/electron/dist/`): agent CLIs, the skill's preflight
+ * script, installers. Descendants of `rootPid`, found through `ps`.
+ */
+export function spawnedChildren(rootPid: number): number[] {
+  let table: string
+  try {
+    table = execFileSync('ps', ['-axo', 'pid=,ppid=,comm='], { encoding: 'utf8' })
+  } catch {
+    return []
+  }
+  const rows = table
+    .trim()
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/))
+    .filter((cols) => cols.length >= 3)
+    .map(([pid, ppid, ...comm]) => ({ pid: Number(pid), ppid: Number(ppid), comm: comm.join(' ') }))
+  const out: number[] = []
+  const walk = (parent: number) => {
+    for (const row of rows) {
+      if (row.ppid !== parent) continue
+      if (!row.comm.includes('/electron/dist/')) out.push(row.pid)
+      walk(row.pid)
+    }
+  }
+  walk(rootPid)
+  return out
+}
+
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Waits until every pid has exited, killing the ones still alive after
+ * `graceMs`. A child the app spawned (a preflight script writing caches under
+ * the sandbox HOME, a fake agent) must not outlive the sandbox, or it would
+ * recreate folders after `destroySandbox` and trip the worker audit.
+ */
+export async function waitForChildren(pids: number[], graceMs = 10_000): Promise<void> {
+  const deadline = Date.now() + graceMs
+  while (pids.some(alive) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))
+  for (const pid of pids.filter(alive)) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // gone meanwhile
+    }
+  }
+  while (pids.some(alive)) await new Promise((resolve) => setTimeout(resolve, 50))
+}
+
+/**
  * Quits the app the way the fixture does. Windows are destroyed first, which
  * skips `beforeunload`: an editor left with unsaved edits would otherwise raise
  * the native "unsaved changes" question (`showMessageBoxSync`, stubbed here as
  * a second guard) and Playwright's own beforeunload handling would race it. A
  * process that still has not exited after `timeoutMs` is killed so the sandbox
- * can be removed.
+ * can be removed, and so is any child the app spawned that outlives it
+ * (`waitForChildren`).
  */
 export async function closeApp(electronApp: ElectronApplication, timeoutMs = 15_000): Promise<void> {
+  const child = electronApp.process()
+  // Collected before quitting: once the app is gone its children are re-parented and cannot be found any more.
+  const spawned = child.pid ? spawnedChildren(child.pid) : []
   await electronApp
     .evaluate(({ BrowserWindow, dialog }) => {
       dialog.showMessageBoxSync = () => 0
       for (const win of BrowserWindow.getAllWindows()) win.destroy()
     })
     .catch(() => {})
-  const child = electronApp.process()
   let timer: NodeJS.Timeout | undefined
   const timeout = new Promise<'timeout'>((resolve) => {
     timer = setTimeout(() => resolve('timeout'), timeoutMs)
@@ -104,6 +167,7 @@ export async function closeApp(electronApp: ElectronApplication, timeoutMs = 15_
     child.kill('SIGKILL')
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
+  await waitForChildren(spawned)
 }
 
 export async function launchApp(sandbox: Sandbox, extraEnv: Record<string, string> = {}): Promise<LaunchedApp> {

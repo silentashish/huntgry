@@ -1,5 +1,6 @@
 import { chmod, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { spawnedChildren } from '../fixtures/app'
 import { expect, test } from '../fixtures/servers/fixture'
 import { BrowserPage } from '../pages/browser'
 import { JobsPage } from '../pages/jobs'
@@ -157,7 +158,10 @@ test.describe('adding jobs', () => {
     expect(await jobFiles(app.workspace!, 'url-')).toHaveLength(1) // only the seeded job
   })
 
-  test('the loader refuses private-network addresses even with the loopback allowance', async ({ app, mock }) => {
+  test('the loader refuses private-network addresses even with the loopback allowance, and public ones under the harness', async ({
+    app,
+    mock
+  }) => {
     const jobs = await openJobs(app)
     for (const [url, host] of [
       ['http://10.0.0.1/careers/1', '10.0.0.1'],
@@ -169,6 +173,11 @@ test.describe('adding jobs', () => {
         `Refusing to load ${host}: it is a local or private-network address.`
       )
     }
+    // A resolvable public posting URL is refused by the loopback-only egress restriction, before any lookup.
+    await jobs.addByUrl('https://jobs.example.com/acme/1')
+    await expect(jobs.error.filter({ hasText: 'Refusing to load' })).toContainText(
+      'Refusing to load jobs.example.com: this test build may only reach loopback addresses.'
+    )
     // Nothing was loaded, so nothing was saved; the mock server saw no request either.
     expect(await jobFiles(app.workspace!, 'url-')).toHaveLength(1)
     expect(mock.requests).toEqual([])
@@ -226,6 +235,19 @@ test.describe('tailoring', () => {
     // Each queued job is listed (the queue panel and the run list both name it).
     await expect(app.window.getByText('Infrastructure Engineer · Tyrell Robotics').first()).toBeVisible()
     await expect(app.window.getByText('Staff Backend Engineer · Initech').first()).toBeVisible()
+
+    // Queue execution is #48's; here the runs only have to be over before teardown. The fake `claude` exits at once,
+    // so both items leave the queued/running states; the environment check's preflight child (`python3`) is waited
+    // for by `closeApp` as well, so nothing the app spawned can outlive the sandbox.
+    await expect
+      .poll(async () => {
+        const state = await app.window.evaluate(() =>
+          (window as unknown as { huntgry: { queue: { state(): Promise<{ items: Array<{ status: string }> }> } } }).huntgry.queue.state()
+        )
+        return state.items.map((i) => i.status)
+      }, { timeout: 30_000 })
+      .toEqual(expect.arrayContaining([expect.stringMatching(/^(done|failed|cancelled)$/), expect.stringMatching(/^(done|failed|cancelled)$/)]))
+    await expect.poll(() => spawnedChildren(app.electronApp.process().pid!), { timeout: 30_000 }).toEqual([])
   })
 })
 

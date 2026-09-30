@@ -33,7 +33,8 @@ export async function rewriteMockUrls(dir: string, origin: string): Promise<void
 export const test = base.extend<{ mock: MockServer }, { mockServer: MockServer }>({
   mockServer: [
     async ({}, use) => {
-      const dir = await mkdtemp(join(tmpdir(), 'huntgry-e2e-mock-'))
+      // Not `huntgry-e2e-`: that prefix is the sandboxes', which a leak check may glob for.
+      const dir = await mkdtemp(join(tmpdir(), 'huntgry-mock-ats-e2e-'))
       const server = await startMockServer(join(dir, 'last-submission.json'))
       await use(server)
       await server.close()
