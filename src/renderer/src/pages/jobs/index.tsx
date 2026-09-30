@@ -18,7 +18,8 @@ import {
 } from '@mantine/core'
 import { IconClipboardText, IconLink, IconSearch } from '@tabler/icons-react'
 import {
-  jobDescriptionFor,
+  canFetchDetails,
+  tailorPrefillFor,
   type Job,
   type JobQuery,
   type SavedSearch,
@@ -103,20 +104,28 @@ export function JobsPage() {
     }
   }
 
+  /**
+   * Sends a job to the Tailor form with everything saved about it, so the run never
+   * has to read a job board URL (boards block plain HTTP). A summary is first
+   * swapped for the employer's full posting when one can be fetched.
+   */
   async function tailor(job: Job) {
+    let current = job
+    if (canFetchDetails(job)) {
+      try {
+        current = await api.jobs.fetchDetails(job.id)
+        upsert([current])
+      } catch {
+        // Hand off the summary; the Tailor form says it is one.
+      }
+    }
     try {
-      upsert([await api.jobs.update(job.id, { tailored: true })])
+      current = await api.jobs.update(job.id, { tailored: true })
+      upsert([current])
     } catch {
       // Marking is a convenience; tailoring still works.
     }
-    navigate('tailor', {
-      // A board summary is not a job description; let Claude fetch the posting instead.
-      jobDescription: job.descriptionComplete ? jobDescriptionFor(job) : undefined,
-      jobUrl: job.url || undefined,
-      company: job.company || undefined,
-      role: job.title,
-      source: job.source
-    })
+    navigate('tailor', tailorPrefillFor(current))
   }
 
   const shown = useMemo(() => {

@@ -76,9 +76,22 @@ export function StartForm({ prefill, environment, busy, onStart }: Props) {
           onChange={(e) => setJobUrl(e.currentTarget.value)}
           error={urlOk ? undefined : 'Must start with http:// or https://'}
         />
+        {prefill?.descriptionComplete === false && (
+          <Alert color="yellow" variant="light" title="Only the job board's summary">
+            <Text size="sm">
+              This is the job board's summary, not the full posting. Paste the full text from the posting below for a
+              better resume; you can still start with the summary.
+            </Text>
+            {prefill.jobUrl && (
+              <Anchor href={prefill.jobUrl} target="_blank" rel="noreferrer" size="sm" mt={4} display="inline-block">
+                Open posting
+              </Anchor>
+            )}
+          </Alert>
+        )}
         <Textarea
           label="Job description"
-          description="Paste the full posting, or leave it empty and Huntgry reads it from the URL. Pages that need JavaScript (Ashby, Workday, …) cannot be read that way: paste those, or add them on the Jobs page, which opens them in a real browser."
+          description="Paste the full posting. Leave it empty only for an employer or ATS page (Greenhouse, Lever, careers sites): Huntgry reads those from the URL. Job boards (Indeed, hiring.cafe) and pages that need JavaScript (Ashby, Workday, …) cannot be read that way: paste those, or send them from the Jobs page."
           autosize
           minRows={8}
           maxRows={18}
