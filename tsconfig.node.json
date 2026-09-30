@@ -21,5 +21,7 @@
     "src/main/**/*",
     "src/preload/**/*",
     "src/shared/**/*"
-  ]
+  ],
+  // DOM code that runs inside job pages is checked by tsconfig.page.json (DOM lib) instead.
+  "exclude": ["src/preload/browser-page.ts", "src/shared/autofill/**/*"]
 }

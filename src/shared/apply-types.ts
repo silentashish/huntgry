@@ -1,0 +1,162 @@
+/**
+ * Auto-apply (#24): open a tailored application's apply page in the in-app
+ * browser, fill it from the master profile and attach the tailored PDFs.
+ * Huntgry never submits; the user reviews the page and clicks the site's own
+ * Submit button. The renderer sends application and session ids only; values,
+ * file paths and pages stay in main.
+ */
+
+/** Applicant tracking systems with an adapter; `generic` is the label/autocomplete heuristic. */
+export type ApplyAts = 'greenhouse' | 'lever' | 'generic'
+
+export const ATS_LABEL: Record<ApplyAts, string> = {
+  greenhouse: 'Greenhouse',
+  lever: 'Lever',
+  generic: 'Unknown site (generic matching)'
+}
+
+/** What a form field is filled with. */
+export type FieldKey =
+  | 'firstName'
+  | 'lastName'
+  | 'fullName'
+  | 'email'
+  | 'phone'
+  | 'location'
+  | 'linkedin'
+  | 'github'
+  | 'website'
+  | 'currentCompany'
+  | 'resume'
+  | 'coverLetter'
+
+/** Text values, all from the master profile's contact block (empty string = not known). */
+export type FillValues = Record<Exclude<FieldKey, 'resume' | 'coverLetter'>, string>
+
+export const FIELD_LABEL: Record<FieldKey, string> = {
+  firstName: 'First name',
+  lastName: 'Last name',
+  fullName: 'Full name',
+  email: 'Email',
+  phone: 'Phone',
+  location: 'Location',
+  linkedin: 'LinkedIn',
+  github: 'GitHub',
+  website: 'Website',
+  currentCompany: 'Current company',
+  resume: 'Resume (resume.pdf)',
+  coverLetter: 'Cover letter (cover.pdf)'
+}
+
+export type FieldKind = 'text' | 'textarea' | 'file' | 'select' | 'checkbox' | 'radio' | 'combobox' | 'other'
+
+/**
+ * - `filled`: written and read back.
+ * - `kept`: the field already held another value (the user's); left as is.
+ * - `skipped-no-value`: the profile has nothing for it (or there is no cover.pdf).
+ * - `skipped-unsupported`: a choice (select, combobox, checkbox, radio) or consent / demographic question; always the user's.
+ * - `unmatched`: a question Huntgry does not answer (custom questions, dates…).
+ * - `ambiguous`: several fields looked like the same thing; none was filled.
+ * - `rejected`: the site changed or refused the value.
+ * - `to-upload`: a file field marked for upload (main replaces this with `uploaded` / `upload-failed`).
+ */
+export type FillOutcome =
+  | 'filled'
+  | 'kept'
+  | 'skipped-no-value'
+  | 'skipped-unsupported'
+  | 'unmatched'
+  | 'ambiguous'
+  | 'rejected'
+  | 'to-upload'
+  | 'uploaded'
+  | 'upload-failed'
+
+export interface FieldReport {
+  key: FieldKey | null
+  /** Label text from the page (untrusted; render as text). */
+  label: string
+  kind: FieldKind
+  required: boolean
+  outcome: FillOutcome
+  /** What was written (text fields) or attached (file name). */
+  value?: string
+  reason?: string
+}
+
+export interface FillReport {
+  ats: ApplyAts
+  url: string
+  fields: FieldReport[]
+  /** The form has a submit button (for the user; Huntgry never presses it). */
+  hasSubmitButton: boolean
+}
+
+/** What the guest page reports on each load. */
+export interface PageScan {
+  ats: ApplyAts
+  url: string
+  title: string
+  /** Start of the page text, for bot-wall detection in main. */
+  text: string
+  /** The site's own "application submitted" page. */
+  confirmation: boolean
+  /** A form with fillable fields (or a file input) was found. */
+  formFound: boolean
+  /** A résumé/CV file input was found (a good sign this is an application form). */
+  hasResumeInput: boolean
+  /** A Greenhouse `/embed/job_app` iframe on a company page; its form is opened directly. */
+  embedUrl: string | null
+}
+
+export type ApplyStatus =
+  /** Tab opened, page loading. */
+  | 'opened'
+  /** Page loaded; no form filled automatically (press Fill form). */
+  | 'ready'
+  | 'filling'
+  | 'filled'
+  /** The site's confirmation page is showing; offer Mark as applied. */
+  | 'submitted-detected'
+  /** The page is a bot wall / human check. */
+  | 'blocked'
+  /** The user closed the tab. */
+  | 'closed'
+  | 'error'
+
+export interface ApplySession {
+  id: string
+  applicationId: string
+  /** "Role · Company", for the panel. */
+  title: string
+  tabId: string
+  applyUrl: string
+  ats: ApplyAts | null
+  status: ApplyStatus
+  report: FillReport | null
+  /** Whether the application has a cover.pdf to attach. */
+  hasCover: boolean
+  message: string | null
+}
+
+export interface ApplyApi {
+  /** Opens the application's apply page in a new in-app tab and starts filling it (a previous session ends). */
+  start(applicationId: string): Promise<ApplySession>
+  /** Fills the tab's current page again (text fields left empty, then resume/cover upload). */
+  fill(sessionId: string): Promise<ApplySession>
+  /** Ends the session; the tab stays open. */
+  cancel(sessionId: string): Promise<void>
+  current(): Promise<ApplySession | null>
+}
+
+export const APPLY_CHANNELS = {
+  start: 'apply:start',
+  fill: 'apply:fill',
+  cancel: 'apply:cancel',
+  current: 'apply:current'
+} as const
+
+export interface ApplyEvents {
+  /** The session after every change; `null` when it ended. */
+  'apply:session': ApplySession | null
+}

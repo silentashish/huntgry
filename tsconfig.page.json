@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": { "@shared/*": ["src/shared/*"] }
+  },
+  "include": ["src/preload/browser-page.ts", "src/shared/**/*"]
+}
