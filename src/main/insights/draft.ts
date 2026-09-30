@@ -47,7 +47,8 @@ export function draftPrompt(req: DraftRequest, label: string): string {
   return `Skill: ${req.skill}\nWhere: ${label}\nThe person's notes about how they used it:\n"""\n${req.notes.trim()}\n"""`
 }
 
-export function draftArgs(): string[] {
+/** `permissionPrompts`: the CLI accepts `--permission-prompts none` (Claude Code ≥ 2.1.259). */
+export function draftArgs(opts: { permissionPrompts?: boolean } = {}): string[] {
   return [
     '-p',
     '--output-format',
@@ -58,8 +59,7 @@ export function draftArgs(): string[] {
     '',
     '--strict-mcp-config',
     '--no-session-persistence',
-    '--permission-prompts',
-    'none',
+    ...(opts.permissionPrompts ? ['--permission-prompts', 'none'] : []),
     '--json-schema',
     JSON.stringify(SCHEMA),
     '--system-prompt',
@@ -85,7 +85,7 @@ export async function draftEvidence(
   req: DraftRequest,
   profile: MasterProfile,
   /** `args` go before the draft arguments (e.g. a script path when `command` is node). */
-  claude: { command: string; args?: readonly string[]; env: NodeJS.ProcessEnv }
+  claude: { command: string; args?: readonly string[]; env: NodeJS.ProcessEnv; permissionPrompts?: boolean }
 ): Promise<EvidenceDraft> {
   if (req.notes.trim().length < 10) throw new Error('Describe what you did with it in a sentence or two first.')
   const label = targetLabel(profile, req.target)
@@ -94,7 +94,7 @@ export async function draftEvidence(
     const stdout = await new Promise<string>((resolve, reject) => {
       const child = execFile(
         claude.command,
-        [...(claude.args ?? []), ...draftArgs()],
+        [...(claude.args ?? []), ...draftArgs({ permissionPrompts: claude.permissionPrompts })],
         { cwd, env: claude.env, timeout: TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
         (err, out, errOut) => {
           if (err && !out) reject(new Error(`claude failed: ${(errOut || err.message).trim().slice(0, 300)}`))

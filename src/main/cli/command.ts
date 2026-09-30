@@ -9,9 +9,10 @@ import { JOB_SOURCE_TAGS, type JobSourceTag, type StartRunParams } from '@shared
 export const SKILL_SCRIPTS = ['build.py', 'preflight.py', 'verify.py', 'render.py', 'render_docx.py'] as const
 
 /**
- * Tools the skill may use without asking. Everything else is refused
- * (`--permission-prompts none`): a headless run has nobody to answer a
- * permission prompt, and a job posting could carry a prompt injection.
+ * Tools the skill may use without asking. Everything else is refused: a
+ * headless `-p` run has nobody to answer a permission prompt (Claude Code
+ * ≥ 2.1.259 also gets `--permission-prompts none`, which tells Claude not to
+ * retry), and a job posting could carry a prompt injection.
  *
  * - Files: reads and edits inside the working directory (the workspace) need
  *   no rule; the only extra read access is the skill folder. Nothing outside
@@ -92,6 +93,11 @@ export interface ClaudeArgsOptions {
   systemPrompt: string
   sandbox: SandboxPaths
   model?: string
+  /**
+   * Pass `--permission-prompts none`. Only Claude Code ≥ 2.1.259 knows the flag;
+   * older versions exit with "unknown option". See `supportsPermissionPrompts`.
+   */
+  permissionPrompts?: boolean
 }
 
 export function buildClaudeArgs(opts: ClaudeArgsOptions): string[] {
@@ -104,8 +110,7 @@ export function buildClaudeArgs(opts: ClaudeArgsOptions): string[] {
     '--verbose',
     '--permission-mode',
     'acceptEdits',
-    '--permission-prompts',
-    'none',
+    ...(opts.permissionPrompts ? ['--permission-prompts', 'none'] : []),
     '--allowedTools',
     ...allowedTools(opts.skillDir),
     // No user, project or local settings: their hooks and permission rules must not widen

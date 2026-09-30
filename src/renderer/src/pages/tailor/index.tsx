@@ -100,6 +100,7 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
               environment={environment}
               busy={starting}
               onStart={start}
+              onEnvironmentChange={setEnvironment}
             />
           ) : detail && detail.run.id === selected ? (
             <RunView run={detail.run} events={detail.events} />

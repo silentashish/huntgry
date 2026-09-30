@@ -4,6 +4,7 @@ import { access, opendir, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import type { PreflightItem } from '@shared/runner-types'
+import { SKILL_NAME } from '../workspace/constants'
 
 /**
  * Where the `claude` binary, the resume-tailor skill and the skill's
@@ -90,8 +91,14 @@ export function composePath(...segments: (string | null | undefined)[]): string 
   return out.join(delimiter)
 }
 
-/** Resolves the `claude` CLI: well-known folders, then the login-shell PATH, then the app's PATH. */
+/**
+ * Resolves the `claude` CLI: well-known folders, then the login-shell PATH, then
+ * the app's PATH. `HUNTGRY_CLAUDE_PATH` in the app's own environment (never from
+ * the renderer) pins a binary, e.g. to test an older Claude Code.
+ */
 export async function findClaude(): Promise<string | null> {
+  const pinned = process.env.HUNTGRY_CLAUDE_PATH
+  if (pinned) return (await isExecutable(pinned)) ? pinned : null
   const dirs = composePath(wellKnownBinDirs().join(delimiter), await loginShellPath(), process.env.PATH).split(
     delimiter
   )
@@ -110,7 +117,6 @@ export function skillSearchRoots(home = homedir()): string[] {
   return [join(home, '.claude/skills'), join(home, '.claude/plugins')]
 }
 
-const SKILL_NAME = 'resume-tailor'
 const MAX_SKILL_SEARCH_DEPTH = 5
 const MAX_SKILL_SEARCH_ENTRIES = 4000
 

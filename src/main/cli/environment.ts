@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { PreflightItem, RunnerEnvironment } from '@shared/runner-types'
+import { CLAUDE_COMMANDS, type ClaudeAuth, type PreflightItem, type RunnerEnvironment } from '@shared/runner-types'
 import {
   buildChildEnv,
   composePath,
@@ -15,6 +15,9 @@ import {
   SKILL_PYTHON_MODULES,
   wellKnownBinDirs
 } from './env'
+import { claudeAuthStatus, claudeInstallKind } from './install-claude'
+import { readSkillInstall } from './install-skill'
+import { claudeVersion as readClaudeVersion, CLAUDE_VERSION_RECOMMENDED, versionAtLeast } from './version'
 
 /**
  * Environment checks for the Settings page and the Tailor page's pre-run
@@ -63,6 +66,8 @@ export async function discoverRuntime(): Promise<{
 export async function checkEnvironment(opts: {
   venvDir: string
   workspace: string | null
+  /** `<userData>/skill-install.json`, written when Huntgry installed the skill. */
+  skillRecordPath?: string
 }): Promise<RunnerEnvironment> {
   const [claudePath, skillDir, texBin, loginPath] = await Promise.all([
     findClaude(),
@@ -80,10 +85,17 @@ export async function checkEnvironment(opts: {
   })
 
   let claudeVersion: string | null = null
+  let claudeAuth: ClaudeAuth | null = null
   if (claudePath) {
-    const v = await run(claudePath, ['--version'], env)
-    claudeVersion = v.code === 0 ? v.out.trim().split('\n')[0] : null
+    ;[claudeVersion, claudeAuth] = await Promise.all([
+      // Refresh the cache the runs use: this is what "Check again" is for (e.g. after an update).
+      readClaudeVersion(claudePath, env, { refresh: true }),
+      claudeAuthStatus(claudePath, env)
+    ])
   }
+  const claudeVersionOk = versionAtLeast(claudeVersion, CLAUDE_VERSION_RECOMMENDED)
+  const installKind = claudePath ? await claudeInstallKind(claudePath) : null
+  const record = opts.skillRecordPath ? await readSkillInstall(opts.skillRecordPath) : null
 
   let preflight: PreflightItem[] = []
   let preflightOutput = ''
@@ -96,13 +108,12 @@ export async function checkEnvironment(opts: {
 
   const problems: string[] = []
   if (!claudePath)
+    problems.push('The claude CLI was not found. Use "Install Claude Code" in Settings, then sign in once in a terminal.')
+  if (claudeAuth?.loggedIn === false)
     problems.push(
-      'The claude CLI was not found. Install Claude Code (https://claude.com/claude-code) and sign in once in a terminal.'
+      `Claude Code is installed but not signed in. Run "${CLAUDE_COMMANDS.login}" in a terminal, then check again.`
     )
-  if (!skillDir)
-    problems.push(
-      'The resume-tailor skill is not installed under ~/.claude/skills (github.com/silentashish/claude-resume-generator-skill).'
-    )
+  if (!skillDir) problems.push('The resume-tailor skill is not installed. Use "Install resume-tailor skill" in Settings.')
   if (
     skillDir &&
     !venvReady &&
@@ -119,9 +130,22 @@ export async function checkEnvironment(opts: {
       problems.push(`Missing: ${p.name}${p.detail ? ` (${p.detail})` : ''}`)
   }
 
+  const warnings: string[] = []
+  if (claudePath && !claudeVersionOk)
+    warnings.push(
+      claudeVersion
+        ? `Claude Code ${claudeVersion} is older than ${CLAUDE_VERSION_RECOMMENDED}. Runs work, but update it (Update Claude Code).`
+        : `The Claude Code version could not be read ("claude --version" failed or hung). Runs still start; updating Claude Code usually fixes this.`
+    )
+
   return {
     claudePath,
     claudeVersion,
+    claudeVersionOk,
+    recommendedClaudeVersion: CLAUDE_VERSION_RECOMMENDED,
+    claudeInstallKind: installKind,
+    claudeAuth,
+    skillInstall: record && skillDir && record.path === skillDir ? { tag: record.tag, installedAt: record.installedAt } : null,
     skillDir,
     venvDir: opts.venvDir,
     venvReady,
@@ -129,7 +153,8 @@ export async function checkEnvironment(opts: {
     preflight,
     preflightOutput,
     ready: problems.length === 0 && preflight.length > 0,
-    problems
+    problems,
+    warnings
   }
 }
 

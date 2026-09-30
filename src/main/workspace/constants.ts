@@ -45,3 +45,12 @@ export const APPLICATION_DEPTH = 3
 
 /** Upper bound on directory entries visited per scan, so picking `~` or `/` cannot hang the app. */
 export const MAX_SCAN_ENTRIES = 5000
+
+/** GitHub repository whose releases publish the skill. */
+export const SKILL_REPO = 'silentashish/claude-resume-generator-skill'
+
+/** The skill's folder name and `name:` in its SKILL.md frontmatter. */
+export const SKILL_NAME = 'resume-tailor'
+
+/** Release asset: a zip with everything under a top-level `resume-tailor/` folder. */
+export const SKILL_ASSET = 'resume-tailor.skill'

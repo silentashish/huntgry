@@ -4,6 +4,7 @@ import type { RunSummary, StartRunParams } from '@shared/runner-types'
 import { LineBuffer, parseEventLine, type HuntgryEvent } from '@shared/transcript'
 import { buildClaudeArgs, buildFirstPrompt, runTitle, userMessageLine, type SandboxPaths } from './command'
 import { recordJobSource } from '../applications/tracking'
+import { explainClaudeError } from './version'
 import { appendEvent, findOutputFolder, newRunId, readEvents, readRun, saveRun } from './runs'
 
 /**
@@ -26,6 +27,10 @@ export interface RunContext {
   env: NodeJS.ProcessEnv
   systemPrompt: string
   model?: string
+  /** The `claude` version, `null` when unknown; used for the error message of a failed run. */
+  claudeVersion?: string | null
+  /** The CLI accepts `--permission-prompts none` (≥ 2.1.259). */
+  permissionPrompts?: boolean
 }
 
 export interface RunnerHooks {
@@ -151,7 +156,8 @@ export class RunManager {
         resumeSessionId,
         systemPrompt: ctx.systemPrompt,
         sandbox: ctx.sandbox,
-        model: ctx.model
+        model: ctx.model,
+        permissionPrompts: ctx.permissionPrompts
       })
     ]
     const child = spawn(ctx.command, args, { cwd: ctx.workspace, env: ctx.env, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -194,7 +200,9 @@ export class RunManager {
         r.status = 'finished'
       } else if (r.status !== 'waiting') {
         r.status = 'failed'
-        r.error = entry.stderr.trim() || `claude exited with ${signal ?? `code ${code}`}`
+        const stderr = entry.stderr.trim()
+        const hint = explainClaudeError(stderr, entry.ctx.claudeVersion ?? null)
+        r.error = [hint, stderr || `claude exited with ${signal ?? `code ${code}`}`].filter(Boolean).join('\n\n')
       }
       // A process that exits after its turn (status "waiting") can still be resumed: keep "waiting".
       if (r.status === 'failed' || r.status === 'stopped') {
