@@ -91,7 +91,7 @@ src/
     └── pages/<page>/           # dashboard, jobs, browser, tailor, graph, profile, settings
 resources/                      # app icon (svg source, png, icns)
 scripts/                        # icon rendering, dev Electron branding, mock-ats.mjs (local test forms)
-e2e/                            # Playwright end-to-end tests: fixtures/ (sandbox, workspaces), pages/, tests/
+e2e/                            # Playwright end-to-end tests: fixtures/ (sandbox, workspaces, fake-agent/), pages/, tests/
 ```
 
 ### Adding a feature
