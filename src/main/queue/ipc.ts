@@ -15,9 +15,9 @@ const queue = new TailorQueue({
   fetchDetails: (ws, id) => fetchDetails(ws, id, loadAndExtract),
   markTailored: (ws, id) => updateJob(ws, id, { tailored: true }),
   // #22 picks the agent here; only Claude exists today.
-  start: (params) => startTailorRun(params),
+  start: (params, _agent, workspace) => startTailorRun(params, workspace),
   stopRun: (runId) => manager.stop(runId),
-  reply: (runId, text) => manager.reply(runId, text, context),
+  reply: (runId, text, workspace) => manager.reply(runId, text, () => context(workspace)),
   onChange: (state) => emit('queue:changed', state)
 })
 onRunChange((run) => queue.onRun(run))

@@ -44,8 +44,12 @@ export async function stopAllRuns(): Promise<void> {
   await manager.whenIdle()
 }
 
-export async function context(): Promise<RunContext> {
+/** `expectedWorkspace`: refuse to build a context for any other workspace (the queue's jobs belong to one). */
+export async function context(expectedWorkspace?: string): Promise<RunContext> {
   const workspace = await requireCurrentWorkspace()
+  if (expectedWorkspace !== undefined && workspace.path !== expectedWorkspace) {
+    throw new Error('Another workspace was opened while this job was starting.')
+  }
   // File checks only: the full preflight is for Settings and the Tailor form's warning.
   const env = await discoverRuntime()
   if (!env.claudePath) throw new Error('The claude CLI was not found. See Settings.')
@@ -109,10 +113,10 @@ async function preferredModel(): Promise<string | undefined> {
  * Validates the parameters, reads a posting given only by URL (Claude gets no
  * network access, so it is fetched here) and starts the run.
  */
-export async function startTailorRun(input: unknown): Promise<RunSummary> {
+export async function startTailorRun(input: unknown, expectedWorkspace?: string): Promise<RunSummary> {
   const params = requireStartParams(input)
   if (!params.jobDescription?.trim() && params.jobUrl) {
     params.jobDescription = await fetchPostingText(params.jobUrl, pinnedFetch)
   }
-  return manager.start(params, await context())
+  return manager.start(params, await context(expectedWorkspace))
 }

@@ -35,10 +35,11 @@ export interface QueueDeps {
   /** Loads the full posting of a job that has only a board summary (throws with a user-facing reason). */
   fetchDetails(workspace: string, id: string): Promise<Job>
   markTailored(workspace: string, id: string): Promise<unknown>
-  start(params: StartRunParams, agent: QueueAgent): Promise<RunSummary>
+  /** Starts the run in `workspace`, refusing when another workspace is open by then. */
+  start(params: StartRunParams, agent: QueueAgent, workspace: string): Promise<RunSummary>
   stopRun(runId: string): void
   /** Sends the user's reply to a run (resuming its session if the process is gone). */
-  reply(runId: string, text: string): Promise<RunSummary>
+  reply(runId: string, text: string, workspace: string): Promise<RunSummary>
   onChange(state: QueueState): void
   now?(): number
   /** Minimum time between two spawns. */
@@ -300,7 +301,7 @@ export class TailorQueue {
     this.save()
     this.deps.onChange(this.state())
     try {
-      return await this.deps.reply(item.runId!, text)
+      return await this.deps.reply(item.runId!, text, this.ws!)
     } catch (err) {
       if (item.status === 'running') {
         item.status = 'needs-reply'
@@ -509,8 +510,10 @@ export class TailorQueue {
     let run: RunSummary
     try {
       this.lastSpawn = this.now()
-      run = await this.deps.start(params, item.agent)
+      run = await this.deps.start(params, item.agent, ws)
     } catch (err) {
+      // The user opened another workspace meanwhile: this item belongs to the old queue, which is gone.
+      if (this.ws !== ws) return
       // Starting fails before any Claude process for reasons that are not about this job (Claude
       // signed out, too old or missing, no skill): pause, so the other jobs wait for the fix
       // instead of failing one after another. Resume or Retry once it is fixed.

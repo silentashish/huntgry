@@ -330,6 +330,37 @@ describe('TailorQueue', () => {
     expect(statuses(queue.state())).toEqual(['needs-reply', 'failed', 'queued'])
   })
 
+  it('starts a job only in its own workspace, even if another one is opened while it starts', async () => {
+    const first = ws
+    const other = await mkdtemp(join(tmpdir(), 'huntgry-queue-other-'))
+    const seen: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    queue = new TailorQueue(
+      deps({
+        start: async (_params, _agent, workspace) => {
+          seen.push(workspace)
+          await gate
+          // As startTailorRun does when the open workspace is no longer the job's.
+          if (ws !== workspace) throw new Error('Another workspace was opened while this job was starting.')
+          throw new Error('unreachable')
+        }
+      })
+    )
+    jobs.set('url:a', job('url:a'))
+    await queue.enqueue({ jobIds: ['url:a'], options })
+    await until((st) => st.items[0]?.status === 'preparing')
+    ws = other
+    await queue.sync()
+    release()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(seen).toEqual([first])
+    // The old job's refusal does not leak into the new workspace's queue.
+    expect(queue.state().items).toEqual([])
+    ws = first
+    await rm(other, { recursive: true, force: true })
+  })
+
   it('reloads when the workspace changes', async () => {
     jobs.set('url:a', job('url:a'))
     await queue.setPaused(true)
