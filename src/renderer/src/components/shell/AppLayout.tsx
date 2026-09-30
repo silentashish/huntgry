@@ -97,6 +97,9 @@ export function AppLayout({ workspacePath, initialLocation, onSwitchWorkspace, c
               return (
                 <NavLink
                   key={page}
+                  // A button, not an anchor without href: focusable, and named "<label> <hint>" for assistive tech and tests.
+                  component="button"
+                  type="button"
                   label={label}
                   description={hint}
                   leftSection={<PageIcon size={20} stroke={1.6} />}
