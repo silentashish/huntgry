@@ -21,7 +21,7 @@ No relay, gateway or app code yet: nothing in main imports the package today.
 | --- | --- | --- |
 | Wire types | `src/shared/remote/protocol.ts` | Every type from the ADR schema, field for field: `RelayFrame`, `RelayNotice`, `RelayClientFrame`, `Envelope` (with `EnvelopeError`, `HelloBody`), `RemoteCommand` (24 names) and `RemoteEvent` (10 names), the DTOs `RemoteRun`, `RemoteQueueItem`, `RemoteQueueState`, `RemoteTranscriptItem`, `RemoteEnqueueInput`, `ReviewDetail` (`revision`, `artifacts`, reframing `id`s), `ReviewItem`, `StatusSummary`, `FileChunk`, `NotificationCategory`, `RemoteFile`, plus `PROTOCOL`, `COMMAND_TTL_SECONDS` and the package-owned enums `REMOTE_AGENT_IDS`, `REMOTE_DATE_STYLES`, `REMOTE_MAX_CONCURRENCY`, `REMOTE_MAX_JOBS`. The #31 shapes the ADR references but does not spell out (`PipelineStartInput`, `PipelineState`, `PipelineSummary`, `ReviewItem`) are defined from the #31 issue text. Name lists (`REMOTE_COMMAND_NAMES`, `COSTLY_COMMANDS`, `READ_COMMANDS`, `WORKSPACE_FREE_COMMANDS`, `REMOTE_EVENT_NAMES`) are `satisfies`-checked against the unions, so the allow-list and the types cannot disagree. |
 | Limits | `limits.ts` | `LIMITS` exactly as the ADR (64 KiB frame, 40 KiB plaintext, 32 KiB text, 24 KiB chunk, 8 KiB transcript item, 20 items / page, 50 jobs / page, 16 KiB inline notes) plus the DTO bounds the frame-size test needed (`queueItems`, id / title / cursor lengths, `errorBytes`, `pushTextChars`), `TTL_SECONDS` bounds, `MAX_CLOCK_SKEW_SECONDS`, and `utf8Bytes` / `truncateUtf8` (code-point safe). |
-| Guards | `guards.ts` | Hand-written `require*` functions, no schema library (ADR open question 10). `requireEnvelope` (shape, `v` / `PROTOCOL` → `unsupported`, `sid` / `from` binding → `denied`, ttl bounds, plaintext budget), `requireFresh` (`now − ts ≤ ttl` → `expired`), `requireNextSeq` (strictly increasing → `denied`, "pair again"), `requireWorkspace` (`ws` on every command but `status.get` / `device.*`), `requireCommand` (allow-list → `unsupported` for unknown names, arguments → `invalid`, extra fields refused, a fresh object with only known fields returned), `requireEvent` / `requireFileChunk`, `requireRelayFrame` / `requireRelayClientFrame` / `requireRelayNotice` for the relay, `negotiateProtocol`, `ttlFor`. Every failure is a `ProtocolError` whose `code` is the `Envelope.error.code` to answer with; `errorOf(e)` maps anything else to `failed`. |
+| Guards | `check.ts`, `guards.ts`, `dto.ts` | Hand-written `require*` functions, no schema library (ADR open question 10). `requireEnvelope` (shape, `v` / `PROTOCOL` → `unsupported`, `sid` / `from` binding → `denied`, ttl bounds, plaintext budget), `requireFresh` (`now − ts ≤ ttl` → `expired`), `requireNextSeq` (strictly increasing → `denied`, "pair again"), `requireWorkspace` (`ws` on every command but `status.get` / `device.*`), `requireCommand` (allow-list → `unsupported` for unknown names, arguments → `invalid`, extra fields refused, a fresh object with only known fields returned), `requireEvent` (name allow-list, then the body field by field through `dto.ts`: every DTO the phone renders, every text bound, list length and enum checked, unknown fields such as `params` or `pendingReply` refused), `requireRelayFrame` / `requireRelayClientFrame` / `requireRelayNotice` for the relay, `negotiateProtocol`, `ttlFor`. Every failure is a `ProtocolError` whose `code` is the `Envelope.error.code` to answer with; `errorOf(e)` maps anything else to `failed` with a fixed generic message, so a filesystem or network error never carries a local path to the phone. `requireJobUrl` refuses non-http(s), credentials, loopback, link-local, private-network and `.local`-style hosts by shape; the gateway still runs the desktop's `assertPublicUrl` (DNS, redirects). |
 | Crypto | `crypto.ts`, `crypto.fixture.json` | `tweetnacl` only: `generateKeyPair`, `keyPairFromSecretKey`, `deriveSessionKey` (`nacl.box.before`), `sealEnvelope` / `openEnvelope` (`box.after` with a random 24-byte nonce), `sealJson` / `openJson` (`secretbox` for pairing), `randomBytes`, pure-JS base64 / hex (no `Buffer`, no `atob`), `equalBytes`. The fixture pins two trivial keypairs, their session key and the ciphertext of a pinned envelope and pairing frame, so the phone and desktop implementations cannot drift. |
 | Host boundary | `text.ts`, `tsconfig.json` | The package type-checks with `lib: ["ES2022"]` and `types: []`, i.e. without Node, DOM or React Native globals, which is what a Worker and Hermes see. `TextEncoder` / `TextDecoder` are the one host API, declared module-locally in `text.ts`. `npm run typecheck:remote` runs it; `typecheck` includes it. |
 | Package | `package.json`, `README.md` | `@huntgry/remote-protocol`, `dependencies: { tweetnacl }` only, `exports` the TypeScript source (all three bundlers compile TS; no build step). README documents the public API, the limits table with measured frame sizes, the guard order for the gateway, and how to change the contract. |
@@ -82,7 +82,21 @@ flowchart LR
   but sets no ceiling; the guard needs one so a relay is never asked to hold a frame forever.
 - **Unknown command *and* event names are `unsupported`**, wrong arguments `invalid`. The
   ADR only specifies commands; the same rule for events lets an older phone ignore what a
-  newer desktop sends.
+  newer desktop sends. `requireWorkspace` also answers `unsupported` for an unknown name, so
+  the code does not depend on whether the gateway checks the workspace or the allow-list
+  first (review finding: a newer command without `ws` used to come back `invalid`).
+- **Event and result bodies are validated field by field** (`dto.ts`), not only as objects
+  (review finding). That needed a few more bounds: `transcriptSummaryBytes` 1 KiB,
+  `transcriptDenials` 20, `runsPageItems` 50, `reviewListItems` 16, `reviewEntryBytes` 256,
+  `verifyReportBytes` 4 KiB, `reviewArtifacts` 16, chosen so a `ReviewDetail` with every
+  field at its bound still fits one frame (51.2 KB).
+- **`errorOf` never forwards a non-protocol error message** (review finding): filesystem and
+  network errors quote paths; the phone gets `GENERIC_FAILURE_MESSAGE`, the Mac keeps the
+  original in its log.
+- **`jobs.addUrl` is checked by shape only** in this package (scheme, credentials, loopback /
+  private / `.local` hosts, IPv4-mapped IPv6, decimal and hex IPv4 forms), because DNS
+  resolution needs the host. The README tells E3 to run `assertPublicUrl` in the gateway
+  and to test loopback and private-host rejection there (review finding).
 - **Both lockfiles are checked by replaying the install** in a temporary directory rather
   than by parsing lockfile formats: it is exactly what a developer runs, catches workspace
   manifests too, and writes nothing into the repo. It needs `pnpm` on the machine (it is,
@@ -103,15 +117,20 @@ Unit (`npm test` runs `check:lockfiles` first, then vitest):
 - `src/shared/remote/guards.test.ts`: envelope shape and every rejection code, `v` /
   `PROTOCOL` negotiation, session and sender binding, ttl bounds, freshness and clock skew,
   strictly increasing `seq`, `ws` required on every command but `status.get` / `device.*`
-  (loops over the allow-list), every allow-listed command with valid arguments, unknown names
-  (`apply.start`, `browser.open`, `workspace.switch`, `runner.installClaude`, …) →
-  `unsupported`, thirty bad-argument cases, text fields at exactly 32 KiB accepted and one
+  (loops over the allow-list), the full envelope in the documented gateway order (a newer
+  command without `ws` → `unsupported`), every allow-listed command with valid arguments,
+  unknown names (`apply.start`, `browser.open`, `workspace.switch`, `runner.installClaude`, …)
+  → `unsupported`, forty bad-argument cases including loopback, private-network, `.local`,
+  IPv4-mapped IPv6 and numeric-IP job URLs, `errorOf` with a path-quoting error, text fields at exactly 32 KiB accepted and one
   byte more refused, file chunks, events, relay frames, client auth frames, notices.
 - `src/shared/remote/frame-size.test.ts`: all 24 commands and 10 events with their largest
   fields through `sealEnvelope` → `RelayFrame` → `requireRelayFrame` → `openEnvelope` →
   `requireEnvelope`; each frame < 64 KiB, each plaintext ≤ 40 KiB; a 24 KiB chunk passes and
-  24 KiB + 1 is refused; a `review.get` result with 16 KiB inline notes and a 32 KiB reply
-  fit; a 20 × 8 KiB transcript page does not. `FRAME_SIZES=<file> npx vitest run
+  24 KiB + 1 is refused; a `review.get` result with every field at its bound and a 32 KiB
+  reply fit; a 20 × 8 KiB transcript page does not (three items do).
+- `src/shared/remote/dto.test.ts`: every DTO accepted with only its known fields; the first
+  value over each limit, wrong enums and unknown fields (`params`, `pendingReply`,
+  `workspacePath`) refused; the value at each limit accepted. `FRAME_SIZES=<file> npx vitest run
   src/shared/remote/frame-size.test.ts` writes the size table.
 - `src/shared/remote/crypto.test.ts`: box round trips between two keypairs with random
   nonces (unique), secretbox round trips, tampered ciphertext / wrong key / wrong nonce /
@@ -148,8 +167,10 @@ No UI changed; nothing to screenshot.
 - **E2 (#35)** relay: `requireRelayFrame` / `requireRelayClientFrame` are written for it; the
   relay only ever sees the clear fields.
 - **E3 (#36)** gateway and `project.ts`: the guard order in the README; transcript pages
-  bounded by bytes; `RemoteQueueState.more`; `LIMITS.titleChars` / `errorBytes` truncation in
-  the projector; `HelloBody.workspace`.
+  bounded by bytes; `RemoteQueueState.more`; truncation to every `LIMITS` bound in the
+  projector (run the `dto.ts` guards before encrypting); `HelloBody.workspace`;
+  `assertPublicUrl` on `jobs.addUrl` with loopback / private-host tests at the gateway; log
+  the original error next to `errorOf`.
 - **#31** may rename fields of `PipelineStartInput` / `PipelineState` / `PipelineSummary` /
   `ReviewItem` once the pipeline lands; they are defined here from the issue text and are
   minor changes as long as fields are only added.

@@ -10,181 +10,59 @@
 
 import { LIMITS, MAX_CLOCK_SKEW_SECONDS, TTL_SECONDS, utf8Bytes } from './limits'
 import {
+  invalid,
+  ProtocolError,
+  rejectUnknownKeys,
+  requireAgentId,
+  requireApplicationId,
+  requireBase64,
+  requireBoolean,
+  requireConcurrency,
+  requireCursor,
+  requireDateStyle,
+  requireId,
+  requireInteger,
+  requireIsoDate,
+  requireNotificationCategory,
+  requireNumber,
+  requireOneOf,
+  requireProtocolRange,
+  requireRecord,
+  requireRemoteFile,
+  requireShortString,
+  requireStringArray,
+  requireText
+} from './check'
+import { requireEventBody } from './dto'
+import { parseUrl } from './text'
+import {
   COSTLY_COMMANDS,
   NOTIFICATION_CATEGORIES,
   PROTOCOL,
   READ_COMMANDS,
-  REMOTE_AGENT_IDS,
   REMOTE_COMMAND_NAMES,
-  REMOTE_DATE_STYLES,
   REMOTE_EVENT_NAMES,
-  REMOTE_MAX_CONCURRENCY,
   REMOTE_MAX_JOBS,
   WORKSPACE_FREE_COMMANDS,
   type Envelope,
   type EnvelopeError,
   type EnvelopeErrorCode,
   type EnvelopeKind,
-  type FileChunk,
   type HelloBody,
-  type NotificationCategory,
   type PipelineStartInput,
   type ProtocolRange,
   type RelayClientFrame,
   type RelayFrame,
   type RelayNotice,
-  type RemoteAgentId,
   type RemoteCommand,
   type RemoteCommandName,
-  type RemoteDateStyle,
   type RemoteEnqueueInput,
   type RemoteEvent,
   type RemoteEventName,
-  type RemoteFile
 } from './protocol'
 
-export class ProtocolError extends Error {
-  readonly code: EnvelopeErrorCode
-  constructor(code: EnvelopeErrorCode, message: string) {
-    super(message)
-    this.name = 'ProtocolError'
-    this.code = code
-  }
-}
-
-/** The `Envelope.error` to answer with for any thrown value (unknown errors become `failed`). */
-export function errorOf(e: unknown): EnvelopeError {
-  if (e instanceof ProtocolError) return { code: e.code, message: e.message }
-  return { code: 'failed', message: e instanceof Error ? e.message : String(e) }
-}
-
-const invalid = (message: string): never => {
-  throw new ProtocolError('invalid', message)
-}
-
-// ── primitives ──────────────────────────────────────────────────────────────────────────────
-
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
-
-function requireRecord(v: unknown, what: string): Record<string, unknown> {
-  if (!isRecord(v)) invalid(`${what} must be an object.`)
-  return v as Record<string, unknown>
-}
-
-/** A non-empty string of at most `maxChars` characters (ids, names). */
-export function requireId(v: unknown, what: string, maxChars: number = LIMITS.idChars): string {
-  if (typeof v !== 'string' || v.length === 0 || v.length > maxChars) invalid(`${what} must be a string of 1–${maxChars} characters.`)
-  return v as string
-}
-
-export function requireApplicationId(v: unknown, what = 'applicationId'): string {
-  return requireId(v, what, LIMITS.applicationIdChars)
-}
-
-export function requireJobId(v: unknown, what = 'jobId'): string {
-  return requireId(v, what, LIMITS.jobIdChars)
-}
-
-export function requireCursor(v: unknown, what = 'cursor'): string {
-  return requireId(v, what, LIMITS.cursorChars)
-}
-
-/** A string (possibly empty) whose UTF-8 length is at most `maxBytes`. */
-export function requireText(v: unknown, what: string, maxBytes: number = LIMITS.textBytes): string {
-  if (typeof v !== 'string') invalid(`${what} must be a string.`)
-  if (utf8Bytes(v as string) > maxBytes) invalid(`${what} exceeds ${maxBytes} bytes.`)
-  return v as string
-}
-
-export function requireShortString(v: unknown, what: string): string {
-  if (typeof v !== 'string' || v.length > LIMITS.shortStringChars) invalid(`${what} must be a string of at most ${LIMITS.shortStringChars} characters.`)
-  return v as string
-}
-
-export function requireBoolean(v: unknown, what: string): boolean {
-  if (typeof v !== 'boolean') invalid(`${what} must be a boolean.`)
-  return v as boolean
-}
-
-export function requireInteger(v: unknown, what: string, min: number, max: number = Number.MAX_SAFE_INTEGER): number {
-  if (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max) invalid(`${what} must be an integer between ${min} and ${max}.`)
-  return v as number
-}
-
-export function requireNumber(v: unknown, what: string, min = 0): number {
-  if (typeof v !== 'number' || !Number.isFinite(v) || v < min) invalid(`${what} must be a number ≥ ${min}.`)
-  return v as number
-}
-
-/** An ISO-8601 timestamp that `Date.parse` accepts. */
-export function requireIsoDate(v: unknown, what: string): string {
-  if (typeof v !== 'string' || v.length > 64 || Number.isNaN(Date.parse(v))) invalid(`${what} must be an ISO date.`)
-  return v as string
-}
-
-export function requireOneOf<T extends string>(v: unknown, list: readonly T[], what: string): T {
-  if (typeof v !== 'string' || !(list as readonly string[]).includes(v)) invalid(`${what} must be one of ${list.join(', ')}.`)
-  return v as T
-}
-
-function requireStringArray(v: unknown, what: string, maxItems: number, maxChars: number = LIMITS.idChars): string[] {
-  if (!Array.isArray(v) || v.length > maxItems) invalid(`${what} must be an array of at most ${maxItems} items.`)
-  return (v as unknown[]).map((item, i) => requireId(item, `${what}[${i}]`, maxChars))
-}
-
-function rejectUnknownKeys(record: Record<string, unknown>, allowed: readonly string[], what: string): void {
-  for (const key of Object.keys(record)) if (!allowed.includes(key)) invalid(`${what} has an unknown field "${key}".`)
-}
-
-const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/
-function requireBase64(v: unknown, what: string, bytes?: number): string {
-  if (typeof v !== 'string' || v.length % 4 !== 0 || !BASE64_RE.test(v)) invalid(`${what} must be base64.`)
-  if (bytes !== undefined && Math.ceil(bytes / 3) * 4 !== (v as string).length) invalid(`${what} must be ${bytes} bytes.`)
-  return v as string
-}
-
-// ── enums ───────────────────────────────────────────────────────────────────────────────────
-
-export function requireAgentId(v: unknown, what = 'agent'): RemoteAgentId {
-  return requireOneOf(v, REMOTE_AGENT_IDS, what)
-}
-
-export function requireDateStyle(v: unknown, what = 'dateStyle'): RemoteDateStyle {
-  return requireOneOf(v, REMOTE_DATE_STYLES, what)
-}
-
-export function requireConcurrency(v: unknown, what = 'concurrency'): number {
-  return requireInteger(v, what, 1, REMOTE_MAX_CONCURRENCY)
-}
-
-export function requireNotificationCategory(v: unknown, what = 'category'): NotificationCategory {
-  return requireOneOf(v, NOTIFICATION_CATEGORIES, what)
-}
-
-const REMOTE_FILE_RE = /^(resume\.pdf|cover\.pdf|review-notes\.md|(resume|cover)-page-\d{1,4}\.jpg)$/
-export function requireRemoteFile(v: unknown, what = 'file'): RemoteFile {
-  if (typeof v !== 'string' || !REMOTE_FILE_RE.test(v)) invalid(`${what} is not a file the phone may fetch.`)
-  return v as RemoteFile
-}
-
-export function requireProtocolRange(v: unknown, what = 'protocol'): ProtocolRange {
-  const r = requireRecord(v, what)
-  const min = requireInteger(r.min, `${what}.min`, 1)
-  const max = requireInteger(r.max, `${what}.max`, min)
-  return { min, max }
-}
-
-/**
- * The protocol major both sides will speak: the highest common one. Throws `unsupported`
- * when the ranges do not overlap (the phone then asks to update Huntgry, or itself).
- */
-export function negotiateProtocol(theirs: ProtocolRange, ours: ProtocolRange = PROTOCOL): number {
-  const version = Math.min(theirs.max, ours.max)
-  if (version < theirs.min || version < ours.min) {
-    throw new ProtocolError('unsupported', `No common protocol version (theirs ${theirs.min}–${theirs.max}, ours ${ours.min}–${ours.max}).`)
-  }
-  return version
-}
+export * from './check'
+export * from './dto'
 
 // ── TTL, freshness, sequence ────────────────────────────────────────────────────────────────
 
@@ -286,10 +164,16 @@ export function requireEnvelope(value: unknown, context: EnvelopeContext = {}): 
 /**
  * Workspace binding: every workspace-scoped command (all but `status.get` and `device.*`)
  * carries the open workspace's id. A mismatch is `invalid` ("workspace changed"); the phone
- * reloads its status and re-issues what still makes sense.
+ * reloads its status and re-issues what still makes sense. A name outside the allow-list is
+ * `unsupported` here too, so the answer does not depend on whether the gateway checks the
+ * workspace or the command first (the phone needs `unsupported` to show "update Huntgry").
  */
 export function requireWorkspace(envelope: Pick<Envelope, 'ws' | 'name'>, currentWorkspaceId: string): void {
-  if (envelope.name !== undefined && (WORKSPACE_FREE_COMMANDS as readonly string[]).includes(envelope.name)) return
+  const name = envelope.name
+  if (name === undefined || !(REMOTE_COMMAND_NAMES as readonly string[]).includes(name)) {
+    throw new ProtocolError('unsupported', `Unknown command${name === undefined ? '' : ` "${name.slice(0, 64)}"`}.`)
+  }
+  if ((WORKSPACE_FREE_COMMANDS as readonly string[]).includes(name)) return
   if (envelope.ws === undefined) invalid('This command needs the workspace id (Envelope.ws).')
   if (envelope.ws !== currentWorkspaceId) invalid('Workspace changed: this command was sent for another workspace.')
 }
@@ -369,6 +253,56 @@ function requireReframingIds(v: unknown): string[] {
   return requireStringArray(v, 'approvedReframingIds', 200, 128)
 }
 
+/**
+ * Syntax and host *shape* of a `jobs.addUrl` URL: http(s), no credentials, and no hostname
+ * that is loopback, link-local, private-network, `.local` / `.internal` / `.localhost` or a
+ * bare name. This is the same first line as the desktop's address bar; **it is not the
+ * public-host check**. The gateway must still run the desktop's `assertPublicUrl` (DNS
+ * resolution, redirects) before fetching anything, because a public name can resolve to a
+ * private address.
+ */
+export function requireJobUrl(v: unknown, what = 'url'): string {
+  const text = requireShortString(v, what)
+  if (!/^https?:\/\/\S+$/i.test(text)) invalid(`${what} must be an http(s) URL.`)
+  const url = parseUrl(text)
+  if (!url) return invalid(`${what} is not a valid URL.`)
+  if (url.username || url.password) invalid(`${what} must not carry credentials.`)
+  const host = url.hostname.toLowerCase().replace(/\.$/, '')
+  if (!host.includes('.') && !host.startsWith('[')) invalid(`${what} must name a public host.`)
+  if (isPrivateHostname(host)) invalid(`${what} points at a local or private-network address.`)
+  return url.href
+}
+
+const PRIVATE_SUFFIXES = ['.local', '.localhost', '.internal', '.home', '.lan', '.intranet', '.corp', '.home.arpa']
+
+/** Loopback, link-local, private and special-use addresses by hostname or IP literal shape. */
+export function isPrivateHostname(host: string): boolean {
+  const h = host.toLowerCase().replace(/\.$/, '')
+  if (h === 'localhost' || PRIVATE_SUFFIXES.some((s) => h.endsWith(s))) return true
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h)
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])]
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224
+  }
+  if (/^\d+$/.test(h) || /^0x/.test(h)) return true // decimal / hex IPv4 forms, never a public site
+  if (h.startsWith('[') && h.endsWith(']')) {
+    const v6 = h.slice(1, -1)
+    if (v6 === '::1' || v6 === '::' || v6.startsWith('fe80:') || v6.startsWith('fc') || v6.startsWith('fd')) return true
+    if (v6.startsWith('::ffff:')) {
+      // IPv4-mapped: dotted (`::ffff:10.0.0.1`) or, after URL normalisation, hex (`::ffff:a00:1`).
+      const tail = v6.slice(7)
+      if (tail.includes('.')) return isPrivateHostname(tail)
+      const [hi = '0', lo = '0'] = tail.split(':')
+      const a = parseInt(hi, 16)
+      const b = parseInt(lo, 16)
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return true
+      return isPrivateHostname(`${a >> 8}.${a & 255}.${b >> 8}.${b & 255}`)
+    }
+    return false
+  }
+  return false
+}
+
 function requireArgs(v: unknown, name: string, keys: readonly string[]): Record<string, unknown> {
   const r = requireRecord(v, `${name} args`)
   rejectUnknownKeys(r, keys, `${name} args`)
@@ -423,9 +357,7 @@ export function requireCommand(name: unknown, args: unknown): RemoteCommand {
     }
     case 'jobs.addUrl': {
       const a = requireArgs(args, n, ['url'])
-      const url = requireShortString(a.url, 'url')
-      if (!/^https?:\/\/\S+$/.test(url)) invalid('url must be an http(s) URL.')
-      return { name: n, args: { url } }
+      return { name: n, args: { url: requireJobUrl(a.url) } }
     }
     case 'runs.list': {
       const a = requireArgs(args, n, ['cursor'])
@@ -494,47 +426,16 @@ export function requireCommandEnvelope(envelope: Envelope): RemoteCommand {
 
 // ── Events (phone side) ─────────────────────────────────────────────────────────────────────
 
-export function requireFileChunk(v: unknown): FileChunk {
-  const r = requireRecord(v, 'file.chunk')
-  rejectUnknownKeys(r, ['applicationId', 'file', 'chunk', 'of', 'bytes', 'sha256', 'data'], 'file.chunk')
-  const of = requireInteger(r.of, 'of', 1, 100_000)
-  const data = requireBase64(r.data, 'data')
-  const decodedBytes = (data.length / 4) * 3 - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0)
-  if (decodedBytes > LIMITS.fileChunkBytes) invalid(`file.chunk data exceeds ${LIMITS.fileChunkBytes} bytes.`)
-  const sha256 = requireId(r.sha256, 'sha256', 64)
-  if (!/^[0-9a-f]{64}$/.test(sha256)) invalid('sha256 must be 64 hex characters.')
-  return {
-    applicationId: requireApplicationId(r.applicationId),
-    file: requireRemoteFile(r.file),
-    chunk: requireInteger(r.chunk, 'chunk', 0, of - 1),
-    of,
-    bytes: requireInteger(r.bytes, 'bytes', 0),
-    sha256,
-    data
-  }
-}
-
 /**
- * The event allow-list. Bodies are the projected DTOs; the phone checks the name and the
- * bounded fields that matter for safety (`file.chunk`), and renders the rest defensively.
- * An unknown event name is `unsupported` (a newer desktop; the phone ignores the event).
+ * The event allow-list. An unknown name is `unsupported` (a newer desktop; the phone ignores
+ * the event); the body is validated field by field against its DTO in `dto.ts`, every text
+ * bound included, so a producer that uses this guard cannot send more than the phone accepts.
  */
 export function requireEvent(name: unknown, body: unknown): RemoteEvent {
   if (typeof name !== 'string' || !(REMOTE_EVENT_NAMES as readonly string[]).includes(name)) {
     throw new ProtocolError('unsupported', `Unknown event${typeof name === 'string' ? ` "${name.slice(0, 64)}"` : ''}.`)
   }
-  const n = name as RemoteEventName
-  if (n === 'file.chunk') return { name: n, body: requireFileChunk(body) }
-  if (n === 'applications.changed') {
-    const r = requireRecord(body, name)
-    return { name: n, body: { ids: requireStringArray(r.ids, 'ids', LIMITS.applicationsChangedIds, LIMITS.applicationIdChars) } }
-  }
-  if (n === 'device.revoked') {
-    const r = requireRecord(body, name)
-    return { name: n, body: { reason: requireShortString(r.reason, 'reason') } }
-  }
-  requireRecord(body, name)
-  return { name: n, body } as RemoteEvent
+  return requireEventBody(name as RemoteEventName, body)
 }
 
 // ── Relay layer ─────────────────────────────────────────────────────────────────────────────

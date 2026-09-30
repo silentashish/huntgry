@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs'
 import { afterAll, describe, expect, it } from 'vitest'
 import { deriveSessionKey, generateKeyPair, openEnvelope, sealEnvelope, toBase64 } from './crypto'
-import { requireCommand, requireEnvelope, requireEvent, requireFileChunk, requireRelayFrame, ttlFor } from './guards'
+import { requireCommand, requireEnvelope, requireEvent, requireFileChunk, requireRelayFrame, requireReviewDetail, requireRunPage, ttlFor } from './guards'
 import { jsonBytes, LIMITS } from './limits'
 import {
   COMMAND_TTL_SECONDS,
@@ -122,7 +122,7 @@ const run: RemoteRun = {
   title: TITLE,
   agent: 'antigravity',
   status: 'finished',
-  job: { company: 'c'.repeat(200), role: 'r'.repeat(200), jobId: ID, source: 'hiring.cafe' },
+  job: { company: TITLE, role: TITLE, jobId: 'j'.repeat(LIMITS.jobIdChars), source: 'hiring.cafe' },
   options: { coverLetter: true, dateStyle: 'inline' },
   createdAt: ISO,
   updatedAt: ISO,
@@ -150,13 +150,13 @@ const queueItem: RemoteQueueItem = {
 const transcriptText = 'w'.repeat(LIMITS.transcriptItemTextBytes)
 const transcriptItems: RemoteTranscriptItem[] = Array.from({ length: LIMITS.transcriptPageItems }, (_, i): RemoteTranscriptItem =>
   i % 3 === 0
-    ? { kind: 'tool', id: `${i}`, name: 'Bash', summary: 's'.repeat(200), status: 'ok', output: transcriptText, truncated: true }
+    ? { kind: 'tool', id: `${i}`, name: 'Bash', summary: 's'.repeat(LIMITS.transcriptSummaryBytes), status: 'ok', output: transcriptText, truncated: true }
     : i % 3 === 1
       ? { kind: 'assistant', id: `${i}`, text: transcriptText, truncated: true }
-      : { kind: 'result', id: `${i}`, ok: true, text: transcriptText, costUsd: 1, durationMs: 1e9, denials: Array.from({ length: 10 }, () => 'd'.repeat(80)), usage: { inputTokens: 1e9, outputTokens: 1e9 } }
+      : { kind: 'result', id: `${i}`, ok: true, text: transcriptText, costUsd: 1, durationMs: 1e9, denials: Array.from({ length: LIMITS.transcriptDenials }, () => 'd'.repeat(LIMITS.titleChars)), usage: { inputTokens: 1e9, outputTokens: 1e9 } }
 )
 const status: StatusSummary = {
-  desktop: { name: 'n'.repeat(200), appVersion: '0.1.0', workspaceName: 'w'.repeat(200), workspaceId: ID },
+  desktop: { name: TITLE, appVersion: '0.1.0', workspaceName: TITLE, workspaceId: ID },
   queue: { active: 4, needsReply: 100, failed: 100, paused: false },
   pipeline: { status: 'waiting-limit', until: ISO },
   review: { unreviewed: 100 },
@@ -172,10 +172,10 @@ const review: ReviewDetail = {
   runId: ID,
   title: TITLE,
   reviewNotes: 'n'.repeat(LIMITS.reviewNotesInlineBytes),
-  openGaps: Array.from({ length: 20 }, () => 'g'.repeat(200)),
-  proposedReframings: Array.from({ length: 20 }, () => ({ id: SHA, sourceFact: 'f'.repeat(200), wording: 'w'.repeat(200) })),
-  verify: { ok: false, report: 'r'.repeat(4096) },
-  artifacts: Array.from({ length: 12 }, (_, i) => ({ file: i === 0 ? 'resume.pdf' : `resume-page-${i}.jpg`, bytes: 1e7, sha256: SHA })),
+  openGaps: Array.from({ length: LIMITS.reviewListItems }, () => 'g'.repeat(LIMITS.reviewEntryBytes)),
+  proposedReframings: Array.from({ length: LIMITS.reviewListItems }, () => ({ id: SHA, sourceFact: 'f'.repeat(LIMITS.reviewEntryBytes), wording: 'w'.repeat(LIMITS.reviewEntryBytes) })),
+  verify: { ok: false, report: 'r'.repeat(LIMITS.verifyReportBytes) },
+  artifacts: Array.from({ length: LIMITS.reviewArtifacts }, (_, i) => ({ file: i === 0 ? 'resume.pdf' : i === 1 ? 'cover.pdf' : `resume-page-${i}.jpg`, bytes: 1e7, sha256: SHA })),
   revision: SHA
 }
 const chunkData = toBase64(new Uint8Array(LIMITS.fileChunkBytes).fill(255))
@@ -184,7 +184,7 @@ const largestBodies: Record<RemoteEventName, unknown> = {
   status,
   'queue.changed': { items: Array.from({ length: LIMITS.queueItems }, () => queueItem), concurrency: 4, paused: true, more: 70 },
   'run.changed': run,
-  'run.transcript': { runId: ID, items: transcriptItems.slice(0, 4), seq: Number.MAX_SAFE_INTEGER },
+  'run.transcript': { runId: ID, items: transcriptItems.slice(0, 3), seq: Number.MAX_SAFE_INTEGER },
   'pipeline.changed': pipeline,
   'pipeline.finished': { status: 'budget', counts: pipeline.counts, costUsd: 1e6, startedAt: ISO, finishedAt: ISO },
   'review.needed': { count: 100, latest: { applicationId: APP_ID, runId: ID, title: TITLE, openGaps: 20, finishedAt: ISO } },
@@ -210,15 +210,15 @@ describe('every event with its largest fields fits one frame', () => {
   })
 
   it('a review detail with 16 KiB inline notes and a 32 KiB reply result both fit', () => {
-    const detail: Envelope = { v: 1, sid: ID, from: 'desktop', seq: 1, ts: ISO, ttl: 60, kind: 'result', re: ID, ok: true, body: review }
+    const detail: Envelope = { v: 1, sid: ID, from: 'desktop', seq: 1, ts: ISO, ttl: 60, kind: 'result', re: ID, ok: true, body: requireReviewDetail(review) }
     sizes['result review.get'] = roundTrip(detail, 'desktop')
-    const page: Envelope = { v: 1, sid: ID, from: 'desktop', seq: 2, ts: ISO, ttl: 60, kind: 'result', re: ID, ok: true, body: { run, items: transcriptItems.slice(0, 4), nextSeq: 1e9 } }
+    const page: Envelope = { v: 1, sid: ID, from: 'desktop', seq: 2, ts: ISO, ttl: 60, kind: 'result', re: ID, ok: true, body: requireRunPage({ run, items: transcriptItems.slice(0, 3), nextSeq: 1e9 }) }
     sizes['result run.get'] = roundTrip(page, 'desktop')
     const reply: Envelope = { v: 1, sid: ID, from: 'desktop', seq: 3, ts: ISO, ttl: 60, kind: 'result', re: ID, ok: false, error: { code: 'failed', message: 'm'.repeat(LIMITS.shortStringChars) }, body: { text: TEXT_MAX } }
     roundTrip(reply, 'desktop')
   })
 
-  it('a full transcript page of 20 × 8 KiB items does not fit one frame: the projector must page by bytes too', () => {
+  it('a full transcript page of 20 × 8 KiB items does not fit one frame: the projector must page by bytes too (three items do)', () => {
     // Documented in the README: run.get pages by LIMITS.transcriptPageItems *and* the plaintext budget.
     const envelope: Envelope = { v: 1, sid: ID, from: 'desktop', seq: 1, ts: ISO, ttl: 60, kind: 'event', name: 'run.transcript', body: { runId: ID, items: transcriptItems, seq: 1 } }
     expect(jsonBytes(envelope)).toBeGreaterThan(LIMITS.plaintextBytes)

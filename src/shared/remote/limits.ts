@@ -16,15 +16,28 @@ export const LIMITS = {
   fileChunkBytes: 24 * 1024,
   /** text / output of one RemoteTranscriptItem, then `truncated: true`. */
   transcriptItemTextBytes: 8 * 1024,
+  /** A tool item's one-line `summary`. */
+  transcriptSummaryBytes: 1024,
+  /** Denied actions listed on a result item. */
+  transcriptDenials: 20,
   /** run.get returns at most this many items per page. */
   transcriptPageItems: 20,
   jobsPageItems: 50,
+  /** `runs.list` page. */
+  runsPageItems: 50,
   /** Longer review-notes.md are fetched through file.get instead of inline. */
   reviewNotesInlineBytes: 16 * 1024,
   /** `RemoteRun.error` / `RemoteQueueItem.error`, truncated by the projector. */
   errorBytes: 1024,
   /** `RelayFrame.pushText` (characters; it is shown as a notification body). */
   pushTextChars: 80,
+  /** `ReviewDetail.openGaps` and `.proposedReframings`: entries per list, bytes per gap / source fact / wording. */
+  reviewListItems: 16,
+  reviewEntryBytes: 256,
+  /** `ReviewDetail.verify.report` (verify.py output; longer reports are truncated by the projector). */
+  verifyReportBytes: 4 * 1024,
+  /** `ReviewDetail.artifacts`: resume.pdf, cover.pdf and up to 14 page previews. */
+  reviewArtifacts: 16,
   /** `queue.changed` / `queue.get` carry at most this many items (active first); `more` counts the rest. */
   queueItems: 20,
   /** Run, queue item, device and session ids, command ids, revisions. */

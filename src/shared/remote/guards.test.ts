@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   errorOf,
+  GENERIC_FAILURE_MESSAGE,
+  isPrivateHostname,
+  requireJobUrl,
   isReadCommand,
   negotiateProtocol,
   ProtocolError,
@@ -131,6 +134,31 @@ describe('workspace binding', () => {
       expect(codeOf(() => requireWorkspace({ name, ws: 'ws-2' }, 'ws-1')), name).toBe(exempt ? 'ok' : 'invalid')
       expect(codeOf(() => requireWorkspace({ name, ws: 'ws-1' }, 'ws-1')), name).toBe('ok')
     }
+    // Whatever the gateway checks first, an unknown command is `unsupported`, never `invalid`.
+    expect(codeOf(() => requireWorkspace({ name: 'pipeline.dryRun', ws: undefined }, 'ws-1'))).toBe('unsupported')
+    expect(codeOf(() => requireWorkspace({ name: 'pipeline.dryRun', ws: 'ws-2' }, 'ws-1'))).toBe('unsupported')
+    expect(codeOf(() => requireWorkspace({ name: undefined, ws: 'ws-1' }, 'ws-1'))).toBe('unsupported')
+  })
+
+  it('full envelope in the documented gateway order: a newer command without ws is unsupported', () => {
+    const gateway = (value: unknown, lastSeq: number): string =>
+      codeOf(() => {
+        const env = requireEnvelope(value, { sid: 'sid-1', from: 'phone' })
+        requireFresh(env, NOW)
+        requireNextSeq(env.seq, lastSeq)
+        requireWorkspace(env, 'ws-1')
+        return requireCommandEnvelope(env)
+      })
+    expect(gateway(base, 2)).toBe('ok')
+    expect(gateway({ ...base, name: 'pipeline.dryRun', ws: undefined }, 2)).toBe('unsupported')
+    expect(gateway({ ...base, name: 'pipeline.dryRun' }, 2)).toBe('unsupported')
+    expect(gateway({ ...base, ws: undefined }, 2)).toBe('invalid')
+    expect(gateway({ ...base, ws: 'ws-2' }, 2)).toBe('invalid')
+    expect(gateway({ ...base, name: 'status.get', ws: undefined, body: null }, 2)).toBe('ok')
+    expect(gateway(base, 3)).toBe('denied')
+    expect(gateway({ ...base, sid: 'other' }, 2)).toBe('denied')
+    expect(gateway({ ...base, ts: '2026-09-29T11:59:00.000Z' }, 2)).toBe('expired')
+    expect(gateway({ ...base, v: 2 }, 2)).toBe('unsupported')
   })
 })
 
@@ -201,6 +229,20 @@ describe('requireCommand', () => {
       ['pipeline.start', { jobIds: ['j'], agent: 'claude' }],
       ['jobs.addUrl', { url: 'file:///etc/passwd' }],
       ['jobs.addUrl', { url: 'ftp://x' }],
+      ['jobs.addUrl', { url: 'https://user:pw@example.com/job' }],
+      ['jobs.addUrl', { url: 'http://127.0.0.1/' }],
+      ['jobs.addUrl', { url: 'http://localhost/' }],
+      ['jobs.addUrl', { url: 'http://intranet/job' }],
+      ['jobs.addUrl', { url: 'http://jobs.corp.local/job' }],
+      ['jobs.addUrl', { url: 'http://10.0.0.5/' }],
+      ['jobs.addUrl', { url: 'http://192.168.1.10:8080/x' }],
+      ['jobs.addUrl', { url: 'http://172.16.0.1/' }],
+      ['jobs.addUrl', { url: 'http://169.254.169.254/latest/meta-data' }],
+      ['jobs.addUrl', { url: 'http://[::1]/' }],
+      ['jobs.addUrl', { url: 'http://[fe80::1]/' }],
+      ['jobs.addUrl', { url: 'http://[::ffff:127.0.0.1]/' }],
+      ['jobs.addUrl', { url: 'http://2130706433/' }],
+      ['jobs.addUrl', { url: 'http://0x7f000001/' }],
       ['run.get', { runId: 'r', sinceSeq: -1 }],
       ['run.reply', { runId: 'r', text: '   ' }],
       ['run.reply', { runId: 'r', text: 42 }],
@@ -225,6 +267,19 @@ describe('requireCommand', () => {
   })
 })
 
+describe('requireJobUrl', () => {
+  it('accepts public http(s) hosts and normalises the href', () => {
+    expect(requireJobUrl('https://boards.greenhouse.io/acme/jobs/123?x=1')).toBe('https://boards.greenhouse.io/acme/jobs/123?x=1')
+    expect(requireJobUrl('HTTP://Example.COM/a')).toBe('http://example.com/a')
+    expect(requireJobUrl('https://172.32.0.1/job')).toBe('https://172.32.0.1/job') // public range next to 172.16/12
+    expect(requireJobUrl('https://[2606:4700::1111]/')).toBe('https://[2606:4700::1111]/')
+    expect(isPrivateHostname('example.com')).toBe(false)
+    expect(isPrivateHostname('100.64.0.1')).toBe(true)
+    expect(isPrivateHostname('224.0.0.1')).toBe(true)
+    expect(isPrivateHostname('my-mac.local.')).toBe(true)
+  })
+})
+
 describe('events and file chunks', () => {
   const chunk = { applicationId: 'a', file: 'resume.pdf', chunk: 1, of: 3, bytes: 60000, sha256: 'a'.repeat(64), data: Buffer.alloc(LIMITS.fileChunkBytes, 1).toString('base64') }
 
@@ -239,13 +294,14 @@ describe('events and file chunks', () => {
     expect(codeOf(() => requireFileChunk({ ...chunk, file: 'master-profile.md' }))).toBe('invalid')
   })
 
-  it('knows the event allow-list', () => {
-    expect(requireEvent('status', { desktop: {} })).toEqual({ name: 'status', body: { desktop: {} } })
+  it('knows the event allow-list and validates every body', () => {
     expect(requireEvent('device.revoked', { reason: 'unpaired' })).toEqual({ name: 'device.revoked', body: { reason: 'unpaired' } })
     expect(requireEvent('applications.changed', { ids: ['a'] })).toEqual({ name: 'applications.changed', body: { ids: ['a'] } })
     expect(codeOf(() => requireEvent('runner:event', {}))).toBe('unsupported')
     expect(codeOf(() => requireEvent('status', 'x'))).toBe('invalid')
+    expect(codeOf(() => requireEvent('status', { desktop: {} }))).toBe('invalid') // a shape-only check is not enough
     expect(codeOf(() => requireEvent('applications.changed', { ids: 'a' }))).toBe('invalid')
+    expect(codeOf(() => requireEvent('device.revoked', { reason: 'x', token: 'y' }))).toBe('invalid')
   })
 })
 
@@ -292,7 +348,10 @@ describe('relay layer', () => {
 describe('errorOf', () => {
   it('maps ProtocolError codes and wraps anything else as failed', () => {
     expect(errorOf(new ProtocolError('stale', 'changed'))).toEqual({ code: 'stale', message: 'changed' })
-    expect(errorOf(new Error('boom'))).toEqual({ code: 'failed', message: 'boom' })
-    expect(errorOf('x')).toEqual({ code: 'failed', message: 'x' })
+    // Anything that is not a ProtocolError may quote local paths: the phone gets a fixed message.
+    const leaky = new Error("ENOENT: no such file or directory, open '/Users/owner/Workspace/acme/.huntgry/remote.json'")
+    expect(errorOf(leaky)).toEqual({ code: 'failed', message: GENERIC_FAILURE_MESSAGE })
+    expect(errorOf('x')).toEqual({ code: 'failed', message: GENERIC_FAILURE_MESSAGE })
+    expect(JSON.stringify(errorOf(leaky))).not.toContain('/Users')
   })
 })
