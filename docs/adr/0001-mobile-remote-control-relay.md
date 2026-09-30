@@ -1,6 +1,6 @@
 # ADR-0001: Mobile remote control through an end-to-end encrypted relay
 
-Status: **Proposed** · Date: 2026-09-30 · Related: #31 (unattended pipeline), #21, #22, #24
+Status: **Accepted** · Date: 2026-09-30 · Related: #31 (unattended pipeline), #21, #22, #24
 
 **Decision outcome:** option B, a self-hosted Cloudflare Worker + Durable Object relay that
 forwards and queues ciphertext, an Expo (React Native) app, and a remote gateway in Electron

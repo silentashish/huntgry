@@ -36,4 +36,4 @@ was checked.
 
 | ADR | Title | Status | Date |
 | --- | --- | --- | --- |
-| [0001](0001-mobile-remote-control-relay.md) | Mobile remote control through an end-to-end encrypted relay | Proposed | 2026-09-30 |
+| [0001](0001-mobile-remote-control-relay.md) | Mobile remote control through an end-to-end encrypted relay | Accepted | 2026-09-30 |
