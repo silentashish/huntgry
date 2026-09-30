@@ -11,7 +11,9 @@ export class GraphPage {
   readonly searchInput: Locator
   /** "Jump to…": a searchable select whose options are `<Kind>: <label>` for every node. */
   readonly nodeSelect: Locator
+  /** The "Jobs overlay (N)" chip: its checkbox (state; visually hidden) and its label (what is clicked). */
   readonly jobsOverlay: Locator
+  readonly jobsOverlayChip: Locator
   readonly skillsTable: Locator
   readonly emptyState: Locator
 
@@ -21,8 +23,20 @@ export class GraphPage {
     this.searchInput = page.getByRole('textbox', { name: /^(Highlight|Filter) / })
     this.nodeSelect = page.getByRole('combobox', { name: 'Select a node of the graph' })
     this.jobsOverlay = page.getByRole('checkbox', { name: /^Jobs overlay \(\d+\)$/ })
+    this.jobsOverlayChip = page.getByText(/^Jobs overlay \(\d+\)$/)
     this.skillsTable = page.getByRole('table')
     this.emptyState = page.getByRole('heading', { name: 'Nothing to draw yet' })
+  }
+
+  async expectVisible(): Promise<void> {
+    await expect(this.heading).toBeVisible()
+    await expect(this.jobsOverlayChip).toBeVisible()
+  }
+
+  async toggleJobsOverlay(on: boolean): Promise<void> {
+    if ((await this.jobsOverlay.isChecked()) !== on) await this.jobsOverlayChip.click()
+    if (on) await expect(this.jobsOverlay).toBeChecked()
+    else await expect(this.jobsOverlay).not.toBeChecked()
   }
 
   async showView(view: 'Graph' | 'Skills'): Promise<void> {
