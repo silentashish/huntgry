@@ -358,7 +358,7 @@ export const LIMITS = {
 export interface Envelope<B = unknown> {
   v: 1                            // protocol major; bump on breaking change
   sid: string                     // session id agreed at pairing (binds frames to this pairing)
-  ws?: string                     // workspace id; required on every mutating command, checked by the gateway
+  ws?: string                     // workspace id; required on every workspace-scoped command, reads included (all but status.get and device.*)
   from: 'desktop' | 'phone'
   seq: number                     // per sender, per sid, strictly increasing, persisted on both ends (replay guard)
   ts: string                      // ISO; receiver rejects frames older than `ttl`
@@ -614,6 +614,16 @@ passes. The rules:
   phone deduplicates by `id` and `re`.
 - **Retry.** The relay retries only by redelivering on reconnect; there is no timer-based
   resend while a socket is open, because an open socket either delivers or closes.
+- **Commit order on the desktop**, so a crash at any point neither duplicates nor drops a
+  command: (1) open the box and check `sid`, `seq`, `ttl` and `ws` in memory; (2) append
+  `{ id, seq, name, started }` to the audit log and fsync: this is the durable commit, and
+  `lastSeq` is *derived* from the log (`devices.json` is only a checkpoint, rebuilt from the
+  log's last entries on start); (3) execute; (4) append `{ id, ok, result }` and fsync;
+  (5) send the result with `ack`. A crash before (2) persisted nothing, so the relay's
+  redelivery executes the command once. A crash between (2) and (4) leaves a `started` entry,
+  so redelivery answers `interrupted` and executes nothing. A crash after (4) resends the
+  stored result. There is no window in which the command is both committed and lost, or
+  executed twice.
 
 ## Security model
 
@@ -843,9 +853,9 @@ order; each lands with tests and a `docs/changes/<N>-*.md`.
 | # | Issue | Goal | Depends on |
 | --- | --- | --- | --- |
 | E1 | Remote protocol package | `src/shared/remote/` with `RelayFrame`, `Envelope`, `RemoteCommand`/`RemoteEvent`, the package-owned wire types and enums, guards, `tweetnacl` helpers, TTL table, `LIMITS` with the largest-payload frame-size test; guard test that the folder imports only itself and `tweetnacl`, desktop test that the wire enums equal `AGENT_IDS` / `DateStyle` / `MAX_CONCURRENCY`; workspaces declared for npm and pnpm, both lockfiles regenerated, `npm run check:lockfiles` script. | — |
-| E2 | Relay (Cloudflare Worker + Durable Object) | `relay/`: admin-token room creation, owner/device auth by token hash, WebSocket hibernation, per-direction inboxes in SQLite with `deliverySeq`, ack-based deletion, redelivery on reconnect ahead of live frames, `ttl` / `expired` / `tooLarge` notices, presence, push hints → Expo API with fixed bodies and coalescing, rate limits; Miniflare tests including disconnect-before-ack redelivery; deploy script that prints the admin token. | E1 |
-| E3 | Desktop gateway and session | `src/main/remote/`: outbound session with reconnect on `powerMonitor` resume, replay state persisted in `devices.json`, workspace id, gateway dispatching the allow-list onto `startTailorRun` / `TailorQueue` / `RunManager` / `jobs` with the shared validators, `project.ts` DTO projections for every event and response with the marker-exclusion and size tests, `onEvent` next to `emit`, write-ahead audit log with the id index and idempotent redelivery (finished → stored result, started → interrupted, tested with a crash between the two writes), allow-list guard test, root-`dependencies` and `dist`-size checks. | E1 |
-| E4 | Pairing and devices in Settings | QR with one-time secret, approve dialog, device list with last-seen, revoke, unpair everything, relay URL + admin token entry, notification detail and TTL settings, `remote:state` event. | E2, E3 |
+| E2 | Relay (Cloudflare Worker + Durable Object) | `relay/`: admin-token room creation, owner/device auth by token hash on the first socket frame (never in the URL, 5 s auth timeout, no body logging), the `{ pushToken }` registration frame with shape check and deletion on revoke / `null` / `DeviceNotRegistered`, WebSocket hibernation, per-direction inboxes in SQLite with `deliverySeq`, ack-based deletion, redelivery on reconnect ahead of live frames, `ttl` / `expired` / `tooLarge` notices, presence, push hints → Expo API with fixed bodies and coalescing, rate limits; Miniflare tests including disconnect-before-ack redelivery; deploy script that prints the admin token. | E1 |
+| E3 | Desktop gateway and session | `src/main/remote/`: outbound session with reconnect on `powerMonitor` resume, replay state persisted in `devices.json`, workspace id, gateway dispatching the allow-list onto `startTailorRun` / `TailorQueue` / `RunManager` / `jobs` with the shared validators, `project.ts` DTO projections for every event and response with the marker-exclusion and size tests, `onEvent` next to `emit`, write-ahead audit log as the durable commit with `lastSeq` derived from it and idempotent redelivery (finished → stored result, started → interrupted, crash tests at each step of the commit order), `ws` check on every workspace-scoped command including reads, `https://`-only relay URL with `redirect: 'error'`, credentials in one `safeStorage` blob (`relay.json`), allow-list guard test, root-`dependencies` and `dist`-size checks. | E1 |
+| E4 | Pairing and devices in Settings | QR with one-time secret, approve dialog, device list with last-seen, revoke, unpair everything, **Rotate relay credentials** and the "credentials unreadable" recovery, relay URL (https only) + admin token entry, notification detail and TTL settings, `remote:state` event. | E2, E3 |
 | E5 | Mobile app MVP (iOS, local build) | `mobile/`: scan QR, status, queue with pause/resume/cancel/retry, run view with transcript and reply, presence and "queued / expired" states. Works on a free Apple ID (no push). | E2, E3, E4 |
 | E5b | iOS push | Push registration and categories in the app, APNs key on the EAS project, relay → Expo push verified on a device. **Prerequisite: Apple Developer Program enrolment ($99/yr)**, an owner task tracked in the issue. | E5, Developer Program |
 | E6 | Pipeline control from the phone | `pipeline.*` commands and `pipeline.changed` / `pipeline.finished` events wired to #31's pipeline; usage-limit pause shown with its reset time. | #31, E3, E5 |
