@@ -29,13 +29,16 @@ export function BrowserPage({ params }: { params: PageParams['browser'] }) {
   const handled = useRef<PageParams['browser'] | null>(null)
   const tab = activeTab(state)
 
-  const run = useCallback(async (fn: () => Promise<BrowserState | void>) => {
+  /** Runs a browser call; errors go to the notice row. Resolves to whether it succeeded. */
+  const run = useCallback(async (fn: () => Promise<BrowserState | void>): Promise<boolean> => {
     setError(null)
     try {
       const next = await fn()
       if (next) setState(next)
+      return true
     } catch (err) {
       setError(errorText(err))
+      return false
     }
   }, [])
 
@@ -74,7 +77,7 @@ export function BrowserPage({ params }: { params: PageParams['browser'] }) {
   }, [])
 
   const newTab = useCallback(() => {
-    void run(() => api.browser.open('')).then(() => address.current?.focus())
+    void run(() => api.browser.open('')).then((ok) => ok && address.current?.focus())
   }, [run])
 
   // Cmd/Ctrl+L: address bar, Cmd/Ctrl+T: new tab (while focus is in the app, not in the page).
@@ -97,7 +100,9 @@ export function BrowserPage({ params }: { params: PageParams['browser'] }) {
   function submit() {
     const text = draft ?? displayUrl(tab)
     if (!text.trim()) return
-    void run(() => (tab ? api.browser.navigate(tab.id, text) : api.browser.open(text))).then(() => {
+    // On failure keep the text in the address bar so it can be corrected.
+    void run(() => (tab ? api.browser.navigate(tab.id, text) : api.browser.open(text))).then((ok) => {
+      if (!ok) return
       setDraft(null)
       address.current?.blur()
     })
