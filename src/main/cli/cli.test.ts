@@ -130,6 +130,28 @@ describe('isolated CLI discovery (HUNTGRY_E2E, used by the e2e harness)', () => 
     expect(dirs.every((d) => d.startsWith('/tmp/home/') || d === '/tmp/fake-bin' || d === '/usr/bin')).toBe(true)
     await expect(loginShellPath({ [E2E_ENV]: '1' })).resolves.toBe('')
   })
+
+  it('keeps the machine-wide folders and the login-shell PATH out of the child PATH too', () => {
+    setPackagedBuild(false)
+    const env = buildChildEnv({
+      base: { [E2E_ENV]: '1', PATH: '/sandbox/bin:/usr/bin', HOME: '/tmp/home' },
+      workspace: '/ws',
+      venvDir: '/venv',
+      texBin: null,
+      loginPath: '/opt/homebrew/bin:/Users/dev/.local/bin',
+      home: '/tmp/home'
+    })
+    const path = env.PATH!.split(':')
+    expect(path.slice(0, 3)).toEqual(['/venv/bin', '/tmp/home/.local/bin', '/tmp/home/.claude/local'])
+    expect(path).toContain('/sandbox/bin')
+    expect(path).not.toContain('/opt/homebrew/bin')
+    expect(path).not.toContain('/usr/local/bin')
+    expect(path).not.toContain('/Users/dev/.local/bin')
+    // Off outside isolated mode: the same call without the variable keeps them.
+    const normal = buildChildEnv({ base: { PATH: '/usr/bin' }, workspace: '/ws', venvDir: '/venv', texBin: null, loginPath: '/opt/homebrew/bin', home: '/tmp/home' })
+    expect(normal.PATH!.split(':')).toContain('/opt/homebrew/bin')
+    expect(normal.PATH!.split(':')).toContain('/usr/local/bin')
+  })
 })
 
 const SANDBOX = {

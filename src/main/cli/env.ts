@@ -55,12 +55,13 @@ export function isolatedDiscovery(env: NodeJS.ProcessEnv = process.env, isPackag
  * the well-known folders below `home` and the app's PATH.
  */
 export async function cliSearchDirs(env: NodeJS.ProcessEnv = process.env, home = homedir()): Promise<string[]> {
+  return composePath(discoveryBinDirs(env, home).join(delimiter), await loginShellPath(env), env.PATH).split(delimiter)
+}
+
+/** The well-known folders discovery may use: all of them, or only those below `home` in isolated mode. */
+export function discoveryBinDirs(env: NodeJS.ProcessEnv = process.env, home = homedir()): string[] {
   const wellKnown = wellKnownBinDirs(home)
-  if (isolatedDiscovery(env)) {
-    const underHome = wellKnown.filter((dir) => dir.startsWith(home + '/'))
-    return composePath(underHome.join(delimiter), env.PATH).split(delimiter)
-  }
-  return composePath(wellKnown.join(delimiter), await loginShellPath(env), env.PATH).split(delimiter)
+  return isolatedDiscovery(env) ? wellKnown.filter((dir) => dir.startsWith(home + '/')) : wellKnown
 }
 
 /** TeX distributions, most specific first. TinyTeX installs per user and needs no sudo. */
@@ -202,7 +203,8 @@ export async function findSkillDir(roots = skillSearchRoots()): Promise<string |
  * Environment of the `claude` child: the venv's `python3` first, then TeX and
  * the usual CLI folders, `CV_HOME` pointing at the workspace. Variables that
  * would make the child think it runs nested inside another Claude Code session
- * are removed.
+ * are removed. In isolated mode (`HUNTGRY_E2E=1` in `base`) the machine-wide
+ * folders and the login-shell PATH stay out, like in `cliSearchDirs`.
  */
 export function buildChildEnv(opts: {
   base: NodeJS.ProcessEnv
@@ -217,11 +219,12 @@ export function buildChildEnv(opts: {
     if (k === 'CLAUDECODE' || k.startsWith('CLAUDE_CODE_') || k === 'ELECTRON_RUN_AS_NODE') continue
     env[k] = v
   }
+  const isolated = isolatedDiscovery(opts.base)
   env.PATH = composePath(
     join(opts.venvDir, 'bin'),
     opts.texBin,
-    wellKnownBinDirs(opts.home).join(delimiter),
-    opts.loginPath,
+    discoveryBinDirs(opts.base, opts.home).join(delimiter),
+    isolated ? null : opts.loginPath,
     opts.base.PATH,
     '/usr/bin:/bin:/usr/sbin:/sbin'
   )
