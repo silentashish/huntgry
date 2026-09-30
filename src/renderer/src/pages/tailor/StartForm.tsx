@@ -85,24 +85,26 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
             title={blocking ? 'Cannot run yet' : 'Some dependencies are missing'}
           >
             <Text size="sm">{environment.problems[0]}</Text>
-            {!environment.skillDir && (
-              <Button size="xs" mt="xs" loading={installingSkill} onClick={installSkill}>
-                Install resume-tailor skill
-              </Button>
+            {!blocking && (
+              <Text size="sm" mt={4}>
+                Claude can still do the gap analysis and write the resume data, but the PDF build will fail.
+              </Text>
             )}
             {installError && (
               <Text size="sm" c="red" mt={4}>
                 {installError}
               </Text>
             )}
-            {!blocking && (
-              <Text size="sm" mt={4}>
-                Claude can still do the gap analysis and write the resume data, but the PDF build will fail.
-              </Text>
-            )}
-            <Anchor component="button" size="sm" mt={4} onClick={() => navigate('settings')}>
-              Open Settings
-            </Anchor>
+            <Group gap="md" mt="xs">
+              {!environment.skillDir && (
+                <Button size="xs" loading={installingSkill} onClick={installSkill}>
+                  Install resume-tailor skill
+                </Button>
+              )}
+              <Anchor component="button" size="sm" onClick={() => navigate('settings')}>
+                Open Settings
+              </Anchor>
+            </Group>
           </Alert>
         )}
 
