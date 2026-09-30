@@ -102,6 +102,13 @@ npx playwright show-report e2e/.results/html-report               # every spec t
    → 96 × 124.
 3. No `huntgry-e2e-*` folder is left in `$TMPDIR` after a run.
 
+Captured by the harness itself:
+
+![Dashboard with the five demo applications](assets/47-e2e-dashboard.png)
+![Initech drawer with the generated page preview](assets/47-e2e-drawer-previews.png)
+![Add evidence modal with the change preview](assets/47-e2e-evidence-modal.png)
+![Knowledge graph, Skills view, Kafka gap panel](assets/47-e2e-graph-skills.png)
+
 ## Follow-ups
 
 - #48 (Tailor and Settings with fake agents) can reuse `Dashboard.row()` to find the application a
