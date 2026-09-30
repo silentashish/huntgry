@@ -470,7 +470,9 @@ export class TailorQueue {
       try {
         job = await this.deps.fetchDetails(ws, job.id)
       } catch (err) {
-        throw new Error(`${message(err)} ${PASTE_HINT}`)
+        // fetchDetails ends with advice for the drawer ("the summary is kept"); the queue gives its own.
+        const reason = message(err).replace(/\s*The summary from the job board is kept;.*$/, '')
+        throw new Error(`${reason} ${PASTE_HINT}`)
       }
       if (!job.descriptionComplete) throw new Error(`Only part of the posting could be read. ${PASTE_HINT}`)
     }
