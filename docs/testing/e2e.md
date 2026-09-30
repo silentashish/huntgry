@@ -44,6 +44,7 @@ The app gets a **fresh environment**, not the runner's. Everything it sees:
 | `PATH` | `<sandbox>/bin:/usr/bin:/bin:/usr/sbin:/sbin` | The system folders Electron and its helpers need; no user-installed CLI lives there. |
 | `HUNTGRY_E2E` | `1` | Isolated CLI discovery (`src/main/cli/env.ts`): `findCli` skips the login-shell `PATH` and the machine-wide folders (`/opt/homebrew/bin`, `/usr/local/bin`) and looks only below `HOME` and in the app's `PATH`; `buildChildEnv` builds the `PATH` of agent child processes the same way, so a fake agent never sees the machine's tools either. Without it the real `claude` in `/opt/homebrew/bin` would be found. Ignored by packaged builds. |
 | `HUNTGRY_ALLOW_LOCAL_URLS` | `1` | Lets the in-app browser **and the hidden job-board loader** open loopback addresses (`127.0.0.1`, `localhost`, `[::1]`): the mock server of the Jobs, Browser and Apply specs. Private-network addresses (`10.…`, `192.168.…`, `169.254.…`, names that resolve to them) stay refused, which those specs assert. Unpackaged builds only. |
+| `HUNTGRY_E2E_LOOPBACK_ONLY` | `1` | The harness's egress restriction (`loopbackOnly` in `src/main/cli/dev-urls.ts`): the in-app browser and the hidden loader refuse every address that is not loopback **before any DNS lookup or request**, with "Refusing to load <host>: this test build may only reach loopback addresses." (private literals and `.local` names keep their usual message). Both Chromium sessions' request guards cancel such requests too, so a page on the mock cannot follow a link out either. This is how the suite proves that a resolvable public URL is never reached. Unpackaged builds only; unit-tested inert when packaged. |
 | `HUNTGRY_JOB_BOARD_BASE_URL_HIRINGCAFE`, `HUNTGRY_JOB_BOARD_BASE_URL_INDEED` | the mock server's origins (set by `fixtures/servers/fixture.ts`, not by `appEnv`) | Point a job board at the mock server (`src/main/jobs/board-url.ts`). Only a loopback http(s) origin is accepted, only in unpackaged builds; anything else (or a packaged build) keeps the real board. Unit-tested in `board-url.test.ts`. |
 | `SHELL` | `/bin/sh` | Nothing sources the user's zsh profile. |
 | `TMPDIR`, `LANG`, `USER`, `LOGNAME` | sandbox tmp, `en_US.UTF-8`, the runner's user | Chromium and Node basics. |
@@ -68,7 +69,11 @@ itself fails (a process that spawned but never showed a window is killed).
 
 Closing: the fixture destroys the windows first (which skips `beforeunload`, so an editor left
 with unsaved edits cannot raise the native "unsaved changes" question), stubs
-`showMessageBoxSync` as a second guard, and kills a process that has not exited after 15 s.
+`showMessageBoxSync` as a second guard, and kills a process that has not exited after 15 s. Before
+quitting it also lists the non-Electron processes the app spawned (`spawnedChildren`: agent CLIs,
+the skill's preflight script) and after quitting waits for them to exit, killing what is still
+alive after 10 s (`waitForChildren`): a child that outlived the app would write under the sandbox
+`HOME` after it was removed and trip the worker audit.
 
 ## Fixtures
 
@@ -104,7 +109,7 @@ Those three flows reach job boards, employer pages and ATS forms. In the suite t
 | File | What it holds |
 | --- | --- |
 | `fixture.ts` | `test` for these specs: the `app` fixture plus `mock` (the server, its request log cleared and the last submission removed per test). Before launch it rewrites `http://mock-server.invalid` in the seeded `mocks` workspace to the server's origin and sets the board overrides through `launchEnv`. |
-| `mock-server.ts` | The server: routes below, `origin` (`http://127.0.0.1:<port>`), `altOrigin` (`http://localhost:<port>`, the same server on a different origin), `requests`, `submissionFile`, `close()`. Port 0, never a fixed port. |
+| `mock-server.ts` | The server: routes below, `origin` (`http://127.0.0.1:<port>`), `altOrigin` (`http://127.0.0.1:<altPort>`: the same handler on a second listener, a different origin), `requests`, `submissionFile`, `close()`. Port 0 for both, never a fixed port, never `localhost` (its resolution is the machine's business). |
 | `pages.ts` | The fictional pages: the board result shapes, the employer postings, a Lever-style and an Ashby-style posting. |
 
 Routes: `/?searchState=…` is a hiring.cafe-shaped search page (`__NEXT_DATA__` with
@@ -113,7 +118,7 @@ Routes: `/?searchState=…` is a hiring.cafe-shaped search page (`__NEXT_DATA__`
 employer pages with a JSON-LD `JobPosting` and a full description; `/postings/lever-style` and
 `/postings/ashby-style` (the latter without JSON-LD, for the text fallback); `/bot-wall` (403,
 "Just a moment…"); `/page/one`, `/page/two`, `/hang` for the browser's history and Stop;
-`/redirect/lever` (302 to the Lever form on `altOrigin`); and the mock ATS at `/greenhouse/`,
+`/redirect/lever` (302 to the Lever form on `altOrigin`, the second port); and the mock ATS at `/greenhouse/`,
 `/lever/`, `/generic/`, `/generic-cover/` (+ `…/submit`, the thanks pages). The ATS routes are
 `scripts/mock-ats/server.mjs`, the same module `node scripts/mock-ats.mjs` runs; `generic-cover`
 is the generic form with a cover-letter upload added, so `cover.pdf` is exercised.
@@ -123,10 +128,12 @@ the in-app browser session and (since #49) the hidden job-board loader honour fo
 addresses only. The boards are moved with `HUNTGRY_JOB_BOARD_BASE_URL_HIRINGCAFE` and
 `HUNTGRY_JOB_BOARD_BASE_URL_INDEED` (`src/main/jobs/board-url.ts`): accepted only in unpackaged
 builds and only for a loopback http(s) origin; a packaged build, a public URL or a private-network
-address leaves the real board in place (unit-tested). Indeed is put on `localhost` and
-hiring.cafe on `127.0.0.1` so the loader's per-host rate limit (one load per host per 4 s) does
-not serialise a two-board search. Posting URLs inside the `mocks` workspace are placeholders
-(`http://mock-server.invalid/…`) rewritten at seed time.
+address leaves the real board in place (unit-tested). Indeed is put on the second port and
+hiring.cafe on the first so the loader's per-host rate limit (one load per `host:port` per 4 s)
+does not serialise a two-board search. Posting URLs inside the `mocks` workspace are placeholders
+(`http://mock-server.invalid/…`) rewritten at seed time. With `HUNTGRY_E2E_LOOPBACK_ONLY=1` (set by
+`appEnv` for every test) nothing but loopback can be reached at all, and the browser and jobs specs
+assert a resolvable public URL is refused before a lookup.
 
 **Timing.** The loader polls a page once a second and gives a bot wall half its 25 s timeout to
 clear itself before reporting it, so "a bot wall gives the blocked message" takes ~13 s
@@ -137,7 +144,7 @@ the same host waits for the 4 s gap.
 
 Browser tabs are not windows. Two ways to see them, both in `e2e/fixtures/tabs.ts`:
 
-- **Through the main process** (the primary route): `listTabs(electronApp)` reads every child of
+- **Through the main process** (the preferred route for state): `listTabs(electronApp)` reads every child of
   the main window's `contentView` (URL, title, loading), `expectTabLoaded` / `tabWithUrl` wait for
   one, `evaluateInTab(electronApp, urlPart, expression)` runs `webContents.executeJavaScript`
   in it, and `stubOpenExternal` replaces `shell.openExternal` and records what it was given.
