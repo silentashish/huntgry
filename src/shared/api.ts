@@ -7,6 +7,7 @@ import type { GraphApi } from './graph-types'
 import type { InsightsApi } from './insights-types'
 import type { JobsApi } from './jobs-types'
 import type { QueueApi } from './queue-types'
+import type { ReviewApi } from './review-types'
 import type { ProfileApi, WorkspaceApi } from './workspace-types'
 
 /**
@@ -32,6 +33,8 @@ export interface HuntgryApi {
   queue: QueueApi
   /** Auto-apply: fill a posting's application form in a browser tab (never submits). */
   apply: ApplyApi
+  /** Review of unattended results: approve, re-run or discard; standing approvals. */
+  review: ReviewApi
   /** Main → renderer events, restricted to `EVENT_CHANNELS`. */
   on: Subscribe
 }

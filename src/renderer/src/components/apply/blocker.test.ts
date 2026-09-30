@@ -9,6 +9,21 @@ describe('applyBlocker', () => {
     expect(applyBlocker({ files: ['cover.pdf', 'resume.pdf'], jobUrl: 'https://x.example' })).toBeNull()
   })
 
+  it('blocks unreviewed, needs-attention and discarded unattended results until approved', () => {
+    const ok = { files: ['resume.pdf'], jobUrl: 'https://x.example' }
+    const at = '2026-09-30T00:00:00.000Z'
+    const review = (state: 'unreviewed' | 'needs-attention' | 'approved' | 'discarded') => ({
+      tracking: { review: { state, runId: 'r', at } }
+    })
+    expect(applyBlocker({ ...ok, ...review('unreviewed') })).toMatch(/Unreviewed.*Review page/)
+    expect(applyBlocker({ ...ok, ...review('needs-attention') })).toMatch(/needs attention/)
+    expect(applyBlocker({ ...ok, ...review('discarded') })).toMatch(/discarded/)
+    expect(applyBlocker({ ...ok, ...review('approved') })).toBeNull()
+    expect(applyBlocker({ ...ok, tracking: { review: undefined } })).toBeNull()
+    // The review state is the first reason given.
+    expect(applyBlocker({ files: [], jobUrl: null, ...review('unreviewed') })).toMatch(/Unreviewed/)
+  })
+
   it('says when it was applied', () => {
     expect(alreadyAppliedText('2026-09-30')).toContain('2026-09-30')
     expect(alreadyAppliedText(undefined)).toBe('You marked this application as applied.')
