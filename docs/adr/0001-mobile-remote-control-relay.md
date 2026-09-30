@@ -320,7 +320,7 @@ export interface RelayFrame {
   to: 'desktop' | string          // device id when sent by the desktop
   ref: string                     // = Envelope.id for commands; lets the relay report queued / expired
   nonce: string                   // 24 bytes, base64
-  ct: string                      // nacl.box ciphertext of an Envelope, base64, ≤ 64 KB
+  ct: string                      // nacl.box ciphertext of an Envelope, base64; the whole frame stays ≤ MAX_FRAME_BYTES
   ttl?: number                    // seconds the relay may hold this frame when the peer is offline
   pushHint?: NotificationCategory // desktop → phone only: send one generic push if the phone has no socket
   pushText?: string               // only when "Show details in notifications" is on; ≤ 80 chars, seen by relay/Expo/Apple/Google
@@ -331,6 +331,23 @@ export type RelayNotice =
   | { presence: 'online' | 'offline'; since: string; queued: number }
   | { queued: true; ref: string }
   | { expired: true; ref: string }
+  | { tooLarge: true; ref: string; bytes: number }
+
+/**
+ * Byte limits, all enforced by the producer before encryption and by the relay on receipt.
+ * Base64 inflates by 4/3, the box tag adds 16 bytes, RelayFrame + Envelope JSON add ≈ 600 bytes,
+ * so 40 KiB of plaintext is ≈ 54 KiB of `ct` and the frame stays under 64 KiB.
+ */
+export const LIMITS = {
+  frameBytes: 64 * 1024,          // UTF-8 length of the serialised RelayFrame; the relay drops larger frames with `tooLarge`
+  plaintextBytes: 40 * 1024,      // UTF-8 length of the serialised Envelope before boxing
+  textBytes: 32 * 1024,           // run.reply.text, review.rerun.answers, enqueue notes: UTF-8 bytes, below the desktop's MAX_TEXT
+  fileChunkBytes: 24 * 1024,      // binary bytes per file.chunk (32 KiB once base64-encoded)
+  transcriptItemTextBytes: 8 * 1024, // text / output of one RemoteTranscriptItem, then `truncated: true`
+  transcriptPageItems: 20,        // run.get returns at most this many items per page
+  jobsPageItems: 50,
+  reviewNotesInlineBytes: 16 * 1024 // longer review-notes.md are fetched through file.get instead of inline
+} as const
 
 /** Wire envelope. The whole object is the plaintext of one nacl.box frame (`RelayFrame.ct`). */
 export interface Envelope<B = unknown> {
@@ -368,11 +385,11 @@ export type RemoteCommand =
   | { name: 'queue.enqueue'; args: RemoteEnqueueInput }         // package-owned mirror of EnqueueInput; ≤ MAX_ENQUEUE, saved job ids only
   | { name: 'pipeline.start'; args: PipelineStartInput }         // #31: jobIds, concurrency 1–4, agent, fallback?, budget?
   | { name: 'pipeline.pause' } | { name: 'pipeline.resume' } | { name: 'pipeline.stop' }
-  | { name: 'jobs.list'; args: { filter?: string; limit?: number } }
+  | { name: 'jobs.list'; args: { filter?: string; cursor?: string } }   // pages of ≤ LIMITS.jobsPageItems
   | { name: 'jobs.addUrl'; args: { url: string } }               // same public-host check as the desktop
-  | { name: 'runs.list' }
-  | { name: 'run.get'; args: { runId: string; sinceSeq?: number } } // transcript items, not raw events
-  | { name: 'run.reply'; args: { runId: string; text: string } }    // ≤ MAX_TEXT, held by the queue like today
+  | { name: 'runs.list'; args: { cursor?: string } }
+  | { name: 'run.get'; args: { runId: string; sinceSeq?: number } } // RemoteRun + one page of ≤ transcriptPageItems items, `nextSeq` when more
+  | { name: 'run.reply'; args: { runId: string; text: string } }    // ≤ LIMITS.textBytes (the desktop's MAX_TEXT still applies), held by the queue like today
   | { name: 'run.finish'; args: { runId: string } }
   | { name: 'run.stop'; args: { runId: string } }
   | { name: 'review.list' }                                       // #31 Unreviewed results
@@ -380,7 +397,7 @@ export type RemoteCommand =
   | { name: 'review.approve'; args: { applicationId: string; contentHash: string; standingApprovals?: string[] } }
   | { name: 'review.rerun'; args: { runId: string; contentHash: string; answers: string } }
   | { name: 'review.discard'; args: { applicationId: string; contentHash: string } }
-  | { name: 'file.get'; args: { applicationId: string; file: 'resume.pdf' | 'cover.pdf'; chunk: number } }
+  | { name: 'file.get'; args: { applicationId: string; file: RemoteFile; chunk: number } }   // chunks of LIMITS.fileChunkBytes
   | { name: 'device.setPushToken'; args: { expoPushToken: string } }
   | { name: 'device.setNotifications'; args: { categories: NotificationCategory[] } }
 
@@ -394,17 +411,20 @@ export type RemoteEvent =
   | { name: 'pipeline.finished'; body: PipelineSummary }
   | { name: 'review.needed'; body: { count: number; latest: ReviewItem } }
   | { name: 'applications.changed'; body: { ids: string[] } }
-  | { name: 'file.chunk'; body: { applicationId: string; file: string; chunk: number; of: number; data: string } }
+  | { name: 'file.chunk'; body: { applicationId: string; file: RemoteFile; chunk: number; of: number; bytes: number; sha256: string; data: string } } // data = base64 of ≤ fileChunkBytes; sha256 of the whole file
   | { name: 'device.revoked'; body: { reason: string } }
 
 export type NotificationCategory = 'needs-reply' | 'usage-limit' | 'pipeline-finished' | 'needs-review' | 'failed'
+
+/** Files the phone may fetch, all inside one application folder (resolved with resolveApplicationFile, symlinks refused). */
+export type RemoteFile = 'resume.pdf' | 'cover.pdf' | 'review-notes.md' | `resume-page-${number}.jpg` | `cover-page-${number}.jpg`
 
 /** Everything the desktop review screen (#31) shows, so the phone approves what it has seen. */
 export interface ReviewDetail {
   applicationId: string
   runId: string
   title: string                   // "Role · Company"
-  reviewNotes: string             // review-notes.md
+  reviewNotes: string | null      // review-notes.md inline when ≤ LIMITS.reviewNotesInlineBytes, else null and fetched with file.get
   openGaps: string[]
   proposedReframings: { sourceFact: string; wording: string }[]
   verify: { ok: boolean; report: string }
@@ -497,6 +517,22 @@ shared types field for field where the phone needs the field, so the phone rende
 data the Tailor page renders, but they are package-owned copies, not imports (see the package
 boundary above and the DTO rules below).
 
+**Size limits.** One WebSocket frame to the relay is at most `LIMITS.frameBytes` (64 KiB of
+serialised `RelayFrame`), and the relay drops anything larger with a `tooLarge` notice, so
+every payload is sized in bytes before it is encrypted. The plaintext budget is 40 KiB; base64
+(4/3), the 16-byte Poly1305 tag and the JSON around it fit inside the remaining 24 KiB. What
+that means per payload: `run.reply`, `review.rerun.answers` and enqueue `notes` are capped at
+`LIMITS.textBytes` (32 KiB of UTF-8) on the phone and in the gateway, a documented remote limit
+below the desktop's `MAX_TEXT` (200 000 characters); a longer answer is written on the Mac.
+Transcripts are paged (`run.get` returns at most 20 items and a `nextSeq`), and a single
+item's text or tool output is cut at 8 KiB with `truncated: true` (the phone shows "open on
+your Mac for the full output"). Job and run lists are cursor-paged. Files travel in binary
+chunks of 24 KiB, which are 32 KiB once base64-encoded, with the whole-file SHA-256 on every
+chunk so the phone can verify the reassembled file. `review-notes.md` is inline up to 16 KiB
+and otherwise fetched like a file; its hash in `ReviewDetail` always covers the full text.
+A protocol test builds every command and event with its largest allowed fields and asserts
+the serialised frame stays under `frameBytes`.
+
 **How a push happens.** Events are encrypted, so the relay cannot read them; the desktop
 tells it, in clear, which frames deserve a push. For each paired device the desktop keeps the
 categories that device asked for (`device.setNotifications`, stored in `devices.json`). When
@@ -560,8 +596,8 @@ signing the request with the desktop's public key, was rejected: a public key is
 **Relay authentication and isolation**: one Durable Object per room. The desktop
 authenticates with `ownerSecret`; each phone with its `relayToken`. The DO checks the token
 hash on every WebSocket upgrade, never stores plaintext tokens, and enforces per-connection
-rate limits (e.g. 60 frames/min, 64 KB/frame, 50 queued frames per device, each with its
-own `ttl`). The relay can learn: room id, device ids, IPs, frame sizes and timing, which
+rate limits (e.g. 60 frames/min, `LIMITS.frameBytes` per frame, 50 queued frames per device,
+each with its own `ttl`). The relay can learn: room id, device ids, IPs, frame sizes and timing, which
 event frames carry a `pushHint` and its category (so, roughly, *when* a run needs a reply or
 a pipeline finishes), the Expo push token in clear, and `pushText` when the owner opts in.
 It cannot read or forge frames (Poly1305 tags).
@@ -611,7 +647,7 @@ audit file with the hash.
   `applications.openFile/reveal`, raw `runner:event` streams, and anything that takes a path
   or a command line.
 - **Text that reaches the agent.** `run.reply.text`, `review.rerun.answers` and enqueue
-  `notes` are the owner's words to a run, exactly like the Tailor page's reply box: the same
+  `notes` are the owner's words to a run, exactly like the Tailor page's reply box, capped at `LIMITS.textBytes` (32 KiB) on the phone and in the gateway: the same
   `MAX_TEXT` limit, the same validators, delivered to the same sandboxed process (no network,
   allow-listed scripts, `--setting-sources ""` for Claude, #8) or held by the queue like a
   desktop reply (#21). There is no "run this prompt" command, and no remote command changes
@@ -671,7 +707,9 @@ Negative
 - No forward secrecy in the MVP: a stolen phone key plus recorded ciphertext decrypts past
   traffic until the device is revoked and the desktop key rotated.
 - Pure-JS crypto (`tweetnacl`) costs CPU per frame; irrelevant at our volume (a few frames
-  per second at most), but the PDF chunks should stay ≤ 64 KB.
+  per second at most). A 300 KB resume PDF is 13 chunks of 24 KiB.
+- Replies typed on the phone are capped at 32 KiB, below the desktop's limit, and long tool
+  outputs are truncated in the phone transcript.
 - While the Mac sleeps nothing happens: the phone can only queue commands. A MacBook cannot
   be woken over the internet; #31's power-save blocker covers the pipeline hours, and the
   owner must accept "asleep = offline" the rest of the time.
@@ -711,7 +749,7 @@ order; each lands with tests and a `docs/changes/<N>-*.md`.
 
 | # | Issue | Goal | Depends on |
 | --- | --- | --- | --- |
-| E1 | Remote protocol package | `src/shared/remote/` with `RelayFrame`, `Envelope`, `RemoteCommand`/`RemoteEvent`, the package-owned wire types and enums, guards, `tweetnacl` helpers, TTL table; guard test that the folder imports only itself and `tweetnacl`, desktop test that the wire enums equal `AGENT_IDS` / `DateStyle` / `MAX_CONCURRENCY`; workspaces declared for npm and pnpm, both lockfiles regenerated, `npm run check:lockfiles` script. | — |
+| E1 | Remote protocol package | `src/shared/remote/` with `RelayFrame`, `Envelope`, `RemoteCommand`/`RemoteEvent`, the package-owned wire types and enums, guards, `tweetnacl` helpers, TTL table, `LIMITS` with the largest-payload frame-size test; guard test that the folder imports only itself and `tweetnacl`, desktop test that the wire enums equal `AGENT_IDS` / `DateStyle` / `MAX_CONCURRENCY`; workspaces declared for npm and pnpm, both lockfiles regenerated, `npm run check:lockfiles` script. | — |
 | E2 | Relay (Cloudflare Worker + Durable Object) | `relay/`: admin-token room creation, owner/device auth by token hash, WebSocket hibernation, per-device queue with `ttl` and `expired` notices, presence, push hints → Expo API with fixed bodies and coalescing, rate limits; Miniflare tests; deploy script that prints the admin token. | E1 |
 | E3 | Desktop gateway and session | `src/main/remote/`: outbound session with reconnect on `powerMonitor` resume, replay state persisted in `devices.json`, workspace id, gateway dispatching the allow-list onto `startTailorRun` / `TailorQueue` / `RunManager` / `jobs` with the shared validators, `project.ts` DTO projections for every event and response with the marker-exclusion and size tests, `onEvent` next to `emit`, audit log, allow-list guard test, root-`dependencies` and `dist`-size checks. | E1 |
 | E4 | Pairing and devices in Settings | QR with one-time secret, approve dialog, device list with last-seen, revoke, unpair everything, relay URL + admin token entry, notification detail and TTL settings, `remote:state` event. | E2, E3 |
@@ -719,7 +757,7 @@ order; each lands with tests and a `docs/changes/<N>-*.md`.
 | E5b | iOS push | Push registration and categories in the app, APNs key on the EAS project, relay → Expo push verified on a device. **Prerequisite: Apple Developer Program enrolment ($99/yr)**, an owner task tracked in the issue. | E5, Developer Program |
 | E6 | Pipeline control from the phone | `pipeline.*` commands and `pipeline.changed` / `pipeline.finished` events wired to #31's pipeline; usage-limit pause shown with its reset time. | #31, E3, E5 |
 | E7 | Review from the phone | `review.list` / `review.get` / `review.approve` / `review.rerun` / `review.discard` with `contentHash`, the review screen mirroring the desktop's, standing approvals ticked per reframing. | #31, E6 |
-| E8 | Files and jobs from the phone | `file.get` chunked PDF preview, `jobs.addUrl` with the public-host check, `applications.changed`. | E5 |
+| E8 | Files and jobs from the phone | `file.get` in 24 KiB chunks with whole-file SHA-256 (PDFs, page previews, long review notes), cursor-paged `jobs.list`, `jobs.addUrl` with the public-host check, `applications.changed`. | E5 |
 | E9 | Distribution | Android build, TestFlight internal, README section on deploying the relay and pairing. | E5 |
 
 ## Open questions
