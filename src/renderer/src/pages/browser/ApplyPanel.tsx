@@ -49,7 +49,10 @@ export function ApplyPanel({ activeTabId }: { activeTabId: string | null }) {
 
   const s = session
   const status = STATUS_META[s.status]
-  const groups = groupReport(s.report)
+  // Once the site confirms (or the tab is gone) the form report is history.
+  const submitted = s.status === 'submitted-detected'
+  const stale = submitted || s.status === 'closed'
+  const groups = stale ? [] : groupReport(s.report)
   const canFill = s.status !== 'closed' && s.status !== 'filling' && s.status !== 'opened'
 
   return (
@@ -100,7 +103,7 @@ export function ApplyPanel({ activeTabId }: { activeTabId: string | null }) {
             </Text>
           </Alert>
 
-          {s.message && <Text size="xs">{s.message}</Text>}
+          {s.message && !submitted && <Text size="xs">{s.message}</Text>}
           {error && (
             <Alert color="red" variant="light" p="xs" withCloseButton onClose={() => setError(null)}>
               <Text size="xs">{error}</Text>
@@ -113,7 +116,10 @@ export function ApplyPanel({ activeTabId }: { activeTabId: string | null }) {
             </Button>
           )}
 
-          {s.status === 'submitted-detected' && !dismissed && (
+          {submitted && dismissed && (
+            <Text size="xs">This looked like a confirmation page. If the form is still open, press Fill form.</Text>
+          )}
+          {submitted && !dismissed && (
             <Alert color="teal" variant="light" p="xs" icon={<IconCheck size={16} />}>
               {marked ? (
                 <Stack gap={6}>
@@ -148,30 +154,32 @@ export function ApplyPanel({ activeTabId }: { activeTabId: string | null }) {
             </Alert>
           )}
 
-          <Group gap="xs">
-            {s.status === 'closed' ? (
-              <Button
-                size="xs"
-                leftSection={<IconSend size={14} />}
-                loading={busy}
-                onClick={() => void run(() => api.apply.start(s.applicationId))}
-              >
-                Open again
-              </Button>
-            ) : (
-              <Button
-                size="xs"
-                variant={s.status === 'filled' ? 'default' : 'filled'}
-                leftSection={s.status === 'filled' ? <IconRefresh size={14} /> : <IconSend size={14} />}
-                disabled={!canFill}
-                loading={busy || s.status === 'filling'}
-                onClick={() => void run(() => api.apply.fill(s.id))}
-              >
-                {s.report ? 'Fill again' : 'Fill form'}
-              </Button>
-            )}
-          </Group>
-          {s.report && (
+          {(!submitted || dismissed) && (
+            <Group gap="xs">
+              {s.status === 'closed' ? (
+                <Button
+                  size="xs"
+                  leftSection={<IconSend size={14} />}
+                  loading={busy}
+                  onClick={() => void run(() => api.apply.start(s.applicationId))}
+                >
+                  Open again
+                </Button>
+              ) : (
+                <Button
+                  size="xs"
+                  variant={s.status === 'filled' ? 'default' : 'filled'}
+                  leftSection={s.status === 'filled' ? <IconRefresh size={14} /> : <IconSend size={14} />}
+                  disabled={!canFill}
+                  loading={busy || s.status === 'filling'}
+                  onClick={() => void run(() => api.apply.fill(s.id))}
+                >
+                  {s.report ? 'Fill again' : 'Fill form'}
+                </Button>
+              )}
+            </Group>
+          )}
+          {s.report && !stale && (
             <Text size="xs" c="dimmed">
               Fill again only fills empty fields and attaches the PDFs again; your own edits stay.
             </Text>
