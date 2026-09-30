@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  ActionBar,
   Alert,
   Anchor,
   Badge,
   Button,
   Card,
+  Checkbox,
   Chip,
   Group,
   Loader,
@@ -16,7 +18,7 @@ import {
   TextInput,
   Title
 } from '@mantine/core'
-import { IconClipboardText, IconLink, IconSearch } from '@tabler/icons-react'
+import { IconClipboardText, IconLink, IconSearch, IconSparkles } from '@tabler/icons-react'
 import {
   canFetchDetails,
   tailorPrefillFor,
@@ -27,11 +29,15 @@ import {
   type SourceResult
 } from '@shared/jobs-types'
 import { api, errorText } from '../../api'
+import { useQueue } from '../../components/queue/useQueue'
 import { useNavigation } from '../../navigation'
+import { QUEUE_STATUS_LABEL } from '../tailor/status'
+import { BulkTailorModal } from './BulkTailorModal'
 import { JobDrawer } from './JobDrawer'
 import { ago, SOURCE_LABEL } from './labels'
 import { PasteModal } from './PasteModal'
 import { mergeJobs } from './merge'
+import { activeQueueItems, selectable, selectAll, selectAllState, selectedJobs, toggle } from './selection'
 
 type Show = 'search' | 'all' | 'new' | 'tailored' | 'dismissed'
 
@@ -55,6 +61,10 @@ export function JobsPage() {
   const [openId, setOpenId] = useState<string | null>(null)
   /** Jobs returned by the last search, shown by default right after it. */
   const [lastIds, setLastIds] = useState<Set<string> | null>(null)
+  /** Jobs ticked for "Tailor all". */
+  const [selection, setSelection] = useState<Set<string>>(new Set())
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [queue] = useQueue()
 
   useEffect(() => {
     api.jobs.list().then(setJobs, (err) => setError(errorText(err)))
@@ -138,6 +148,14 @@ export function JobsPage() {
       return !q || [j.title, j.company, j.location, j.tags.join(' ')].some((s) => s.toLowerCase().includes(q))
     })
   }, [jobs, filter, show, lastIds])
+
+  // A new search or filter is a new list: start the selection over.
+  useEffect(() => setSelection(new Set()), [filter, show, lastIds])
+
+  const selected = selectedJobs(selection, shown)
+  const allState = selectAllState(selection, shown)
+  const queued = useMemo(() => activeQueueItems(queue?.items ?? []), [queue])
+  const queueItemOf = (j: Job) => queued.get(j.id) ?? j.aliases?.map((a) => queued.get(a)).find(Boolean)
 
   const open = (jobs ?? []).find((j) => j.id === openId) ?? null
 
@@ -294,9 +312,24 @@ export function JobsPage() {
               ]}
             />
           </Group>
-          <Text size="xs" c="dimmed">
-            {shown.length} of {jobs.length} saved jobs
-          </Text>
+          <Group gap="md">
+            <Checkbox
+              size="xs"
+              label={`Select all shown (${shown.filter(selectable).length})`}
+              checked={allState === 'all'}
+              indeterminate={allState === 'some'}
+              disabled={!shown.some(selectable)}
+              onChange={() => setSelection(allState === 'all' ? new Set() : selectAll(selection, shown))}
+            />
+            {selected.length > 0 && (
+              <Anchor size="xs" component="button" type="button" onClick={() => setSelection(new Set())}>
+                Clear
+              </Anchor>
+            )}
+            <Text size="xs" c="dimmed" ml="auto">
+              {shown.length} of {jobs.length} saved jobs
+            </Text>
+          </Group>
           <Stack gap="xs">
             {shown.map((j) => (
               <Card
@@ -308,7 +341,16 @@ export function JobsPage() {
                 style={{ cursor: 'pointer' }}
               >
                 <Group justify="space-between" wrap="nowrap" align="flex-start">
-                  <Stack gap={2} style={{ minWidth: 0 }}>
+                  <Checkbox
+                    mt={2}
+                    aria-label={`Select ${j.title}`}
+                    checked={selection.has(j.id) && selectable(j)}
+                    disabled={!selectable(j)}
+                    // Ticking selects the job; it must not open the drawer.
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={() => setSelection((sel) => toggle(sel, j.id))}
+                  />
+                  <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
                     <Text fw={600} size="sm" truncate>
                       {j.title}
                     </Text>
@@ -328,6 +370,11 @@ export function JobsPage() {
                         Remote
                       </Badge>
                     )}
+                    {queueItemOf(j) && (
+                      <Badge size="sm" variant="light" color={QUEUE_STATUS_LABEL[queueItemOf(j)!.status].color}>
+                        {QUEUE_STATUS_LABEL[queueItemOf(j)!.status].label}
+                      </Badge>
+                    )}
                     {j.tailoredAt && (
                       <Badge size="sm" variant="light" color="green">
                         Tailored
@@ -344,6 +391,32 @@ export function JobsPage() {
         </>
       )}
 
+      <ActionBar opened={selected.length > 0} onClose={() => setSelection(new Set())} aria-label="Selected jobs">
+        <Text size="sm" fw={500} px="xs">
+          {selected.length} selected
+        </Text>
+        <ActionBar.Divider />
+        <Button size="xs" leftSection={<IconSparkles size={14} />} onClick={() => setBulkOpen(true)}>
+          Tailor all
+        </Button>
+        <Button size="xs" variant="subtle" onClick={() => setSelection(new Set())}>
+          Clear
+        </Button>
+      </ActionBar>
+      <BulkTailorModal
+        jobs={selected}
+        opened={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        onQueued={(res) => {
+          setBulkOpen(false)
+          if (res.added === 0) {
+            setError(`Nothing was queued: ${[...new Set(res.skipped.map((s) => s.reason))].join(' ')}`)
+            return
+          }
+          setSelection(new Set())
+          navigate('tailor', { view: 'queue' })
+        }}
+      />
       <JobDrawer job={open} onClose={() => setOpenId(null)} onChange={(j) => upsert([j])} onTailor={tailor} />
       <PasteModal
         opened={pasteOpen}
