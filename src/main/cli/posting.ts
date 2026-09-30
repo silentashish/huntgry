@@ -16,6 +16,31 @@ const HEADERS = {
   'accept-language': 'en-US,en;q=0.9',
   'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Huntgry'
 }
+/** Job boards whose pages sit behind a bot check (country sites are subdomains); their jobs come in through the Jobs page. */
+const JOB_BOARD_HOSTS = ['indeed.com', 'hiringcafe.com', 'hiring.cafe']
+
+function isJobBoard(host: string): boolean {
+  const h = host.toLowerCase()
+  return JOB_BOARD_HOSTS.some((b) => h === b || h.endsWith(`.${b}`))
+}
+
+/**
+ * The error for a 401/403: an actionable one when a job board or a Cloudflare
+ * bot check refused the request (retrying or waiting will not help).
+ */
+export function refusedMessage(host: string, status: number, headers: Headers): string {
+  const paste = 'Paste the job description instead.'
+  if (status === 401 || status === 403) {
+    if (isJobBoard(host)) {
+      return `${host} does not let Huntgry read job pages directly. Open the job on the Jobs page and click Tailor resume, or paste the job description.`
+    }
+    if (/cloudflare/i.test(headers.get('server') ?? '') || headers.has('cf-mitigated')) {
+      return `${host} does not let Huntgry read job pages directly (it asks for a human check). ${paste}`
+    }
+  }
+  return `The job site answered ${status}. ${paste}`
+}
+
 /** Shorter than this, the page is a shell that needs JavaScript, or a bot wall. */
 export const MIN_POSTING_CHARS = 300
 
@@ -131,8 +156,10 @@ export async function fetchPostingText(
   try {
     let res: Response
     let next = url
+    let host = ''
     for (let hop = 0; ; hop++) {
       const { url: target, addresses } = await assertPublicUrl(next, resolve)
+      host = target.hostname
       try {
         res = await fetcher(target.href, {
           signal: ctrl.signal,
@@ -148,7 +175,7 @@ export async function fetchPostingText(
       if (hop >= MAX_REDIRECTS) throw new Error(`The posting URL redirects too many times. ${paste}`)
       next = new URL(location, target).href
     }
-    if (!res.ok) throw new Error(`The job site answered ${res.status}. ${paste}`)
+    if (!res.ok) throw new Error(refusedMessage(host, res.status, res.headers))
     const type = res.headers.get('content-type') ?? ''
     if (type && !/html|text\/plain/i.test(type))
       throw new Error(`The posting URL is not a web page (${type}). ${paste}`)
