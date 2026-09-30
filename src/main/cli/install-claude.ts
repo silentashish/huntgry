@@ -143,7 +143,7 @@ export function installClaude(
     try {
       const code = await stream('/bin/bash', [path, 'latest'], installerEnv(process.env), log)
       if (code !== 0) return { ok: false, error: `The Claude Code installer failed (exit ${code}); see the log.` }
-      log(`Done. Next: sign in once in a terminal with \`${CLAUDE_COMMANDS.login}\`, then Check again.`)
+      log(`Done. Next: sign in once in a terminal with "${CLAUDE_COMMANDS.login}", then Check again.`)
       return { ok: true }
     } finally {
       await rm(path, { force: true })
@@ -159,7 +159,7 @@ export function updateClaude(
   if (opts.kind === 'homebrew')
     return Promise.resolve({
       ok: false,
-      error: `Claude Code was installed with Homebrew. Run \`${CLAUDE_COMMANDS.brewUpgrade}\` in a terminal, then Check again.`
+      error: `Claude Code was installed with Homebrew. Run "${CLAUDE_COMMANDS.brewUpgrade}" in a terminal, then Check again.`
     })
   // A native install lands in ~/.local/bin, which is looked up first, so it shadows an unknown older copy.
   if (opts.kind === 'other') return installClaude(log, { scratchDir: opts.scratchDir })

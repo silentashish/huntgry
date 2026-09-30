@@ -113,7 +113,7 @@ export async function checkEnvironment(opts: {
     problems.push('The claude CLI was not found. Use "Install Claude Code" in Settings, then sign in once in a terminal.')
   if (claudeAuth?.loggedIn === false)
     problems.push(
-      `Claude Code is installed but not signed in. Run \`${CLAUDE_COMMANDS.login}\` in a terminal, then check again.`
+      `Claude Code is installed but not signed in. Run "${CLAUDE_COMMANDS.login}" in a terminal, then check again.`
     )
   if (!skillDir) problems.push('The resume-tailor skill is not installed. Use "Install resume-tailor skill" in Settings.')
   if (
@@ -137,7 +137,7 @@ export async function checkEnvironment(opts: {
     warnings.push(
       claudeVersion
         ? `Claude Code ${claudeVersion} is older than ${CLAUDE_VERSION_RECOMMENDED}. Runs work, but update it (Update Claude Code).`
-        : `The Claude Code version could not be read (\`claude --version\` failed or hung). Runs still start; updating Claude Code usually fixes this.`
+        : `The Claude Code version could not be read ("claude --version" failed or hung). Runs still start; updating Claude Code usually fixes this.`
     )
 
   return {
