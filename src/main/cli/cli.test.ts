@@ -356,6 +356,23 @@ describe('run store', () => {
     expect((await findOutputFolder(tmp, since, { prefer: { company: 'Initech' }, exclude: [globex] }))?.folder).toBe(acme)
     expect(await findOutputFolder(tmp, since, { exclude: [globex, acme] })).toBeNull()
   })
+
+  it('never takes another job id that merely contains the run\'s job id', async () => {
+    const other = join(tmp, 'engineer/acme/142')
+    await mkdir(other, { recursive: true })
+    const since = Date.now() - 1000
+    await writeFile(join(other, 'resume.pdf'), 'b')
+    const prefer = { role: 'Engineer', company: 'Acme', jobId: '42' }
+    // A live run for job 142 owns that folder even before it records it.
+    expect(await findOutputFolder(tmp, since, { prefer, claimedJobIds: ['142'] })).toBeNull()
+    // Its own folder, once written, is an exact job-id match and wins over the newer 142 one.
+    const mine = join(tmp, 'engineer/acme/42')
+    await mkdir(mine, { recursive: true })
+    await writeFile(join(mine, 'resume.pdf'), 'a')
+    const past = new Date(Date.now() - 500)
+    await utimes(join(mine, 'resume.pdf'), past, past)
+    expect((await findOutputFolder(tmp, since, { prefer }))?.folder).toBe(join('engineer', 'acme', '42'))
+  })
 })
 
 describe('posting fetch (main process, no network for Claude)', () => {

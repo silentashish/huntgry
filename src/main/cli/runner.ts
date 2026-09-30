@@ -249,14 +249,14 @@ export class RunManager {
       r.status = 'waiting'
       const since = entry.turnStartedAt - 1000
       entry.queue = entry.queue.then(async () => {
-        // Other runs may be building at the same time: never take a folder another live run owns.
-        const others = [...this.live.values()]
-          .filter((e) => e !== entry && e.run.outputFolder)
-          .map((e) => e.run.outputFolder!)
+        // Other runs may be building at the same time: never take a folder another live run owns,
+        // or one named after another live run's job id (it may not have recorded it yet).
+        const others = [...this.live.values()].filter((e) => e !== entry)
         const { role, company, jobId } = r.params
         const out = await findOutputFolder(entry.ctx.workspace, since, {
           prefer: { role, company, jobId },
-          exclude: others
+          exclude: others.map((e) => e.run.outputFolder).filter((f): f is string => !!f),
+          claimedJobIds: others.map((e) => e.run.params.jobId).filter((id): id is string => !!id)
         }).catch(() => null)
         if (out) {
           r.outputFolder = out.folder

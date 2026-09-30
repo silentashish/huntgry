@@ -107,24 +107,35 @@ export interface OutputFolderHints {
   prefer?: { role?: string; company?: string; jobId?: string }
   /** Folders (relative to the workspace) that belong to other live runs. */
   exclude?: string[]
+  /**
+   * Job ids of other live runs. A folder whose job-id segment is one of them belongs to that
+   * run even before it has recorded the folder, so it is never picked.
+   */
+  claimedJobIds?: string[]
 }
 
-/** How well a `<role>/<company>/<job-id>` folder matches the run: job id counts most, then company, then role. */
+/**
+ * How well a `<role>/<company>/<job-id>` folder matches the run. The job id must be the same
+ * slug (`42` is not `142`) and counts most; company and role (Claude may shorten them, so
+ * containment is enough) only break ties.
+ */
 function matchScore(rel: string[], prefer: OutputFolderHints['prefer']): number {
   if (!prefer) return 0
   const [role, company, jobId] = rel.map(folderSlug)
-  const same = (seg: string | undefined, want: string | undefined) => {
+  const like = (seg: string | undefined, want: string | undefined) => {
     const w = want ? folderSlug(want) : ''
     return !!seg && !!w && (seg === w || seg.includes(w) || w.includes(seg))
   }
-  return (same(jobId, prefer.jobId) ? 4 : 0) + (same(company, prefer.company) ? 2 : 0) + (same(role, prefer.role) ? 1 : 0)
+  const sameId = !!prefer.jobId && !!jobId && jobId === folderSlug(prefer.jobId)
+  return (sameId ? 4 : 0) + (like(company, prefer.company) ? 2 : 0) + (like(role, prefer.role) ? 1 : 0)
 }
 
 /**
  * The application folder (`<role>/<company>/<job-id>`) a run wrote at or after
  * `sinceMs`, relative to the workspace: among folders holding a build output,
  * the one matching the run's role/company/job id best, newest first on a tie,
- * skipping folders other live runs own (several runs can build at once).
+ * skipping folders other live runs own or whose job id is another live run's
+ * (several runs can build at once).
  * Bounded like the workspace scan; `null` when nothing qualifies.
  */
 export async function findOutputFolder(
@@ -133,6 +144,8 @@ export async function findOutputFolder(
   hints: OutputFolderHints = {}
 ): Promise<{ folder: string; files: string[] } | null> {
   const exclude = new Set((hints.exclude ?? []).map((f) => join(workspace, f)))
+  const own = hints.prefer?.jobId ? folderSlug(hints.prefer.jobId) : ''
+  const claimed = new Set((hints.claimedJobIds ?? []).map(folderSlug).filter((id) => id && id !== own))
   let visited = 0
   let best: { path: string; mtime: number; score: number; files: string[] } | null = null
 
@@ -153,7 +166,7 @@ export async function findOutputFolder(
       else if (e.isFile()) files.push(e.name)
     }
     if (depth === APPLICATION_DEPTH) {
-      if (exclude.has(dir)) return
+      if (exclude.has(dir) || claimed.has(folderSlug(relative(workspace, dir).split(sep)[2] ?? ''))) return
       const outputs = files.filter((f) => (OUTPUT_FILES as readonly string[]).includes(f))
       if (
         !outputs.includes('resume.pdf') &&
