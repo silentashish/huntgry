@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Alert,
   Anchor,
@@ -14,7 +14,7 @@ import {
   Textarea
 } from '@mantine/core'
 import type { Job } from '@shared/jobs-types'
-import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY, type EnqueueResult } from '@shared/queue-types'
+import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY, MAX_ENQUEUE, type EnqueueResult } from '@shared/queue-types'
 import type { RunnerEnvironment } from '@shared/runner-types'
 import { api, errorText } from '../../api'
 import { useNavigation } from '../../navigation'
@@ -37,16 +37,32 @@ export function BulkTailorModal({ jobs, opened, onClose, onQueued }: Props) {
   const [environment, setEnvironment] = useState<RunnerEnvironment | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** The user picked "Runs at once" in this opening; the queue's current value must not overwrite it. */
+  const concurrencyTouched = useRef(false)
 
   useEffect(() => {
     if (!opened) return
+    let live = true
+    concurrencyTouched.current = false
     setError(null)
-    api.runner.environment().then(setEnvironment, () => setEnvironment(null))
-    api.queue.state().then((s) => setConcurrency(String(s.concurrency)), () => undefined)
+    api.runner.environment().then(
+      (env) => live && setEnvironment(env),
+      () => live && setEnvironment(null)
+    )
+    api.queue.state().then(
+      (s) => live && !concurrencyTouched.current && setConcurrency(String(s.concurrency)),
+      () => undefined
+    )
+    // A late answer for a closed (or reopened) modal is ignored.
+    return () => {
+      live = false
+    }
   }, [opened])
 
   const summary = selectionSummary(jobs)
   const blocking = environment && (!environment.claudePath || !environment.skillDir)
+  // The main process accepts at most MAX_ENQUEUE ids per request.
+  const tooMany = jobs.length > MAX_ENQUEUE
 
   async function confirm() {
     setBusy(true)
@@ -132,10 +148,21 @@ export function BulkTailorModal({ jobs, opened, onClose, onQueued }: Props) {
             w={120}
             allowDeselect={false}
             value={concurrency}
-            onChange={(v) => v && setConcurrency(v)}
+            onChange={(v) => {
+              if (!v) return
+              concurrencyTouched.current = true
+              setConcurrency(v)
+            }}
             data={Array.from({ length: MAX_CONCURRENCY }, (_, i) => String(i + 1))}
           />
         </Group>
+
+        {tooMany && (
+          <Alert color="orange" variant="light">
+            Huntgry queues at most {MAX_ENQUEUE} jobs at a time. {jobs.length} are selected: narrow the list or untick
+            some, then tailor the rest afterwards.
+          </Alert>
+        )}
 
         {error && (
           <Alert color="red" variant="light">
@@ -147,7 +174,7 @@ export function BulkTailorModal({ jobs, opened, onClose, onQueued }: Props) {
           <Button variant="default" onClick={onClose}>
             Cancel
           </Button>
-          <Button loading={busy} disabled={jobs.length === 0 || !!blocking} onClick={confirm}>
+          <Button loading={busy} disabled={jobs.length === 0 || tooMany || !!blocking} onClick={confirm}>
             Tailor {summary.total} job{summary.total === 1 ? '' : 's'}
           </Button>
         </Group>
