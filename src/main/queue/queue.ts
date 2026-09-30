@@ -284,7 +284,9 @@ export class TailorQueue {
   async setAgent(itemId: string, agent: AgentId): Promise<QueueState> {
     await this.sync()
     const item = this.find(itemId)
-    if (item.runId || (item.status !== 'queued' && item.status !== 'failed' && item.status !== 'cancelled'))
+    // A failed or cancelled job starts a new run when retried.
+    const notStarted = item.status === 'queued' && !item.runId
+    if (!notStarted && item.status !== 'failed' && item.status !== 'cancelled')
       throw new Error('The agent can only be changed before the job starts.')
     item.agent = agent
     item.updatedAt = new Date(this.now()).toISOString()

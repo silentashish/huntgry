@@ -428,6 +428,8 @@ describe('TailorQueue', () => {
       ['failed', 0],
       ['queued', 1]
     ])
+    // A failed job keeps its old run id, and can still switch agent before it is retried.
+    expect((await queue.setAgent(a.id, 'codex')).items[0].agent).toBe('codex')
   })
 
   it('reads items saved before agents could be chosen as Claude items', async () => {
