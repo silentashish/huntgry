@@ -139,8 +139,12 @@ such as Indeed cannot be read directly; send those from **Jobs**), follow Claude
 its approval question, and open the resulting `resume.pdf` / `cover.pdf`. Runs are kept in
 `<workspace>/.huntgry/runs/` and can be reopened and continued after a restart.
 
-**Settings** shows whether `claude`, the skill and its dependencies are found. The skill
-needs `pdflatex` (TinyTeX works without admin rights), poppler (`brew install poppler`) and
+**Settings** shows whether `claude`, the skill and its dependencies are found, which
+Claude Code version is installed and whether it is signed in. **Install Claude Code** runs
+the official installer, **Update Claude Code** updates an older one (Homebrew installs get
+the `brew upgrade claude-code` command instead), and **Install resume-tailor skill**
+downloads the skill from its latest GitHub release into `~/.claude/skills`. Signing in
+happens once in a terminal (`claude auth login`). The skill needs `pdflatex` (TinyTeX works without admin rights), poppler (`brew install poppler`) and
 a few Python modules, which **Install Python dependencies** puts in a venv in the app's
 data folder. You do not have to change your shell PATH.
 
