@@ -37,7 +37,8 @@ export interface QueueDeps {
   markTailored(workspace: string, id: string): Promise<unknown>
   /** Starts the run in `workspace`, refusing when another workspace is open by then. */
   start(params: StartRunParams, agent: QueueAgent, workspace: string): Promise<RunSummary>
-  stopRun(runId: string): void
+  /** Stops a run: kills its process, or marks it stopped when it waits with none (Codex between turns). */
+  stopRun(runId: string, workspace: string): void
   /** Sends the user's reply to a run (resuming its session if the process is gone). */
   reply(runId: string, text: string, workspace: string): Promise<RunSummary>
   onChange(state: QueueState): void
@@ -425,7 +426,7 @@ export class TailorQueue {
   private cancelItem(item: QueueItem): void {
     // A started run is stopped; its `stopped` summary is ignored since the item is already cancelled.
     // A queued item has no run, unless its reply is held: then its waiting run is stopped too.
-    if (item.runId) this.deps.stopRun(item.runId)
+    if (item.runId) this.deps.stopRun(item.runId, this.ws!)
     item.status = 'cancelled'
     item.pendingReply = undefined
     item.notBefore = undefined
@@ -556,7 +557,7 @@ export class TailorQueue {
     item.runId = run.id
     if (item.status !== 'preparing') {
       // Cancelled while the agent was starting.
-      this.deps.stopRun(run.id)
+      this.deps.stopRun(run.id, ws)
       return
     }
     this.apply(item, this.early.get(run.id) ?? run)

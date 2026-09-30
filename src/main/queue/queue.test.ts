@@ -6,6 +6,7 @@ import type { Job } from '@shared/jobs-types'
 import type { QueueItemStatus, QueueOptions, QueueState } from '@shared/queue-types'
 import type { RunSummary, StartRunParams } from '@shared/runner-types'
 import { RunManager, type RunContext } from '../cli/runner'
+import { readRun } from '../cli/runs'
 import { queueFile, requireConcurrency, requireEnqueueInput, requireItemId, TailorQueue, type QueueDeps } from './queue'
 
 const FAKE = join(__dirname, '../cli/fixtures/fake-claude.mjs')
@@ -71,7 +72,7 @@ function deps(over: Partial<QueueDeps> = {}): QueueDeps {
       started.push({ params, at: Date.now() })
       return manager.start(params, ctx())
     },
-    stopRun: (id) => manager.stop(id),
+    stopRun: (id, workspace) => manager.stopAny(workspace, id),
     reply: (id, text) => manager.reply(id, text, async () => ctx()),
     onChange: (s) => states.push(s),
     spawnGapMs: 0,
@@ -430,6 +431,25 @@ describe('TailorQueue', () => {
     ])
     // A failed job keeps its old run id, and can still switch agent before it is retried.
     expect((await queue.setAgent(a.id, 'codex')).items[0].agent).toBe('codex')
+  })
+
+  it('cancelling a Codex job between turns stops its run, which has no process', async () => {
+    const codexCtx = (): RunContext => ({
+      ...ctx(),
+      agent: 'codex',
+      commandPrefixArgs: [join(__dirname, '../cli/fixtures/fake-codex.mjs')]
+    })
+    queue = new TailorQueue(deps({ start: async (params) => manager.start(params, codexCtx()) }))
+    jobs.set('url:a', job('url:a'))
+    await queue.enqueue({ jobIds: ['url:a'], options, agent: 'codex' })
+    const s = await until(all('needs-reply'))
+    const runId = s.items[0].runId!
+    await manager.whenIdle()
+    expect(manager.isLive(runId)).toBe(false)
+    await queue.cancel(s.items[0].id)
+    await manager.whenIdle()
+    expect((await readRun(ws, runId)).status).toBe('stopped')
+    expect(queue.state().items[0].status).toBe('cancelled')
   })
 
   it('reads items saved before agents could be chosen as Claude items', async () => {

@@ -15,7 +15,7 @@ const queue = new TailorQueue({
   fetchDetails: (ws, id) => fetchDetails(ws, id, loadAndExtract),
   markTailored: (ws, id) => updateJob(ws, id, { tailored: true }),
   start: (params, agent, workspace) => startTailorRun({ ...params, agent }, workspace),
-  stopRun: (runId) => manager.stop(runId),
+  stopRun: (runId, workspace) => manager.stopAny(workspace, runId),
   reply: (runId, text, workspace) => manager.reply(runId, text, () => contextForRun(runId, workspace)),
   onChange: (state) => emit('queue:changed', state)
 })

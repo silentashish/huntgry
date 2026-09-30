@@ -149,6 +149,15 @@ export class RunManager {
     }, 3000).unref()
   }
 
+  /**
+   * Stops a run whatever its state: kills its process, or marks a run waiting with no
+   * process (an exec agent between turns) stopped, so it does not look like it still waits.
+   */
+  stopAny(workspace: string, id: string): void {
+    if (this.live.has(id)) return this.stop(id)
+    this.endIdle(workspace, id, 'stopped').catch((err) => console.error('Stopping the run failed:', err))
+  }
+
   /** Ends the conversation: closing stdin lets the agent finish and exit on its own. */
   finish(id: string): void {
     const entry = this.live.get(id)
@@ -205,8 +214,8 @@ export class RunManager {
 
   /** Resolves when no process is left and every write is on disk (tests, shutdown). */
   async whenIdle(): Promise<void> {
-    while (this.live.size > 0 || this.settling.size > 0) {
-      await Promise.all([...this.settling, ...[...this.live.values()].map((e) => e.queue)])
+    while (this.live.size > 0 || this.settling.size > 0 || this.idleOps.size > 0) {
+      await Promise.all([...this.settling, ...this.idleOps.values(), ...[...this.live.values()].map((e) => e.queue)])
       if (this.live.size > 0) await new Promise((r) => setTimeout(r, 10))
     }
   }
