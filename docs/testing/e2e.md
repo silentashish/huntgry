@@ -42,7 +42,7 @@ The app gets a **fresh environment**, not the runner's. Everything it sees:
 | --- | --- | --- |
 | `HOME` | `<sandbox>/home` | Every `~/…` lookup in `src/main` goes through `os.homedir()`, which follows `HOME`: the skill search, the agents' skill folders, the well-known CLI folders. |
 | `PATH` | `<sandbox>/bin:/usr/bin:/bin:/usr/sbin:/sbin` | The system folders Electron and its helpers need; no user-installed CLI lives there. |
-| `HUNTGRY_E2E` | `1` | Isolated CLI discovery (`src/main/cli/env.ts`): `findCli` skips the login-shell `PATH` and the machine-wide folders (`/opt/homebrew/bin`, `/usr/local/bin`) and looks only below `HOME` and in the app's `PATH`. Without it the real `claude` in `/opt/homebrew/bin` would be found. Ignored by packaged builds. |
+| `HUNTGRY_E2E` | `1` | Isolated CLI discovery (`src/main/cli/env.ts`): `findCli` skips the login-shell `PATH` and the machine-wide folders (`/opt/homebrew/bin`, `/usr/local/bin`) and looks only below `HOME` and in the app's `PATH`; `buildChildEnv` builds the `PATH` of agent child processes the same way, so a fake agent never sees the machine's tools either. Without it the real `claude` in `/opt/homebrew/bin` would be found. Ignored by packaged builds. |
 | `HUNTGRY_ALLOW_LOCAL_URLS` | `1` | Lets the in-app browser open `127.0.0.1` (mock job boards and ATS forms of later tickets). Unpackaged builds only. |
 | `SHELL` | `/bin/sh` | Nothing sources the user's zsh profile. |
 | `TMPDIR`, `LANG`, `USER`, `LOGNAME` | sandbox tmp, `en_US.UTF-8`, the runner's user | Chromium and Node basics. |
@@ -53,11 +53,17 @@ Not set, deliberately: `ELECTRON_RENDERER_URL` (so main loads the built renderer
 only app path `src/main` uses. (Electron's `app.getPath('home')` comes from the user database
 on macOS, not from `HOME`; nothing in the app reads it.)
 
-`isolation.spec.ts` asserts all of this from inside the running app, checks that the real
-`~/Library/Application Support/Huntgry`, `~/.claude` and the repository are untouched, that the
-real `claude`/`codex`/`agy` are not found (Settings shows *Not found* for all three) while a fake
-`claude` in the sandbox `bin` is, and that sandboxes are removed. A worker-scoped fixture fails
-the run if any sandbox is still on disk at the end.
+`isolation.spec.ts` launches the app itself so it can take a baseline **before** launch, asserts
+all of this from inside the running app, and after closing compares a file-level snapshot (path,
+size, mtime) of the real `~/Library/Application Support/Huntgry`, `~/.claude/skills` and
+`~/.claude/local` plus `git status --porcelain --ignored` of the repository (minus `node_modules`
+and `e2e/.results`, which the runner writes) against that baseline. The rest of `~/.claude`
+belongs to Claude Code itself and changes while a developer's session runs, so it is not part
+of the baseline. Other tests check that the real `claude`/`codex`/`agy` are not found (Settings
+shows *Not found* for all three) while a fake `claude` in the sandbox `bin` is, and that a
+closed app's sandbox is removed. A worker-scoped fixture fails the run if any sandbox is still
+on disk at the end, and the `app` fixture removes its sandbox even when seeding or the launch
+itself fails (a process that spawned but never showed a window is killed).
 
 Closing: the fixture destroys the windows first (which skips `beforeunload`, so an editor left
 with unsaved edits cannot raise the native "unsaved changes" question), stubs
@@ -87,7 +93,8 @@ with unsaved edits cannot raise the native "unsaved changes" question), stubs
 ## Page objects
 
 `e2e/pages/`: `WorkspacePicker`, `ProfileSetup`, `ProfileEditor`, `Shell` (`SHELL_PAGES`,
-`navLink(page)`, `goTo(page)`, `expectActive(page)`, `switchWorkspaceButton`). Later tickets add
+`navLink(page)`, `goTo(page)`, `expectActive(page)` (checks `aria-current="page"`, Mantine's
+`data-active` and the page heading), `currentEntries`, `switchWorkspaceButton`). Later tickets add
 `dashboard`, `tailor`, `jobs`, `browser`, `settings` next to them.
 
 Selectors are role, label and text based; Mantine renders accessible markup. The renderer has no

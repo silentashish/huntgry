@@ -21,8 +21,8 @@ the login-shell `PATH` and machine-wide folders, and it remembers the workspace 
 | Workspace fixture | `e2e/fixtures/workspace.ts`, `e2e/fixtures/workspaces/*`, `e2e/fixtures/resumes/*`, `e2e/fixtures/generate.mts` | `seedWorkspace`, `rememberWorkspace` (settings.json before launch: the fast path), `stubOpenDialog` / `stubMessageBox` through `electronApp.evaluate`. Fixture workspaces `empty-profile` (real Create output), `demo`, `legacy`, `not-a-workspace`; generated sample resumes (`.docx`, `.pdf`) of a fictional person, reusing the vitest builders in `src/main/resume/test-fixtures.ts`. |
 | Page objects | `e2e/pages/{workspace-picker,profile-setup,profile-editor,shell}.ts` | Role/label/text locators only. `Shell.expectActive` checks the navbar's `data-active` and the page heading. |
 | Specs | `e2e/tests/{workspace,profile-setup,shell,isolation}.spec.ts` | 19 tests: the picker flows (Create missing / non-empty with confirmation, Import valid / refused with Create offer / legacy, `~`, cancelled dialog), remembered workspace (relaunch, deleted profile notice, switch), profile setup (manual → Contact tab, `.docx` import → review → save → dashboard, `.pdf` import, cancel), every navbar entry, the dashboard listing the demo applications, and the isolation guarantees. |
-| CLI discovery | `src/main/cli/env.ts`, `src/main/index.ts`, `src/main/cli/cli.test.ts` | `HUNTGRY_E2E=1` (unpackaged only; main reports `app.isPackaged` once through `setPackagedBuild`) makes `cliSearchDirs` skip the login-shell PATH and `/opt/homebrew/bin`, `/usr/local/bin`, keeping the folders below `HOME` and the app's PATH. `loginShellPath()` resolves to `''` in that mode, so child processes do not inherit the user's shell PATH either. Without it the harness could not hide a Homebrew `claude`. Unit-tested. |
-| Navbar | `src/renderer/src/components/shell/AppLayout.tsx` | `NavLink` rendered an `<a>` without `href`: no role, no accessible name, not focusable. It is now `component="button" type="button"`, named "<label> <hint>". No `data-testid` was added anywhere. |
+| CLI discovery | `src/main/cli/env.ts`, `src/main/index.ts`, `src/main/cli/cli.test.ts` | `HUNTGRY_E2E=1` (unpackaged only; main reports `app.isPackaged` once through `setPackagedBuild`) makes `cliSearchDirs` skip the login-shell PATH and `/opt/homebrew/bin`, `/usr/local/bin`, keeping the folders below `HOME` and the app's PATH. `buildChildEnv` applies the same filter to the PATH of agent child processes, and `loginShellPath()` resolves to `''` in that mode, so children do not inherit the user's shell PATH either. Without it the harness could not hide a Homebrew `claude`. Unit-tested. |
+| Navbar | `src/renderer/src/components/shell/AppLayout.tsx` | `NavLink` rendered an `<a>` without `href`: no role, no accessible name, not focusable. It is now `component="button" type="button"`, named "<label> <hint>", and the active entry carries `aria-current="page"` (Mantine only sets `data-active`). No `data-testid` was added anywhere. |
 | Docs | `docs/testing/e2e.md`, `README.md` | How to run, the isolation model and every variable the harness sets, fixtures, page objects, adding a spec, debugging. README's Development section lists the scripts and links the guide. |
 
 ```mermaid
@@ -68,8 +68,14 @@ flowchart LR
   second guard.
 - **Navbar entries as buttons rather than a `data-testid`.** The anchor without `href` was an
   accessibility bug (not focusable, no role); fixing it removed the need for a test id.
-- **No `aria-current`.** Mantine's `NavLink` marks the active entry with `data-active`; the
-  page object checks that attribute plus the page heading.
+- **`aria-current="page"` set by the app.** Mantine's `NavLink` only marks the active entry with
+  `data-active`, which assistive technology does not announce; the shell sets `aria-current` and
+  the page object asserts it (plus `data-active` and the page heading).
+- **Isolation baseline before launch, at file level.** The isolation test launches the app
+  itself instead of using the `app` fixture, snapshots the real userData and
+  `~/.claude/{skills,local}` (path, size, mtime) and `git status --porcelain --ignored` before
+  launch, and compares after close. Directory mtimes and plain `git status` would miss a
+  modified nested file or an ignored path.
 
 ## How to test
 
