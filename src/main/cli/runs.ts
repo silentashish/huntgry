@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { appendFile, mkdir, opendir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
-import { join, relative } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import type { RunSummary } from '@shared/runner-types'
 import { parseEventLine } from '@shared/transcript'
 import { APPLICATION_DEPTH, HUNTGRY_DIR, IGNORED_ENTRIES, MAX_SCAN_ENTRIES } from '../workspace/constants'
@@ -94,17 +94,60 @@ export const OUTPUT_FILES = [
   'resume.tex'
 ] as const
 
+/** Lowercase dash slug, as the skill names `<role>/<company>/<job-id>` folders. */
+export function folderSlug(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+export interface OutputFolderHints {
+  /** Role, company and job id of the run; a folder whose segments match them wins over a newer one. */
+  prefer?: { role?: string; company?: string; jobId?: string }
+  /** Folders (relative to the workspace) that belong to other live runs. */
+  exclude?: string[]
+  /**
+   * Job ids of other live runs. A folder whose job-id segment is one of them belongs to that
+   * run even before it has recorded the folder, so it is never picked.
+   */
+  claimedJobIds?: string[]
+}
+
 /**
- * The application folder (`<role>/<company>/<job-id>`) changed most recently
- * at or after `sinceMs` that holds a build output, relative to the workspace.
+ * How well a `<role>/<company>/<job-id>` folder matches the run. The job id must be the same
+ * slug (`42` is not `142`) and counts most; company and role (Claude may shorten them, so
+ * containment is enough) only break ties.
+ */
+function matchScore(rel: string[], prefer: OutputFolderHints['prefer']): number {
+  if (!prefer) return 0
+  const [role, company, jobId] = rel.map(folderSlug)
+  const like = (seg: string | undefined, want: string | undefined) => {
+    const w = want ? folderSlug(want) : ''
+    return !!seg && !!w && (seg === w || seg.includes(w) || w.includes(seg))
+  }
+  const sameId = !!prefer.jobId && !!jobId && jobId === folderSlug(prefer.jobId)
+  return (sameId ? 4 : 0) + (like(company, prefer.company) ? 2 : 0) + (like(role, prefer.role) ? 1 : 0)
+}
+
+/**
+ * The application folder (`<role>/<company>/<job-id>`) a run wrote at or after
+ * `sinceMs`, relative to the workspace: among folders holding a build output,
+ * the one matching the run's role/company/job id best, newest first on a tie,
+ * skipping folders other live runs own or whose job id is another live run's
+ * (several runs can build at once).
  * Bounded like the workspace scan; `null` when nothing qualifies.
  */
 export async function findOutputFolder(
   workspace: string,
-  sinceMs: number
+  sinceMs: number,
+  hints: OutputFolderHints = {}
 ): Promise<{ folder: string; files: string[] } | null> {
+  const exclude = new Set((hints.exclude ?? []).map((f) => join(workspace, f)))
+  const own = hints.prefer?.jobId ? folderSlug(hints.prefer.jobId) : ''
+  const claimed = new Set((hints.claimedJobIds ?? []).map(folderSlug).filter((id) => id && id !== own))
   let visited = 0
-  let best: { path: string; mtime: number; files: string[] } | null = null
+  let best: { path: string; mtime: number; score: number; files: string[] } | null = null
 
   async function walk(dir: string, depth: number): Promise<void> {
     if (visited > MAX_SCAN_ENTRIES) return
@@ -123,6 +166,7 @@ export async function findOutputFolder(
       else if (e.isFile()) files.push(e.name)
     }
     if (depth === APPLICATION_DEPTH) {
+      if (exclude.has(dir) || claimed.has(folderSlug(relative(workspace, dir).split(sep)[2] ?? ''))) return
       const outputs = files.filter((f) => (OUTPUT_FILES as readonly string[]).includes(f))
       if (
         !outputs.includes('resume.pdf') &&
@@ -139,13 +183,16 @@ export async function findOutputFolder(
         )
       )
       const mtime = Math.max(...mtimes)
-      if (mtime >= sinceMs && (!best || mtime > best.mtime)) best = { path: dir, mtime, files: outputs.sort() }
+      if (mtime < sinceMs) return
+      const score = matchScore(relative(workspace, dir).split(sep), hints.prefer)
+      if (!best || score > best.score || (score === best.score && mtime > best.mtime))
+        best = { path: dir, mtime, score, files: outputs.sort() }
       return
     }
     for (const sub of subdirs) await walk(sub, depth + 1)
   }
 
   await walk(workspace, 0)
-  const found = best as { path: string; mtime: number; files: string[] } | null
+  const found = best as { path: string; files: string[] } | null
   return found ? { folder: relative(workspace, found.path), files: found.files } : null
 }

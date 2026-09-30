@@ -3,12 +3,14 @@ import { Alert, Grid, Loader, Stack, Title } from '@mantine/core'
 import type { RunDetail, RunnerEnvironment, RunSummary, StartRunParams } from '@shared/runner-types'
 import { appendLive } from '@shared/transcript'
 import { api, errorText } from '../../api'
+import { useQueue } from '../../components/queue/useQueue'
 import type { PageParams } from '../../navigation'
+import { QueuePanel } from './QueuePanel'
 import { RunList } from './RunList'
 import { RunView } from './RunView'
 import { StartForm } from './StartForm'
 
-/** Runs the Claude resume-tailor skill against the workspace for one job. */
+/** Runs the Claude resume-tailor skill against the workspace, for one job or a queue of jobs. */
 export function TailorPage({ params }: { params: PageParams['tailor'] }) {
   const [runs, setRuns] = useState<RunSummary[]>([])
   // Opening the page with a job (from the Jobs page) shows the form pre-filled.
@@ -17,6 +19,7 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
   const [environment, setEnvironment] = useState<RunnerEnvironment | null>(null)
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [queue, setQueue] = useQueue()
   /** Run whose events are being read from disk, with the live events that arrived meanwhile. */
   const loading = useRef<{ id: string; buffer: { seq: number; event: unknown }[] } | null>(null)
 
@@ -88,6 +91,9 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
           {error}
         </Alert>
       )}
+      {queue && (params?.view === 'queue' || queue.items.length > 0) && (
+        <QueuePanel queue={queue} onChange={setQueue} onOpenRun={(id) => void open(id)} />
+      )}
       <Grid gap="lg">
         <Grid.Col span={{ base: 12, md: 3 }}>
           <RunList runs={runs} selected={selected} onSelect={open} />
@@ -103,7 +109,11 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
               onEnvironmentChange={setEnvironment}
             />
           ) : detail && detail.run.id === selected ? (
-            <RunView run={detail.run} events={detail.events} />
+            <RunView
+              run={detail.run}
+              events={detail.events}
+              heldReply={queue?.items.some((i) => i.runId === detail.run.id && i.pendingReply) ?? false}
+            />
           ) : (
             <Loader />
           )}

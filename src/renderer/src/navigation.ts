@@ -24,6 +24,8 @@ export interface PageParams {
         source?: JobSourceTag
         /** `false` when `jobDescription` is only the board's summary, so the form can say so. */
         descriptionComplete?: boolean
+        /** Open on the bulk tailoring queue (after "Tailor all" on the Jobs page). */
+        view?: 'queue'
       }
     | undefined
   graph: { nodeId?: string } | undefined

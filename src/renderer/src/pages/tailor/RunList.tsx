@@ -11,6 +11,7 @@ interface Props {
 
 /** Past and active runs of this workspace, newest first. */
 export function RunList({ runs, selected, onSelect }: Props) {
+  const waiting = runs.filter((r) => r.status === 'waiting').length
   return (
     <Stack gap="xs">
       <Button
@@ -20,6 +21,11 @@ export function RunList({ runs, selected, onSelect }: Props) {
       >
         New run
       </Button>
+      {waiting > 0 && (
+        <Text size="xs" c="yellow.8" px="xs">
+          {waiting} run{waiting === 1 ? '' : 's'} waiting for your reply
+        </Text>
+      )}
       <ScrollArea.Autosize mah="calc(100vh - 180px)">
         {runs.length === 0 && (
           <Text size="sm" c="dimmed" p="xs">
