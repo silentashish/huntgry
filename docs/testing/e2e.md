@@ -45,6 +45,7 @@ The app gets a **fresh environment**, not the runner's. Everything it sees:
 | `HUNTGRY_E2E` | `1` | Isolated CLI discovery (`src/main/cli/env.ts`): `findCli` skips the login-shell `PATH` and the machine-wide folders (`/opt/homebrew/bin`, `/usr/local/bin`) and looks only below `HOME` and in the app's `PATH`; `buildChildEnv` builds the `PATH` of agent child processes the same way, so a fake agent never sees the machine's tools either. Without it the real `claude` in `/opt/homebrew/bin` would be found. Ignored by packaged builds. |
 | `HUNTGRY_ALLOW_LOCAL_URLS` | `1` | Lets the in-app browser open `127.0.0.1` (mock job boards and ATS forms of later tickets). Unpackaged builds only. |
 | `SHELL` | `/bin/sh` | Nothing sources the user's zsh profile. |
+| `PYTHONDONTWRITEBYTECODE` | `1` | The system `python3` (the skill's preflight) caches bytecode under `~/Library/Caches`; a check still running when the app quits would recreate the removed sandbox HOME for it. |
 | `TMPDIR`, `LANG`, `USER`, `LOGNAME` | sandbox tmp, `en_US.UTF-8`, the runner's user | Chromium and Node basics. |
 
 Not set, deliberately: `ELECTRON_RENDERER_URL` (so main loads the built renderer),
@@ -117,11 +118,9 @@ expect((await fakes.runs()).map((r) => r.agent)).toEqual(['claude', 'codex'])
   `node agent.mjs <name> "$@"` with `FAKE_AGENT_HOME=<sandbox>/fake-agent` (the sandbox PATH has
   no `node`, so the wrapper names the test runner's own binary), and `HUNTGRY_CLAUDE_PATH` pinned
   to the `claude` wrapper: `~/.local/bin` below the sandbox HOME is searched *before* PATH, so a
-  `claude` there would otherwise win (`settings.spec.ts` plants one to prove the pin), plus
-  `PYTHONDONTWRITEBYTECODE=1`, because the system `python3` that runs the fixture preflight would
-  otherwise cache bytecode under `~/Library/Caches` and a check still running at quit recreated
-  the removed sandbox for it (the shim guards its markers the same way: it writes nothing once
-  `FAKE_AGENT_HOME` is gone);
+  `claude` there would otherwise win (`settings.spec.ts` plants one to prove the pin); the shim
+  writes nothing once `FAKE_AGENT_HOME` is gone, so a process that boots after the app quit
+  cannot recreate the sandbox (the harness sets `PYTHONDONTWRITEBYTECODE` for the same reason);
 - the fixture skill (`skill/SKILL.md` and a `scripts/preflight.py` that reports every dependency
   present) copied, not linked (`findSkillDir` skips symlinks), to `~/.claude/skills/resume-tailor`
   and, with `skills: 'all'` (default), to the Codex and Antigravity folders too; `skills: 'claude'`

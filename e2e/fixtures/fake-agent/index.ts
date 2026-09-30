@@ -84,8 +84,7 @@ export const fakeSkillDir = (sandbox: Pick<Sandbox, 'home'>, agent: FakeAgentNam
  * Installs the shims and the skill into a sandbox before the app starts.
  * Returns the extra environment the app gets: `HUNTGRY_CLAUDE_PATH` pinned to
  * the shim, so a `claude` below the sandbox HOME (`~/.local/bin`, which
- * discovery checks before PATH) can never take its place, and no Python
- * bytecode cache under HOME.
+ * discovery checks before PATH) can never take its place.
  */
 export async function installFakeAgents(sandbox: Sandbox, opts: FakeAgentOptions = {}): Promise<Record<string, string>> {
   const home = fakeAgentHome(sandbox)
@@ -112,12 +111,7 @@ export async function installFakeAgents(sandbox: Sandbox, opts: FakeAgentOptions
     await writeFile(join(texBin, 'pdflatex'), '#!/bin/sh\necho "fake pdflatex"\n')
     await chmod(join(texBin, 'pdflatex'), 0o755)
   }
-  return {
-    ...((opts.agents ?? FAKE_AGENT_NAMES).includes('claude') ? { HUNTGRY_CLAUDE_PATH: join(sandbox.bin, 'claude') } : {}),
-    // The system python3 that runs the fixture preflight caches bytecode under ~/Library/Caches; a check still
-    // running when the app quits would recreate the removed sandbox HOME for it.
-    PYTHONDONTWRITEBYTECODE: '1'
-  }
+  return (opts.agents ?? FAKE_AGENT_NAMES).includes('claude') ? { HUNTGRY_CLAUDE_PATH: join(sandbox.bin, 'claude') } : {}
 }
 
 /** `test.use({ prepare: withFakeAgents(opts) })`: the app fixture installs the fakes before launch. */

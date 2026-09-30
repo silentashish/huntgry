@@ -86,8 +86,9 @@ sequenceDiagram
 - **Children that outlive the quit.** A `--version` or `preflight.py` started by the Settings
   check right before the app quits can boot after the fixture removed the sandbox, and recreated
   it (`fake-agent/invocations.jsonl`; the system Python's bytecode cache under `~/Library/Caches`).
-  The shim writes nothing once its home is gone and the fixture sets `PYTHONDONTWRITEBYTECODE=1`;
-  the temp folder is empty after a run again.
+  The shim writes nothing once its home is gone and the harness sets `PYTHONDONTWRITEBYTECODE=1`
+  for every launch (the isolation spec of #46 plants a skill too, so its check boots Python as
+  well); the temp folder is empty after a run again.
 - **One class selector** (`mantine-Card-root`) finds the open run's card and the queue panel by
   their headings; Mantine's static class names are stable and the alternative was a `data-testid`.
 

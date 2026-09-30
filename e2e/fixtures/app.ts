@@ -67,6 +67,9 @@ export function appEnv(sandbox: Sandbox, extra: Record<string, string> = {}): Re
     PATH: `${sandbox.bin}:${SYSTEM_PATH}`,
     HUNTGRY_E2E: '1',
     HUNTGRY_ALLOW_LOCAL_URLS: '1',
+    // The system python3 (the skill's preflight) caches bytecode under ~/Library/Caches; a check still running
+    // when the app quits would recreate the removed sandbox HOME for it.
+    PYTHONDONTWRITEBYTECODE: '1',
     ...extra
   }
 }
