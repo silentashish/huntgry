@@ -48,6 +48,10 @@ describe('Claude draft', () => {
     expect(args).toContain('--strict-mcp-config')
     expect(args).toContain('--no-session-persistence')
     expect(args).not.toContain('--dangerously-skip-permissions')
+    // Claude Code < 2.1.259 rejects --permission-prompts.
+    expect(args).not.toContain('--permission-prompts')
+    const newer = draftArgs({ permissionPrompts: true })
+    expect(newer[newer.indexOf('--permission-prompts') + 1]).toBe('none')
   })
 
   it('returns the bullet and flags numbers the notes do not contain', async () => {

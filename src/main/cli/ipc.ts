@@ -11,6 +11,7 @@ import { checkEnvironment, discoverRuntime, installPythonDeps } from './environm
 import { fetchPostingText } from './posting'
 import { pinnedFetch } from './public-url'
 import { RunManager, type RunContext } from './runner'
+import { claudeVersion, supportsPermissionPrompts } from './version'
 import { listRuns, OUTPUT_FILES, readEvents, readRun, RUN_ID_PATTERN } from './runs'
 
 /** The venv the skill's `python3` comes from. Shared by every workspace. */
@@ -41,6 +42,15 @@ async function context(): Promise<RunContext> {
   if (!env.skillDir) throw new Error('The resume-tailor skill was not found. See Settings.')
   // Sandbox rules apply to real paths; allow the given spelling and its target (the venv may be a symlink).
   const real = async (p: string) => [p, await realpath(p).catch(() => p)]
+  const childEnv = buildChildEnv({
+    base: process.env,
+    workspace: workspace.path,
+    venvDir: venvDir(),
+    texBin: env.texBin,
+    loginPath: await loginShellPath()
+  })
+  // Once per binary (cached by real path); an unknown version just leaves out the newer flags.
+  const version = await claudeVersion(env.claudePath, childEnv)
   const texRoot = texRootOf(env.texBin)
   const allow = [
     ...new Set(
@@ -52,13 +62,9 @@ async function context(): Promise<RunContext> {
     skillDir: env.skillDir,
     sandbox: { workspace: workspace.path, skillDir: env.skillDir, venvDir: venvDir(), texRoot, extraRead: allow },
     command: env.claudePath,
-    env: buildChildEnv({
-      base: process.env,
-      workspace: workspace.path,
-      venvDir: venvDir(),
-      texBin: env.texBin,
-      loginPath: await loginShellPath()
-    }),
+    env: childEnv,
+    claudeVersion: version,
+    permissionPrompts: supportsPermissionPrompts(version),
     model: await preferredModel(),
     systemPrompt: buildSystemPrompt({
       workspace: workspace.path,

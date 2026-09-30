@@ -174,4 +174,18 @@ describe('RunManager against a fake claude', () => {
     const raw = JSON.parse(await readFile(join(ws, '.huntgry/runs', a.id, 'run.json'), 'utf8'))
     expect(raw.live).toBe(false)
   })
+
+  it('explains a failure of a Claude Code too old for a flag', async () => {
+    const old = { ...ctx(), env: { ...process.env, FAKE_CLAUDE_UNKNOWN: '--permission-prompts' } }
+    const r = await manager.start(params, { ...old, claudeVersion: '2.1.231', permissionPrompts: true })
+    const failed = await until(r.id, (x) => x.status === 'failed')
+    expect(failed.error).toContain('Your Claude Code (2.1.231) does not support --permission-prompts')
+    expect(failed.error).toContain("error: unknown option '--permission-prompts'")
+  })
+
+  it('does not pass --permission-prompts to an older Claude Code', async () => {
+    const old = { ...ctx(), env: { ...process.env, FAKE_CLAUDE_UNKNOWN: '--permission-prompts' } }
+    const r = await manager.start(params, { ...old, claudeVersion: '2.1.231', permissionPrompts: false })
+    expect((await until(r.id, (x) => x.status !== 'running')).status).toBe('waiting')
+  })
 })

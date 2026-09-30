@@ -90,8 +90,14 @@ export function composePath(...segments: (string | null | undefined)[]): string 
   return out.join(delimiter)
 }
 
-/** Resolves the `claude` CLI: well-known folders, then the login-shell PATH, then the app's PATH. */
+/**
+ * Resolves the `claude` CLI: well-known folders, then the login-shell PATH, then
+ * the app's PATH. `HUNTGRY_CLAUDE_PATH` in the app's own environment (never from
+ * the renderer) pins a binary, e.g. to test an older Claude Code.
+ */
 export async function findClaude(): Promise<string | null> {
+  const pinned = process.env.HUNTGRY_CLAUDE_PATH
+  if (pinned) return (await isExecutable(pinned)) ? pinned : null
   const dirs = composePath(wellKnownBinDirs().join(delimiter), await loginShellPath(), process.env.PATH).split(
     delimiter
   )

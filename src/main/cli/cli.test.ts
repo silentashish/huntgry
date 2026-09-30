@@ -114,8 +114,14 @@ describe('command line and prompts', () => {
       '--verbose',
       '--permission-mode'
     ])
-    expect(args).toContain('--permission-prompts')
-    expect(args[args.indexOf('--permission-prompts') + 1]).toBe('none')
+    // Older Claude Code (< 2.1.259) rejects --permission-prompts: only passed when the version supports it.
+    expect(args).not.toContain('--permission-prompts')
+    const newer = buildClaudeArgs({ skillDir: '/s', systemPrompt: 'sys', sandbox: SANDBOX, permissionPrompts: true })
+    expect(newer[newer.indexOf('--permission-prompts') + 1]).toBe('none')
+    expect(newer.slice(newer.indexOf('--permission-mode'), newer.indexOf('--permission-mode') + 2)).toEqual([
+      '--permission-mode',
+      'acceptEdits'
+    ])
     expect(args).not.toContain('--dangerously-skip-permissions')
     expect(args).not.toContain('--add-dir')
     // No inherited user/project/local settings (hooks, permission rules).

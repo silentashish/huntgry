@@ -6,6 +6,7 @@ import { computeGaps, emptySections } from '@shared/profile-insights'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { buildChildEnv, loginShellPath } from '../cli/env'
 import { discoverRuntime } from '../cli/environment'
+import { claudeVersion, supportsPermissionPrompts } from '../cli/version'
 import { readProfile } from '../profile/store'
 import { draftEvidence } from './draft'
 import { collectJobTexts } from './jobs'
@@ -75,6 +76,7 @@ export function registerInsightsIpc(): void {
       texBin: null,
       loginPath
     })
-    return draftEvidence(req, doc.profile, { command: runtime.claudePath, env })
+    const permissionPrompts = supportsPermissionPrompts(await claudeVersion(runtime.claudePath, env))
+    return draftEvidence(req, doc.profile, { command: runtime.claudePath, env, permissionPrompts })
   })
 }

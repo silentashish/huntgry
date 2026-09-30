@@ -3,8 +3,15 @@
 //   "WRITE_OUTPUT" in a message -> writes role/company/42/{resume.pdf,build-report.json} under cwd first
 //   "CRASH" -> prints to stderr and exits 3
 // Closing stdin ends the process with code 0.
+// FAKE_CLAUDE_UNKNOWN=--flag in the env: behaves like an older CLI that rejects that flag.
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
+
+const unknown = process.env.FAKE_CLAUDE_UNKNOWN
+if (unknown && process.argv.includes(unknown)) {
+  process.stderr.write(`error: unknown option '${unknown}'\n`)
+  process.exit(1)
+}
 
 const resumeIdx = process.argv.indexOf('--resume')
 const session = resumeIdx > 0 ? process.argv[resumeIdx + 1] : 'sess-fake-1'
