@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { chmod, mkdir, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { closeApp, createSandbox, destroySandbox, expect, launchApp, test } from '../fixtures/app'
+import { closeApp, createSandbox, destroySandbox, expect, launchApp, test, type AppFixture } from '../fixtures/app'
+import { rememberWorkspace, seedWorkspace } from '../fixtures/workspace'
 import { Shell } from '../pages/shell'
 
 /**
@@ -13,18 +14,73 @@ import { Shell } from '../pages/shell'
 
 const REPO = resolve(__dirname, '../..')
 const REAL_HOME = homedir()
-/** What a real run of the app would touch: its userData and the Claude Code folder. */
-const PROTECTED = [join(REAL_HOME, 'Library/Application Support/Huntgry'), join(REAL_HOME, '.claude')]
+/**
+ * What a real run of the app writes on this machine: its userData, and under
+ * ~/.claude the skills it installs (`skills/`) and the CLI it installs (`local/`).
+ * The rest of ~/.claude belongs to Claude Code itself and changes while a
+ * developer's session is running, so it is not a usable baseline.
+ */
+const PROTECTED = [
+  join(REAL_HOME, 'Library/Application Support/Huntgry'),
+  join(REAL_HOME, '.claude/skills'),
+  join(REAL_HOME, '.claude/local')
+]
 
-const mtimes = () => Promise.all(PROTECTED.map((p) => stat(p).then((s) => s.mtimeMs, () => null)))
-const gitStatus = () => execFileSync('git', ['status', '--porcelain'], { cwd: REPO, encoding: 'utf8' })
+/** Every file below `dir` with its size and mtime (`null` when `dir` does not exist). */
+async function snapshot(dir: string): Promise<Record<string, string> | null> {
+  const out: Record<string, string> = {}
+  let entries
+  try {
+    entries = await readdir(dir, { withFileTypes: true, recursive: true })
+  } catch {
+    return null
+  }
+  for (const e of entries) {
+    if (!e.isFile()) continue
+    const path = join(e.parentPath, e.name)
+    const s = await stat(path).catch(() => null)
+    if (s) out[path] = `${s.size}:${s.mtimeMs}`
+  }
+  return out
+}
+const machineState = () => Promise.all(PROTECTED.map(snapshot))
+/** Tracked, untracked and ignored paths of the repo, minus what the test runner itself writes. */
+const repoState = () =>
+  execFileSync('git', ['status', '--porcelain', '--ignored', '--', '.', ':!node_modules', ':!e2e/.results'], {
+    cwd: REPO,
+    encoding: 'utf8'
+  })
 
 test.describe('isolation', () => {
-  test.use({ workspace: 'demo' })
+  test('the app runs with the sandbox HOME, userData and PATH, and nothing from the runner', async () => {
+    // Baseline before anything is launched, so startup reads and writes count too.
+    const machineBefore = await machineState()
+    const repoBefore = repoState()
 
-  test('the app runs with the sandbox HOME, userData and PATH, and nothing from the runner', async ({ app }) => {
-    const before = await mtimes()
-    const status = gitStatus()
+    const sandbox = await createSandbox()
+    let launched: Awaited<ReturnType<typeof launchApp>> | null = null
+    try {
+      const workspace = await seedWorkspace('demo', sandbox.workspaces)
+      await rememberWorkspace(sandbox.userData, workspace)
+      launched = await launchApp(sandbox)
+      const app = { ...launched, sandbox, userData: sandbox.userData, home: sandbox.home, workspace } as Pick<
+        AppFixture,
+        'electronApp' | 'window' | 'sandbox' | 'userData' | 'home' | 'workspace'
+      >
+      await checkSandboxed(app)
+    } finally {
+      if (launched) await closeApp(launched.electronApp)
+      await destroySandbox(sandbox)
+    }
+
+    // Then check the machine is untouched: the real userData, ~/.claude/{skills,local} and the repo.
+    expect(await machineState()).toEqual(machineBefore)
+    expect(repoState()).toBe(repoBefore)
+  })
+})
+
+async function checkSandboxed(app: Pick<AppFixture, 'electronApp' | 'window' | 'sandbox' | 'userData' | 'home' | 'workspace'>): Promise<void> {
+  {
 
     // What the main process sees: `userData` (the only app path src/main uses) and its environment.
     // Every `~/…` lookup in src/main goes through `os.homedir()`, which follows HOME; Electron's own
@@ -63,12 +119,12 @@ test.describe('isolation', () => {
     await new Shell(app.window).goTo('settings')
     await expect(app.window.getByText(skill, { exact: true }).first()).toBeVisible()
     await expect(app.window.getByText('Not found', { exact: true }).first()).toBeVisible()
-
-    // Then check the machine is untouched: the real userData and ~/.claude, and the repo.
-    expect(await mtimes()).toEqual(before)
-    expect(gitStatus()).toBe(status)
     expect(existsSync(join(app.userData, 'settings.json'))).toBe(true) // the remembered workspace lives in the sandbox
-  })
+  }
+}
+
+test.describe('agent CLI discovery', () => {
+  test.use({ workspace: 'demo' })
 
   test('the real claude, codex and agy are not found; a fake in the sandbox bin is', async ({ app }) => {
     const shell = new Shell(app.window)
