@@ -1,0 +1,21 @@
+{
+  // The package must type-check without Node, DOM or React Native globals: this is the
+  // strictest of the three consumers' environments (a Cloudflare Worker sees ES2022 + a few
+  // web APIs, Hermes ES2022). Only `TextEncoder` / `TextDecoder` are assumed, declared module-locally in text.ts.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": [],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "noEmit": true
+  },
+  "include": ["*.ts"],
+  "exclude": ["*.test.ts"]
+}
