@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import icon from '../../resources/icon.png?asset'
 import { stopApplicationsWatcher } from './applications/ipc'
 import { handleFileScheme, registerFileScheme } from './applications/protocol'
+import { attachBrowser, destroyBrowser } from './browser/manager'
 import { stopAllRuns } from './cli/ipc'
 import { registerIpcHandlers } from './ipc'
 
@@ -33,6 +34,8 @@ function createWindow(): void {
   })
 
   win.once('ready-to-show', () => win.show())
+  // Job postings open in in-app tabs drawn over this window (src/main/browser).
+  attachBrowser(win)
 
   // The renderer never navigates or opens windows; external links go to the OS browser.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -90,6 +93,7 @@ app.whenReady().then(() => {
 let runsStopped = false
 app.on('before-quit', (event) => {
   stopApplicationsWatcher()
+  destroyBrowser()
   if (runsStopped) return
   event.preventDefault()
   void stopAllRuns()
