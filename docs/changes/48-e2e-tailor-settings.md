@@ -134,6 +134,17 @@ What the 17 specs cover:
 Timings on the reference machine (macOS, Node 26.7, real `claude`/`codex`/`agy` installed in
 `~/.local/bin` and `/opt/homebrew/bin` and never found) are in the PR.
 
+## Review round 1 (Codex)
+
+- `resume.pdf` had no cross-reference table (`pdfinfo` warned): the shim now writes a
+  structurally valid one-page PDF (objects at their recorded offsets, `xref`, a trailer with
+  `/Size` and `/Root`, `startxref`) with the name, role and company as text, and the unit test
+  parses it with `unpdf` (one page, the text) and with `pdfinfo` when poppler is installed.
+- The interrupt spec quit after seeing the session id, which the shim announces before it reads
+  the job; a quit in that gap would have made the resumed "Approved" a fresh job. It now waits
+  for the `turn-start` marker and the session's job file, and asserts the resumed process built
+  the original `<role>/<company>/<job-id>` folder, never the default one.
+
 ## Follow-ups
 
 - #49 can reuse `prepare` for its mock servers and `stubOpenPath` for Apply.

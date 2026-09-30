@@ -123,9 +123,12 @@ test.describe('tailor with the fake agents', () => {
     let tailor = new TailorPage(app.window)
     await tailor.start(JOB)
     await tailor.expectStatus('Claude is working')
-    // The agent has announced its session and is in the middle of its first turn.
+    // The agent has announced its session, read the job (its session file is written) and is in the middle of
+    // its first turn: `turn-start` is marked, `turn-end` (5 s of pauses away) is not.
     await expect.poll(async () => (await fakes.runs()).length).toBe(1)
     const [first] = await fakes.runs()
+    await expect.poll(async () => (await fakes.turns()).map((t) => [t.pid, t.turn, t.end])).toEqual([[first.pid, 1, null]])
+    expect(JSON.parse(await readFile(join(fakes.home, 'sessions', `${first.session}.json`), 'utf8'))).toMatchObject({ role: 'staff-engineer', company: 'acme-corp', jobId: 'a-42' })
     const [id] = await runIds(app.workspace!)
     await expect.poll(async () => (await readRun(app.workspace!, id)).sessionId).toBe(first.session)
 
@@ -143,8 +146,11 @@ test.describe('tailor with the fake agents', () => {
     await fakes.setScript('normal')
     await tailor.reply('Approved')
     await tailor.expectStatus('Waiting for you')
+    // The resumed process built for the job it was started with (role, company, job id), not a default folder.
     await expect(tailor.outputLine(FOLDER)).toBeVisible()
     expect(existsSync(join(app.workspace!, FOLDER, 'resume.pdf'))).toBe(true)
+    expect(existsSync(join(app.workspace!, 'software-engineer/acme/job'))).toBe(false)
+    await expect.poll(async () => (await readRun(app.workspace!, id)).outputFolder).toBe(FOLDER)
     // The second process was told to resume the first one's session, and kept it.
     const runs = await fakes.runs()
     expect(runs).toHaveLength(2)
