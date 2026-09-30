@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { Alert, Badge, Button, Drawer, Group, ScrollArea, Stack, Text } from '@mantine/core'
-import { IconDownload, IconExternalLink, IconEyeOff, IconSparkles } from '@tabler/icons-react'
+import { IconDownload, IconEyeOff, IconSparkles, IconWorld } from '@tabler/icons-react'
 import { canFetchDetails, type Job } from '@shared/jobs-types'
 import { api, errorText } from '../../api'
+import { useNavigation } from '../../navigation'
 import { SOURCE_LABEL } from './labels'
 
 interface Props {
@@ -15,6 +16,7 @@ interface Props {
 
 /** One job: full description (or the board's summary), and what to do with it. */
 export function JobDrawer({ job, onClose, onChange, onTailor }: Props) {
+  const { navigate } = useNavigation()
   const [busy, setBusy] = useState<'details' | 'dismiss' | 'tailor' | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -88,11 +90,9 @@ export function JobDrawer({ job, onClose, onChange, onTailor }: Props) {
             </Button>
             <Button
               variant="default"
-              component="a"
-              href={job.url}
-              target="_blank"
-              rel="noreferrer"
-              leftSection={<IconExternalLink size={16} />}
+              disabled={!job.url}
+              onClick={() => navigate('browser', { url: job.url })}
+              leftSection={<IconWorld size={16} />}
             >
               Open posting
             </Button>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { tailorPrefillFor, type Job } from '@shared/jobs-types'
-import { DEFAULT_LOCATION, locationOf, PAGES, paramsFor } from './navigation'
+import { DEFAULT_LOCATION, FULL_BLEED, locationOf, PAGES, paramsFor } from './navigation'
 
 describe('navigation', () => {
   it('starts on the dashboard and lists every page once', () => {
@@ -41,5 +41,15 @@ describe('navigation', () => {
   it('allows omitting params where they are optional', () => {
     expect(locationOf('settings')).toEqual({ page: 'settings', params: undefined })
     expect(paramsFor(locationOf('profile', { section: 'experience' }), 'profile')?.section).toBe('experience')
+  })
+
+  it('has a full-bleed Browser page between Jobs and Tailor that takes a URL', () => {
+    expect(PAGES.indexOf('browser')).toBe(PAGES.indexOf('jobs') + 1)
+    expect(PAGES.indexOf('tailor')).toBe(PAGES.indexOf('browser') + 1)
+    expect(FULL_BLEED.has('browser')).toBe(true)
+    expect(FULL_BLEED.has('dashboard')).toBe(false)
+    const loc = locationOf('browser', { url: 'https://jobs.example.com/1' })
+    expect(paramsFor(loc, 'browser')?.url).toBe('https://jobs.example.com/1')
+    expect(locationOf('browser')).toEqual({ page: 'browser', params: undefined })
   })
 })

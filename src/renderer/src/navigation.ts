@@ -10,6 +10,8 @@ import { createContext, useContext } from 'react'
 export interface PageParams {
   dashboard: undefined
   jobs: undefined
+  /** Opens `url` in an in-app browser tab (or shows the open tabs when absent). */
+  browser: { url?: string } | undefined
   /** Pre-fills the Tailor form, e.g. from a job found on the Jobs page. */
   tailor:
     | {
@@ -38,7 +40,10 @@ export type ProfileSection = 'contact' | 'summary' | 'experience' | 'projects' |
 export type Location = { [P in Page]: { page: P; params: PageParams[P] } }[Page]
 
 /** Navbar order. */
-export const PAGES: readonly Page[] = ['dashboard', 'jobs', 'tailor', 'graph', 'profile', 'settings']
+export const PAGES: readonly Page[] = ['dashboard', 'jobs', 'browser', 'tailor', 'graph', 'profile', 'settings']
+
+/** Pages drawn edge to edge, without the shell's padding and max width. */
+export const FULL_BLEED: ReadonlySet<Page> = new Set<Page>(['browser'])
 
 export const DEFAULT_LOCATION: Location = { page: 'dashboard', params: undefined }
 

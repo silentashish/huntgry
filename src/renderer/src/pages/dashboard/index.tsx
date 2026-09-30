@@ -20,7 +20,7 @@ import {
   Title,
   Tooltip
 } from '@mantine/core'
-import { IconExternalLink, IconFileTypePdf, IconFolder, IconRefresh, IconSearch } from '@tabler/icons-react'
+import { IconFileTypePdf, IconFolder, IconRefresh, IconSearch, IconWorld } from '@tabler/icons-react'
 import {
   APPLICATION_STATUSES,
   type ApplicationRecord,
@@ -290,6 +290,7 @@ interface RowProps {
 }
 
 function Row({ app, onOpen, onUpdate, onAct }: RowProps) {
+  const { navigate } = useNavigation()
   const has = (f: string) => app.files.includes(f)
   // Controls inside the row must not also open the drawer.
   const stop = (e: React.MouseEvent) => e.stopPropagation()
@@ -361,13 +362,10 @@ function Row({ app, onOpen, onUpdate, onAct }: RowProps) {
               variant="subtle"
               color="gray"
               disabled={!app.jobUrl}
-              component="a"
-              href={app.jobUrl ?? undefined}
-              target="_blank"
-              rel="noreferrer"
+              onClick={() => app.jobUrl && navigate('browser', { url: app.jobUrl })}
               aria-label="Open job posting"
             >
-              <IconExternalLink size={18} />
+              <IconWorld size={18} />
             </ActionIcon>
           </Tooltip>
           <Tooltip label="Show in Finder">
