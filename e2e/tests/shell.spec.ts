@@ -12,8 +12,10 @@ test.describe('app shell', () => {
 
     for (const name of Object.keys(SHELL_PAGES) as ShellPage[]) {
       await shell.goTo(name)
-      // Only one entry is active at a time.
-      await expect(shell.navbar.getByRole('button').and(shell.navbar.locator('[data-active="true"]'))).toHaveCount(1)
+      // Only this entry is the current page; every other entry carries no aria-current at all.
+      for (const other of Object.keys(SHELL_PAGES) as ShellPage[]) {
+        if (other !== name) await expect(shell.navLink(other)).not.toHaveAttribute('aria-current')
+      }
       switch (name) {
         case 'browser':
           await expect(app.window.getByLabel('Address')).toBeVisible()

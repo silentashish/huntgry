@@ -40,9 +40,16 @@ export class Shell {
     await this.expectActive(name)
   }
 
-  /** The navbar marks `name` active and the page's heading (when it has one) is shown. */
+  /** Entries currently marked as the current page (`aria-current="page"`); exactly one while a page is open. */
+  get currentEntries(): Locator {
+    return this.navbar.getByRole('button').and(this.navbar.locator('[aria-current="page"]'))
+  }
+
+  /** `name` is the current page (`aria-current="page"`, Mantine's active state) and its heading (when it has one) is shown. */
   async expectActive(name: ShellPage): Promise<void> {
+    await expect(this.navLink(name)).toHaveAttribute('aria-current', 'page')
     await expect(this.navLink(name)).toHaveAttribute('data-active', 'true')
+    await expect(this.currentEntries).toHaveCount(1)
     const { heading } = SHELL_PAGES[name]
     if (heading) await expect(this.page.getByRole('heading', { name: heading, level: 2 })).toBeVisible()
   }

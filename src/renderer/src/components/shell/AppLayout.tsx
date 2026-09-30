@@ -104,6 +104,7 @@ export function AppLayout({ workspacePath, initialLocation, onSwitchWorkspace, c
                   description={hint}
                   leftSection={<PageIcon size={20} stroke={1.6} />}
                   active={location.page === page}
+                  aria-current={location.page === page ? 'page' : undefined}
                   onClick={() => nav.navigate(page)}
                   styles={{ description: { fontSize: 'var(--mantine-font-size-xs)' } }}
                   style={{ borderRadius: 'var(--mantine-radius-md)' }}
