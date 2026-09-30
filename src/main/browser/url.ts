@@ -1,4 +1,5 @@
 import { MAX_URL_LENGTH } from '@shared/browser-types'
+import { isLoopbackUrl } from '../cli/dev-urls'
 import { assertPublicUrl, resolveHost, type ResolveHost } from '../cli/public-url'
 
 /**
@@ -57,10 +58,16 @@ export function isAllowedNavigation(url: string): boolean {
 /**
  * Why `url` may not be loaded, or `null` when it may: a local or
  * private-network address, or a name that does not resolve (so a typo says
- * "Could not find …", not "private address").
+ * "Could not find …", not "private address"). `allowLoopback` is the dev-only
+ * mock-ATS allowance (`localUrlsAllowed`).
  */
-export async function refusalFor(url: string, resolve: ResolveHost = resolveHost): Promise<string | null> {
+export async function refusalFor(
+  url: string,
+  resolve: ResolveHost = resolveHost,
+  allowLoopback = false
+): Promise<string | null> {
   if (url === BLANK) return null
+  if (allowLoopback && isLoopbackUrl(url)) return null
   try {
     await assertPublicUrl(url, resolve)
     return null
