@@ -13,6 +13,7 @@ import {
   rejectUnknownKeys,
   requireAgentId,
   requireApplicationId,
+  base64DecodedBytes,
   requireBase64,
   requireBoolean,
   requireConcurrency,
@@ -362,8 +363,7 @@ export function requireFileChunk(v: unknown, what = 'file.chunk'): FileChunk {
   rejectUnknownKeys(r, ['applicationId', 'file', 'chunk', 'of', 'bytes', 'sha256', 'data'], what)
   const of = requireInteger(r.of, `${what}.of`, 1, 100_000)
   const data = requireBase64(r.data, `${what}.data`)
-  const decodedBytes = (data.length / 4) * 3 - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0)
-  if (decodedBytes > LIMITS.fileChunkBytes) invalid(`${what}.data exceeds ${LIMITS.fileChunkBytes} bytes.`)
+  if (base64DecodedBytes(data) > LIMITS.fileChunkBytes) invalid(`${what}.data exceeds ${LIMITS.fileChunkBytes} bytes.`)
   return {
     applicationId: requireApplicationId(r.applicationId, `${what}.applicationId`),
     file: requireRemoteFile(r.file, `${what}.file`),

@@ -313,6 +313,10 @@ describe('relay layer', () => {
     expect(requireRelayFrame(frame)).toEqual(frame)
     expect(requireRelayFrame({ to: 'dev-1', ref: 'e1', nonce, ct: 'AAAA', pushHint: 'needs-reply', pushText: 'Backend · Acme' })).toMatchObject({ pushHint: 'needs-reply' })
     expect(codeOf(() => requireRelayFrame({ ...frame, nonce: 'AAAA' }))).toBe('invalid')
+    // 32 base64 characters but 23 / 22 decoded bytes: padding must not pass as a 24-byte nonce.
+    expect(codeOf(() => requireRelayFrame({ ...frame, nonce: Buffer.alloc(23, 7).toString('base64') }))).toBe('invalid')
+    expect(codeOf(() => requireRelayFrame({ ...frame, nonce: Buffer.alloc(22, 7).toString('base64') }))).toBe('invalid')
+    expect(codeOf(() => requireRelayFrame({ ...frame, nonce: Buffer.alloc(25, 7).toString('base64') }))).toBe('invalid')
     expect(codeOf(() => requireRelayFrame({ ...frame, ct: '***' }))).toBe('invalid')
     expect(codeOf(() => requireRelayFrame({ ...frame, ttl: 0 }))).toBe('invalid')
     expect(codeOf(() => requireRelayFrame({ ...frame, pushHint: 'needs-reply' }))).toBe('invalid') // not towards a phone

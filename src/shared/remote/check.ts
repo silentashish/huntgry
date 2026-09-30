@@ -122,9 +122,16 @@ export function rejectUnknownKeys(record: Record<string, unknown>, allowed: read
 }
 
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/
+
+/** Decoded byte length of a string that already passed `requireBase64` (padding counted). */
+export function base64DecodedBytes(v: string): number {
+  return (v.length / 4) * 3 - (v.endsWith('==') ? 2 : v.endsWith('=') ? 1 : 0)
+}
+
+/** Canonical base64; with `bytes`, exactly that many *decoded* bytes (padding counted, so `=` cannot hide a short value). */
 export function requireBase64(v: unknown, what: string, bytes?: number): string {
   if (typeof v !== 'string' || v.length % 4 !== 0 || !BASE64_RE.test(v)) invalid(`${what} must be base64.`)
-  if (bytes !== undefined && Math.ceil(bytes / 3) * 4 !== (v as string).length) invalid(`${what} must be ${bytes} bytes.`)
+  if (bytes !== undefined && base64DecodedBytes(v as string) !== bytes) invalid(`${what} must be ${bytes} bytes.`)
   return v as string
 }
 

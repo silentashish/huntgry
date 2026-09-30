@@ -50,3 +50,13 @@ describe('utf8 helpers', () => {
     expect(utf8Bytes(truncateUtf8('😀'.repeat(100), 33).text)).toBe(32)
   })
 })
+
+describe('base64 length check', () => {
+  it('counts decoded bytes, so padding cannot hide a short value', async () => {
+    const { base64DecodedBytes, requireBase64 } = await import('./check')
+    for (const n of [0, 1, 2, 3, 22, 23, 24, 25]) expect(base64DecodedBytes(Buffer.alloc(n).toString('base64'))).toBe(n)
+    expect(() => requireBase64(Buffer.alloc(24).toString('base64'), 'nonce', 24)).not.toThrow()
+    expect(() => requireBase64(Buffer.alloc(23).toString('base64'), 'nonce', 24)).toThrow(/24 bytes/)
+    expect(() => requireBase64(Buffer.alloc(22).toString('base64'), 'nonce', 24)).toThrow(/24 bytes/)
+  })
+})
