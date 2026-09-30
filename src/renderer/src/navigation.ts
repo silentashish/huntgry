@@ -20,6 +20,8 @@ export interface PageParams {
         jobId?: string
         /** Job board the job came from, recorded with the application. */
         source?: JobSourceTag
+        /** `false` when `jobDescription` is only the board's summary, so the form can say so. */
+        descriptionComplete?: boolean
       }
     | undefined
   graph: { nodeId?: string } | undefined

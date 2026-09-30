@@ -381,6 +381,26 @@ describe('posting fetch (main process, no network for Claude)', () => {
     ).rejects.toThrow(/Could not load/)
   })
 
+  it('points to the Jobs page when a job board refuses the request', async () => {
+    const refused = (status: number, headers: Record<string, string> = {}): Fetcher =>
+      async () =>
+        new Response('<html>Just a moment…</html>', { status, headers: { 'content-type': 'text/html', ...headers } })
+    await expect(
+      fetchPostingText('https://www.indeed.com/viewjob?jk=2bd2cff5c29c9fca', refused(401, { server: 'cloudflare' }), dns())
+    ).rejects.toThrow(/^www\.indeed\.com does not let Huntgry read job pages directly\. Open the job on the Jobs page/)
+    await expect(fetchPostingText('https://hiringcafe.com/job/1', refused(403), dns())).rejects.toThrow(
+      /hiringcafe\.com does not let Huntgry.*Jobs page/
+    )
+    await expect(fetchPostingText('https://uk.indeed.com/viewjob?jk=1', refused(403), dns())).rejects.toThrow(/Jobs page/)
+    // Any other Cloudflare bot wall: actionable, but no Jobs page hint.
+    await expect(
+      fetchPostingText('https://careers.example/1', refused(403, { server: 'cloudflare' }), dns())
+    ).rejects.toThrow(/careers\.example does not let Huntgry.*human check.*Paste/)
+    // Not a board, not Cloudflare, or not a refusal: the plain status.
+    await expect(fetchPostingText('https://notindeed.com/1', refused(401), dns())).rejects.toThrow(/answered 401/)
+    await expect(fetchPostingText('https://www.indeed.com/x', refused(500), dns())).rejects.toThrow(/answered 500/)
+  })
+
   /** Serves `routes[url]`: a redirect target string, or HTML. Records every URL requested. */
   const site = (routes: Record<string, { redirect: string } | string>, seen: string[]): Fetcher =>
     async (url, init) => {

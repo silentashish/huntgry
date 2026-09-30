@@ -108,13 +108,16 @@ Features only add files, plus one line in each registry:
 **Jobs** searches hiring.cafe and Indeed when you click Search. Each board's search page is
 opened once in a hidden browser window, because both reject plain HTTP clients. You can
 also add any posting by URL, or paste it. Saved jobs live in `<workspace>/.huntgry/jobs/`.
-**Tailor resume** sends a job to the Tailor page. Indeed shows full descriptions only
-after a human check, so for Indeed jobs open the posting and paste the text.
+**Tailor resume** sends a job to the Tailor page with its saved description, company, role
+and job id (the board's id), first fetching the full posting from the employer's page when
+there is one. Indeed shows full descriptions only after a human check, so Indeed jobs arrive
+with the search snippet: the Tailor page says so, and you can paste the full text first.
 
 ## Tailoring a resume
 
 **Tailor** runs the installed resume-tailor skill through the `claude` CLI, in the open
-workspace: paste a job description or a posting URL, follow Claude's gap analysis, answer
+workspace: paste a job description, or give an employer or ATS posting URL (job board URLs
+such as Indeed cannot be read directly; send those from **Jobs**), follow Claude's gap analysis, answer
 its approval question, and open the resulting `resume.pdf` / `cover.pdf`. Runs are kept in
 `<workspace>/.huntgry/runs/` and can be reopened and continued after a restart.
 
