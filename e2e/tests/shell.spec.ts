@@ -32,6 +32,7 @@ test.describe('app shell', () => {
     await shell.expectActive('dashboard')
     await expect(app.window.getByText('Acme', { exact: true }).first()).toBeVisible()
     await expect(app.window.getByText('Globex', { exact: true }).first()).toBeVisible()
-    await expect(app.window.getByRole('heading', { name: 'No applications yet' })).toHaveCount(0)
+    // #50 deliberate failure: proves the HTML report and the traces are uploaded; reverted right after.
+    await expect(app.window.getByRole('heading', { name: 'No applications yet' })).toHaveCount(1)
   })
 })
