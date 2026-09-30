@@ -60,7 +60,14 @@ proof of the artifact path besides the deliberate failure below.
 
 ## How this was tested
 
-RUNS_PLACEHOLDER
+| Run | Commit | Result | Notes |
+| --- | --- | --- | --- |
+| [36789448194](https://github.com/silentashish/huntgry/actions/runs/36789448194) (first) | `ed781c5` | `e2e (macOS)` ✅ 81 passed, 6m 35s of tests, job 7m 52s wall | caches cold (`Cache not found`), saved at the end; the Linux trial job in the same run failed at launch (see "Linux") |
+| [36790426121](https://github.com/silentashish/huntgry/actions/runs/36790426121) (deliberate failure) | `5b8286e` | `e2e (macOS)` ❌ 1 failed, 80 passed; workflow still "success" (`continue-on-error`) | npm cache and `electron-macOS-ARM64-44.4.5` both `Cache hit`; artifacts `e2e-html-report-macOS` (1.2 MB) and `e2e-traces-macOS` (0.7 MB, `trace.zip` from the first retry, screenshots, `error-context.md`), expiring after 7 days |
+| [36791202675](https://github.com/silentashish/huntgry/actions/runs/36791202675) (revert) | `89aebd2` | `e2e (macOS)` ✅ 81 passed, 4m 20s of tests, job 5m 15s wall | both caches hit again |
+| [36789448201](https://github.com/silentashish/huntgry/actions/runs/36789448201) / [36791202669](https://github.com/silentashish/huntgry/actions/runs/36791202669) | `ed781c5` / `89aebd2` | `unit + typecheck` ✅ about 1 min / 44 s | cold, then npm and Electron caches hit |
+
+The push to `main` and `workflow_dispatch` runs happen after the merge (test plan of #50).
 
 Locally, on the integrated branch:
 
