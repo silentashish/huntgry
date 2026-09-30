@@ -511,7 +511,13 @@ export class TailorQueue {
       this.lastSpawn = this.now()
       run = await this.deps.start(params, item.agent)
     } catch (err) {
-      if (item.status === 'preparing') this.fail(item, message(err))
+      // Starting fails before any Claude process for reasons that are not about this job (Claude
+      // signed out, too old or missing, no skill): pause, so the other jobs wait for the fix
+      // instead of failing one after another. Resume or Retry once it is fixed.
+      if (item.status === 'preparing') {
+        this.paused = true
+        this.fail(item, message(err))
+      }
       return
     }
     item.runId = run.id

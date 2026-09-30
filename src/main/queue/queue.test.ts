@@ -163,6 +163,29 @@ describe('TailorQueue', () => {
     expect(tailored).not.toContain('indeed:x')
   })
 
+  it('pauses when Claude cannot be started (e.g. signed out), leaving the other jobs queued', async () => {
+    let signedIn = false
+    queue = new TailorQueue(
+      deps({
+        start: async (params) => {
+          if (!signedIn) throw new Error('Claude Code is not signed in. Run claude auth login in a terminal.')
+          started.push({ params, at: Date.now() })
+          return manager.start(params, ctx())
+        }
+      })
+    )
+    for (const id of ['url:a', 'url:b']) jobs.set(id, job(id))
+    await queue.enqueue({ jobIds: ['url:a', 'url:b'], options })
+    const s = await until((st) => st.paused && st.items[0].status === 'failed')
+    expect(s.items[0].error).toMatch(/not signed in/)
+    expect(s.items[1].status).toBe('queued')
+    expect(tailored).toEqual([])
+    signedIn = true
+    await queue.retry(s.items[0].id)
+    await until(all('needs-reply'))
+    expect(started).toHaveLength(2)
+  })
+
   it('isolates a crashing run and keeps the others going', async () => {
     jobs.set('url:a', job('url:a'))
     jobs.set('url:b', job('url:b'))

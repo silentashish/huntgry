@@ -99,6 +99,11 @@ sequenceDiagram
   frees, because finishing started jobs matters more than starting new ones. Pause does not
   hold them: it only stops new jobs. The alternative, refusing the reply, would make the user
   come back later for no reason.
+- **A start error pauses the queue.** Queue runs go through the same `startTailorRun` /
+  `context()` as the Start button, including #19's sign-in and Claude Code version checks.
+  When starting fails before any process exists (signed out, CLI missing or too old, no skill),
+  the cause is not the job. So the item fails with that message and the queue pauses, and the
+  other jobs wait for the fix instead of failing one after another.
 - **Enqueueing and Retry resume the queue.** Queuing jobs is the user asking for them to start.
   Only a restart, a workspace switch or the Pause button pauses it.
 - **Bulk runs never start from a board summary.** In the single-job flow (#20) the Tailor form
