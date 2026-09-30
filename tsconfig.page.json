@@ -1,0 +1,20 @@
+// DOM code that runs inside job pages (the autofill engine and the browser tabs' preload) plus the apply
+// service test that drives it on jsdom. Not composite, so imported main modules come along without listing them.
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": { "@shared/*": ["src/shared/*"] }
+  },
+  "include": ["src/preload/browser-page.ts", "src/shared/**/*", "src/main/apply/apply.test.ts"]
+}

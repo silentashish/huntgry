@@ -3,6 +3,7 @@ import { APPLICATIONS_CHANNELS, applicationFileUrl, type ApplicationsApi } from 
 
 export const applications: ApplicationsApi = {
   list: () => ipcRenderer.invoke(APPLICATIONS_CHANNELS.list),
+  get: (id) => ipcRenderer.invoke(APPLICATIONS_CHANNELS.get, id),
   updateTracking: (id, patch) => ipcRenderer.invoke(APPLICATIONS_CHANNELS.updateTracking, id, patch),
   readJobDescription: (id) => ipcRenderer.invoke(APPLICATIONS_CHANNELS.readJobDescription, id),
   openFile: (id, file) => ipcRenderer.invoke(APPLICATIONS_CHANNELS.openFile, id, file),

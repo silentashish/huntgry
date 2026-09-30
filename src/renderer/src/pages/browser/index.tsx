@@ -12,6 +12,7 @@ import {
 import type { BrowserState } from '@shared/browser-types'
 import { api, errorText } from '../../api'
 import type { PageParams } from '../../navigation'
+import { ApplyPanel } from './ApplyPanel'
 import { activeTab, displayUrl, EMPTY_STATE, findTab, tabLabel } from './state'
 
 /**
@@ -227,23 +228,27 @@ export function BrowserPage({ params }: { params: PageParams['browser'] }) {
         </Alert>
       )}
 
-      <Box ref={placeholder} style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        {state.tabs.length === 0 && (
-          <Center h="100%">
-            <Stack align="center" gap="xs" maw={420}>
-              <IconWorld size={40} stroke={1.3} color="var(--mantine-color-dimmed)" />
-              <Text fw={600}>No pages open</Text>
-              <Text size="sm" c="dimmed" ta="center">
-                Open a posting from Jobs or the Dashboard, or enter a URL above. Pages stay open while you use the rest of
-                the app.
-              </Text>
-              <Button size="xs" variant="light" leftSection={<IconPlus size={14} />} onClick={newTab}>
-                New tab
-              </Button>
-            </Stack>
-          </Center>
-        )}
-      </Box>
+      <Group gap={0} wrap="nowrap" align="stretch" style={{ flex: 1, minHeight: 0 }}>
+        <Box ref={placeholder} style={{ flex: 1, minWidth: 0, minHeight: 0, position: 'relative' }}>
+          {state.tabs.length === 0 && (
+            <Center h="100%">
+              <Stack align="center" gap="xs" maw={420}>
+                <IconWorld size={40} stroke={1.3} color="var(--mantine-color-dimmed)" />
+                <Text fw={600}>No pages open</Text>
+                <Text size="sm" c="dimmed" ta="center">
+                  Open a posting from Jobs or the Dashboard, or enter a URL above. Pages stay open while you use the rest of
+                  the app.
+                </Text>
+                <Button size="xs" variant="light" leftSection={<IconPlus size={14} />} onClick={newTab}>
+                  New tab
+                </Button>
+              </Stack>
+            </Center>
+          )}
+        </Box>
+        {/* Auto-apply (#24): beside the page, never over it (the page is a native view). */}
+        <ApplyPanel activeTabId={state.activeId} />
+      </Group>
     </Stack>
   )
 }

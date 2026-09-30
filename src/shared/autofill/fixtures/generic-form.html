@@ -1,0 +1,36 @@
+<!-- A company-hosted application form with no known ATS, for the generic label/autocomplete heuristic.
+     Written 2026-09-30 to exercise its rules: autocomplete beats labels, negatives ("Previous employer",
+     "Emergency contact"), an ambiguous pair (two "Phone" fields), a CV file input, and fields that must stay
+     untouched (EEO select, consent checkbox, radio group, password). Added after review: labels that contradict
+     their field names (previous_employer labelled "Company", reference_email labelled "Email") and uploads that
+     are not the resume (portfolio without accept, a PDF work sample). -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>Apply - Software Engineer - Example Co</title></head><body>
+<h1>Apply: Software Engineer</h1>
+<form id="apply" action="/generic/submit" method="POST" enctype="multipart/form-data">
+  <p><label for="f1">Name</label> <input id="f1" name="applicant_a" autocomplete="given-name" required></p>
+  <p><label for="f2">Surname</label> <input id="f2" name="applicant_b" required></p>
+  <p><label>Email address <input type="email" name="contact" required></label></p>
+  <p><label for="p1">Phone</label> <input id="p1" name="phone_home" type="tel"></p>
+  <p><label for="p2">Phone</label> <input id="p2" name="phone_work" type="tel"></p>
+  <p><label for="city">City</label> <input id="city" name="city"></p>
+  <p><label for="li">LinkedIn profile</label> <input id="li" name="social_1" type="url"></p>
+  <p><label for="gh">GitHub</label> <input id="gh" name="social_2" type="url"></p>
+  <p><label for="site">Personal website</label> <input id="site" name="social_3" type="url"></p>
+  <p><label for="prev">Previous employer</label> <input id="prev" name="history_employer"></p>
+  <p><label for="em">Emergency contact phone</label> <input id="em" name="ice" type="tel"></p>
+  <p><label for="start">Earliest start date</label> <input id="start" name="start" type="date"></p>
+  <p><label for="pw">Create a password</label> <input id="pw" name="pw" type="password"></p>
+  <p><label>Company <input name="previous_employer"></label></p>
+  <p><label for="ref">Email</label> <input id="ref" name="reference_email" type="email"></p>
+  <p><label for="cv">Upload your CV</label> <input id="cv" name="attachment_1" type="file" accept=".pdf,.docx"></p>
+  <p><label for="pf">Portfolio</label> <input id="pf" name="portfolio" type="file"></p>
+  <p><label for="ws">Work sample</label> <input id="ws" name="attachment_2" type="file" accept=".pdf"></p>
+  <p><label for="why">Why do you want to work here?</label> <textarea id="why" name="why"></textarea></p>
+  <p><label for="gender">Gender (optional)</label> <select id="gender" name="gender"><option value="">Choose</option><option>Prefer not to say</option></select></p>
+  <fieldset><legend>Are you authorized to work in the country?</legend>
+    <label><input type="radio" name="auth" value="yes"> Yes</label> <label><input type="radio" name="auth" value="no"> No</label>
+  </fieldset>
+  <p><label><input type="checkbox" name="consent" required> I consent to the processing of my data.</label></p>
+  <p><button type="submit">Send application</button></p>
+</form>
+</body></html>

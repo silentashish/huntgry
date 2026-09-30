@@ -1,4 +1,5 @@
 import {
+  app,
   clipboard,
   Menu,
   shell,
@@ -8,7 +9,9 @@ import {
   type MenuItemConstructorOptions,
   type WebContents
 } from 'electron'
+import { join } from 'node:path'
 import type { BrowserRect, BrowserState } from '@shared/browser-types'
+import { localUrlsAllowed } from '../cli/dev-urls'
 import { emit } from '../events'
 import { browserSession, setDownloadRefusedHandler } from './session'
 import { TabRegistry } from './tabs'
@@ -20,6 +23,9 @@ import { isAllowedNavigation, loadErrorMessage, normalizeAddress, refusalFor } f
  * for them. Main owns every page (so #24 can drive it through
  * `getWebContents` / `attachDebugger`); the renderer only sees `BrowserState`.
  */
+/** Dev builds with HUNTGRY_ALLOW_LOCAL_URLS=1 may open the local mock ATS (see cli/dev-urls.ts). */
+const refuse = (url: string) => refusalFor(url, undefined, localUrlsAllowed(app.isPackaged))
+
 export class BrowserManager {
   private readonly registry = new TabRegistry()
   private readonly views = new Map<string, WebContentsView>()
@@ -46,11 +52,17 @@ export class BrowserManager {
 
   /** Opens a tab; blank `input` opens an empty one. */
   async open(input: string, activate = true): Promise<BrowserState> {
+    await this.openTab(input, activate)
+    return this.state()
+  }
+
+  /** #24 hook: opens a tab like `open` and returns its id. */
+  async openTab(input: string, activate = true): Promise<string> {
     this.assertOpen()
     const address = input.trim() ? normalizeAddress(input) : ({ ok: true, url: 'about:blank' } as const)
     if (!address.ok) throw new Error(address.message)
     // Refuse before creating the tab, so no tab ever holds an address it may not load.
-    const refusal = await refusalFor(address.url)
+    const refusal = await refuse(address.url)
     if (refusal) throw new Error(refusal)
     // The window may have closed during the DNS check.
     this.assertOpen()
@@ -62,7 +74,9 @@ export class BrowserManager {
         contextIsolation: true,
         nodeIntegration: false,
         nodeIntegrationInSubFrames: false,
-        webSecurity: true
+        webSecurity: true,
+        // Auto-apply's form filler (#24): isolated world, exposes nothing to the page, top frame only.
+        preload: join(__dirname, '../preload/browser-page.js')
       }
     })
     view.setBackgroundColor('#ffffff')
@@ -73,7 +87,7 @@ export class BrowserManager {
     this.load(tab.id, address.url)
     this.layout()
     this.changed()
-    return this.state()
+    return tab.id
   }
 
   close(id: string): BrowserState {
@@ -99,7 +113,7 @@ export class BrowserManager {
     if (!address.ok) throw new Error(address.message)
     this.contents(id)
     // A refused address leaves the tab as it was (page, URL and Open in browser all still agree).
-    const refusal = await refusalFor(address.url)
+    const refusal = await refuse(address.url)
     if (refusal) throw new Error(refusal)
     this.load(id, address.url)
     this.changed()
@@ -240,7 +254,7 @@ export class BrowserManager {
       if (!error) return
       // The request guard cancels without a reason; re-check to tell a private address from an unknown name.
       if (description === 'ERR_BLOCKED_BY_CLIENT') {
-        void refusalFor(url).then((refusal) => sync({ error: refusal ?? error, loading: false }))
+        void refuse(url).then((refusal) => sync({ error: refusal ?? error, loading: false }))
       } else {
         sync({ error, loading: false })
       }

@@ -16,9 +16,10 @@ import {
   Textarea,
   Tooltip
 } from '@mantine/core'
-import { IconFileTypePdf, IconFolder, IconWorld } from '@tabler/icons-react'
+import { IconFileTypePdf, IconFolder, IconSend, IconWorld } from '@tabler/icons-react'
 import { APPLICATION_STATUSES, type ApplicationRecord, type ApplicationTracking } from '@shared/applications-types'
 import { api, errorText } from '../../api'
+import { applyBlocker } from '../../components/apply/blocker'
 import { useNavigation } from '../../navigation'
 import { STATUS_META } from './status'
 
@@ -26,10 +27,13 @@ interface Props {
   app: ApplicationRecord | null
   onClose(): void
   onUpdate(patch: Partial<ApplicationTracking>): Promise<void>
+  /** Auto-apply: open the apply page in the in-app browser and fill it. */
+  onApply(app: ApplicationRecord): void
+  applying: boolean
 }
 
 /** One application: page previews, the saved job description, tracking and notes. */
-export function ApplicationDrawer({ app, onClose, onUpdate }: Props) {
+export function ApplicationDrawer({ app, onClose, onUpdate, onApply, applying }: Props) {
   const { navigate } = useNavigation()
   const [jd, setJd] = useState<string | null>(null)
   const [notes, setNotes] = useState('')
@@ -76,6 +80,17 @@ export function ApplicationDrawer({ app, onClose, onUpdate }: Props) {
         <Stack gap="md">
           {app.jobTitle && <Text c="dimmed">{app.jobTitle}</Text>}
           <Group gap="xs">
+            <Tooltip label={applyBlocker(app) ?? 'Fills the form and attaches resume.pdf; you review and submit'} multiline maw={260}>
+              <Button
+                size="xs"
+                leftSection={<IconSend size={16} />}
+                disabled={applyBlocker(app) !== null}
+                loading={applying}
+                onClick={() => onApply(app)}
+              >
+                Apply in browser
+              </Button>
+            </Tooltip>
             {has('resume.pdf') && (
               <Button
                 size="xs"

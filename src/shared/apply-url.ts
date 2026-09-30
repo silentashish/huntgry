@@ -1,0 +1,66 @@
+import type { ApplyAts } from './apply-types'
+
+/**
+ * Where to apply for a posting, and which ATS serves it. Pure, so it is
+ * shared by main (opening the tab) and the guest page (choosing an adapter).
+ */
+
+const GREENHOUSE_HOST = /(^|\.)greenhouse\.io$/i
+const LEVER_HOST = /(^|\.)lever\.co$/i
+const ASHBY_HOST = /(^|\.)ashbyhq\.com$/i
+
+/** The ATS an address belongs to by host alone (`generic` when unknown). */
+export function atsForHost(host: string): ApplyAts {
+  if (GREENHOUSE_HOST.test(host)) return 'greenhouse'
+  if (LEVER_HOST.test(host)) return 'lever'
+  return 'generic'
+}
+
+/**
+ * The page with the application form for a posting URL: Lever and Ashby put it
+ * on `<posting>/apply` and `<posting>/application`; Greenhouse and everything
+ * else show it on the posting itself. Idempotent; query strings are kept.
+ * Throws for anything but http(s).
+ */
+export function applyUrlFor(jobUrl: string): string {
+  let url: URL
+  try {
+    url = new URL(jobUrl.trim())
+  } catch {
+    throw new Error('The posting URL is not valid.')
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('The posting URL must be http(s).')
+  const parts = url.pathname.split('/').filter(Boolean)
+  // jobs.lever.co/<company>/<posting-id>[/apply], jobs.ashbyhq.com/<company>/<posting-id>[/application]
+  const page = LEVER_HOST.test(url.hostname) ? 'apply' : ASHBY_HOST.test(url.hostname) ? 'application' : null
+  // Other paths are left exactly as they are (some sites care about a trailing slash).
+  if (page && parts.length === 2) url.pathname = `/${[...parts, page].join('/')}`
+  url.hash = ''
+  return url.href
+}
+
+/**
+ * Whether Huntgry may fill `pageUrl` on its own during an apply session: the
+ * posting's own origin (where the tab was opened), or a Greenhouse / Lever
+ * host over https. Anything else (a redirect to another site, a page that
+ * merely looks like an ATS form) waits for the user to press Fill form.
+ */
+export function isTrustedApplyPage(pageUrl: string, applyUrl: string): boolean {
+  try {
+    const page = new URL(pageUrl)
+    if (page.origin === new URL(applyUrl).origin) return true
+    return page.protocol === 'https:' && atsForHost(page.hostname) !== 'generic'
+  } catch {
+    return false
+  }
+}
+
+/** A Greenhouse embedded-form URL (`…greenhouse.io/embed/job_app?…`), safe to open in the tab directly. */
+export function isGreenhouseEmbedUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && GREENHOUSE_HOST.test(url.hostname) && url.pathname === '/embed/job_app'
+  } catch {
+    return false
+  }
+}

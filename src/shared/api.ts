@@ -1,4 +1,5 @@
 import type { ApplicationsApi } from './applications-types'
+import type { ApplyApi } from './apply-types'
 import type { BrowserApi } from './browser-types'
 import type { Subscribe } from './events'
 import type { RunnerApi } from './runner-types'
@@ -29,6 +30,8 @@ export interface HuntgryApi {
   browser: BrowserApi
   /** Bulk tailoring: jobs queued from the Jobs page, started a few at a time. */
   queue: QueueApi
+  /** Auto-apply: fill a posting's application form in a browser tab (never submits). */
+  apply: ApplyApi
   /** Main → renderer events, restricted to `EVENT_CHANNELS`. */
   on: Subscribe
 }

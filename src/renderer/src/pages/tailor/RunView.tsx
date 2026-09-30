@@ -19,6 +19,7 @@ import { IconFileTypePdf, IconFolder, IconPlayerStop, IconSend } from '@tabler/i
 import type { RunSummary } from '@shared/runner-types'
 import { buildTranscript } from '@shared/transcript'
 import { api, errorText } from '../../api'
+import { useApply } from '../../components/apply/useApply'
 import { useNavigation } from '../../navigation'
 import { STATUS_LABEL } from './status'
 import { Transcript } from './Transcript'
@@ -38,6 +39,7 @@ export function RunView({ run, events, heldReply = false }: Props) {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
+  const applier = useApply(setError)
 
   // Block body: Chromium's scrollIntoView returns a Promise, which React would take for a cleanup function.
   useEffect(() => {
@@ -93,6 +95,17 @@ export function RunView({ run, events, heldReply = false }: Props) {
           </Text>
           {(run.outputFolder || run.live) && (
             <Group gap="xs">
+              {run.outputFolder && has('resume.pdf') && (
+                <Button
+                  size="xs"
+                  leftSection={<IconSend size={16} />}
+                  loading={applier.busy}
+                  onClick={() => run.outputFolder && applier.apply({ id: run.outputFolder })}
+                  title="Fill the posting's application form in the in-app browser; you submit it yourself"
+                >
+                  Apply
+                </Button>
+              )}
               {run.outputFolder && has('resume.pdf') && (
                 <Button
                   size="xs"
@@ -228,6 +241,7 @@ export function RunView({ run, events, heldReply = false }: Props) {
         </Card>
       </Box>
       <div ref={bottom} />
+      {applier.modal}
     </Stack>
   )
 }

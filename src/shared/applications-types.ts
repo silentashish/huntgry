@@ -59,6 +59,8 @@ export interface ApplicationsList {
 
 export interface ApplicationsApi {
   list(): Promise<ApplicationsList>
+  /** One application by id, read directly (never limited by the list's scan budget). */
+  get(id: string): Promise<ApplicationRecord>
   /** Merge a change into `huntgry.json`; returns the updated record. */
   updateTracking(id: string, patch: Partial<ApplicationTracking>): Promise<ApplicationRecord>
   readJobDescription(id: string): Promise<string>
@@ -71,6 +73,7 @@ export interface ApplicationsApi {
 
 export const APPLICATIONS_CHANNELS = {
   list: 'applications:list',
+  get: 'applications:get',
   updateTracking: 'applications:update-tracking',
   readJobDescription: 'applications:read-job-description',
   openFile: 'applications:open-file',

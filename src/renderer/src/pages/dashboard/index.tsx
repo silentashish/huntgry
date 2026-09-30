@@ -20,7 +20,7 @@ import {
   Title,
   Tooltip
 } from '@mantine/core'
-import { IconFileTypePdf, IconFolder, IconRefresh, IconSearch, IconWorld } from '@tabler/icons-react'
+import { IconFileTypePdf, IconFolder, IconRefresh, IconSearch, IconSend, IconWorld } from '@tabler/icons-react'
 import {
   APPLICATION_STATUSES,
   type ApplicationRecord,
@@ -29,6 +29,8 @@ import {
   type ApplicationTracking
 } from '@shared/applications-types'
 import { api, errorText } from '../../api'
+import { APPLY_HINT, applyBlocker } from '../../components/apply/blocker'
+import { useApply } from '../../components/apply/useApply'
 import { SkillsSummaryCard } from '../../components/graph/SkillsSummaryCard'
 import { useKnowledgeGraph } from '../../components/graph/useKnowledgeGraph'
 import { useNavigation } from '../../navigation'
@@ -46,6 +48,7 @@ export function DashboardPage() {
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<Filter>(DEFAULT_FILTER)
   const [openId, setOpenId] = useState<string | null>(null)
+  const applier = useApply(setError)
 
   // Bumped by every successful tracking update; a list() that started before it may hold stale tracking.
   const generation = useRef(0)
@@ -204,7 +207,7 @@ export function DashboardPage() {
                   <Table.Th w={120}>Created</Table.Th>
                   <Table.Th w={160}>Status</Table.Th>
                   <Table.Th w={150}>Build</Table.Th>
-                  <Table.Th w={150} />
+                  <Table.Th w={180} />
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -215,6 +218,8 @@ export function DashboardPage() {
                     onOpen={() => setOpenId(a.id)}
                     onUpdate={(p) => act(() => update(a.id, p))}
                     onAct={act}
+                    onApply={() => applier.apply(a)}
+                    applying={applier.busy}
                   />
                 ))}
                 {shown.length === 0 && (
@@ -240,7 +245,14 @@ export function DashboardPage() {
         <DashboardSkills />
       </SimpleGrid>
 
-      <ApplicationDrawer app={open} onClose={() => setOpenId(null)} onUpdate={(p) => update(open!.id, p)} />
+      <ApplicationDrawer
+        app={open}
+        onClose={() => setOpenId(null)}
+        onUpdate={(p) => update(open!.id, p)}
+        onApply={(a) => applier.apply(a)}
+        applying={applier.busy}
+      />
+      {applier.modal}
     </Stack>
   )
 }
@@ -287,9 +299,12 @@ interface RowProps {
   onOpen(): void
   onUpdate(patch: Partial<ApplicationTracking>): void
   onAct(fn: () => Promise<unknown>): void
+  onApply(): void
+  /** An Apply is starting; every row's Apply waits for it. */
+  applying: boolean
 }
 
-function Row({ app, onOpen, onUpdate, onAct }: RowProps) {
+function Row({ app, onOpen, onUpdate, onAct, onApply, applying }: RowProps) {
   const { navigate } = useNavigation()
   const has = (f: string) => app.files.includes(f)
   // Controls inside the row must not also open the drawer.
@@ -336,6 +351,17 @@ function Row({ app, onOpen, onUpdate, onAct }: RowProps) {
       </Table.Td>
       <Table.Td onClick={stop}>
         <Group gap={4} justify="flex-end" wrap="nowrap">
+          <Tooltip label={applyBlocker(app) ?? APPLY_HINT} multiline maw={260}>
+            <ActionIcon
+              variant="subtle"
+              color="teal"
+              disabled={applyBlocker(app) !== null || applying}
+              onClick={onApply}
+              aria-label="Apply"
+            >
+              <IconSend size={18} />
+            </ActionIcon>
+          </Tooltip>
           <Tooltip label="Open resume PDF">
             <ActionIcon
               variant="subtle"
