@@ -139,6 +139,13 @@ such as Indeed cannot be read directly; send those from **Jobs**), follow Claude
 its approval question, and open the resulting `resume.pdf` / `cover.pdf`. Runs are kept in
 `<workspace>/.huntgry/runs/` and can be reopened and continued after a restart.
 
+To tailor several jobs at once, tick them on **Jobs** and press **Tailor all**. Huntgry
+queues one run per job in `<workspace>/.huntgry/queue.json` and starts them itself, two at a
+time by default (up to four), a couple of seconds apart. The queue is shown at the top of
+**Tailor**. Each run still stops at the approval step: it shows **Needs your reply**, and the
+next job starts in its place. Jobs with only a board summary (Indeed) are skipped with a note.
+After a restart the queue is paused until you press **Resume**.
+
 **Settings** shows whether `claude`, the skill and its dependencies are found, which
 Claude Code version is installed and whether it is signed in. **Install Claude Code** runs
 the official installer, **Update Claude Code** updates an older one (Homebrew installs get
