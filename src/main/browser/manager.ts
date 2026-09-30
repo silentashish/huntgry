@@ -11,7 +11,7 @@ import {
 } from 'electron'
 import { join } from 'node:path'
 import type { BrowserRect, BrowserState } from '@shared/browser-types'
-import { localUrlsAllowed } from '../cli/dev-urls'
+import { localUrlsAllowed, loopbackOnly } from '../cli/dev-urls'
 import { emit } from '../events'
 import { browserSession, setDownloadRefusedHandler } from './session'
 import { TabRegistry } from './tabs'
@@ -23,8 +23,8 @@ import { isAllowedNavigation, loadErrorMessage, normalizeAddress, refusalFor } f
  * for them. Main owns every page (so #24 can drive it through
  * `getWebContents` / `attachDebugger`); the renderer only sees `BrowserState`.
  */
-/** Dev builds with HUNTGRY_ALLOW_LOCAL_URLS=1 may open the local mock ATS (see cli/dev-urls.ts). */
-const refuse = (url: string) => refusalFor(url, undefined, localUrlsAllowed(app.isPackaged))
+/** Dev builds with HUNTGRY_ALLOW_LOCAL_URLS=1 may open the local mock ATS; HUNTGRY_E2E_LOOPBACK_ONLY=1 allows nothing else (see cli/dev-urls.ts). */
+const refuse = (url: string) => refusalFor(url, undefined, localUrlsAllowed(app.isPackaged), loopbackOnly(app.isPackaged))
 
 export class BrowserManager {
   private readonly registry = new TabRegistry()

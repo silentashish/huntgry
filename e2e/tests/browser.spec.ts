@@ -115,10 +115,30 @@ test.describe('browser tabs', () => {
       await expect(browser.address).toHaveValue(input)
     }
     expect((await listTabs(app.electronApp)).map((t) => t.url)).toEqual([`https://localhost:${mock.port}/page/one`])
-    // A public name goes through the guard's lookup and never loads a page here: nothing but 127.0.0.1 is reached.
-    await browser.go('https://jobs.example.invalid/posting')
-    await browser.expectNotice('Could not find jobs.example.invalid.')
     expect(mock.requests.filter((r) => r.startsWith('/page/one'))).toHaveLength(0)
+  })
+
+  test('a resolvable public URL is refused before anything leaves the machine (HUNTGRY_E2E_LOOPBACK_ONLY)', async ({ app, mock }) => {
+    // The harness runs the app with the loopback-only egress restriction: the browser and the hidden loader refuse every
+    // non-loopback address before the DNS lookup, so these specs cannot reach a public host even when one resolves.
+    const shell = new Shell(app.window)
+    await shell.goTo('browser')
+    const browser = new BrowserPage(app.window)
+    for (const url of ['https://example.com/', 'https://hiringcafe.com/', 'http://www.indeed.com/jobs?q=engineer']) {
+      await browser.go(url)
+      await browser.expectNotice(`Refusing to load ${new URL(url).host}: this test build may only reach loopback addresses.`)
+      await expect(browser.address).toHaveValue(url)
+    }
+    expect(await listTabs(app.electronApp)).toEqual([])
+    // The mock is still reachable: the restriction is "loopback only", not "nothing".
+    await browser.go(`${mock.origin}/page/one`)
+    await expectTabLoaded(app.electronApp, '/page/one', 'Mock page one')
+    // A page on the mock that links to a public host cannot follow that link either (the session guard cancels it).
+    await evaluateInTab(app.electronApp, '/page/one', 'location.href = "https://example.com/from-page"')
+    // The request is cancelled by the session guard (ERR_BLOCKED_BY_CLIENT) and the tab shows Chromium's error page for
+    // the attempted address; the notice carries the guard's reason.
+    await browser.expectNotice('Refusing to load example.com: this test build may only reach loopback addresses.')
+    expect(mock.requests.filter((r) => !r.startsWith('/page/one'))).toEqual([])
   })
 
   test('Cmd/Ctrl+T opens a tab, Cmd/Ctrl+L focuses the address bar, the close button closes a tab', async ({ app, mock }) => {

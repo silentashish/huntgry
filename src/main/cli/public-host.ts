@@ -46,12 +46,16 @@ export const GUARDED_URLS = ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*
  * every request whose host is not public. With `allowLoopback` (the dev-only
  * `HUNTGRY_ALLOW_LOCAL_URLS=1` allowance, see cli/dev-urls.ts) loopback
  * addresses pass without a check; private-network addresses stay refused.
+ * With `loopbackOnly` (the e2e harness's `HUNTGRY_E2E_LOOPBACK_ONLY=1`)
+ * everything that is not loopback is cancelled without a lookup.
  */
 export function createRequestGuard(
   allowLoopback: boolean,
-  check: PublicHostCheck = isPublicHost
+  check: PublicHostCheck = isPublicHost,
+  loopbackOnly = false
 ): (details: { url: string }, callback: (response: { cancel: boolean }) => void) => void {
   return (details, callback) => {
+    if (loopbackOnly && !isLoopbackUrl(details.url)) return callback({ cancel: true })
     if (allowLoopback && isLoopbackUrl(details.url)) return callback({ cancel: false })
     void check(details.url).then((ok) => callback({ cancel: !ok }))
   }

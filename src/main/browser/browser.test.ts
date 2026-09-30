@@ -81,6 +81,24 @@ describe('refusalFor', () => {
     expect(await refusalFor('http://169.254.169.254/latest', resolve, true)).toMatch(/private/)
     expect(await refusalFor('https://intranet.example/', resolve, true)).toMatch(/private/)
   })
+
+  it('in loopback-only mode refuses every non-loopback address before any lookup', async () => {
+    const neverResolve = async (host: string): Promise<string[]> => {
+      throw new Error(`lookup of ${host} must not happen`)
+    }
+    expect(await refusalFor('https://example.com/jobs/1', neverResolve, true, true)).toBe(
+      'Refusing to load example.com: this test build may only reach loopback addresses.'
+    )
+    // Private literals and local names keep their own message (no lookup is needed to know them).
+    expect(await refusalFor('http://10.0.0.5/', neverResolve, true, true)).toBe(
+      'Refusing to load 10.0.0.5: it is a local or private-network address.'
+    )
+    expect(await refusalFor('http://intranet.local/', neverResolve, true, true)).toMatch(/local or private-network/)
+    expect(await refusalFor('https://intranet.example/', neverResolve, true, true)).toMatch(/only reach loopback/)
+    expect(await refusalFor('http://127.0.0.1:8080/', neverResolve, true, true)).toBeNull()
+    expect(await refusalFor('http://localhost:8080/', neverResolve, true, true)).toBeNull()
+    expect(await refusalFor('about:blank', neverResolve, true, true)).toBeNull()
+  })
 })
 
 describe('TabRegistry', () => {

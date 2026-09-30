@@ -55,4 +55,18 @@ describe('createRequestGuard', () => {
     expect(await decide(guard, 'http://169.254.169.254/latest')).toBe(true)
     expect(await decide(guard, 'https://jobs.example.com/1')).toBe(false)
   })
+
+  it('in loopback-only mode cancels everything but loopback, without consulting the host check', async () => {
+    const guard = createRequestGuard(
+      true,
+      async () => {
+        throw new Error('the host check must not run')
+      },
+      true
+    )
+    expect(await decide(guard, 'https://jobs.example.com/1')).toBe(true)
+    expect(await decide(guard, 'http://10.0.0.5/')).toBe(true)
+    expect(await decide(guard, 'http://127.0.0.1:4173/lever/')).toBe(false)
+    expect(await decide(guard, 'ws://localhost:4173/socket')).toBe(false)
+  })
 })
