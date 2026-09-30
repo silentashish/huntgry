@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ApplicationRecord, ApplicationsList } from '@shared/applications-types'
+import type { ApplicationTracking } from '@shared/applications-types'
 import { alreadyAppliedText, applyBlocker, trackingFor } from './blocker'
 
 describe('applyBlocker', () => {
@@ -16,25 +16,33 @@ describe('applyBlocker', () => {
 })
 
 describe('trackingFor', () => {
-  const list = (records: Array<Pick<ApplicationRecord, 'id' | 'tracking'>>) => {
-    const fn = vi.fn(async () => ({ applications: records, truncated: false }) as unknown as ApplicationsList)
-    return fn
+  const store: Record<string, ApplicationTracking> = {
+    'r/c/1': { status: 'generated', notes: '' },
+    'r/c/2': { status: 'applied', notes: '', appliedAt: '2026-09-30' }
   }
+  const getter = () =>
+    vi.fn(async (id: string) => {
+      const tracking = store[id]
+      if (!tracking) throw new Error('This application folder no longer exists.')
+      return { tracking }
+    })
 
-  it('uses the tracking the caller has, without listing', async () => {
-    const fn = list([])
-    expect(await trackingFor({ id: 'a', tracking: { status: 'applied', notes: '' } }, fn)).toMatchObject({
+  it('uses the tracking the caller has, without reading', async () => {
+    const get = getter()
+    expect(await trackingFor({ id: 'a', tracking: { status: 'applied', notes: '' } }, get)).toMatchObject({
       status: 'applied'
     })
-    expect(fn).not.toHaveBeenCalled()
+    expect(get).not.toHaveBeenCalled()
   })
 
-  it('looks the application up when only the id is known (Tailor run)', async () => {
-    const fn = list([
-      { id: 'r/c/1', tracking: { status: 'generated', notes: '' } },
-      { id: 'r/c/2', tracking: { status: 'applied', notes: '', appliedAt: '2026-09-30' } }
-    ])
-    expect(await trackingFor({ id: 'r/c/2' }, fn)).toMatchObject({ status: 'applied', appliedAt: '2026-09-30' })
-    expect(await trackingFor({ id: 'r/c/9' }, fn)).toBeUndefined()
+  it('reads the application by id when only the id is known (Tailor run), never from a possibly truncated list', async () => {
+    const get = getter()
+    expect(await trackingFor({ id: 'r/c/2' }, get)).toMatchObject({ status: 'applied', appliedAt: '2026-09-30' })
+    expect(get).toHaveBeenCalledWith('r/c/2')
+    expect(await trackingFor({ id: 'r/c/1' }, get)).toMatchObject({ status: 'generated' })
+  })
+
+  it('fails instead of skipping the question when the application cannot be read', async () => {
+    await expect(trackingFor({ id: 'r/c/9' }, getter())).rejects.toThrow(/no longer exists/)
   })
 })

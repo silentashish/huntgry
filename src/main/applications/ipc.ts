@@ -44,6 +44,11 @@ export function registerApplicationsIpc(): void {
     return scanApplications(workspace)
   })
 
+  ipcMain.handle(APPLICATIONS_CHANNELS.get, async (_e, id: unknown) => {
+    const workspace = await currentWorkspace()
+    return readApplication(workspace, await resolveApplicationFolder(workspace, requireId(id)))
+  })
+
   ipcMain.handle(APPLICATIONS_CHANNELS.updateTracking, async (_e, id: unknown, patch: unknown) => {
     const workspace = await currentWorkspace()
     const folder = await resolveApplicationFolder(workspace, requireId(id))

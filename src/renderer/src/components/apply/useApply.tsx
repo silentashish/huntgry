@@ -51,7 +51,7 @@ export function useApply(onError: (message: string) => void): {
 
   function apply(target: Target) {
     void exclusive(async () => {
-      const tracking = await trackingFor(target, () => api.applications.list())
+      const tracking = await trackingFor(target, (id) => api.applications.get(id))
       if (tracking?.status === 'applied') {
         setConfirm({ ...target, tracking })
         return
