@@ -111,3 +111,54 @@ export function jobDescriptionFor(job: Job): string {
   const body = lines.length > 0 && same(lines[0]) ? lines.slice(1).join('\n').trim() : job.description.trim()
   return [...head, '', body].join('\n')
 }
+
+/**
+ * Whether the full description can be fetched from an employer page: only a
+ * summary is saved, and the job is not Indeed-only (Indeed job pages need a
+ * human check; a copy of the same job found on another board still loads).
+ */
+export function canFetchDetails(job: Job): boolean {
+  return !job.descriptionComplete && (job.source !== 'indeed' || (job.aliases?.length ?? 0) > 0)
+}
+
+/**
+ * Short id for the application folder (`<role>/<company>/<job-id>`), from the
+ * board's own id: Indeed's job key, the employer requisition number at the end
+ * of a hiring.cafe id (`adp___<uuid>___594192` → `594192`), or the URL/pasted hash.
+ */
+export function jobIdFor(job: Job): string {
+  const raw = job.source === 'hiring.cafe' ? (job.sourceId.split('___').pop() ?? '') : job.sourceId
+  const slug = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40)
+      .replace(/-+$/, '')
+  return slug(raw) || slug(job.sourceId) || slug(job.id)
+}
+
+/** What the Tailor form is pre-filled with when a job is sent from the Jobs page. */
+export interface TailorPrefill {
+  /** Always the saved description (`jobDescriptionFor`), so the run never refetches a job board URL. */
+  jobDescription: string
+  jobUrl?: string
+  company?: string
+  role: string
+  jobId: string
+  source: JobSourceId
+  /** `false` when the description is only the board's summary or snippet. */
+  descriptionComplete: boolean
+}
+
+export function tailorPrefillFor(job: Job): TailorPrefill {
+  return {
+    jobDescription: jobDescriptionFor(job),
+    jobUrl: job.url || undefined,
+    company: job.company || undefined,
+    role: job.title,
+    jobId: jobIdFor(job),
+    source: job.source,
+    descriptionComplete: job.descriptionComplete
+  }
+}
