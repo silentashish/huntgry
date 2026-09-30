@@ -65,6 +65,10 @@ export class RunManager {
   private live = new Map<string, Live>()
   /** Writes still pending for runs whose process has exited. */
   private settling = new Set<Promise<void>>()
+  /** Per run: the pending writes of its last process, until they are on disk. */
+  private settledById = new Map<string, Promise<void>>()
+  /** Per run: the chain of resumes and ends of a run with no process (see `idle`). */
+  private idleOps = new Map<string, Promise<unknown>>()
 
   constructor(private hooks: RunnerHooks) {}
 
@@ -105,24 +109,33 @@ export class RunManager {
    * session is resumed in a new process, and only then is `context` resolved.
    */
   async reply(id: string, text: string, context: () => Promise<RunContext>): Promise<RunSummary> {
-    let entry = this.live.get(id)
-    // An exec agent's process lives for one turn: while it runs, the turn is not over.
-    if (entry && entry.adapter.turnMode === 'exec')
-      throw new Error(`${entry.adapter.label} is still working on this turn; reply when it has answered.`)
-    if (!entry) {
-      const ctx = await context()
-      const run = await readRun(ctx.workspace, id)
-      if ((ctx.agent ?? DEFAULT_AGENT) !== run.agent)
-        throw new Error(`This run uses ${AGENT_LABEL[run.agent]}; it cannot be continued with another agent.`)
-      if (!run.sessionId) throw new Error(`This run has no ${AGENT_LABEL[run.agent]} session to resume.`)
-      run.error = undefined
-      const existing = (await readEvents(ctx.workspace, id)).length
-      // Another reply may have resumed it while we were reading.
-      if (!this.live.has(id)) this.spawnFor(run, ctx, run.sessionId, existing)
-      entry = this.live.get(id)!
+    const live = this.live.get(id)
+    if (live) {
+      // An exec agent's process lives for one turn: while it runs, the turn is not over.
+      if (live.adapter.turnMode === 'exec') throw stillWorking(live)
+      await this.send(id, text)
+      return { ...live.run }
     }
-    await this.send(id, text)
-    return { ...entry.run }
+    return this.idle(id, async () => {
+      let entry = this.live.get(id)
+      if (entry) {
+        // A reply that came first resumed the run meanwhile. An exec agent has already read its
+        // whole prompt (stdin is closed), so this one could never reach it: refuse it.
+        if (entry.adapter.turnMode === 'exec') throw stillWorking(entry)
+      } else {
+        const ctx = await context()
+        const run = await readRun(ctx.workspace, id)
+        if ((ctx.agent ?? DEFAULT_AGENT) !== run.agent)
+          throw new Error(`This run uses ${AGENT_LABEL[run.agent]}; it cannot be continued with another agent.`)
+        if (!run.sessionId) throw new Error(`This run has no ${AGENT_LABEL[run.agent]} session to resume.`)
+        run.error = undefined
+        const existing = (await readEvents(ctx.workspace, id)).length
+        this.spawnFor(run, ctx, run.sessionId, existing)
+        entry = this.live.get(id)!
+      }
+      await this.send(id, text)
+      return { ...entry.run }
+    })
   }
 
   stop(id: string): void {
@@ -146,17 +159,44 @@ export class RunManager {
 
   /**
    * Ends a run that waits for the user with no process (an exec agent between
-   * turns, or any run after a restart): it is marked finished. `null` when the
-   * run is live or not waiting (nothing to do).
+   * turns, or any run after a restart): `finished` when the user is done,
+   * `stopped` when its queue job was cancelled. `null` when the run has a
+   * process or is not waiting (nothing to do).
    */
-  async finishIdle(workspace: string, id: string): Promise<RunSummary | null> {
-    if (this.live.has(id)) return null
-    const run = await readRun(workspace, id)
-    if (run.status !== 'waiting') return null
-    const done: RunSummary = { ...run, status: 'finished', updatedAt: new Date().toISOString(), live: false }
-    await saveRun(workspace, done)
-    this.hooks.onRun(done)
-    return done
+  endIdle(workspace: string, id: string, status: 'finished' | 'stopped'): Promise<RunSummary | null> {
+    return this.idle(id, async () => {
+      if (this.live.has(id)) return null
+      const run = await readRun(workspace, id)
+      if (run.status !== 'waiting') return null
+      if (status === 'stopped') {
+        const seq = (await readEvents(workspace, id)).length
+        const event = notice('info', 'Stopped.')
+        await appendEvent(workspace, id, event)
+        this.hooks.onEvent(id, seq, event)
+      }
+      const ended: RunSummary = { ...run, status, updatedAt: new Date().toISOString(), live: false }
+      await saveRun(workspace, ended)
+      this.hooks.onRun(ended)
+      return ended
+    })
+  }
+
+  /**
+   * Runs `job` for a run with no process: after the previous resume/end of the same run, and
+   * after its last process's writes are on disk, so it never reads or overwrites stale state.
+   */
+  private idle<T>(id: string, job: () => Promise<T>): Promise<T> {
+    const previous = this.idleOps.get(id) ?? Promise.resolve()
+    const next = previous
+      .catch(() => undefined)
+      .then(() => this.settledById.get(id))
+      .then(job)
+    const tail = next.catch(() => undefined)
+    this.idleOps.set(id, tail)
+    void tail.then(() => {
+      if (this.idleOps.get(id) === tail) this.idleOps.delete(id)
+    })
+    return next
   }
 
   stopAll(): void {
@@ -253,8 +293,10 @@ export class RunManager {
       this.touch(entry)
       const settled = entry.queue.then(() => {
         this.settling.delete(settled)
+        if (this.settledById.get(run.id) === settled) this.settledById.delete(run.id)
       })
       this.settling.add(settled)
+      this.settledById.set(run.id, settled)
     })
   }
 
@@ -342,6 +384,10 @@ export class RunManager {
       })
       .catch((err) => console.error('Run save failed:', err))
   }
+}
+
+function stillWorking(entry: Live): Error {
+  return new Error(`${entry.adapter.label} is still working on this turn; reply when it has answered.`)
 }
 
 function notice(level: 'info' | 'error', text: string): HuntgryEvent {

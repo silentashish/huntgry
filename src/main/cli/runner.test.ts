@@ -287,12 +287,50 @@ describe('RunManager against a fake codex (one process per turn)', () => {
     const { id } = await manager.start(params, codexCtx())
     await until(id, (r) => r.status === 'waiting' && !r.live)
     await manager.whenIdle()
-    const done = await manager.finishIdle(ws, id)
+    const done = await manager.endIdle(ws, id, 'finished')
     expect(done?.status).toBe('finished')
     expect(runs[runs.length - 1]).toMatchObject({ id, status: 'finished' })
     expect((await readRun(ws, id)).status).toBe('finished')
     // Nothing to do for a finished run.
-    expect(await manager.finishIdle(ws, id)).toBeNull()
+    expect(await manager.endIdle(ws, id, 'finished')).toBeNull()
+  })
+
+  it('lets only one of two simultaneous replies to an idle run through', async () => {
+    const { id } = await manager.start(params, codexCtx())
+    await until(id, (r) => r.status === 'waiting' && !r.live)
+    await manager.whenIdle()
+    const results = await Promise.allSettled([
+      manager.reply(id, 'first reply', async () => codexCtx()),
+      manager.reply(id, 'second reply', async () => codexCtx())
+    ])
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected'])
+    expect(String((results[1] as PromiseRejectedResult).reason)).toMatch(/Codex is still working/)
+    await until(id, (r) => r.status === 'waiting' && !r.live && (r.usage?.inputTokens ?? 0) === 2000)
+    await manager.whenIdle()
+    const users = buildTranscript(await readEvents(ws, id), 'codex').filter((i) => i.kind === 'user') as { text: string }[]
+    // The refused reply is not recorded as if Codex had received it.
+    expect(users.map((u) => u.text).slice(1)).toEqual(['first reply'])
+  })
+
+  it('keeps End when it is pressed as soon as the turn is over', async () => {
+    for (let i = 0; i < 5; i++) {
+      const { id } = await manager.start(params, codexCtx())
+      // The first broadcast without a process; the exit's own writes may still be pending.
+      await until(id, (r) => r.status === 'waiting' && !r.live)
+      expect((await manager.endIdle(ws, id, 'finished'))?.status).toBe('finished')
+      await manager.whenIdle()
+      expect((await readRun(ws, id)).status).toBe('finished')
+    }
+  })
+
+  it('stops an idle run (a cancelled queue job) and records it', async () => {
+    const { id } = await manager.start(params, codexCtx())
+    await until(id, (r) => r.status === 'waiting' && !r.live)
+    expect((await manager.endIdle(ws, id, 'stopped'))?.status).toBe('stopped')
+    await manager.whenIdle()
+    expect((await readRun(ws, id)).status).toBe('stopped')
+    const t = buildTranscript(await readEvents(ws, id), 'codex')
+    expect(t[t.length - 1]).toMatchObject({ kind: 'notice', text: 'Stopped.' })
   })
 
   it('fails with the stderr tail when codex crashes', async () => {

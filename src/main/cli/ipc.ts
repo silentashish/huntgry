@@ -131,7 +131,7 @@ export function registerRunnerIpc(): void {
     }
     // Between turns of an exec agent (or after a restart) there is no process to close.
     const workspace = await requireCurrentWorkspace()
-    return (await manager.finishIdle(workspace.path, runId)) ?? currentRun(runId)
+    return (await manager.endIdle(workspace.path, runId, 'finished')) ?? currentRun(runId)
   })
 
   ipcMain.handle(RUNNER_CHANNELS.openOutput, async (_e, id: unknown, file: unknown) => {
