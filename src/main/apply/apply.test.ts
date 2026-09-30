@@ -217,7 +217,12 @@ describe('ApplyService', () => {
     const { service, opened, dbg, events } = setup(tab)
 
     const session = await service.start(ID)
-    expect(session).toMatchObject({ status: 'opened', applyUrl: GH_URL, tabId: 'tab-1', title: 'Software Engineer · Acme' })
+    expect(session).toMatchObject({
+      status: 'opened',
+      applyUrl: GH_URL,
+      tabId: 'tab-1',
+      title: 'Software Engineer · Acme'
+    })
     expect(opened).toEqual([GH_URL])
 
     tab.load(fixture('greenhouse-form.html'), GH_URL)
@@ -228,7 +233,10 @@ describe('ApplyService', () => {
     const current = service.current()!
     expect(current.ats).toBe('greenhouse')
     expect((form.window.document.getElementById('first_name') as HTMLInputElement).value).toBe('Ada')
-    expect(current.report?.fields.find((f) => f.key === 'resume')).toMatchObject({ outcome: 'uploaded', value: 'resume.pdf' })
+    expect(current.report?.fields.find((f) => f.key === 'resume')).toMatchObject({
+      outcome: 'uploaded',
+      value: 'resume.pdf'
+    })
     expect(dbg.log).toEqual([
       'attach',
       'DOM.getDocument',
@@ -399,6 +407,22 @@ describe('ApplyService', () => {
     expect(tab.sent).toEqual([AUTOFILL_CHANNELS.detect])
     await service.fill(service.current()!.id)
     expect(service.current()!.status).toBe('filled')
+  })
+
+  it('refuses a second start while the first is still opening', async () => {
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' }, 'a/b/other')
+    const { service, opened } = setup(new FakeTab('', GH_URL))
+    const [first, second] = await Promise.allSettled([service.start(ID), service.start('a/b/other')])
+    expect(first).toMatchObject({ status: 'fulfilled', value: { applicationId: ID } })
+    expect(second).toMatchObject({
+      status: 'rejected',
+      reason: expect.objectContaining({ message: expect.stringMatching(/still starting/) })
+    })
+    expect(opened).toHaveLength(1)
+    expect(service.current()!.applicationId).toBe(ID)
+    // Once it has started, a new Apply may replace the session as before.
+    await expect(service.start('a/b/other')).resolves.toMatchObject({ applicationId: 'a/b/other' })
   })
 
   it('ends on cancel, on a second start and when the tab closes', async () => {

@@ -1,4 +1,4 @@
-import type { ApplicationRecord } from '@shared/applications-types'
+import type { ApplicationRecord, ApplicationsList, ApplicationTracking } from '@shared/applications-types'
 
 /** Why Apply is not possible for an application yet, or `null` when it is (pure, unit-tested). */
 export function applyBlocker(app: Pick<ApplicationRecord, 'files' | 'jobUrl'>): string | null {
@@ -14,4 +14,17 @@ export function alreadyAppliedText(appliedAt: string | undefined): string {
   return appliedAt
     ? `You marked this application as applied on ${appliedAt}.`
     : 'You marked this application as applied.'
+}
+
+/**
+ * The tracking to check before applying: the caller's when it has the record
+ * (Dashboard), else looked up by id (a Tailor run knows only the folder), so
+ * "Already applied" is asked from every entry point.
+ */
+export async function trackingFor(
+  target: { id: string; tracking?: ApplicationTracking },
+  list: () => Promise<ApplicationsList>
+): Promise<ApplicationTracking | undefined> {
+  if (target.tracking) return target.tracking
+  return (await list()).applications.find((a) => a.id === target.id)?.tracking
 }

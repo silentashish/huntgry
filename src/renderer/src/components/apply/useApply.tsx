@@ -1,13 +1,13 @@
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { Button, Group, Modal, Text } from '@mantine/core'
 import type { ApplicationTracking } from '@shared/applications-types'
 import { api, errorText } from '../../api'
 import { useNavigation } from '../../navigation'
-import { alreadyAppliedText } from './blocker'
+import { alreadyAppliedText, trackingFor } from './blocker'
 
 interface Target {
   id: string
-  /** When known: an application already marked applied asks before opening again. */
+  /** The application's tracking; looked up when absent, so an application already marked applied always asks first. */
   tracking?: ApplicationTracking
 }
 
@@ -24,22 +24,41 @@ export function useApply(onError: (message: string) => void): {
   const { navigate } = useNavigation()
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState<Target | null>(null)
+  // A ref, not state: a second click in the same frame must already see the first one.
+  const inFlight = useRef(false)
 
-  async function start(id: string) {
+  /** Runs `fn` unless another Apply of this hook is pending (the service also refuses concurrent starts). */
+  async function exclusive(fn: () => Promise<void>) {
+    if (inFlight.current) return
+    inFlight.current = true
     setBusy(true)
     try {
-      await api.apply.start(id)
-      navigate('browser')
+      await fn()
     } catch (err) {
       onError(errorText(err))
     } finally {
+      inFlight.current = false
       setBusy(false)
     }
   }
 
+  function start(id: string) {
+    void exclusive(async () => {
+      await api.apply.start(id)
+      navigate('browser')
+    })
+  }
+
   function apply(target: Target) {
-    if (target.tracking?.status === 'applied') setConfirm(target)
-    else void start(target.id)
+    void exclusive(async () => {
+      const tracking = await trackingFor(target, () => api.applications.list())
+      if (tracking?.status === 'applied') {
+        setConfirm({ ...target, tracking })
+        return
+      }
+      await api.apply.start(target.id)
+      navigate('browser')
+    })
   }
 
   const modal = (
@@ -53,7 +72,7 @@ export function useApply(onError: (message: string) => void): {
           onClick={() => {
             const id = confirm?.id
             setConfirm(null)
-            if (id) void start(id)
+            if (id) start(id)
           }}
         >
           Open apply page

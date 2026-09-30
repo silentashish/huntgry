@@ -219,6 +219,7 @@ export function DashboardPage() {
                     onUpdate={(p) => act(() => update(a.id, p))}
                     onAct={act}
                     onApply={() => applier.apply(a)}
+                    applying={applier.busy}
                   />
                 ))}
                 {shown.length === 0 && (
@@ -299,9 +300,11 @@ interface RowProps {
   onUpdate(patch: Partial<ApplicationTracking>): void
   onAct(fn: () => Promise<unknown>): void
   onApply(): void
+  /** An Apply is starting; every row's Apply waits for it. */
+  applying: boolean
 }
 
-function Row({ app, onOpen, onUpdate, onAct, onApply }: RowProps) {
+function Row({ app, onOpen, onUpdate, onAct, onApply, applying }: RowProps) {
   const { navigate } = useNavigation()
   const has = (f: string) => app.files.includes(f)
   // Controls inside the row must not also open the drawer.
@@ -349,7 +352,13 @@ function Row({ app, onOpen, onUpdate, onAct, onApply }: RowProps) {
       <Table.Td onClick={stop}>
         <Group gap={4} justify="flex-end" wrap="nowrap">
           <Tooltip label={applyBlocker(app) ?? APPLY_HINT} multiline maw={260}>
-            <ActionIcon variant="subtle" color="teal" disabled={applyBlocker(app) !== null} onClick={onApply} aria-label="Apply">
+            <ActionIcon
+              variant="subtle"
+              color="teal"
+              disabled={applyBlocker(app) !== null || applying}
+              onClick={onApply}
+              aria-label="Apply"
+            >
               <IconSend size={18} />
             </ActionIcon>
           </Tooltip>

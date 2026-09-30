@@ -69,6 +69,8 @@ export class ApplyService {
   private session: ApplySession | null = null
   private ctx: Context | null = null
   private readonly pending = new Map<string, Pending>()
+  /** A start() is between its first await and emitting the new session. */
+  private starting = false
 
   constructor(private readonly deps: ApplyDeps) {}
 
@@ -76,7 +78,22 @@ export class ApplyService {
     return this.session
   }
 
+  /**
+   * Opens a new session. One start at a time: a second one while the first
+   * is still resolving files and opening the tab is refused, so two quick
+   * clicks (or two windows) cannot swap the session under each other.
+   */
   async start(applicationId: string): Promise<ApplySession> {
+    if (this.starting) throw new Error('Another Apply is still starting. Try again in a moment.')
+    this.starting = true
+    try {
+      return await this.open(applicationId)
+    } finally {
+      this.starting = false
+    }
+  }
+
+  private async open(applicationId: string): Promise<ApplySession> {
     const workspace = await this.deps.workspace()
     const folder = await resolveApplicationFolder(workspace, applicationId)
     const record = await readApplication(workspace, folder)
