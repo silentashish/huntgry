@@ -56,6 +56,7 @@ export type RelayClientFrame =
   | { auth: { room: string; device: string; token: string } } // phone, paired
   | { auth: { room: string; owner: string } } // desktop (ownerSecret)
   | { pushToken: string | null } // phone only, after auth; null removes it
+  | { ack: string } // either side, after auth: `ref` of a frame durably processed, with nothing to send back (same effect as `RelayFrame.ack`)
 
 // ── Envelope (the plaintext of one box) ──────────────────────────────────────────────────────
 
