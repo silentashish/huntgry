@@ -121,9 +121,16 @@ export async function launchApp(sandbox: Sandbox, extraEnv: Record<string, strin
   const chunks: string[] = []
   electronApp.process().stderr?.on('data', (d: Buffer) => chunks.push(d.toString()))
   electronApp.process().stdout?.on('data', (d: Buffer) => chunks.push(d.toString()))
-  const window = await electronApp.firstWindow()
-  await window.waitForLoadState('domcontentloaded')
-  return { electronApp, window, output: () => chunks.join('') }
+  try {
+    const window = await electronApp.firstWindow()
+    await window.waitForLoadState('domcontentloaded')
+    return { electronApp, window, output: () => chunks.join('') }
+  } catch (err) {
+    // Spawned but never showed a window (crash at startup, bad build): do not leave the process behind.
+    electronApp.process().kill('SIGKILL')
+    const output = chunks.join('').trim()
+    throw new Error(`${err instanceof Error ? err.message : String(err)}${output ? `\n[main process output]\n${output}` : ''}`)
+  }
 }
 
 export interface AppFixture extends LaunchedApp {
@@ -151,46 +158,51 @@ export const test = base.extend<AppOptions & { app: AppFixture }, { sandboxAudit
 
   app: async ({ workspace }, use, testInfo) => {
     const sandbox = await createSandbox()
-    let seeded: string | null = null
-    if (workspace) {
-      seeded = await seedWorkspace(workspace, sandbox.workspaces)
-      await rememberWorkspace(sandbox.userData, seeded)
-    }
-    let current = await launchApp(sandbox)
-    const fixture: AppFixture = {
-      get electronApp() {
-        return current.electronApp
-      },
-      get window() {
-        return current.window
-      },
-      output: () => current.output(),
-      sandbox,
-      userData: sandbox.userData,
-      home: sandbox.home,
-      workspace: seeded,
-      relaunch: async () => {
-        await closeApp(current.electronApp)
-        current = await launchApp(sandbox)
-      }
-    }
+    // From here on the sandbox is removed whatever happens, seeding and launch included.
+    let current: LaunchedApp | null = null
     try {
+      let seeded: string | null = null
+      if (workspace) {
+        seeded = await seedWorkspace(workspace, sandbox.workspaces)
+        await rememberWorkspace(sandbox.userData, seeded)
+      }
+      current = await launchApp(sandbox)
+      const fixture: AppFixture = {
+        get electronApp() {
+          return current!.electronApp
+        },
+        get window() {
+          return current!.window
+        },
+        output: () => current!.output(),
+        sandbox,
+        userData: sandbox.userData,
+        home: sandbox.home,
+        workspace: seeded,
+        relaunch: async () => {
+          await closeApp(current!.electronApp)
+          current = null
+          current = await launchApp(sandbox)
+        }
+      }
       await use(fixture)
     } finally {
       const failed = testInfo.status !== testInfo.expectedStatus
-      if (failed) {
-        // Playwright's own screenshot-on-failure runs after this teardown, when the window is gone: take it here.
-        const path = testInfo.outputPath('test-failed-1.png')
-        await current.window
-          .screenshot({ path })
-          .then(() => testInfo.attach('screenshot', { path, contentType: 'image/png' }))
-          .catch(() => {})
-      }
-      const output = current.output()
-      await closeApp(current.electronApp)
-      if (failed && output.trim()) {
-        await testInfo.attach('main-process-output', { body: output, contentType: 'text/plain' })
-        console.error(`\n[main process output for "${testInfo.title}"]\n${output}`)
+      if (current) {
+        if (failed) {
+          // Playwright's own screenshot-on-failure runs after this teardown, when the window is gone: take it here.
+          const path = testInfo.outputPath('test-failed-1.png')
+          await current.window
+            .screenshot({ path })
+            .then(() => testInfo.attach('screenshot', { path, contentType: 'image/png' }))
+            .catch(() => {})
+        }
+        const output = current.output()
+        await closeApp(current.electronApp)
+        if (failed && output.trim()) {
+          await testInfo.attach('main-process-output', { body: output, contentType: 'text/plain' })
+          console.error(`\n[main process output for "${testInfo.title}"]\n${output}`)
+        }
       }
       await destroySandbox(sandbox)
     }
