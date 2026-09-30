@@ -2,6 +2,7 @@ import { execFile, spawn } from 'node:child_process'
 import { realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CLAUDE_COMMANDS, type ClaudeAuth, type ClaudeInstallKind, type InstallResult } from '@shared/runner-types'
+import { readCapped } from './install-skill'
 
 /**
  * Installs and updates Claude Code with its official tools: the native
@@ -156,8 +157,11 @@ export function installClaude(
     log(`Downloading ${INSTALL_SCRIPT_URL}…`)
     const res = await (opts.fetchImpl ?? fetch)(INSTALL_SCRIPT_URL, { signal: AbortSignal.timeout(15_000) })
     if (!res.ok) return { ok: false, error: `Downloading the installer failed (${res.status}).` }
-    const script = await res.text()
-    if (script.length > MAX_SCRIPT_BYTES || !script.startsWith('#!'))
+    // Bounded read: a huge body is cancelled at the cap instead of buffered.
+    const script = new TextDecoder().decode(
+      await readCapped(res, MAX_SCRIPT_BYTES, 'The installer download is unexpectedly large.')
+    )
+    if (!script.startsWith('#!'))
       return { ok: false, error: 'The installer download does not look like a shell script.' }
     const path = join(opts.scratchDir, 'claude-install.sh')
     await writeFile(path, script, { mode: 0o600 })

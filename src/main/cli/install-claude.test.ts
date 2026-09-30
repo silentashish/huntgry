@@ -73,6 +73,12 @@ describe.skipIf(process.platform === 'win32')('installClaude', () => {
       fetchImpl: async () => new Response('<html>captive portal</html>', { status: 200 })
     })
     expect(html).toMatchObject({ ok: false, error: expect.stringContaining('shell script') })
+    const huge = await installClaude(() => {}, {
+      scratchDir: tmp,
+      fetchImpl: async () => new Response(new Uint8Array(2 * 1024 * 1024).fill(35), { status: 200 })
+    })
+    expect(huge).toMatchObject({ ok: false, error: expect.stringContaining('unexpectedly large') })
+    expect(await readdir(tmp)).toEqual([])
     const failing = await installClaude(() => {}, {
       scratchDir: tmp,
       fetchImpl: async () => new Response('#!/bin/bash\nexit 7\n', { status: 200 })

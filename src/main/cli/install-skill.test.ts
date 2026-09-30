@@ -9,6 +9,7 @@ import {
   installSkill,
   parseRelease,
   readSkillArchive,
+  readCapped,
   readSkillInstall,
   sha256Hex,
   type FetchLike
@@ -58,7 +59,25 @@ describe('skill release', () => {
   it('picks the skill asset and its digest', () => {
     const zip = skillZip()
     expect(parseRelease(release(zip))).toEqual({ tag: 'v3', url: DL, size: zip.byteLength, sha256: sha256Hex(zip) })
-    expect(parseRelease(release(zip, null)).sha256).toBeNull()
+  })
+
+  it('refuses a release whose asset has no or a malformed digest', () => {
+    const zip = skillZip()
+    expect(() => parseRelease(release(zip, null))).toThrow(/no sha256 digest/)
+    expect(() => parseRelease(release(zip, 'sha256:abc'))).toThrow(/no sha256 digest/)
+    expect(() => parseRelease(release(zip, `md5:${'0'.repeat(32)}`))).toThrow(/no sha256 digest/)
+  })
+
+  it('stops reading a body as soon as it passes the cap', async () => {
+    let pulled = 0
+    const endless = new ReadableStream<Uint8Array>({
+      pull(c) {
+        pulled++
+        c.enqueue(new Uint8Array(64 * 1024))
+      }
+    })
+    await expect(readCapped(new Response(endless), 256 * 1024, 'too big')).rejects.toThrow('too big')
+    expect(pulled).toBeLessThan(10)
   })
 
   it('rejects a release without the asset or pointing elsewhere', () => {

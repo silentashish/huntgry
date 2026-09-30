@@ -15,8 +15,8 @@ export interface SkillRelease {
   tag: string
   url: string
   size: number
-  /** Hex digest from the release asset, `null` when GitHub did not publish one. */
-  sha256: string | null
+  /** Hex sha256 from the release asset's `digest`; a release without one is refused. */
+  sha256: string
 }
 
 /** What Huntgry installed, kept in `<userData>/skill-install.json`. */
@@ -54,7 +54,9 @@ export function parseRelease(json: unknown): SkillRelease {
   const size = typeof asset.size === 'number' ? asset.size : 0
   if (size > MAX_ARCHIVE_BYTES) throw new Error('The skill archive is unexpectedly large.')
   const digest = typeof asset.digest === 'string' ? /^sha256:([0-9a-f]{64})$/i.exec(asset.digest) : null
-  return { tag: r.tag_name, url, size, sha256: digest ? digest[1].toLowerCase() : null }
+  // Without a published digest the download cannot be verified, so it is not installed.
+  if (!digest) throw new Error(`The latest release (${r.tag_name}) has no sha256 digest for ${SKILL_ASSET}; it cannot be verified.`)
+  return { tag: r.tag_name, url, size, sha256: digest[1].toLowerCase() }
 }
 
 export async function latestSkillRelease(fetchImpl: FetchLike = fetch): Promise<SkillRelease> {
@@ -68,8 +70,9 @@ export async function latestSkillRelease(fetchImpl: FetchLike = fetch): Promise<
   return parseRelease(await res.json())
 }
 
-async function readCapped(res: Response, max: number): Promise<Uint8Array> {
-  if (!res.body) return new Uint8Array(await res.arrayBuffer())
+/** Reads a response body, cancelling it as soon as it passes `max` bytes. */
+export async function readCapped(res: Response, max: number, tooLarge = 'The skill archive is unexpectedly large.'): Promise<Uint8Array> {
+  if (!res.body) return new Uint8Array(0)
   const reader = res.body.getReader()
   const chunks: Uint8Array[] = []
   let total = 0
@@ -79,7 +82,7 @@ async function readCapped(res: Response, max: number): Promise<Uint8Array> {
     total += value.byteLength
     if (total > max) {
       await reader.cancel()
-      throw new Error('The skill archive is unexpectedly large.')
+      throw new Error(tooLarge)
     }
     chunks.push(value)
   }
@@ -104,7 +107,7 @@ export async function downloadSkillArchive(release: SkillRelease, fetchImpl: Fet
   })
   if (!res.ok) throw new Error(`Downloading the skill failed (${res.status}).`)
   const bytes = await readCapped(res, MAX_ARCHIVE_BYTES)
-  if (release.sha256 && sha256Hex(bytes) !== release.sha256)
+  if (sha256Hex(bytes) !== release.sha256)
     throw new Error('The downloaded skill does not match the checksum GitHub published. Nothing was installed.')
   return bytes
 }
@@ -218,7 +221,7 @@ export async function installSkill(
     log(`Release ${release.tag}: ${SKILL_ASSET} (${release.size.toLocaleString()} bytes)`)
     const zip = await downloadSkillArchive(release, opts.fetchImpl)
     const sha256 = sha256Hex(zip)
-    log(release.sha256 ? `sha256 ${sha256} matches the release digest.` : `sha256 ${sha256} (GitHub published no digest).`)
+    log(`sha256 ${sha256} matches the release digest.`)
 
     const files = readSkillArchive(zip)
     log(`${files.size} files checked.`)
