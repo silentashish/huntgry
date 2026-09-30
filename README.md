@@ -90,8 +90,8 @@ src/
     ├── components/shell/       # AppLayout: navbar + page area
     └── pages/<page>/           # dashboard, jobs, browser, tailor, graph, profile, settings
 resources/                      # app icon (svg source, png, icns)
-scripts/                        # icon rendering, dev Electron branding, mock-ats.mjs (local test forms)
-e2e/                            # Playwright end-to-end tests: fixtures/ (sandbox, workspaces, fake-agent/), pages/, tests/
+scripts/                        # icon rendering, dev Electron branding, mock-ats.mjs + mock-ats/ (local test forms)
+e2e/                            # Playwright end-to-end tests: fixtures/ (sandbox, workspaces, fake-agent/, servers/), pages/, tests/
 ```
 
 ### Adding a feature
@@ -163,6 +163,13 @@ dev build (ignored by packaged builds):
 node scripts/mock-ats.mjs                      # http://localhost:4173/{greenhouse,lever,generic}/
 HUNTGRY_ALLOW_LOCAL_URLS=1 npm run dev         # then set an application's posting URL to one of them
 ```
+
+The mock's routes live in `scripts/mock-ats/server.mjs`; the e2e suite mounts the same code in
+its own server (`e2e/fixtures/servers/`), next to mock job boards that a dev build can be
+pointed at with `HUNTGRY_JOB_BOARD_BASE_URL_HIRINGCAFE` / `HUNTGRY_JOB_BOARD_BASE_URL_INDEED`
+(loopback origins only, ignored by packaged builds; see `docs/testing/e2e.md`). The e2e harness
+additionally sets `HUNTGRY_E2E_LOOPBACK_ONLY=1`, under which a dev build refuses every non-loopback
+address outright; packaged builds ignore it too.
 
 ## Tailoring a resume
 

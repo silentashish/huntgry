@@ -1,0 +1,17 @@
+{
+  "id": "pasted:seeded0001",
+  "source": "pasted",
+  "sourceId": "seeded0001",
+  "title": "Staff Backend Engineer",
+  "company": "Initech",
+  "location": "",
+  "remote": true,
+  "salary": "",
+  "postedAt": null,
+  "url": "http://mock-server.invalid/postings/lever-style",
+  "boardUrl": null,
+  "description": "Initech is looking for a Staff Backend Engineer to lead its Go platform team. Remote.\n\nRequirements: Go, PostgreSQL, Kubernetes, five years of experience. You will own the payments platform end to end and mentor the team.",
+  "descriptionComplete": true,
+  "tags": [],
+  "fetchedAt": "2026-09-25T10:00:00.000Z"
+}
