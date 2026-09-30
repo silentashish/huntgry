@@ -1,4 +1,5 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +9,7 @@ import { buildTranscript, LineBuffer, parseEventLine } from '../../../src/shared
 import { parseAuthStatus } from '../../../src/main/cli/install-claude'
 import { CLAUDE_VERSION_RECOMMENDED, parseClaudeVersion, versionAtLeast } from '../../../src/main/cli/version'
 import { parsePreflight } from '../../../src/main/cli/env'
+import { extractText, getDocumentProxy } from 'unpdf'
 
 /**
  * The scripted agent CLIs (`agent.mjs`) checked against the code that parses
@@ -116,7 +118,19 @@ describe('fake claude', () => {
     expect(t[5]).toMatchObject({ name: 'Bash', status: 'ok' })
     expect(t[6]).toMatchObject({ text: expect.stringContaining(join(cwd, 'staff-engineer/acme-corp/a-42')) })
     expect(await builtFiles()).toEqual(['build-report.json', 'job-description.md', 'resume.pdf', 'resume_data.json'])
-    expect(await readFile(join(cwd, 'staff-engineer/acme-corp/a-42/resume.pdf'), 'utf8')).toMatch(/^%PDF-1\.4/)
+    // A PDF a parser accepts: one page, the text inside, a cross-reference table and a trailer with /Size.
+    const pdf = await readFile(join(cwd, 'staff-engineer/acme-corp/a-42/resume.pdf'))
+    expect(pdf.subarray(0, 8).toString()).toBe('%PDF-1.4')
+    const doc = await getDocumentProxy(new Uint8Array(pdf))
+    expect(doc.numPages).toBe(1)
+    expect((await extractText(doc)).text).toContain('Alex Rivera - staff-engineer at acme-corp')
+    expect(pdf.toString()).toMatch(/\nxref\n0 6\n[\s\S]*trailer\n<< \/Size 6 \/Root 1 0 R >>\nstartxref\n\d+\n%%EOF\n$/)
+    // pdfinfo (poppler), when the machine has it, must not warn about the file.
+    const pdfinfo = ['/opt/homebrew/bin/pdfinfo', '/usr/local/bin/pdfinfo'].find((p) => existsSync(p))
+    if (pdfinfo) {
+      const info = execFileSync(pdfinfo, [join(cwd, 'staff-engineer/acme-corp/a-42/resume.pdf')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+      expect(info).toMatch(/^Pages:\s+1$/m)
+    }
     expect(JSON.parse(await readFile(join(cwd, 'staff-engineer/acme-corp/a-42/build-report.json'), 'utf8'))).toMatchObject({ ok: true })
     expect(await readFile(join(cwd, 'staff-engineer/acme-corp/a-42/job-description.md'), 'utf8')).toContain('Build the platform.')
   })

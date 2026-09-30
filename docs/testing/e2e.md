@@ -146,7 +146,9 @@ The script, the same for every agent: the first message of a session is the job 
 and job id are read from the `Company:` / `Role:` / `Job id:` lines the app writes, slugged as
 the real skill does) and gets a gap analysis, one `Read` of the master profile and the approval
 question, so the run stops at *Waiting for you*. A later message containing "approve" gets a
-`Bash` step and the files `resume.pdf`, `resume_data.json`, `build-report.json`,
+`Bash` step and the files `resume.pdf` (a structurally valid one-page PDF with a cross-reference
+table, carrying the name, role and company as text; `agent.test.ts` parses it with `unpdf` and,
+when poppler is on the machine, `pdfinfo`), `resume_data.json`, `build-report.json`,
 `job-description.md` under `<CV_HOME>/<role>/<company>/<job-id>/`; any other reply gets a short
 answer and the question again. A resumed process keeps the id it was given (Codex, which runs one
 process per turn, also recalls the job from `fake-agent/sessions/<id>.json`).
