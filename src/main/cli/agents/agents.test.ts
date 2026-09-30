@@ -108,6 +108,8 @@ describe('Codex adapter', () => {
     })
     expect(c.signal({ type: 'turn.failed', error: { message: 'nope' } })).toEqual({ type: 'turn-end', error: 'nope' })
     expect(c.signal({ type: 'item.completed', item: {} })).toEqual({ type: 'keep' })
+    expect(c.signal({ type: 'item.started', item: { type: 'command_execution' } })).toEqual({ type: 'keep', content: true })
+    expect(c.signal({ type: 'turn.started' })).toEqual({ type: 'keep' })
     expect(c.explainFailure('Error: not logged in', null)).toMatch(/codex login/)
     expect(c.explainFailure('boom', null)).toBeNull()
   })

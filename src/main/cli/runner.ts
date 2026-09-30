@@ -50,6 +50,8 @@ interface Live {
   stderr: string
   /** Why the last turn failed, as the agent reported it (cleared by a good turn). */
   turnError?: string
+  /** Items the agent produced in the current turn (messages, commands, edits). */
+  turnContent: number
   /** Serializes disk writes of this run so events keep their order. */
   queue: Promise<void>
   /** Index the next recorded event gets in `events.jsonl`. */
@@ -250,6 +252,7 @@ export class RunManager {
       seq,
       stopping: false,
       finishing: false,
+      turnContent: 0,
       turnStartedAt: Date.now()
     }
     this.live.set(run.id, entry)
@@ -315,6 +318,7 @@ export class RunManager {
     if (!entry) throw new Error('This run is not active.')
     entry.run.status = 'running'
     entry.turnStartedAt = Date.now()
+    entry.turnContent = 0
     const event: HuntgryEvent = { type: 'huntgry', subtype: 'user_message', text, ts: new Date().toISOString() }
     this.record(entry, event)
     this.touch(entry)
@@ -330,6 +334,7 @@ export class RunManager {
     if (signal.type === 'drop') return
     this.record(entry, event)
     const r = entry.run
+    if (signal.type === 'keep' && signal.content) entry.turnContent++
     if (signal.type === 'init') {
       r.sessionId = signal.sessionId
       this.touch(entry)
@@ -342,8 +347,15 @@ export class RunManager {
         }
       }
       if (signal.sessionId) r.sessionId = signal.sessionId
-      entry.turnError = signal.error
-      r.error = signal.error
+      // A per-turn agent that exits after a turn with no output and nothing done would leave the
+      // run waiting for a reply to nothing: fail it instead, so the user sees it and can retry.
+      const empty =
+        !signal.error &&
+        entry.adapter.turnMode === 'exec' &&
+        entry.turnContent === 0 &&
+        signal.usage?.outputTokens === 0
+      entry.turnError = signal.error ?? (empty ? `${entry.adapter.label} ended the turn without any answer or action.` : undefined)
+      r.error = entry.turnError
       r.status = 'waiting'
       const since = entry.turnStartedAt - 1000
       entry.queue = entry.queue.then(async () => {

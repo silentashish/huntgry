@@ -26,8 +26,8 @@ export interface AgentInvocation {
 export type AgentSignal =
   /** Not shown or stored (hook chatter, rate-limit pings). */
   | { type: 'drop' }
-  /** Stored for the transcript; nothing else to do. */
-  | { type: 'keep' }
+  /** Stored for the transcript. `content`: something the user sees (a message, a command, an edit). */
+  | { type: 'keep'; content?: boolean }
   /** The session id to resume with is known. */
   | { type: 'init'; sessionId: string }
   /** The turn ended: the agent waits for the user. `error` = the turn failed. */

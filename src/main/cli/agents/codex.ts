@@ -89,6 +89,8 @@ export const codex: AgentAdapter = {
       const err = isObj(event.error) ? event.error.message : undefined
       return { type: 'turn-end', error: typeof err === 'string' && err ? err : 'The Codex turn failed.' }
     }
+    if (typeof event.type === 'string' && event.type.startsWith('item.') && isObj(event.item) && event.item.type)
+      return { type: 'keep', content: true }
     return { type: 'keep' }
   },
   explainFailure(stderr) {

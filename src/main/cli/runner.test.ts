@@ -349,6 +349,20 @@ describe('RunManager against a fake codex (one process per turn)', () => {
     expect((await until(b.id, (r) => r.status === 'failed')).error).toContain('exited before the turn ended')
   })
 
+  it('fails a turn that ends with no output and nothing done, instead of waiting for a reply to nothing', async () => {
+    const { id } = await manager.start({ ...params, notes: 'EMPTY' }, codexCtx())
+    const failed = await until(id, (r) => r.status === 'failed' && !r.live)
+    expect(failed.error).toContain('Codex ended the turn without any answer or action.')
+    // The session is known, so the user can retry with a reply.
+    expect(failed.sessionId).toBe('thread-fake-1')
+    await manager.whenIdle()
+    const t = buildTranscript(await readEvents(ws, id), 'codex')
+    expect(t[t.length - 1]).toMatchObject({ kind: 'notice', level: 'error' })
+    // Something the agent did (here only reasoning, also reported as 0 output tokens) is not an empty turn.
+    const other = await manager.start({ ...params, notes: 'REASONING_ONLY' }, codexCtx())
+    expect((await until(other.id, (r) => r.status !== 'running' && !r.live)).status).toBe('waiting')
+  })
+
   it('continues a run only with its own agent', async () => {
     const { id } = await manager.start(params, codexCtx())
     await until(id, (r) => r.status === 'waiting' && !r.live)
