@@ -6,6 +6,9 @@
 
 export type JobSourceId = 'hiring.cafe' | 'indeed' | 'url' | 'pasted'
 
+/** Shape of `Job.id`, checked on every id the renderer sends. */
+export const JOB_ID_PATTERN = /^(hiring\.cafe|indeed|url|pasted):[\w.:-]{1,200}$/
+
 export const SEARCH_SOURCES = ['hiring.cafe', 'indeed'] as const
 export type SearchSource = (typeof SEARCH_SOURCES)[number]
 

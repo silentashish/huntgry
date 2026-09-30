@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { JOBS_CHANNELS } from '@shared/jobs-types'
+import { JOB_ID_PATTERN, JOBS_CHANNELS } from '@shared/jobs-types'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { loadAndExtract } from './loader'
 import { addByUrl, addPasted, fetchDetails, listJobs, searchJobs, updateJob, validateQuery } from './service'
@@ -8,8 +8,7 @@ import { recentSearches } from './store'
 const workspace = async () => (await requireCurrentWorkspace()).path
 
 function requireJobId(id: unknown): string {
-  if (typeof id !== 'string' || !/^(hiring\.cafe|indeed|url|pasted):[\w.:-]{1,200}$/.test(id))
-    throw new Error('Invalid job id.')
+  if (typeof id !== 'string' || !JOB_ID_PATTERN.test(id)) throw new Error('Invalid job id.')
   return id
 }
 

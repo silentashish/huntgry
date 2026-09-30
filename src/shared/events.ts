@@ -6,10 +6,11 @@
 
 import type { ApplicationsEvents } from './applications-types'
 import type { BrowserEvents } from './browser-types'
+import type { QueueEvents } from './queue-types'
 import type { RunnerEvents } from './runner-types'
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface HuntgryEvents extends RunnerEvents, ApplicationsEvents, BrowserEvents {}
+export interface HuntgryEvents extends RunnerEvents, ApplicationsEvents, BrowserEvents, QueueEvents {}
 
 export type EventChannel = keyof HuntgryEvents
 
@@ -19,7 +20,8 @@ export const EVENT_CHANNELS: readonly EventChannel[] = [
   'runner:run',
   'runner:install-log',
   'applications:changed',
-  'browser:state'
+  'browser:state',
+  'queue:changed'
 ]
 
 /** Subscribe to a main-process event. Returns the unsubscribe function. */

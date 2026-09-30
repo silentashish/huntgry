@@ -5,6 +5,7 @@ import { stopApplicationsWatcher } from './applications/ipc'
 import { handleFileScheme, registerFileScheme } from './applications/protocol'
 import { attachBrowser, destroyBrowser } from './browser/manager'
 import { stopAllRuns } from './cli/ipc'
+import { stopQueue } from './queue/ipc'
 import { registerIpcHandlers } from './ipc'
 
 // Menus, the About panel and userData use this name. Packaged builds take the
@@ -96,7 +97,9 @@ app.on('before-quit', (event) => {
   destroyBrowser()
   if (runsStopped) return
   event.preventDefault()
-  void stopAllRuns()
+  // The queue stops following its runs first, so they reload as interrupted, not cancelled.
+  void stopQueue()
+    .then(stopAllRuns)
     .catch((err: unknown) => console.error('Stopping runs before quit failed:', err))
     .finally(() => {
       runsStopped = true

@@ -1,103 +1,26 @@
 import { app, ipcMain, shell } from 'electron'
-import { readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { RUNNER_CHANNELS, type RunSummary } from '@shared/runner-types'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
-import { buildSystemPrompt, MAX_TEXT, requireStartParams, texRootOf } from './command'
-import { buildChildEnv, findClaude, loginShellPath } from './env'
-import { checkEnvironment, discoverRuntime, installPythonDeps } from './environment'
-import { claudeInstallKind, exclusive, installClaude, requireSignedIn, updateClaude } from './install-claude'
+import { MAX_TEXT } from './command'
+import { findClaude } from './env'
+import { checkEnvironment, installPythonDeps } from './environment'
+import { claudeInstallKind, exclusive, installClaude, updateClaude } from './install-claude'
 import { installSkill } from './install-skill'
-import { fetchPostingText } from './posting'
-import { pinnedFetch } from './public-url'
-import { RunManager, type RunContext } from './runner'
-import { claudeVersion, supportsPermissionPrompts } from './version'
 import { listRuns, OUTPUT_FILES, readEvents, readRun, RUN_ID_PATTERN } from './runs'
+import { context, manager, startTailorRun, venvDir } from './start'
 
-/** The venv the skill's `python3` comes from. Shared by every workspace. */
-const venvDir = (): string => join(app.getPath('userData'), 'skill-venv')
 /** Which skill release Huntgry installed (see `install-skill.ts`). */
 const skillRecordPath = (): string => join(app.getPath('userData'), 'skill-install.json')
 const installLog = (line: string): void => emit('runner:install-log', line)
 
-const manager = new RunManager({
-  onEvent: (runId, seq, event) => emit('runner:event', { runId, seq, event }),
-  onRun: (run) => emit('runner:run', run)
-})
-
-/** Kills every `claude` child; called when the app quits. */
-/** Stops every run and resolves once the processes are gone and their state is on disk. */
-export async function stopAllRuns(): Promise<void> {
-  manager.stopAll()
-  await manager.whenIdle()
-}
+export { stopAllRuns } from './start'
 
 function requireRunId(id: unknown): string {
   if (typeof id !== 'string' || !RUN_ID_PATTERN.test(id)) throw new Error('Invalid run id.')
   return id
-}
-
-async function context(): Promise<RunContext> {
-  const workspace = await requireCurrentWorkspace()
-  // File checks only: the full preflight is for Settings and the Tailor form's warning.
-  const env = await discoverRuntime()
-  if (!env.claudePath) throw new Error('The claude CLI was not found. See Settings.')
-  if (!env.skillDir) throw new Error('The resume-tailor skill was not found. See Settings.')
-  // Sandbox rules apply to real paths; allow the given spelling and its target (the venv may be a symlink).
-  const real = async (p: string) => [p, await realpath(p).catch(() => p)]
-  const childEnv = buildChildEnv({
-    base: process.env,
-    workspace: workspace.path,
-    venvDir: venvDir(),
-    texBin: env.texBin,
-    loginPath: await loginShellPath()
-  })
-  const [version] = await Promise.all([
-    // Once per binary (cached by real path); an unknown version just leaves out the newer flags.
-    claudeVersion(env.claudePath, childEnv),
-    // A signed-out CLI would only produce a failed run; say what to do instead (start and resume).
-    requireSignedIn(env.claudePath, childEnv)
-  ])
-  const texRoot = texRootOf(env.texBin)
-  const allow = [
-    ...new Set(
-      (await Promise.all([workspace.path, env.skillDir, venvDir(), ...(texRoot ? [texRoot] : [])].map(real))).flat()
-    )
-  ]
-  return {
-    workspace: workspace.path,
-    skillDir: env.skillDir,
-    sandbox: { workspace: workspace.path, skillDir: env.skillDir, venvDir: venvDir(), texRoot, extraRead: allow },
-    command: env.claudePath,
-    env: childEnv,
-    claudeVersion: version,
-    permissionPrompts: supportsPermissionPrompts(version),
-    model: await preferredModel(),
-    systemPrompt: buildSystemPrompt({
-      workspace: workspace.path,
-      masterProfile: workspace.masterProfile,
-      skillDir: env.skillDir
-    })
-  }
-}
-
-/**
- * The model the user chose for Claude Code (`model` in ~/.claude/settings.json).
- * Runs load no settings files, so it is passed explicitly; `undefined` = Claude's default.
- */
-async function preferredModel(): Promise<string | undefined> {
-  try {
-    const settings = JSON.parse(await readFile(join(homedir(), '.claude', 'settings.json'), 'utf8')) as {
-      model?: unknown
-    }
-    return typeof settings.model === 'string' && /^[\w.[\]:/@-]{1,300}$/.test(settings.model)
-      ? settings.model
-      : undefined
-  } catch {
-    return undefined
-  }
 }
 
 async function currentRun(id: string): Promise<RunSummary> {
@@ -165,14 +88,7 @@ export function registerRunnerIpc(): void {
     return { run: await currentRun(runId), events: await readEvents(workspace.path, runId) }
   })
 
-  ipcMain.handle(RUNNER_CHANNELS.start, async (_e, input: unknown) => {
-    const params = requireStartParams(input)
-    // Claude gets no network access, so a posting given only by URL is fetched here.
-    if (!params.jobDescription?.trim() && params.jobUrl) {
-      params.jobDescription = await fetchPostingText(params.jobUrl, pinnedFetch)
-    }
-    return manager.start(params, await context())
-  })
+  ipcMain.handle(RUNNER_CHANNELS.start, (_e, input: unknown) => startTailorRun(input))
 
   ipcMain.handle(RUNNER_CHANNELS.reply, async (_e, id: unknown, text: unknown) => {
     if (typeof text !== 'string' || !text.trim() || text.length > MAX_TEXT) throw new Error('Type a reply first.')

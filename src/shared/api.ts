@@ -5,6 +5,7 @@ import type { RunnerApi } from './runner-types'
 import type { GraphApi } from './graph-types'
 import type { InsightsApi } from './insights-types'
 import type { JobsApi } from './jobs-types'
+import type { QueueApi } from './queue-types'
 import type { ProfileApi, WorkspaceApi } from './workspace-types'
 
 /**
@@ -26,6 +27,8 @@ export interface HuntgryApi {
   insights: InsightsApi
   /** In-app browser tabs for job postings (pages live in main). */
   browser: BrowserApi
+  /** Bulk tailoring: jobs queued from the Jobs page, started a few at a time. */
+  queue: QueueApi
   /** Main → renderer events, restricted to `EVENT_CHANNELS`. */
   on: Subscribe
 }
