@@ -3,9 +3,11 @@ import { expect } from '@playwright/test'
 
 /**
  * The in-app browser's tabs are `WebContentsView`s owned by the main
- * process, children of the main window's `contentView`. They are not
- * Playwright `Page`s (see docs/testing/e2e.md), so their state is read and
- * their DOM driven from the main process through `electronApp.evaluate`.
+ * process, children of the main window's `contentView`. Playwright also
+ * exposes each loaded tab as a `Page` (`electronApp.windows()`), but tab
+ * state (URL, title, loading) and the Submit press are read and driven here
+ * from the main process through `electronApp.evaluate`, which does not
+ * depend on when Playwright attaches to the tab (see docs/testing/e2e.md).
  */
 
 export interface TabInfo {
