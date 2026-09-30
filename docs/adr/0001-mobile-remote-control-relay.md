@@ -399,9 +399,9 @@ export type RemoteCommand =
   | { name: 'run.stop'; args: { runId: string } }
   | { name: 'review.list' }                                       // #31 Unreviewed results
   | { name: 'review.get'; args: { applicationId: string } }       // → ReviewDetail: what the desktop review screen shows
-  | { name: 'review.approve'; args: { applicationId: string; contentHash: string; approvedReframingIds?: string[] } } // ids from the ReviewDetail the phone fetched, verified by the gateway
-  | { name: 'review.rerun'; args: { runId: string; contentHash: string; answers: string } }
-  | { name: 'review.discard'; args: { applicationId: string; contentHash: string } }
+  | { name: 'review.approve'; args: { applicationId: string; revision: string; approvedReframingIds?: string[] } } // ids from the ReviewDetail the phone fetched, verified by the gateway
+  | { name: 'review.rerun'; args: { runId: string; revision: string; answers: string } }
+  | { name: 'review.discard'; args: { applicationId: string; revision: string } }
   | { name: 'file.get'; args: { applicationId: string; file: RemoteFile; chunk: number } }   // chunks of LIMITS.fileChunkBytes
   | { name: 'device.setPushToken'; args: { expoPushToken: string } }
   | { name: 'device.setNotifications'; args: { categories: NotificationCategory[] } }
@@ -432,8 +432,10 @@ export interface ReviewDetail {
   reviewNotes: string | null      // review-notes.md inline when ≤ LIMITS.reviewNotesInlineBytes, else null and fetched with file.get
   openGaps: string[]
   proposedReframings: { id: string; sourceFact: string; wording: string }[]   // id = sha256(sourceFact + '\n' + wording), stable across calls
-  verify: { ok: boolean; report: string }
-  contentHash: string             // sha256 over reviewNotes + openGaps + proposedReframings; approval must echo it
+  verify: { ok: boolean; report: string }                     // build-report.json / verify.py result, in full
+  artifacts: { file: RemoteFile; bytes: number; sha256: string }[]   // resume.pdf, cover.pdf, resume-page-N.jpg, cover-page-N.jpg as on disk right now
+  revision: string                // sha256 over the full review-notes.md, openGaps, reframing ids, verify.report and every artifact's sha256:
+                                  // one immutable snapshot of what the phone was shown. approve / rerun / discard must echo it.
 }
 
 export interface StatusSummary {
@@ -534,7 +536,7 @@ item's text or tool output is cut at 8 KiB with `truncated: true` (the phone sho
 your Mac for the full output"). Job and run lists are cursor-paged. Files travel in binary
 chunks of 24 KiB, which are 32 KiB once base64-encoded, with the whole-file SHA-256 on every
 chunk so the phone can verify the reassembled file. `review-notes.md` is inline up to 16 KiB
-and otherwise fetched like a file; its hash in `ReviewDetail` always covers the full text.
+and otherwise fetched like a file; the `revision` in `ReviewDetail` always covers the full text.
 A protocol test builds every command and event with its largest allowed fields and asserts
 the serialised frame stays under `frameBytes`.
 
@@ -663,23 +665,31 @@ re-paired.
 **Honesty-critical approvals (#31).** Approving a result from the phone is the step the skill
 calls "most worth protecting", because it can turn an *Unreviewed* reframing into a standing
 approval reused by every later unattended run. So the phone must have seen what it approves:
-`review.get` returns `ReviewDetail`, the same review notes, open gaps, proposed reframings
-and verify report the desktop review screen shows, plus a `contentHash` over them.
-`review.approve`, `review.rerun` and `review.discard` must echo that hash; the gateway
-recomputes it from disk and answers `stale` if the notes changed (a re-run finished, the
-owner edited them on the Mac). The phone's review screen renders `ReviewDetail` in full,
+`review.get` returns `ReviewDetail`, the same review notes, open gaps, proposed reframings,
+verify report and PDF previews the desktop review screen (#31) shows, plus a `revision`: one
+SHA-256 over the full `review-notes.md`, the open gaps, the reframing ids, the verify report
+and the SHA-256 of every artifact on disk (`resume.pdf`, `cover.pdf`, the `*-page-N.jpg`
+previews). It is a snapshot id, not a notes hash: a regenerated PDF, a changed verify result
+or an edited note all change it. `review.approve`, `review.rerun` and `review.discard` must
+echo it; the gateway rebuilds the snapshot from disk at that moment and answers `stale` if
+any part differs (a re-run finished, the owner edited the notes or rebuilt on the Mac), and
+the phone reloads the item. Two more rules make "has seen" literal: the gateway remembers,
+per device, which revisions it served through `review.get` in the current session and
+answers `denied` to an approval for a revision that device never fetched; and the phone
+enables **Approve** only after it has fetched page 1 of each PDF preview for that revision
+(the previews are part of the snapshot, so what it displayed is what it approves). The phone's review screen renders `ReviewDetail` in full,
 with each proposed reframing individually tickable, and never offers "approve all" without
 opening the item. **The phone never sends reframing text.** Every proposed reframing carries a
 stable `id` (SHA-256 of its source fact and wording), and `review.approve` sends only
-`approvedReframingIds`. The gateway rebuilds `ReviewDetail` from disk, checks the echoed hash,
+`approvedReframingIds`. The gateway rebuilds `ReviewDetail` from disk, checks the echoed revision,
 and then checks that every id is in *that* detail's `proposedReframings`; one unknown id fails
 the whole command with `invalid` and writes nothing. Only the matching entries' own
 `sourceFact → wording` pairs, read from disk, are appended to
 `.huntgry/approved-reframings.json`. A modified or compromised client can therefore approve
 only reframings the skill actually proposed for that application, never a string of its own
-making. A gateway test sends a forged id, an id from another application and a stale hash,
+making. A gateway test sends a forged id, an id from another application and a stale revision,
 and asserts the approvals file is untouched in each case. Approvals from the phone are logged
-in the audit file with the hash and the ids.
+in the audit file with the revision and the ids.
 
 **Command allow-list and rules**
 
@@ -781,7 +791,7 @@ Negative
    phase ships without push and the app polls status while open; push then lands as its own
    follow-up.
 3. **Phase 3 — review and files.** Unreviewed list, `review.get`, approve / re-run with
-   answers / discard bound to `contentHash`, `file.get` PDF preview, `jobs.addUrl`,
+   answers / discard bound to `revision`, `file.get` PDF preview, `jobs.addUrl`,
    notification detail toggle, Android build, TestFlight internal.
 4. **Later.** LAN fast path (Bonjour + same protocol, relay as fallback); forward secrecy
    (per-connection ephemeral keys, or Noise IK over the same relay); a Node relay image for
@@ -801,7 +811,7 @@ order; each lands with tests and a `docs/changes/<N>-*.md`.
 | E5 | Mobile app MVP (iOS, local build) | `mobile/`: scan QR, status, queue with pause/resume/cancel/retry, run view with transcript and reply, presence and "queued / expired" states. Works on a free Apple ID (no push). | E2, E3, E4 |
 | E5b | iOS push | Push registration and categories in the app, APNs key on the EAS project, relay → Expo push verified on a device. **Prerequisite: Apple Developer Program enrolment ($99/yr)**, an owner task tracked in the issue. | E5, Developer Program |
 | E6 | Pipeline control from the phone | `pipeline.*` commands and `pipeline.changed` / `pipeline.finished` events wired to #31's pipeline; usage-limit pause shown with its reset time. | #31, E3, E5 |
-| E7 | Review from the phone | `review.list` / `review.get` / `review.approve` / `review.rerun` / `review.discard` with `contentHash`, the review screen mirroring the desktop's, standing approvals sent as reframing ids that the gateway verifies against the on-disk `ReviewDetail` before writing (forged-id, foreign-id and stale-hash tests). | #31, E6 |
+| E7 | Review from the phone | `review.list` / `review.get` / `review.approve` / `review.rerun` / `review.discard` bound to a `revision` snapshot (notes, gaps, reframing ids, verify report, artifact hashes), the review screen mirroring the desktop's with PDF page previews, "served revision" tracking per device, Approve enabled only after the previews loaded, standing approvals sent as reframing ids that the gateway verifies against the on-disk `ReviewDetail` before writing (forged-id, foreign-id, stale-revision, regenerated-PDF and unserved-revision tests). | #31, E6, E8 |
 | E8 | Files and jobs from the phone | `file.get` in 24 KiB chunks with whole-file SHA-256 (PDFs, page previews, long review notes), cursor-paged `jobs.list`, `jobs.addUrl` with the public-host check, `applications.changed`. | E5 |
 | E9 | Distribution | Android build, TestFlight internal, README section on deploying the relay and pairing. | E5 |
 
