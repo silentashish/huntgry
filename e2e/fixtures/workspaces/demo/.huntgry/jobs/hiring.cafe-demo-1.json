@@ -1,0 +1,17 @@
+{
+  "id": "hiring.cafe:demo-1",
+  "source": "hiring.cafe",
+  "sourceId": "demo-1",
+  "title": "Staff Backend Engineer",
+  "company": "Initech",
+  "location": "Remote",
+  "remote": true,
+  "salary": "$180,000 – $210,000 / year",
+  "postedAt": "2026-09-25",
+  "url": "https://jobs.example.com/initech/1",
+  "boardUrl": null,
+  "description": "Initech is looking for a Staff Backend Engineer to lead its Go platform team.\n\nRequirements: Go, PostgreSQL, Kubernetes, five years of experience.",
+  "descriptionComplete": true,
+  "tags": ["Go", "PostgreSQL", "Kubernetes"],
+  "fetchedAt": "2026-09-26T10:00:00.000Z"
+}

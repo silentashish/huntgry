@@ -1,0 +1,45 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Length 1175 >>
+stream
+BT /F1 16 Tf 1 0 0 1 56 740 Tm (Jordan Example) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 722 Tm (Portland, OR | \(555\) 010-0142 | jordan.example@example.com) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 704 Tm (SUMMARY) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 686 Tm (Full-Stack Engineer with 5+ years shipping web products in TypeScript and Go.) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 668 Tm (TECHNICAL SKILLS) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 650 Tm (\225 Languages: TypeScript, Go, SQL) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 632 Tm (\225 Frameworks: React, Node.js, PostgreSQL) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 614 Tm (EXPERIENCE) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 596 Tm (Vandelay Industries \226 Senior Full-Stack Engineer, Mar 2021 \226 Present, Portland, OR) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 578 Tm (\225 Shipped the customer portal used by 30k accounts.) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 560 Tm (Wonka Digital \226 Software Engineer, Jul 2018 \226 Feb 2021, Denver, CO) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 542 Tm (\225 Built the order tracking API in Go.) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 524 Tm (EDUCATION) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 506 Tm (Pacific State University \226 Bachelor of Science, Computer Science, Aug 2014 \226 May 2018) Tj ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000338 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1565
+%%EOF

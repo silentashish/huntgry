@@ -1,0 +1,6 @@
+{
+  "ok": false,
+  "verify": { "results": [{ "check": "one_page", "passed": false, "hard": true }], "warnings": 1 },
+  "render": { "pages": 2 },
+  "style_warnings": ["Summary longer than three lines"]
+}

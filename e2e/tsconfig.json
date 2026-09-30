@@ -1,0 +1,21 @@
+// Type-checks the Playwright harness on its own (`npm run typecheck:e2e`): Node types plus the
+// DOM lib that @playwright/test's page.evaluate callbacks need, kept out of tsconfig.node.json.
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["./**/*.ts", "./**/*.mts"],
+  "exclude": ["./.results/**"]
+}

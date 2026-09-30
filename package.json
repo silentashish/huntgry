@@ -14,13 +14,17 @@
     "icons": "sh scripts/build-icons.sh",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web && npm run typecheck:page",
+    "test:e2e": "npm run build && playwright test -c e2e/playwright.config.ts",
+    "test:e2e:ui": "playwright test -c e2e/playwright.config.ts --ui",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web && npm run typecheck:page && npm run typecheck:e2e",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck:page": "tsc --noEmit -p tsconfig.page.json",
+    "typecheck:e2e": "tsc --noEmit -p e2e/tsconfig.json",
     "postinstall": "node -e \"require('electron')\" && node scripts/brand-dev-electron.cjs"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^26.6.3",
     "@types/react": "^19.3.0",
