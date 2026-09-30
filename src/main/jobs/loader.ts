@@ -1,4 +1,5 @@
 import { BrowserWindow, session } from 'electron'
+import { GUARDED_URLS, isPublicHost } from '../cli/public-host'
 import { assertPublicUrl } from '../cli/public-url'
 import { isBlockedPage } from './blocked'
 
@@ -30,33 +31,11 @@ function configureSession(): Electron.Session {
   s.on('will-download', (e) => e.preventDefault())
   // A posting URL is user input: neither it, nor a redirect, nor anything the page requests may reach
   // localhost or the private network (SSRF). Checked per request, cached per host for a minute.
-  s.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => {
+  s.webRequest.onBeforeRequest({ urls: GUARDED_URLS }, (details, callback) => {
     void isPublicHost(details.url).then((ok) => callback({ cancel: !ok }))
   })
   configured = s
   return s
-}
-
-const HOST_CHECK_TTL_MS = 60_000
-const hostChecks = new Map<string, { ok: boolean; at: number }>()
-
-/** Whether `url`'s host is public (see `assertPublicUrl`), cached per host. */
-async function isPublicHost(url: string): Promise<boolean> {
-  let host: string
-  try {
-    host = new URL(url).host
-  } catch {
-    return false
-  }
-  const cached = hostChecks.get(host)
-  if (cached && Date.now() - cached.at < HOST_CHECK_TTL_MS) return cached.ok
-  // WebSocket URLs are checked as their http(s) equivalent.
-  const ok = await assertPublicUrl(url.replace(/^ws/i, 'http')).then(
-    () => true,
-    () => false
-  )
-  hostChecks.set(host, { ok, at: Date.now() })
-  return ok
 }
 
 /**

@@ -8,11 +8,13 @@ import {
   IconSettings,
   IconSparkles,
   IconSwitchHorizontal,
+  IconWorld,
   type Icon
 } from '@tabler/icons-react'
 import logo from '../../assets/logo.svg'
 import {
   DEFAULT_LOCATION,
+  FULL_BLEED,
   NavigationContext,
   PAGES,
   locationOf,
@@ -24,6 +26,7 @@ import {
 const NAV: Record<Page, { label: string; icon: Icon; hint: string }> = {
   dashboard: { label: 'Dashboard', icon: IconLayoutDashboard, hint: 'Generated resumes and applications' },
   jobs: { label: 'Jobs', icon: IconBriefcase, hint: 'Search hiring.cafe and Indeed' },
+  browser: { label: 'Browser', icon: IconWorld, hint: 'Open job postings without leaving the app' },
   tailor: { label: 'Tailor', icon: IconSparkles, hint: 'Run the Claude resume-tailor skill' },
   graph: { label: 'Knowledge graph', icon: IconChartDots3, hint: 'Your skills and experience as a graph' },
   profile: { label: 'Master profile', icon: IconFileText, hint: 'The single source of truth for every resume' },
@@ -74,9 +77,11 @@ export function AppLayout({ workspacePath, initialLocation, onSwitchWorkspace, c
     [location, guarded, setLeaveGuard]
   )
 
+  const fullBleed = FULL_BLEED.has(location.page)
+
   return (
     <NavigationContext.Provider value={nav}>
-      <AppShell navbar={{ width: 240, breakpoint: 0 }} padding="lg">
+      <AppShell navbar={{ width: 240, breakpoint: 0 }} padding={fullBleed ? 0 : 'lg'}>
         <AppShell.Navbar p="sm">
           <AppShell.Section>
             <Group gap="xs" wrap="nowrap" px="xs" py="sm">
@@ -128,7 +133,11 @@ export function AppLayout({ workspacePath, initialLocation, onSwitchWorkspace, c
         </AppShell.Navbar>
 
         <AppShell.Main>
-          <div style={{ maxWidth: 1040, margin: '0 auto' }}>{children(location)}</div>
+          {fullBleed ? (
+            children(location)
+          ) : (
+            <div style={{ maxWidth: 1040, margin: '0 auto' }}>{children(location)}</div>
+          )}
         </AppShell.Main>
       </AppShell>
 

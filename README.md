@@ -72,13 +72,14 @@ src/
 │   ├── graph/                  # job descriptions for the knowledge graph overlay
 │   ├── insights/               # gap insights from job descriptions, dismissals, Claude-drafted evidence
 │   ├── jobs/                   # job boards: hidden-window loader, hiring.cafe / Indeed / posting parsers, .huntgry/jobs store
+│   ├── browser/                # in-app browser: one WebContentsView per tab, session hardening, address rules
 │   ├── resume/                 # resume file → lines (docx, pdf, txt/md) → draft profile (parse.ts)
 │   └── cli/                    # runs the resume-tailor skill via `claude -p` (stream-json), run history
 ├── preload/                    # index.ts composes window.huntgry from <feature>.ts + events.ts
 └── renderer/src/               # React 19 + Mantine UI, no Node access
     ├── navigation.ts           # pages, typed params, navigate(), leave guard
     ├── components/shell/       # AppLayout: navbar + page area
-    └── pages/<page>/           # dashboard, jobs, tailor, graph, profile, settings
+    └── pages/<page>/           # dashboard, jobs, browser, tailor, graph, profile, settings
 resources/                      # app icon (svg source, png, icns)
 scripts/                        # icon rendering, dev Electron branding
 ```
@@ -112,6 +113,23 @@ also add any posting by URL, or paste it. Saved jobs live in `<workspace>/.huntg
 and job id (the board's id), first fetching the full posting from the employer's page when
 there is one. Indeed shows full descriptions only after a human check, so Indeed jobs arrive
 with the search snippet: the Tailor page says so, and you can paste the full text first.
+
+## Browser
+
+**Open posting** (Jobs) and the posting links on the Dashboard open the job in the
+**Browser** page instead of your system browser: tabs, Back/Forward/Reload/Stop, an address
+bar (`jobs.example.com` is enough; there is no search engine) and **Open in browser** to
+hand the page to your system browser. Tabs stay open while you use the rest of the app and
+close when the app quits. Pages run sandboxed in their own cookie jar
+(`persist:huntgry-browser`), with permissions (camera, notifications, location…) and
+downloads refused, and cannot reach localhost or your private network. `Cmd/Ctrl+L`
+focuses the address bar and `Cmd/Ctrl+T` opens a tab while focus is in the app.
+
+Each tab is an Electron `WebContentsView` owned by the main process (see
+`docs/changes/23-embedded-browser.md`), so auto-apply (#24) can drive a page:
+`BrowserManager.getWebContents(tabId)`, `attachDebugger(tabId)` (Chrome DevTools Protocol,
+e.g. `DOM.setFileInputFiles` for the resume upload), and unpacked extensions dropped into
+`<userData>/browser-extensions/<name>/`, which load into the browser session at startup.
 
 ## Tailoring a resume
 

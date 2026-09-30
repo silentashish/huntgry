@@ -8,6 +8,7 @@ import { ProfileSetup } from './components/ProfileSetup'
 import { AppLayout } from './components/shell/AppLayout'
 import { WorkspacePicker } from './components/WorkspacePicker'
 import { locationOf, paramsFor, type Location } from './navigation'
+import { BrowserPage } from './pages/browser'
 import { DashboardPage } from './pages/dashboard'
 import { GraphPage } from './pages/graph'
 import { JobsPage } from './pages/jobs'
@@ -75,6 +76,8 @@ export function App() {
               return <DashboardPage />
             case 'jobs':
               return <JobsPage />
+            case 'browser':
+              return <BrowserPage params={paramsFor(location, 'browser')} />
             case 'tailor':
               return <TailorPage params={paramsFor(location, 'tailor')} />
             case 'graph':

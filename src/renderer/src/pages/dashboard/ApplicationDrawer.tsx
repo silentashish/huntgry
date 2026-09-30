@@ -16,9 +16,10 @@ import {
   Textarea,
   Tooltip
 } from '@mantine/core'
-import { IconExternalLink, IconFileTypePdf, IconFolder } from '@tabler/icons-react'
+import { IconFileTypePdf, IconFolder, IconWorld } from '@tabler/icons-react'
 import { APPLICATION_STATUSES, type ApplicationRecord, type ApplicationTracking } from '@shared/applications-types'
 import { api, errorText } from '../../api'
+import { useNavigation } from '../../navigation'
 import { STATUS_META } from './status'
 
 interface Props {
@@ -29,6 +30,7 @@ interface Props {
 
 /** One application: page previews, the saved job description, tracking and notes. */
 export function ApplicationDrawer({ app, onClose, onUpdate }: Props) {
+  const { navigate } = useNavigation()
   const [jd, setJd] = useState<string | null>(null)
   const [notes, setNotes] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -98,11 +100,8 @@ export function ApplicationDrawer({ app, onClose, onUpdate }: Props) {
               <Button
                 size="xs"
                 variant="default"
-                component="a"
-                href={app.jobUrl}
-                target="_blank"
-                rel="noreferrer"
-                leftSection={<IconExternalLink size={16} />}
+                onClick={() => app.jobUrl && navigate('browser', { url: app.jobUrl })}
+                leftSection={<IconWorld size={16} />}
               >
                 Job posting
               </Button>

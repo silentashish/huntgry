@@ -1,4 +1,5 @@
 import type { ApplicationsApi } from './applications-types'
+import type { BrowserApi } from './browser-types'
 import type { Subscribe } from './events'
 import type { RunnerApi } from './runner-types'
 import type { GraphApi } from './graph-types'
@@ -23,6 +24,8 @@ export interface HuntgryApi {
   jobs: JobsApi
   /** Gaps job descriptions keep asking for, and Claude-drafted evidence for the master profile. */
   insights: InsightsApi
+  /** In-app browser tabs for job postings (pages live in main). */
+  browser: BrowserApi
   /** Main → renderer events, restricted to `EVENT_CHANNELS`. */
   on: Subscribe
 }
