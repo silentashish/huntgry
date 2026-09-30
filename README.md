@@ -41,12 +41,19 @@ Requirements: Node.js ≥ 22.12 (developed on Node 26) and npm. macOS is the pri
 npm install          # the Electron binary is downloaded on first launch
 npm run dev          # electron-vite dev server + Electron window (HMR for the renderer)
 npm test             # vitest: workspace, profile format and resume parser (no Electron needed)
-npm run typecheck    # tsc for main/preload (node), renderer (web) and in-page autofill code (page)
+npm run test:e2e     # build, then the Playwright end-to-end suite against the real Electron app
+npm run test:e2e:ui  # the same suite in Playwright's UI mode
+npm run typecheck    # tsc for main/preload (node), renderer (web), in-page autofill code (page) and e2e
 npm run build        # typecheck + production bundles in out/
 npm start            # preview the production build
 npm run dist         # packaged app (Huntgry.app / dmg / zip) in release/ via electron-builder
 npm run icons        # regenerate resources/icon.png + icon.icns from resources/icon.svg
 ```
+
+End-to-end tests live in `e2e/` and run the built app in a sandbox (own `userData`, `HOME`
+and `PATH`, so they never see your workspace, settings or agent CLIs). How they isolate the
+app, how to add a page object or a spec and how to debug a failure is in
+[docs/testing/e2e.md](docs/testing/e2e.md).
 
 On macOS, `npm run dev` launches the Electron binary from `node_modules`, which would
 show up as "Electron". `scripts/brand-dev-electron.cjs` (run on install and before
@@ -84,6 +91,7 @@ src/
     └── pages/<page>/           # dashboard, jobs, browser, tailor, graph, profile, settings
 resources/                      # app icon (svg source, png, icns)
 scripts/                        # icon rendering, dev Electron branding, mock-ats.mjs (local test forms)
+e2e/                            # Playwright end-to-end tests: fixtures/ (sandbox, workspaces), pages/, tests/
 ```
 
 ### Adding a feature
