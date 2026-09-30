@@ -95,7 +95,7 @@ Three facts about the existing code shape the design:
 
 | Option | Push | Code sharing | Distribution | Verdict |
 | --- | --- | --- | --- | --- |
-| **React Native + Expo** (dev client, `expo-notifications`) | APNs/FCM through the free Expo push service (600/s per project, no per-message cost; [FAQ](https://docs.expo.dev/push-notifications/faq/)) | TypeScript, React, the shared protocol package; Expo has first-class npm-workspaces monorepo support since SDK 52 ([monorepos](https://docs.expo.dev/guides/monorepos/)) | Local `expo run:ios --device` with a free Apple ID for development (7-day profiles); APNs, TestFlight and Ad Hoc need the $99/yr Developer Program; EAS Build Free gives 15 iOS + 15 Android builds/month ([EAS pricing](https://expo.dev/pricing)) | **Recommended.** |
+| **React Native + Expo** (dev client, `expo-notifications`) | APNs/FCM through the free Expo push service (600/s per project, no per-message cost; [FAQ](https://docs.expo.dev/push-notifications/faq/)) | TypeScript, React, the shared protocol package; Expo has first-class npm-workspaces monorepo support since SDK 52 ([monorepos](https://docs.expo.dev/guides/monorepos/)) | Local `expo run:ios --device` with a free Apple ID works for development without push (7-day profiles). **iOS push needs the paid $99/yr Developer Program**: Expo's [setup guide](https://docs.expo.dev/push-notifications/push-notifications-setup/) requires a paid Apple Developer account to create the APNs credentials the Expo push service uses, and a free Apple ID cannot provision the push entitlement. TestFlight and Ad Hoc need the program too. EAS Build Free gives 15 iOS + 15 Android builds/month ([EAS pricing](https://expo.dev/pricing)) | **Recommended**, with the Developer Program as a prerequisite for the push part of the MVP (Phase 2). |
 | **PWA** | iOS Web Push only for a Home Screen-installed app, no install prompt, subscriptions reported to vanish ([iOS PWA limits](https://www.magicbell.com/blog/pwa-ios-limitations-safari-support-complete-guide)) | Same React code | No store, no signing | Fallback if the owner refuses the $99/yr. Push reliability is the risk. |
 | **Native Swift** | APNs directly | None | Same as Expo | Rejected: no sharing with a TypeScript codebase. |
 
@@ -606,7 +606,13 @@ Negative
 2. **Phase 2 — MVP phone (iOS first, local build).** Expo app: scan QR, status screen, queue
    list with pause/resume/cancel/retry, run view with transcript and reply, push for
    `needs-reply`, `usage-limit`, `pipeline-finished`, `failed`. Pipeline start/pause/stop as
-   soon as #31 lands. Distribution: `expo run:ios --device`.
+   soon as #31 lands. Distribution: `expo run:ios --device`. **Prerequisite for push:** the
+   owner enrols in the Apple Developer Program ($99/yr) and uploads an APNs key to the EAS
+   project before the push work starts; a free Apple ID cannot provision the push
+   entitlement ([Expo setup guide](https://docs.expo.dev/push-notifications/push-notifications-setup/)).
+   Everything else in Phase 2 works on a free Apple ID, so if the enrolment is delayed the
+   phase ships without push and the app polls status while open; push then lands as its own
+   follow-up.
 3. **Phase 3 — review and files.** Unreviewed list, `review.get`, approve / re-run with
    answers / discard bound to `contentHash`, `file.get` PDF preview, `jobs.addUrl`,
    notification detail toggle, Android build, TestFlight internal.
@@ -625,7 +631,8 @@ order; each lands with tests and a `docs/changes/<N>-*.md`.
 | E2 | Relay (Cloudflare Worker + Durable Object) | `relay/`: admin-token room creation, owner/device auth by token hash, WebSocket hibernation, per-device queue with `ttl` and `expired` notices, presence, push hints → Expo API with fixed bodies and coalescing, rate limits; Miniflare tests; deploy script that prints the admin token. | E1 |
 | E3 | Desktop gateway and session | `src/main/remote/`: outbound session with reconnect on `powerMonitor` resume, replay state persisted in `devices.json`, workspace id, gateway dispatching the allow-list onto `startTailorRun` / `TailorQueue` / `RunManager` / `jobs` with the shared validators, `onEvent` next to `emit`, audit log, allow-list guard test, root-`dependencies` and `dist`-size checks. | E1 |
 | E4 | Pairing and devices in Settings | QR with one-time secret, approve dialog, device list with last-seen, revoke, unpair everything, relay URL + admin token entry, notification detail and TTL settings, `remote:state` event. | E2, E3 |
-| E5 | Mobile app MVP (iOS, local build) | `mobile/`: scan QR, status, queue with pause/resume/cancel/retry, run view with transcript and reply, presence and "queued / expired" states, push registration and categories. | E2, E3, E4 |
+| E5 | Mobile app MVP (iOS, local build) | `mobile/`: scan QR, status, queue with pause/resume/cancel/retry, run view with transcript and reply, presence and "queued / expired" states. Works on a free Apple ID (no push). | E2, E3, E4 |
+| E5b | iOS push | Push registration and categories in the app, APNs key on the EAS project, relay → Expo push verified on a device. **Prerequisite: Apple Developer Program enrolment ($99/yr)**, an owner task tracked in the issue. | E5, Developer Program |
 | E6 | Pipeline control from the phone | `pipeline.*` commands and `pipeline.changed` / `pipeline.finished` events wired to #31's pipeline; usage-limit pause shown with its reset time. | #31, E3, E5 |
 | E7 | Review from the phone | `review.list` / `review.get` / `review.approve` / `review.rerun` / `review.discard` with `contentHash`, the review screen mirroring the desktop's, standing approvals ticked per reframing. | #31, E6 |
 | E8 | Files and jobs from the phone | `file.get` chunked PDF preview, `jobs.addUrl` with the public-host check, `applications.changed`. | E5 |
