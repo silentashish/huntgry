@@ -14,8 +14,9 @@ import {
   Textarea,
   Title
 } from '@mantine/core'
-import type { RunnerEnvironment, StartRunParams } from '@shared/runner-types'
+import { AGENT_LABEL, DEFAULT_AGENT, type AgentId, type RunnerEnvironment, type StartRunParams } from '@shared/runner-types'
 import { api, errorText } from '../../api'
+import { AgentPicker, agentStatus } from '../../components/AgentPicker'
 import { useNavigation, type PageParams } from '../../navigation'
 
 interface Props {
@@ -38,6 +39,11 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
   const [notes, setNotes] = useState('')
   const [coverLetter, setCoverLetter] = useState(true)
   const [dateStyle, setDateStyle] = useState<'inline' | 'right'>('right')
+  /** The user's pick; until then the page's preselection or the default agent (known once the environment loads). */
+  const [picked, setPicked] = useState<AgentId | null>(null)
+  const agent = picked ?? prefill?.agent ?? environment?.defaultAgent ?? DEFAULT_AGENT
+  const agentLabel = AGENT_LABEL[agent]
+  const status = agentStatus(environment, agent)
 
   const urlOk = !jobUrl.trim() || /^https?:\/\//i.test(jobUrl.trim())
   // A job sent from the Jobs page without its full posting: its URL is a job board page or an employer
@@ -48,8 +54,12 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
   // Once the user edits or pastes the description, it is theirs, not the board's summary.
   const showSummaryNotice =
     prefill?.descriptionComplete === false && (needsPaste || jobDescription === (prefill.jobDescription ?? ''))
-  const blocking =
-    environment && (!environment.claudePath || !environment.skillDir || environment.claudeAuth?.loggedIn === false)
+  // The chosen agent's CLI or skill is missing: nothing can run. Shared dependencies (LaTeX, venv) only break the build.
+  const blocking = !!status && !status.ready
+  const problem = blocking ? status.problems[0] : environment?.sharedProblems[0]
+  // Claude's copy comes from GitHub; the other agents get a link to it.
+  const canInstallSkill =
+    !!environment && (agent === 'claude' ? !environment.skillDir : !!environment.skillDir && !status?.skillPath)
   const [installingSkill, setInstallingSkill] = useState(false)
   const [installError, setInstallError] = useState<string | null>(null)
 
@@ -57,7 +67,7 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
     setInstallingSkill(true)
     setInstallError(null)
     try {
-      const res = await api.runner.installSkill(false)
+      const res = agent === 'claude' ? await api.runner.installSkill(false) : await api.runner.linkSkill(agent)
       if (!res.ok) setInstallError(res.error ?? 'Installing the skill failed.')
       onEnvironmentChange(await api.runner.environment())
     } catch (err) {
@@ -73,21 +83,21 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
         <div>
           <Title order={3}>New tailored resume</Title>
           <Text size="sm" c="dimmed">
-            Claude runs the resume-tailor skill on your master profile. It stops after the gap analysis to ask you to
+            {agentLabel} runs the resume-tailor skill on your master profile. It stops after the gap analysis to ask you to
             approve the wording, then builds the PDFs into this workspace.
           </Text>
         </div>
 
-        {environment && !environment.ready && (
+        {environment && problem && (
           <Alert
             color={blocking ? 'red' : 'yellow'}
             variant="light"
-            title={blocking ? 'Cannot run yet' : 'Some dependencies are missing'}
+            title={blocking ? `${agentLabel} cannot run yet` : 'Some dependencies are missing'}
           >
-            <Text size="sm">{environment.problems[0]}</Text>
+            <Text size="sm">{problem}</Text>
             {!blocking && (
               <Text size="sm" mt={4}>
-                Claude can still do the gap analysis and write the resume data, but the PDF build will fail.
+                {agentLabel} can still do the gap analysis and write the resume data, but the PDF build will fail.
               </Text>
             )}
             {installError && (
@@ -96,9 +106,9 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
               </Text>
             )}
             <Group gap="md" mt="xs">
-              {!environment.skillDir && (
+              {blocking && canInstallSkill && (
                 <Button size="xs" loading={installingSkill} onClick={installSkill}>
-                  Install resume-tailor skill
+                  {agent === 'claude' ? 'Install resume-tailor skill' : `Install skill for ${agentLabel}`}
                 </Button>
               )}
               <Anchor component="button" size="sm" onClick={() => navigate('settings')}>
@@ -163,39 +173,40 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
           />
         </SimpleGrid>
         <Textarea
-          label="Notes for Claude"
+          label={`Notes for ${agentLabel}`}
           placeholder="Optional: angle, seniority, stack to emphasise…"
           autosize
           minRows={2}
           value={notes}
           onChange={(e) => setNotes(e.currentTarget.value)}
         />
-        <Group justify="space-between" align="flex-end">
-          <Group gap="xl">
-            <Switch
-              label="Cover letter"
-              checked={coverLetter}
-              onChange={(e) => setCoverLetter(e.currentTarget.checked)}
+        <Group gap="xl" align="flex-end">
+          <Switch
+            label="Cover letter"
+            checked={coverLetter}
+            onChange={(e) => setCoverLetter(e.currentTarget.checked)}
+          />
+          <Stack gap={4}>
+            <Text size="sm" fw={500}>
+              Date style
+            </Text>
+            <SegmentedControl
+              size="xs"
+              value={dateStyle}
+              onChange={(v) => setDateStyle(v as 'inline' | 'right')}
+              data={[
+                { value: 'right', label: 'Right-aligned (human reader)' },
+                { value: 'inline', label: 'Inline (strict ATS)' }
+              ]}
             />
-            <Stack gap={4}>
-              <Text size="sm" fw={500}>
-                Date style
-              </Text>
-              <SegmentedControl
-                size="xs"
-                value={dateStyle}
-                onChange={(v) => setDateStyle(v as 'inline' | 'right')}
-                data={[
-                  { value: 'right', label: 'Right-aligned (human reader)' },
-                  { value: 'inline', label: 'Inline (strict ATS)' }
-                ]}
-              />
-            </Stack>
-          </Group>
+          </Stack>
+        </Group>
+        <Group justify="space-between" align="flex-end">
+          <AgentPicker environment={environment} value={agent} onChange={setPicked} />
           <Button
             size="md"
             loading={busy}
-            disabled={!canStart || !!blocking}
+            disabled={!canStart || blocking}
             onClick={() =>
               onStart({
                 jobDescription: jobDescription.trim() || undefined,
@@ -206,6 +217,7 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
                 notes: notes.trim() || undefined,
                 coverLetter,
                 dateStyle,
+                agent,
                 // The Jobs page's board applies only while the URL is still that job's; anything else is manual.
                 source: jobUrl.trim()
                   ? prefill?.source && jobUrl.trim() === prefill.jobUrl?.trim()

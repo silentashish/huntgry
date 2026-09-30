@@ -27,10 +27,10 @@ const NAV: Record<Page, { label: string; icon: Icon; hint: string }> = {
   dashboard: { label: 'Dashboard', icon: IconLayoutDashboard, hint: 'Generated resumes and applications' },
   jobs: { label: 'Jobs', icon: IconBriefcase, hint: 'Search hiring.cafe and Indeed' },
   browser: { label: 'Browser', icon: IconWorld, hint: 'Open job postings without leaving the app' },
-  tailor: { label: 'Tailor', icon: IconSparkles, hint: 'Run the Claude resume-tailor skill' },
+  tailor: { label: 'Tailor', icon: IconSparkles, hint: 'Run the resume-tailor skill with Claude, Codex or Antigravity' },
   graph: { label: 'Knowledge graph', icon: IconChartDots3, hint: 'Your skills and experience as a graph' },
   profile: { label: 'Master profile', icon: IconFileText, hint: 'The single source of truth for every resume' },
-  settings: { label: 'Settings', icon: IconSettings, hint: 'Claude CLI, skill and dependencies' }
+  settings: { label: 'Settings', icon: IconSettings, hint: 'Agent CLIs, skill and dependencies' }
 }
 
 interface Props {

@@ -16,12 +16,12 @@ import {
   Title
 } from '@mantine/core'
 import { IconFileTypePdf, IconFolder, IconPlayerStop, IconSend } from '@tabler/icons-react'
-import type { RunSummary } from '@shared/runner-types'
+import { AGENT_LABEL, type RunSummary } from '@shared/runner-types'
 import { buildTranscript } from '@shared/transcript'
 import { api, errorText } from '../../api'
 import { useApply } from '../../components/apply/useApply'
 import { useNavigation } from '../../navigation'
-import { STATUS_LABEL } from './status'
+import { AGENT_COLOR, runCost, runStatusLabel, STATUS_LABEL } from './status'
 import { Transcript } from './Transcript'
 
 interface Props {
@@ -33,7 +33,11 @@ interface Props {
 
 /** One run: its conversation, the reply box, and the files it produced. */
 export function RunView({ run, events, heldReply = false }: Props) {
-  const items = useMemo(() => buildTranscript(events), [events])
+  const items = useMemo(() => buildTranscript(events, run.agent), [events, run.agent])
+  const agent = AGENT_LABEL[run.agent]
+  // Codex runs one process per turn: between turns a waiting run has no process, and "End" just closes it.
+  const perTurn = run.agent === 'codex'
+  const canEnd = run.live || (perTurn && run.status === 'waiting')
   const { navigate } = useNavigation()
   const [reply, setReply] = useState('')
   const [sending, setSending] = useState(false)
@@ -47,7 +51,7 @@ export function RunView({ run, events, heldReply = false }: Props) {
   }, [items.length])
 
   const working = run.status === 'running'
-  // A finished, stopped or failed run can be continued as long as Claude gave it a session.
+  // A finished, stopped or failed run can be continued as long as the agent gave it a session.
   const canReply = !working && !sending && !heldReply && (run.live || run.sessionId !== null)
 
   async function act(fn: () => Promise<unknown>) {
@@ -79,21 +83,25 @@ export function RunView({ run, events, heldReply = false }: Props) {
             <Title order={3} lineClamp={2} style={{ minWidth: 0 }}>
               {run.title}
             </Title>
-            <Badge
-              size="lg"
-              color={STATUS_LABEL[run.status].color}
-              variant="light"
-              style={{ flexShrink: 0 }}
-              leftSection={working ? <Loader size={10} color="blue" /> : undefined}
-            >
-              {STATUS_LABEL[run.status].label}
-            </Badge>
+            <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
+              <Badge size="lg" color={AGENT_COLOR[run.agent]} variant="outline">
+                {agent}
+              </Badge>
+              <Badge
+                size="lg"
+                color={STATUS_LABEL[run.status].color}
+                variant="light"
+                leftSection={working ? <Loader size={10} color="blue" /> : undefined}
+              >
+                {runStatusLabel(run.status, run.agent)}
+              </Badge>
+            </Group>
           </Group>
           <Text size="xs" c="dimmed">
-            ${run.costUsd.toFixed(2)} · started{' '}
+            {runCost(run)} · started{' '}
             {new Date(run.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
           </Text>
-          {(run.outputFolder || run.live) && (
+          {(run.outputFolder || canEnd) && (
             <Group gap="xs">
               {run.outputFolder && has('resume.pdf') && (
                 <Button
@@ -136,7 +144,7 @@ export function RunView({ run, events, heldReply = false }: Props) {
                   Show in Finder
                 </Button>
               )}
-              {run.live && (
+              {canEnd && (
                 <Menu position="bottom-end">
                   <Menu.Target>
                     <Button size="xs" variant="default" leftSection={<IconPlayerStop size={16} />} ml="auto">
@@ -147,9 +155,11 @@ export function RunView({ run, events, heldReply = false }: Props) {
                     <Menu.Item onClick={() => act(() => api.runner.finish(run.id))} disabled={working}>
                       Finish conversation
                     </Menu.Item>
-                    <Menu.Item color="red" onClick={() => act(() => api.runner.stop(run.id))}>
-                      Stop Claude now
-                    </Menu.Item>
+                    {run.live && (
+                      <Menu.Item color="red" onClick={() => act(() => api.runner.stop(run.id))}>
+                        Stop {agent} now
+                      </Menu.Item>
+                    )}
                   </Menu.Dropdown>
                 </Menu>
               )}
@@ -164,12 +174,12 @@ export function RunView({ run, events, heldReply = false }: Props) {
       </Card>
 
       {run.error && run.status === 'failed' && (
-        <Alert color="red" variant="light" title="Claude stopped with an error">
+        <Alert color="red" variant="light" title={`${agent} stopped with an error`}>
           <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
             {run.error}
           </Text>
           {/* Set by the runner when the CLI rejected a flag (too old). */}
-          {run.error.includes('Update Claude Code') && (
+          {/Update Claude Code|Settings/.test(run.error) && (
             <Anchor component="button" size="sm" mt={4} onClick={() => navigate('settings')}>
               Open Settings
             </Anchor>
@@ -182,7 +192,7 @@ export function RunView({ run, events, heldReply = false }: Props) {
       {working && (
         <Group gap="xs" c="dimmed">
           <Loader size="xs" type="dots" />
-          <Text size="sm">Claude is working…</Text>
+          <Text size="sm">{agent} is working…</Text>
         </Group>
       )}
 
@@ -209,11 +219,11 @@ export function RunView({ run, events, heldReply = false }: Props) {
               maxRows={8}
               placeholder={
                 run.status === 'waiting'
-                  ? 'Reply to Claude, e.g. "Approved" or what to change…'
+                  ? `Reply to ${agent}, e.g. "Approved" or what to change…`
                   : run.live
-                    ? 'Claude is working; you can reply when it asks.'
+                    ? `${agent} is working; you can reply when it asks.`
                     : run.sessionId
-                      ? 'Continue this conversation (Claude resumes the session)…'
+                      ? `Continue this conversation (${agent} resumes the session)…`
                       : 'This run cannot be continued.'
               }
               value={reply}

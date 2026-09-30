@@ -1,4 +1,4 @@
-import type { JobSourceTag } from '@shared/runner-types'
+import type { AgentId, JobSourceTag } from '@shared/runner-types'
 import { createContext, useContext } from 'react'
 
 /**
@@ -26,6 +26,8 @@ export interface PageParams {
         descriptionComplete?: boolean
         /** Open on the bulk tailoring queue (after "Tailor all" on the Jobs page). */
         view?: 'queue'
+        /** Preselect this agent instead of the default one. */
+        agent?: AgentId
       }
     | undefined
   graph: { nodeId?: string } | undefined

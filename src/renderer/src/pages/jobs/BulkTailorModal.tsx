@@ -15,8 +15,9 @@ import {
 } from '@mantine/core'
 import type { Job } from '@shared/jobs-types'
 import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY, MAX_ENQUEUE, type EnqueueResult } from '@shared/queue-types'
-import type { RunnerEnvironment } from '@shared/runner-types'
+import { AGENT_LABEL, DEFAULT_AGENT, type AgentId, type RunnerEnvironment } from '@shared/runner-types'
 import { api, errorText } from '../../api'
+import { AgentPicker, agentStatus } from '../../components/AgentPicker'
 import { useNavigation } from '../../navigation'
 import { selectionSummary } from './selection'
 
@@ -35,6 +36,9 @@ export function BulkTailorModal({ jobs, opened, onClose, onQueued }: Props) {
   const [notes, setNotes] = useState('')
   const [concurrency, setConcurrency] = useState(String(DEFAULT_CONCURRENCY))
   const [environment, setEnvironment] = useState<RunnerEnvironment | null>(null)
+  /** Agent for every job of this request; the default agent until the user picks one. */
+  const [picked, setPicked] = useState<AgentId | null>(null)
+  const agent = picked ?? environment?.defaultAgent ?? DEFAULT_AGENT
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   /** The user picked "Runs at once" in this opening; the queue's current value must not overwrite it. */
@@ -60,7 +64,9 @@ export function BulkTailorModal({ jobs, opened, onClose, onQueued }: Props) {
   }, [opened])
 
   const summary = selectionSummary(jobs)
-  const blocking = environment && (!environment.claudePath || !environment.skillDir)
+  const status = agentStatus(environment, agent)
+  const blocking = !!status && !status.ready
+  const problem = blocking ? status.problems[0] : environment?.sharedProblems[0]
   // The main process accepts at most MAX_ENQUEUE ids per request.
   const tooMany = jobs.length > MAX_ENQUEUE
 
@@ -72,7 +78,7 @@ export function BulkTailorModal({ jobs, opened, onClose, onQueued }: Props) {
         jobIds: jobs.map((j) => j.id),
         options: { coverLetter, dateStyle, notes: notes.trim() || undefined },
         concurrency: Number(concurrency),
-        agent: 'claude'
+        agent
       })
       onQueued(result)
     } catch (err) {
@@ -86,13 +92,17 @@ export function BulkTailorModal({ jobs, opened, onClose, onQueued }: Props) {
     <Modal opened={opened} onClose={onClose} title={`Tailor ${summary.total} job${summary.total === 1 ? '' : 's'}`} size="lg">
       <Stack gap="md">
         <Text size="sm" c="dimmed">
-          Huntgry starts one Claude run per job, a few at a time, on the Tailor page. Each run stops after the gap
+          Huntgry starts one {AGENT_LABEL[agent]} run per job, a few at a time, on the Tailor page. Each run stops after the gap
           analysis and waits for you to approve it there before the PDFs are built.
         </Text>
 
-        {environment && !environment.ready && (
-          <Alert color={blocking ? 'red' : 'yellow'} variant="light" title={blocking ? 'Cannot run yet' : 'Some dependencies are missing'}>
-            <Text size="sm">{environment.problems[0]}</Text>
+        {environment && problem && (
+          <Alert
+            color={blocking ? 'red' : 'yellow'}
+            variant="light"
+            title={blocking ? `${AGENT_LABEL[agent]} cannot run yet` : 'Some dependencies are missing'}
+          >
+            <Text size="sm">{problem}</Text>
             <Anchor component="button" size="sm" mt={4} onClick={() => navigate('settings')}>
               Open Settings
             </Anchor>
@@ -120,7 +130,7 @@ export function BulkTailorModal({ jobs, opened, onClose, onQueued }: Props) {
         )}
 
         <Textarea
-          label="Notes for Claude (every job)"
+          label={`Notes for ${AGENT_LABEL[agent]} (every job)`}
           placeholder="Optional: angle, seniority, stack to emphasise…"
           autosize
           minRows={2}
@@ -156,6 +166,10 @@ export function BulkTailorModal({ jobs, opened, onClose, onQueued }: Props) {
             data={Array.from({ length: MAX_CONCURRENCY }, (_, i) => String(i + 1))}
           />
         </Group>
+        <AgentPicker environment={environment} value={agent} onChange={setPicked} />
+        <Text size="xs" c="dimmed" mt={-8}>
+          Each job's agent can still be changed in the queue until it starts.
+        </Text>
 
         {tooMany && (
           <Alert color="orange" variant="light">
@@ -174,7 +188,7 @@ export function BulkTailorModal({ jobs, opened, onClose, onQueued }: Props) {
           <Button variant="default" onClick={onClose}>
             Cancel
           </Button>
-          <Button loading={busy} disabled={jobs.length === 0 || tooMany || !!blocking} onClick={confirm}>
+          <Button loading={busy} disabled={jobs.length === 0 || tooMany || blocking} onClick={confirm}>
             Tailor {summary.total} job{summary.total === 1 ? '' : 's'}
           </Button>
         </Group>

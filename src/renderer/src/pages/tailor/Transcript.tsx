@@ -17,8 +17,9 @@ import { IconAlertTriangle, IconCheck, IconChevronRight, IconLoader2, IconTool, 
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { TranscriptItem } from '@shared/runner-types'
+import { formatUsage } from '@shared/transcript'
 
-/** The conversation: the user's messages, Claude's replies (Markdown), compact tool calls and turn results. */
+/** The conversation: the user's messages, the agent's replies (Markdown), compact tool calls and turn results. */
 export function Transcript({ items }: { items: TranscriptItem[] }) {
   return (
     <Stack gap="sm">
@@ -46,8 +47,11 @@ export function Transcript({ items }: { items: TranscriptItem[] }) {
             return (
               <Stack key={item.id} gap={4}>
                 <Text size="xs" c="dimmed" ta="center">
-                  {item.ok ? 'Turn finished' : `Turn ended with an error: ${item.text}`} · ${item.costUsd.toFixed(2)} ·{' '}
-                  {Math.round(item.durationMs / 1000)}s
+                  {[
+                    item.ok ? 'Turn finished' : `Turn ended with an error: ${item.text}`,
+                    item.usage ? formatUsage(item.usage) : `$${item.costUsd.toFixed(2)}`,
+                    ...(item.durationMs > 0 ? [`${Math.round(item.durationMs / 1000)}s`] : [])
+                  ].join(' · ')}
                 </Text>
                 {item.denials.length > 0 && (
                   <Alert
@@ -56,7 +60,7 @@ export function Transcript({ items }: { items: TranscriptItem[] }) {
                     icon={<IconAlertTriangle size={16} />}
                     title="Blocked tool calls"
                   >
-                    <Text size="xs">Huntgry only lets Claude run the skill's own commands. These were refused:</Text>
+                    <Text size="xs">Huntgry only lets the agent run what the skill needs. These were refused:</Text>
                     {item.denials.map((d, i) => (
                       <Code key={i} block mt={4}>
                         {d}
