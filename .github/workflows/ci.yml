@@ -1,0 +1,50 @@
+# Unit tests and type checks. Optional for now (`continue-on-error: true`, not in branch
+# protection), like the e2e workflow; see docs/testing/e2e.md "CI".
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 26
+
+jobs:
+  unit:
+    name: unit + typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Read the Electron version from the lockfile
+        id: electron
+        run: echo "version=$(node -p "require('./package-lock.json').packages['node_modules/electron'].version")" >> "$GITHUB_OUTPUT"
+
+      # `npm ci` still downloads Electron (the postinstall requires it); the cache makes that a no-op.
+      - name: Cache the Electron binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ steps.electron.outputs.version }}
+
+      - run: npm ci
+
+      - run: npm test
+
+      - run: npm run typecheck

@@ -335,6 +335,58 @@ details the Tailor page object hides: a `SegmentedControl` option is a visually 
 panel are found by their headings through Mantine's stable `mantine-Card-root` class, the one
 class selector in the suite.
 
+## CI
+
+Two GitHub Actions workflows, both **optional checks** for now:
+
+| Workflow | Job | Runner | Runs |
+| --- | --- | --- | --- |
+| `.github/workflows/e2e.yml` | `e2e (macOS)` | `macos-latest` | `npm ci`, `npm run build`, `npx playwright test -c e2e/playwright.config.ts` with `CI=1` (so `retries: 2`, traces on the first retry) |
+| `.github/workflows/ci.yml` | `unit + typecheck` | `ubuntu-latest` | `npm test`, `npm run typecheck` |
+
+Triggers: every `pull_request`, every `push` to `main`, and the "Run workflow" button
+(`workflow_dispatch`). A newer push to the same ref cancels the older run (`concurrency`).
+`permissions: contents: read` is all they need: the suite reaches only fakes on `127.0.0.1`,
+so there are no secrets. The e2e job has a 30-minute timeout. Two caches make the second run
+fast: `actions/setup-node`'s npm cache (keyed on `package-lock.json`) and the Electron binary
+(`~/Library/Caches/electron`, keyed on the electron version in the lockfile, restored before
+`npm ci` so electron's postinstall finds the download already there).
+
+**What a run leaves behind.** The job summary (the run page, under the job) has the pass /
+fail / flaky / skipped counts and the duration; the config adds a JSON reporter when `CI` is
+set (`e2e/.results/results.json`) and `.github/scripts/e2e-summary.mjs` turns it into that
+table. When a test fails the run uploads two artifacts, kept for 7 days:
+`e2e-html-report-macOS` (the Playwright HTML report) and `e2e-traces-macOS`
+(`e2e/.results/test-output/`: `trace.zip`, `test-failed-1.png`, `error-context.md` and the
+main-process output per failed test). To look at a trace:
+
+```bash
+# Actions → the run → Artifacts → download e2e-traces-macOS.zip, then
+unzip e2e-traces-macOS.zip -d /tmp/e2e-traces
+npx playwright show-trace /tmp/e2e-traces/<test-folder>/trace.zip
+# or the whole report:
+unzip e2e-html-report-macOS.zip -d /tmp/e2e-report && npx playwright show-report /tmp/e2e-report
+```
+
+`gh run download <run-id> -n e2e-traces-macOS -D /tmp/e2e-traces` does the download from the
+terminal. Traces are recorded on the first retry in CI (`on-first-retry`), so a test that fails
+once and passes on retry (reported as *flaky*) has a trace too.
+
+**Why the check is optional.** Every job has `continue-on-error: true` and neither workflow is
+in branch protection, so a red e2e run shows on the PR but never blocks a merge, until the
+build time and the flake rate are known. **To make it required** later, one change in the
+workflow and one in the repository settings: set `continue-on-error: false` on the `e2e` job in
+`e2e.yml` (otherwise a failed job still reports the run as successful), then *Settings →
+Branches → main → Require status checks to pass* and add `e2e (macOS)` (and `unit + typecheck`
+if wanted). Nothing else changes.
+
+**Linux.** An experimental `e2e (Linux, experimental)` job runs the same suite on
+`ubuntu-latest` under `xvfb-run --auto-servernum` (with the Electron runtime libraries
+installed and Ubuntu 24.04's unprivileged user-namespace restriction lifted for Chromium's
+sandbox). It is `continue-on-error` as well and never a required check: macOS is the primary
+target, and the Settings specs plant the fake `pdflatex` under `~/Library/TinyTeX`, a macOS
+path.
+
 ## Adding a page object and a spec
 
 1. `e2e/pages/<page>.ts`: a class taking `page: Page`, exposing `Locator`s built with

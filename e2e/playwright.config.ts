@@ -14,7 +14,12 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   timeout: 60_000,
   expect: { timeout: 10_000 },
-  reporter: [['list'], ['html', { open: 'never', outputFolder: './.results/html-report' }]],
+  reporter: [
+    ['list'],
+    ['html', { open: 'never', outputFolder: './.results/html-report' }],
+    // In CI the JSON output feeds the job summary (.github/scripts/e2e-summary.mjs).
+    ...(process.env.CI ? ([['json', { outputFile: './.results/results.json' }]] as const) : [])
+  ],
   use: {
     // Locally there are no retries, so a failure keeps its trace right away; in CI the retry records it.
     trace: process.env.CI ? 'on-first-retry' : 'retain-on-failure',
