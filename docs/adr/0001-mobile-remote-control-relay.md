@@ -192,7 +192,7 @@ sequenceDiagram
     G-->>S: QR = huntgry://pair?v=1&relay=…&room=…&pk=(desktop pub)&s=(S)&exp=…
     U->>P: scan QR (camera)
     P->>P: generate device X25519 keypair (expo-secure-store)
-    P->>R: wss /ws?room=…&role=phone&pairing=(pairingId)
+    P->>R: wss /ws, then first frame in clear { auth: { room, pairing: pairingId } } (never in the URL)
     P->>R: secretbox(S){ pair.hello: devicePub, deviceName, appVersion, protocol {min,max} }
     R->>G: forward (opaque)
     G->>G: decrypt with S (proves the phone saw this QR), S consumed, rejected after exp
@@ -203,8 +203,8 @@ sequenceDiagram
     G->>R: secretbox(S){ pair.ok: deviceId, relayToken, desktop name, protocol }
     R->>P: forward
     P->>P: sessionKey = box.before(desktopPub, devicePriv), store deviceId + relayToken
-    P->>R: reconnect wss /ws?room=…&device=(deviceId)&token=(relayToken)
-    P->>R: PUT push token {expoPushToken} in clear (the relay must hold it to call Expo)
+    P->>R: reconnect wss /ws, first frame { auth: { room, device: deviceId, token: relayToken } } (5 s to authenticate, else closed)
+    P->>R: { pushToken: expoPushToken } clear frame on the authenticated socket (relay-only, the desktop never sees it)
     P->>G: box{ device.setNotifications: categories } (the desktop decides which events get a pushHint)
     Note over G,P: From here every frame is box(sessionKey, nonce) with seq + ts inside, wrapped in a clear RelayFrame.
 ```
@@ -403,8 +403,15 @@ export type RemoteCommand =
   | { name: 'review.rerun'; args: { runId: string; revision: string; answers: string } }
   | { name: 'review.discard'; args: { applicationId: string; revision: string } }
   | { name: 'file.get'; args: { applicationId: string; file: RemoteFile; chunk: number } }   // chunks of LIMITS.fileChunkBytes
-  | { name: 'device.setPushToken'; args: { expoPushToken: string } }
   | { name: 'device.setNotifications'; args: { categories: NotificationCategory[] } }
+  // The Expo push token is not a command: the phone registers it with the relay in clear (see "How a push happens").
+
+/** Clear frames from a client to the relay after the socket opens (the relay consumes these, nothing is forwarded). */
+export type RelayClientFrame =
+  | { auth: { room: string; pairing: string } }                          // phone, during pairing
+  | { auth: { room: string; device: string; token: string } }            // phone, paired
+  | { auth: { room: string; owner: string } }                            // desktop (ownerSecret)
+  | { pushToken: string | null }                                         // phone only, after auth; null removes it
 
 /** Desktop → phone. Payloads are the projected DTOs below, never the desktop's own types. */
 export type RemoteEvent =
@@ -544,9 +551,14 @@ the serialised frame stays under `frameBytes`.
 tells it, in clear, which frames deserve a push. For each paired device the desktop keeps the
 categories that device asked for (`device.setNotifications`, stored in `devices.json`). When
 it sends an event whose category is in that list, it sets `RelayFrame.pushHint` to the
-category. The relay stores the phone's Expo push token in clear (the phone registers it over
-its authenticated socket, and the relay must hold it to call the Expo API) and, only when that
-phone has no live socket, sends one push per hint with a **fixed body per category** from a
+category. The relay stores the phone's Expo push token in clear, because it must hold it to
+call the Expo API. **There is one registration path**: after its socket is authenticated the
+phone sends the clear frame `{ pushToken }` (`RelayClientFrame`); the relay checks the
+`ExponentPushToken[…]` shape and length, stores it on that device's record replacing any
+previous value, and never forwards it. `{ pushToken: null }`, device revocation and an Expo
+push receipt of `DeviceNotRegistered` delete it. The desktop never receives or stores the
+token; it only decides categories. Only when that phone has no live socket does the relay
+send one push per hint with a **fixed body per category** from a
 table in the relay (`'A run needs your reply'`, `'Paused: usage limit'`, `'Pipeline
 finished'`, `'Results need your review'`, `'Something failed'`) and `data: { category }`.
 Pushes are coalesced to at most one per category per 5 minutes per device. The phone fetches
@@ -557,9 +569,15 @@ Apple/Google, and the setting says so.
 
 **Workspace binding.** The desktop generates a random `workspaceId` on first remote use and
 stores it in `<workspace>/.huntgry/remote.json`. It is in `hello` and `StatusSummary`, and
-every mutating command carries it in `Envelope.ws`. If the owner switched workspace on the
-desktop meanwhile, the gateway answers `invalid` ("workspace changed") and the phone reloads;
-queued commands for the old workspace never touch the new one.
+**every workspace-scoped command carries it in `Envelope.ws`, reads included**: `queue.get`,
+`jobs.list`, `runs.list`, `run.get`, `review.list`, `review.get` and `file.get` as much as the
+mutating ones. Only `status.get` (which reports the current workspace) and `device.*` are
+exempt. The gateway compares `ws` with the open workspace before dispatch and answers
+`invalid` ("workspace changed") on a mismatch, so a read queued while the Mac was asleep and
+delivered after a workspace switch returns nothing from the new workspace, and a mutating
+command never touches it; the phone reloads its status and re-issues what still makes sense.
+The relay cannot purge queued frames on a switch (it cannot read them), which is why the
+check is on the desktop and applies to everything.
 
 **Command expiry.** The phone sets `ttl` from `COMMAND_TTL_SECONDS` (both in the clear
 `RelayFrame` and inside the envelope). The relay drops a queued frame whose `ttl` has passed
@@ -620,6 +638,21 @@ a random relay token.
 account with `wrangler deploy` and sets one secret, `wrangler secret put ADMIN_TOKEN` (a
 random 32-byte string the deploy script prints once). They paste the relay URL and that
 token into **Settings → Remote control** once; the desktop stores both with `safeStorage`.
+**TLS only.** Settings accepts a relay URL only with the `https://` scheme, derives the
+WebSocket URL as `wss://`, and refuses anything else; the desktop's requests use `fetch` with
+`redirect: 'error'` and the phone's the same, so a credential is never sent after a redirect
+or a downgrade; the pairing QR carries the same `https://` URL and the phone validates the
+scheme before connecting. This covers room creation, pairing registration, device
+registration, revocation and both WebSockets; a Cloudflare Worker serves TLS only anyway,
+and the rule keeps a self-hosted Node relay (option C) equally strict.
+**Credential storage and lifecycle.** The relay URL, the admin token, the `roomId` and the
+`ownerSecret` live in one `safeStorage`-encrypted blob, `userData/remote/relay.json`, so the
+desktop can authenticate to its room after every restart. **Rotate relay credentials** in
+Settings (also part of **Unpair everything**) mints a new `ownerSecret`, creates a new room
+with the admin token, deletes the old room, and requires every phone to pair again. If the
+blob cannot be decrypted (Keychain reset, `userData` copied to another Mac) Settings shows
+"Relay credentials unreadable" and offers the same rotation after re-entering the admin
+token; nothing else is recoverable and nothing is guessed.
 Creating a room (`POST /rooms`) requires `Authorization: Bearer <ADMIN_TOKEN>`; the Worker
 rejects a wrong or missing token before touching any Durable Object (no cost) and rate-limits
 failures per IP. The desktop generates a random 32-byte `ownerSecret`, sends its SHA-256 in
@@ -631,7 +664,12 @@ signing the request with the desktop's public key, was rejected: a public key is
 
 **Relay authentication and isolation**: one Durable Object per room. The desktop
 authenticates with `ownerSecret`; each phone with its `relayToken`. The DO checks the token
-hash on every WebSocket upgrade, never stores plaintext tokens, and enforces per-connection
+hash on the **first frame** of every socket (`RelayClientFrame.auth`, sent over `wss` after
+the upgrade; a socket that has not authenticated within 5 s is closed). Credentials are never
+in the upgrade URL, its query string or a header, so they cannot land in proxy, access or
+Cloudflare request logs, and the Worker logs no frame bodies. The desktop's `ownerSecret`
+goes the same way on its socket and as an `Authorization: Bearer` header on its HTTPS calls.
+The DO never stores plaintext tokens, and enforces per-connection
 rate limits (e.g. 60 frames/min, `LIMITS.frameBytes` per frame, 50 queued frames per device,
 each with its own `ttl`). The relay can learn: room id, device ids, IPs, frame sizes and timing, which
 event frames carry a `pushHint` and its category (so, roughly, *when* a run needs a reply or
