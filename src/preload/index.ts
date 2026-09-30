@@ -8,6 +8,7 @@ import { graph } from './graph'
 import { insights } from './insights'
 import { runner } from './runner'
 import { jobs } from './jobs'
+import { pipeline } from './pipeline'
 import { queue } from './queue'
 import { review } from './review'
 import { profile, workspace } from './workspace'
@@ -27,6 +28,7 @@ const api: HuntgryApi = {
   queue,
   apply,
   review,
+  pipeline,
   on
 }
 
