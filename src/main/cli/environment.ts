@@ -1,12 +1,26 @@
 import { execFile, spawn } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { CLAUDE_COMMANDS, type ClaudeAuth, type PreflightItem, type RunnerEnvironment } from '@shared/runner-types'
+import {
+  AGENT_IDS,
+  AGENT_LABEL,
+  CLAUDE_COMMANDS,
+  DEFAULT_AGENT,
+  type AgentId,
+  type AgentStatus,
+  type ClaudeAuth,
+  type PreflightItem,
+  type RunnerEnvironment
+} from '@shared/runner-types'
+import { adapterFor } from './agents'
+import { skillStatus } from './agents/skills'
 import {
   buildChildEnv,
   composePath,
   findClaude,
+  findCli,
   findInDirs,
   findSkillDir,
   findTexBin,
@@ -15,15 +29,69 @@ import {
   SKILL_PYTHON_MODULES,
   wellKnownBinDirs
 } from './env'
+import { SKILL_NAME } from '../workspace/constants'
 import { claudeAuthStatus, claudeInstallKind } from './install-claude'
 import { readSkillInstall } from './install-skill'
 import { claudeVersion as readClaudeVersion, CLAUDE_VERSION_RECOMMENDED, versionAtLeast } from './version'
 
 /**
  * Environment checks for the Settings page and the Tailor page's pre-run
- * check: `claude`, the skill, and the skill's own `preflight.py` run with the
- * PATH the real run gets.
+ * check: the agent CLIs, the skill as each agent sees it, and the skill's own
+ * `preflight.py` run with the PATH the real run gets.
  */
+
+/** How to get a missing agent CLI. */
+export const AGENT_INSTALL_HINT: Record<AgentId, string> = {
+  claude: 'Use "Install Claude Code" in Settings, then sign in once in a terminal.',
+  codex: 'Install it with "brew install --cask codex" or "npm install -g @openai/codex", then run "codex login" once.',
+  antigravity: 'Install the Antigravity CLI (antigravity.google/docs/cli), then run "agy" once to sign in.'
+}
+
+/**
+ * One agent's status from what was found. Pure. Claude's problems keep the
+ * wording (and order) the Settings banner always had; the other agents need
+ * the skill linked into their own skills folder.
+ */
+export function describeAgent(a: {
+  id: AgentId
+  cliPath: string | null
+  version: string | null
+  skillPath: string | null
+  skillTarget: string
+  /** The Claude copy of the skill, which the other agents link to. */
+  claudeSkill: string | null
+  /** Claude only. */
+  auth?: ClaudeAuth | null
+}): AgentStatus {
+  const label = AGENT_LABEL[a.id]
+  const problems: string[] = []
+  if (a.id === 'claude') {
+    if (!a.cliPath) problems.push(`The claude CLI was not found. ${AGENT_INSTALL_HINT.claude}`)
+    if (a.auth?.loggedIn === false)
+      problems.push(
+        `Claude Code is installed but not signed in. Run "${CLAUDE_COMMANDS.login}" in a terminal, then check again.`
+      )
+    if (!a.skillPath) problems.push('The resume-tailor skill is not installed. Use "Install resume-tailor skill" in Settings.')
+  } else {
+    if (!a.cliPath) problems.push(`The ${adapterFor(a.id).binary} CLI (${label}) was not found. ${AGENT_INSTALL_HINT[a.id]}`)
+    if (!a.skillPath)
+      problems.push(
+        a.claudeSkill
+          ? `${label} cannot see the resume-tailor skill yet. Use "Install skill" for ${label} in Settings → Agents.`
+          : `Install the resume-tailor skill first (Settings), then "Install skill" for ${label}.`
+      )
+  }
+  return {
+    id: a.id,
+    label,
+    cliPath: a.cliPath,
+    version: a.version,
+    skillPath: a.skillPath,
+    skillTarget: a.skillTarget,
+    ready: problems.length === 0,
+    problems
+  }
+}
 
 function run(
   cmd: string,
@@ -68,7 +136,11 @@ export async function checkEnvironment(opts: {
   workspace: string | null
   /** `<userData>/skill-install.json`, written when Huntgry installed the skill. */
   skillRecordPath?: string
+  defaultAgent?: AgentId
+  home?: string
 }): Promise<RunnerEnvironment> {
+  const home = opts.home ?? homedir()
+  const defaultAgent = opts.defaultAgent ?? DEFAULT_AGENT
   const [claudePath, skillDir, texBin, loginPath] = await Promise.all([
     findClaude(),
     findSkillDir(),
@@ -106,14 +178,19 @@ export async function checkEnvironment(opts: {
     preflight = parsePreflight(r.out)
   }
 
-  const problems: string[] = []
-  if (!claudePath)
-    problems.push('The claude CLI was not found. Use "Install Claude Code" in Settings, then sign in once in a terminal.')
-  if (claudeAuth?.loggedIn === false)
-    problems.push(
-      `Claude Code is installed but not signed in. Run "${CLAUDE_COMMANDS.login}" in a terminal, then check again.`
-    )
-  if (!skillDir) problems.push('The resume-tailor skill is not installed. Use "Install resume-tailor skill" in Settings.')
+  const agents = await Promise.all(
+    AGENT_IDS.map(async (id): Promise<AgentStatus> => {
+      if (id === 'claude') {
+        const skillTarget = join(adapterFor(id).skillRoots(home)[0], SKILL_NAME)
+        return describeAgent({ id, cliPath: claudePath, version: claudeVersion, skillPath: skillDir, skillTarget, claudeSkill: skillDir, auth: claudeAuth })
+      }
+      const [cliPath, skill] = await Promise.all([findCli(adapterFor(id).binary), skillStatus(id, home)])
+      const version = cliPath ? await readClaudeVersion(cliPath, env, { refresh: true }) : null
+      return describeAgent({ id, cliPath, version, skillPath: skill.path, skillTarget: skill.target, claudeSkill: skillDir })
+    })
+  )
+
+  const shared: string[] = []
   if (
     skillDir &&
     !venvReady &&
@@ -121,14 +198,16 @@ export async function checkEnvironment(opts: {
       (p) => p.status === 'missing' && SKILL_PYTHON_MODULES.some((m) => p.name.includes(m.replace('python-', '')))
     )
   ) {
-    problems.push('Python modules are missing: use "Install Python dependencies".')
+    shared.push('Python modules are missing: use "Install Python dependencies".')
   }
   if (!texBin)
-    problems.push('No LaTeX (pdflatex) found. Install TinyTeX (no admin needed) or BasicTeX, then check again.')
+    shared.push('No LaTeX (pdflatex) found. Install TinyTeX (no admin needed) or BasicTeX, then check again.')
   for (const p of preflight) {
-    if (p.status === 'missing' && !problems.some((q) => q.includes(p.name)))
-      problems.push(`Missing: ${p.name}${p.detail ? ` (${p.detail})` : ''}`)
+    if (p.status === 'missing' && !shared.some((q) => q.includes(p.name)))
+      shared.push(`Missing: ${p.name}${p.detail ? ` (${p.detail})` : ''}`)
   }
+  // The banner and `ready` are about the agent new runs use.
+  const problems = [...agents.find((a) => a.id === defaultAgent)!.problems, ...shared]
 
   const warnings: string[] = []
   if (claudePath && !claudeVersionOk)
@@ -154,7 +233,10 @@ export async function checkEnvironment(opts: {
     preflightOutput,
     ready: problems.length === 0 && preflight.length > 0,
     problems,
-    warnings
+    warnings,
+    defaultAgent,
+    agents,
+    sharedProblems: shared
   }
 }
 

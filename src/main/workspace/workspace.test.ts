@@ -526,4 +526,11 @@ describe('settings', () => {
     await writeFile(file, '{not json')
     expect(await loadSettings(file)).toEqual({})
   })
+
+  it('keeps the default agent next to the current workspace', async () => {
+    const file = join(tmp, 'settings.json')
+    await saveSettings(file, { currentWorkspace: '/some/ws' })
+    await saveSettings(file, { defaultAgent: 'codex' })
+    expect(await loadSettings(file)).toEqual({ currentWorkspace: '/some/ws', defaultAgent: 'codex' })
+  })
 })

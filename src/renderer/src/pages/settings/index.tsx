@@ -8,6 +8,7 @@ import {
   Group,
   List,
   Loader,
+  Radio,
   ScrollArea,
   Stack,
   Table,
@@ -15,7 +16,15 @@ import {
   Title
 } from '@mantine/core'
 import { IconAlertTriangle, IconCheck, IconRefresh, IconX } from '@tabler/icons-react'
-import { CLAUDE_COMMANDS, type InstallResult, type PreflightItem, type RunnerEnvironment } from '@shared/runner-types'
+import {
+  AGENT_LABEL,
+  CLAUDE_COMMANDS,
+  type AgentId,
+  type AgentStatus,
+  type InstallResult,
+  type PreflightItem,
+  type RunnerEnvironment
+} from '@shared/runner-types'
 import { api, errorText } from '../../api'
 
 const STATUS: Record<PreflightItem['status'], { color: string; label: string }> = {
@@ -26,9 +35,9 @@ const STATUS: Record<PreflightItem['status'], { color: string; label: string }> 
 
 const INSTALL_KIND_LABEL = { native: 'native install', homebrew: 'Homebrew', npm: 'npm', other: '' } as const
 
-type Installer = 'python' | 'claude' | 'update' | 'skill' | 'reinstall-skill'
+type Installer = 'python' | 'claude' | 'update' | 'skill' | 'reinstall-skill' | `link-${AgentId}`
 
-/** Where the Claude CLI and the resume-tailor skill are, and whether their dependencies are installed. */
+/** Where the agent CLIs and the resume-tailor skill are, and whether their dependencies are installed. */
 export function SettingsPage() {
   const [env, setEnv] = useState<RunnerEnvironment | null>(null)
   const [checking, setChecking] = useState(false)
@@ -76,6 +85,17 @@ export function SettingsPage() {
     install('python', () => api.runner.installPythonDeps(), 'Installing Python dependencies failed.')
   const installClaude = () => install('claude', () => api.runner.installClaude(), 'Installing Claude Code failed.')
   const updateClaude = () => install('update', () => api.runner.updateClaude(), 'Updating Claude Code failed.')
+  const linkSkill = (agent: AgentId) =>
+    install(`link-${agent}`, () => api.runner.linkSkill(agent), `Installing the skill for ${AGENT_LABEL[agent]} failed.`)
+  async function setDefault(agent: AgentId) {
+    setError(null)
+    try {
+      await api.runner.setDefaultAgent(agent)
+      await check()
+    } catch (err) {
+      setError(errorText(err))
+    }
+  }
   const installSkill = (replace: boolean) =>
     install(
       replace ? 'reinstall-skill' : 'skill',
@@ -109,7 +129,8 @@ export function SettingsPage() {
         <>
           {env.ready ? (
             <Alert color="green" variant="light" icon={<IconCheck size={18} />} title="Ready to tailor">
-              Claude, the resume-tailor skill and every dependency it needs to build PDFs are installed.
+              {AGENT_LABEL[env.defaultAgent]} (the default agent), the resume-tailor skill and every dependency it needs
+              to build PDFs are installed.
             </Alert>
           ) : (
             <Alert color="yellow" variant="light" title="Not everything is in place">
@@ -130,6 +151,8 @@ export function SettingsPage() {
               </List>
             </Alert>
           )}
+
+          <AgentsCard env={env} installing={installing} onLinkSkill={linkSkill} onSetDefault={setDefault} />
 
           <Card withBorder radius="md" padding="lg">
             <Title order={4} mb="sm">
@@ -293,6 +316,144 @@ brew install poppler`}</Code>
         </>
       )}
     </Stack>
+  )
+}
+
+/** Every agent a run can use: its CLI, whether it sees the skill, and which one new runs use. */
+function AgentsCard({
+  env,
+  installing,
+  onLinkSkill,
+  onSetDefault
+}: {
+  env: RunnerEnvironment
+  installing: Installer | null
+  onLinkSkill(agent: AgentId): void
+  onSetDefault(agent: AgentId): void
+}) {
+  return (
+    <Card withBorder radius="md" padding="lg">
+      <Title order={4}>Agents</Title>
+      <Text size="sm" c="dimmed" mb="sm">
+        The CLI that runs the resume-tailor skill. New runs use the default; the Tailor form and "Tailor all" can pick
+        another one per job. Codex and Antigravity use the skill installed for Claude, linked into their own skills
+        folder.
+      </Text>
+      <Radio.Group value={env.defaultAgent} onChange={(v) => onSetDefault(v as AgentId)}>
+        <Table layout="fixed" verticalSpacing="sm">
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th w={150}>Agent</Table.Th>
+              <Table.Th>CLI</Table.Th>
+              <Table.Th>resume-tailor skill</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {env.agents.map((a) => (
+              <AgentRow
+                key={a.id}
+                agent={a}
+                canLink={!!env.skillDir}
+                busy={!!installing}
+                linking={installing === `link-${a.id}`}
+                onLinkSkill={() => onLinkSkill(a.id)}
+              />
+            ))}
+          </Table.Tbody>
+        </Table>
+      </Radio.Group>
+    </Card>
+  )
+}
+
+function AgentRow({
+  agent: a,
+  canLink,
+  busy,
+  linking,
+  onLinkSkill
+}: {
+  agent: AgentStatus
+  canLink: boolean
+  busy: boolean
+  linking: boolean
+  onLinkSkill(): void
+}) {
+  const cliProblem = a.problems.find((p) => p.includes('CLI') || p.includes('signed in'))
+  return (
+    <Table.Tr>
+      <Table.Td>
+        <Stack gap={4}>
+          <Radio value={a.id} label={a.label} aria-label={`Make ${a.label} the default agent`} />
+          <Badge size="sm" variant="light" color={a.ready ? 'green' : 'red'}>
+            {a.ready ? 'Ready' : 'Not ready'}
+          </Badge>
+        </Stack>
+      </Table.Td>
+      <Table.Td>
+        {a.cliPath ? (
+          <Stack gap={4} align="flex-start">
+            <Group gap="xs" wrap="nowrap" maw="100%">
+              <Text size="sm" ff="monospace" truncate="start" style={{ minWidth: 0 }}>
+                <bdi>{a.cliPath}</bdi>
+              </Text>
+              <Badge variant="light" color="gray" style={{ flexShrink: 0 }}>
+                {a.version ?? 'version unknown'}
+              </Badge>
+            </Group>
+            {cliProblem && (
+              <Text size="xs" c="red">
+                {cliProblem}
+              </Text>
+            )}
+          </Stack>
+        ) : (
+          <Stack gap={4} align="flex-start">
+            <Badge color="red" variant="light">
+              Not found
+            </Badge>
+            {cliProblem && (
+              <Text size="xs" c="dimmed">
+                {cliProblem}
+              </Text>
+            )}
+          </Stack>
+        )}
+      </Table.Td>
+      <Table.Td>
+        {a.skillPath ? (
+          <Text size="sm" ff="monospace" truncate="start">
+            <bdi>{a.skillPath}</bdi>
+          </Text>
+        ) : (
+          <Stack gap={4} align="flex-start">
+            <Badge color="red" variant="light">
+              Not installed
+            </Badge>
+            {a.id !== 'claude' &&
+              (canLink ? (
+                <>
+                  <Button size="xs" loading={linking} disabled={busy} onClick={onLinkSkill}>
+                    Install skill
+                  </Button>
+                  <Text size="xs" c="dimmed">
+                    Links it at <Code>{a.skillTarget}</Code>
+                  </Text>
+                </>
+              ) : (
+                <Text size="xs" c="dimmed">
+                  Install the resume-tailor skill for Claude first (below).
+                </Text>
+              ))}
+            {a.id === 'claude' && (
+              <Text size="xs" c="dimmed">
+                Use "Install resume-tailor skill" below.
+              </Text>
+            )}
+          </Stack>
+        )}
+      </Table.Td>
+    </Table.Tr>
   )
 }
 

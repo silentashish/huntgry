@@ -1,7 +1,45 @@
 /**
- * Types for running the resume-tailor Claude skill from the app: environment
- * checks (Settings page) and tailoring runs (Tailor page).
+ * Types for running the resume-tailor skill from the app through an agent CLI
+ * (Claude Code, Codex, Antigravity): environment checks (Settings page) and
+ * tailoring runs (Tailor page).
  */
+
+/** Agent CLIs a run can use. The one list: validation, labels, adapters and the UI derive from it. */
+export const AGENT_IDS = ['claude', 'codex', 'antigravity'] as const
+export type AgentId = (typeof AGENT_IDS)[number]
+
+export const AGENT_LABEL: Record<AgentId, string> = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity' }
+
+/** Used when nothing is chosen, and for runs recorded before agents could be chosen. */
+export const DEFAULT_AGENT: AgentId = 'claude'
+
+export function isAgentId(v: unknown): v is AgentId {
+  return (AGENT_IDS as readonly unknown[]).includes(v)
+}
+
+/** One agent's CLI and skill, for Settings and the agent pickers. */
+export interface AgentStatus {
+  id: AgentId
+  label: string
+  /** Absolute path of the CLI, or `null` when not found. */
+  cliPath: string | null
+  /** `x.y.z`, or `null` when unknown. */
+  version: string | null
+  /** The resume-tailor folder this agent reads, or `null` when it cannot see the skill. */
+  skillPath: string | null
+  /** Where "Install skill" makes the skill visible to this agent. */
+  skillTarget: string
+  /** The CLI is found and sees the skill (shared dependencies are reported separately). */
+  ready: boolean
+  /** Why it is not ready, most important first. */
+  problems: string[]
+}
+
+/** How many tokens a run used (agents that do not report a price). */
+export interface TokenUsage {
+  inputTokens: number
+  outputTokens: number
+}
 
 /** One dependency line from the skill's `scripts/preflight.py`, plus the app's own checks. */
 export interface PreflightItem {
@@ -57,6 +95,12 @@ export interface RunnerEnvironment {
   problems: string[]
   /** Things worth fixing that do not block a run (e.g. an old Claude Code). */
   warnings: string[]
+  /** The agent a new run uses unless the user picks another one. */
+  defaultAgent: AgentId
+  /** Every agent, in `AGENT_IDS` order. */
+  agents: AgentStatus[]
+  /** Problems of the dependencies every agent shares (venv, LaTeX, preflight); `problems` adds the default agent's. */
+  sharedProblems: string[]
 }
 
 export interface InstallResult {
@@ -80,6 +124,8 @@ export interface StartRunParams {
   notes?: string
   /** Where the job was found (`hiring.cafe`, `indeed`, `url`, `pasted`); `manual` when typed on the Tailor page. */
   source?: JobSourceTag
+  /** Agent to run with; the default agent from Settings when absent. */
+  agent?: AgentId
 }
 
 /** Recorded with the application in `huntgry.json`, so the Dashboard can show where a job came from. */
@@ -89,7 +135,7 @@ export type JobSourceTag = (typeof JOB_SOURCE_TAGS)[number]
 export type RunStatus =
   /** Process spawned, first turn in progress. */
   | 'running'
-  /** Claude finished its turn and waits for the user's reply (e.g. the approval step). */
+  /** The agent finished its turn and waits for the user's reply (e.g. the approval step). */
   | 'waiting'
   /** User ended the run, or the process exited normally. */
   | 'finished'
@@ -100,8 +146,10 @@ export interface RunSummary {
   id: string
   title: string
   params: StartRunParams
+  /** Agent the run uses (replies too). Runs recorded before agents could be chosen read as `claude`. */
+  agent: AgentId
   status: RunStatus
-  /** Claude session id, used to resume the conversation after a restart. */
+  /** The agent's session (Claude), thread (Codex) or conversation (Antigravity) id, used to resume. */
   sessionId: string | null
   createdAt: string
   updatedAt: string
@@ -110,6 +158,8 @@ export interface RunSummary {
   /** Files found in the output folder, e.g. `resume.pdf`. */
   outputFiles: string[]
   costUsd: number
+  /** Tokens used so far, for agents that report tokens instead of a price (Codex, Antigravity). */
+  usage?: TokenUsage
   /** The process is alive (a reply can be sent without resuming). */
   live: boolean
   error?: string
@@ -120,7 +170,17 @@ export type TranscriptItem =
   | { kind: 'user'; id: string; text: string }
   | { kind: 'assistant'; id: string; text: string }
   | { kind: 'tool'; id: string; name: string; summary: string; status: 'running' | 'ok' | 'error'; output?: string }
-  | { kind: 'result'; id: string; ok: boolean; text: string; costUsd: number; durationMs: number; denials: string[] }
+  | {
+      kind: 'result'
+      id: string
+      ok: boolean
+      text: string
+      costUsd: number
+      durationMs: number
+      denials: string[]
+      /** Set for agents that report tokens instead of a price. */
+      usage?: TokenUsage
+    }
   | { kind: 'notice'; id: string; level: 'info' | 'error'; text: string }
 
 export interface RunDetail {
@@ -130,8 +190,12 @@ export interface RunDetail {
 }
 
 export interface RunnerApi {
-  /** Locate claude + skill, check dependencies. */
+  /** Locate the agent CLIs + skill, check dependencies. */
   environment(): Promise<RunnerEnvironment>
+  /** Saves the agent new runs use by default. */
+  setDefaultAgent(agent: AgentId): Promise<void>
+  /** Makes the installed resume-tailor skill visible to `agent` (a link to the Claude copy, or a copy). */
+  linkSkill(agent: AgentId): Promise<InstallResult & { path?: string }>
   /** (Re)create the Python venv and install the skill's modules; progress arrives as `runner:install-log`. */
   installPythonDeps(): Promise<InstallResult>
   /** Run the official Claude Code installer (`claude.ai/install.sh`); progress on `runner:install-log`. */
@@ -143,11 +207,11 @@ export interface RunnerApi {
   listRuns(): Promise<RunSummary[]>
   getRun(id: string): Promise<RunDetail>
   start(params: StartRunParams): Promise<RunSummary>
-  /** Send the user's reply. Resumes the Claude session if the process is gone. */
+  /** Send the user's reply. Resumes the agent's session if the process is gone. */
   reply(id: string, text: string): Promise<RunSummary>
   /** Kill the process now. */
   stop(id: string): Promise<RunSummary>
-  /** Close the conversation cleanly (the user is done). */
+  /** Close the conversation cleanly (the user is done); also ends a waiting run with no process. */
   finish(id: string): Promise<RunSummary>
   /** Open a file of the run's output folder (`resume.pdf`, `cover.pdf`, …) with the OS. */
   openOutput(id: string, file: string): Promise<void>
@@ -156,6 +220,8 @@ export interface RunnerApi {
 
 export const RUNNER_CHANNELS = {
   environment: 'runner:environment',
+  setDefaultAgent: 'runner:set-default-agent',
+  linkSkill: 'runner:link-skill',
   installPythonDeps: 'runner:install-python-deps',
   installClaude: 'runner:install-claude',
   updateClaude: 'runner:update-claude',

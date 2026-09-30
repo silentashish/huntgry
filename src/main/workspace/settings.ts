@@ -11,6 +11,8 @@ import { readFile, rename, writeFile } from 'node:fs/promises'
  */
 export interface AppSettings {
   currentWorkspace?: string
+  /** Agent new tailoring runs use (`AgentId`); read through `agentOr`, so an unknown value means Claude. */
+  defaultAgent?: string
 }
 
 /** Reads the settings file; a missing or corrupt file yields empty settings. */

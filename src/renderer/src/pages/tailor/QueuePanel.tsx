@@ -2,8 +2,9 @@ import { useState } from 'react'
 import { ActionIcon, Alert, Badge, Button, Card, Group, Select, Stack, Text, Title, Tooltip } from '@mantine/core'
 import { IconPlayerPause, IconPlayerPlay, IconRefresh, IconTrash, IconX } from '@tabler/icons-react'
 import { MAX_CONCURRENCY, type QueueItemStatus, type QueueState } from '@shared/queue-types'
+import { AGENT_IDS, AGENT_LABEL, type AgentId } from '@shared/runner-types'
 import { api, errorText } from '../../api'
-import { QUEUE_STATUS_LABEL } from './status'
+import { AGENT_COLOR, QUEUE_STATUS_LABEL } from './status'
 
 interface Props {
   queue: QueueState
@@ -105,6 +106,23 @@ export function QueuePanel({ queue, onChange, onOpenRun }: Props) {
                     <Badge size="sm" variant="light" color={label.color} style={{ flexShrink: 0 }}>
                       {label.label}
                     </Badge>
+                    {/* The agent can change until the job starts (a retry starts a new run). */}
+                    {(item.status === 'queued' && !item.runId) || item.status === 'failed' || item.status === 'cancelled' ? (
+                      <Select
+                        size="xs"
+                        w={120}
+                        aria-label={`Agent for ${item.title}`}
+                        allowDeselect={false}
+                        value={item.agent}
+                        onChange={(v) => v && v !== item.agent && void act(() => api.queue.setAgent(item.id, v as AgentId))}
+                        data={AGENT_IDS.map((id) => ({ value: id, label: AGENT_LABEL[id] }))}
+                        style={{ flexShrink: 0 }}
+                      />
+                    ) : (
+                      <Badge size="sm" variant="outline" color={AGENT_COLOR[item.agent]} style={{ flexShrink: 0 }}>
+                        {AGENT_LABEL[item.agent]}
+                      </Badge>
+                    )}
                     {item.built && (
                       <Badge size="sm" variant="light" color="green" style={{ flexShrink: 0 }}>
                         Resume built

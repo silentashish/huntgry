@@ -1,4 +1,4 @@
-import type { DateStyle } from './runner-types'
+import type { AgentId, DateStyle } from './runner-types'
 
 /**
  * Bulk tailoring: several saved jobs queued from the Jobs page, started by the
@@ -9,9 +9,9 @@ import type { DateStyle } from './runner-types'
 export type QueueItemStatus =
   /** Waiting for a free slot. */
   | 'queued'
-  /** Reading the full posting and starting Claude. */
+  /** Reading the full posting and starting the agent. */
   | 'preparing'
-  /** Claude is working on a turn (takes a slot). */
+  /** The agent is working on a turn (takes a slot). */
   | 'running'
   /** The run stopped at the approval step (or any other question) and waits for the user; the slot is free. */
   | 'needs-reply'
@@ -21,8 +21,8 @@ export type QueueItemStatus =
   | 'failed'
   | 'cancelled'
 
-/** Who runs an item. Only Claude today; #22 widens this. */
-export type QueueAgent = 'claude'
+/** Who runs an item: any agent CLI (see `AGENT_IDS`). */
+export type QueueAgent = AgentId
 
 /** Run options shared by every job of one bulk request. */
 export interface QueueOptions {
@@ -61,7 +61,7 @@ export interface QueueItem {
 
 export interface QueueState {
   items: QueueItem[]
-  /** Runs Claude may work on at once, 1..`MAX_CONCURRENCY`. */
+  /** Runs that may work at once, 1..`MAX_CONCURRENCY`. */
   concurrency: number
   /** Nothing new starts while paused. The queue opens paused after a restart. */
   paused: boolean
@@ -72,6 +72,7 @@ export interface EnqueueInput {
   options: QueueOptions
   /** Also sets the queue's concurrency. */
   concurrency?: number
+  /** Agent for every job of this request (each item can be changed until it starts); the default agent when absent. */
   agent?: QueueAgent
 }
 
@@ -87,14 +88,14 @@ export const MAX_CONCURRENCY = 4
 /** Most jobs one bulk request may queue. */
 export const MAX_ENQUEUE = 100
 
-/** Items that hold (or wait for) a Claude process and are not finished. */
+/** Items that hold (or wait for) an agent process and are not finished. */
 export const ACTIVE_STATUSES: readonly QueueItemStatus[] = ['queued', 'preparing', 'running', 'needs-reply']
 
 export interface QueueApi {
   state(): Promise<QueueState>
   /** Queues the jobs (one IPC call for the whole selection) and resumes the queue. */
   enqueue(input: EnqueueInput): Promise<EnqueueResult>
-  /** A queued item is dropped before it starts; a started one has its Claude process stopped. */
+  /** A queued item is dropped before it starts; a started one has its agent process stopped. */
   cancel(itemId: string): Promise<QueueState>
   cancelAll(): Promise<QueueState>
   /** Queues a failed or cancelled item again. */
@@ -105,6 +106,8 @@ export interface QueueApi {
   clearFinished(): Promise<QueueState>
   setConcurrency(n: number): Promise<QueueState>
   setPaused(paused: boolean): Promise<QueueState>
+  /** Changes the agent of an item that has not started yet. */
+  setAgent(itemId: string, agent: QueueAgent): Promise<QueueState>
 }
 
 export const QUEUE_CHANNELS = {
@@ -116,7 +119,8 @@ export const QUEUE_CHANNELS = {
   remove: 'queue:remove',
   clearFinished: 'queue:clear-finished',
   setConcurrency: 'queue:set-concurrency',
-  setPaused: 'queue:set-paused'
+  setPaused: 'queue:set-paused',
+  setAgent: 'queue:set-agent'
 } as const
 
 export interface QueueEvents {

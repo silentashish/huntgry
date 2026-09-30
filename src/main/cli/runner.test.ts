@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -236,3 +236,201 @@ describe('RunManager against a fake claude', () => {
     expect((await until(r.id, (x) => x.status !== 'running')).status).toBe('waiting')
   })
 })
+
+const FAKE_CODEX = join(__dirname, 'fixtures/fake-codex.mjs')
+const FAKE_AGY = join(__dirname, 'fixtures/fake-agy.mjs')
+const codexCtx = (): RunContext => ({ ...ctx(), agent: 'codex', commandPrefixArgs: [FAKE_CODEX] })
+const agyCtx = (): RunContext => ({ ...ctx(), agent: 'antigravity', commandPrefixArgs: [FAKE_AGY] })
+
+describe('RunManager against a fake codex (one process per turn)', () => {
+  it('runs the first turn, then waits with no process left', async () => {
+    const started = await manager.start(params, codexCtx())
+    expect(started.agent).toBe('codex')
+    const waiting = await until(started.id, (r) => r.status === 'waiting' && !r.live)
+    expect(waiting.sessionId).toBe('thread-fake-1')
+    expect(waiting.usage).toEqual({ inputTokens: 1000, outputTokens: 50 })
+    expect(waiting.costUsd).toBe(0)
+    expect(manager.isLive(started.id)).toBe(false)
+    await manager.whenIdle()
+    expect((await readRun(ws, started.id)).agent).toBe('codex')
+    const t = buildTranscript(await readEvents(ws, started.id), 'codex')
+    expect(t.map((i) => i.kind)).toEqual(['user', 'tool', 'assistant', 'result'])
+    expect(t[1]).toMatchObject({ name: 'Bash', status: 'ok', output: 'profile text' })
+    // The prompt went in whole on stdin; the process ran in the workspace.
+    expect(t[2]).toMatchObject({ text: expect.stringContaining('echo: Follow the resume-tailor skill') })
+    expect((t[2] as { text: string }).text).toContain(`cwd=${await realpathOf(ws)}`)
+    expect((t[2] as { text: string }).text).toContain('resume=false')
+  })
+
+  it('answers a reply with `exec resume <thread>` in the workspace and finds the output', async () => {
+    const { id } = await manager.start(params, codexCtx())
+    await until(id, (r) => r.status === 'waiting' && !r.live)
+    await manager.whenIdle()
+    await manager.reply(id, 'Approved. WRITE_OUTPUT', async () => codexCtx())
+    const done = await until(id, (r) => r.status === 'waiting' && !r.live && r.outputFolder !== null)
+    expect(done.outputFolder).toBe(join('software-engineer', 'acme', '42'))
+    expect(done.usage).toEqual({ inputTokens: 2000, outputTokens: 100 })
+    await manager.whenIdle()
+    const t = buildTranscript(await readEvents(ws, id), 'codex')
+    const last = t.filter((i) => i.kind === 'assistant').pop() as { text: string }
+    expect(last.text).toContain('resume=true')
+    expect(last.text).toContain(`cwd=${await realpathOf(ws)}`)
+  })
+
+  it('refuses a second reply while a turn is running', async () => {
+    const { id } = await manager.start({ ...params, notes: 'SLOW' }, codexCtx())
+    await expect(manager.reply(id, 'again', async () => codexCtx())).rejects.toThrow(/Codex is still working/)
+    await until(id, (r) => r.status === 'waiting' && !r.live)
+  })
+
+  it('finishes a waiting run that has no process', async () => {
+    const { id } = await manager.start(params, codexCtx())
+    await until(id, (r) => r.status === 'waiting' && !r.live)
+    await manager.whenIdle()
+    const done = await manager.endIdle(ws, id, 'finished')
+    expect(done?.status).toBe('finished')
+    expect(runs[runs.length - 1]).toMatchObject({ id, status: 'finished' })
+    expect((await readRun(ws, id)).status).toBe('finished')
+    // Nothing to do for a finished run.
+    expect(await manager.endIdle(ws, id, 'finished')).toBeNull()
+  })
+
+  it('lets only one of two simultaneous replies to an idle run through', async () => {
+    const { id } = await manager.start(params, codexCtx())
+    await until(id, (r) => r.status === 'waiting' && !r.live)
+    await manager.whenIdle()
+    const results = await Promise.allSettled([
+      manager.reply(id, 'first reply', async () => codexCtx()),
+      manager.reply(id, 'second reply', async () => codexCtx())
+    ])
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected'])
+    expect(String((results[1] as PromiseRejectedResult).reason)).toMatch(/Codex is still working/)
+    await until(id, (r) => r.status === 'waiting' && !r.live && (r.usage?.inputTokens ?? 0) === 2000)
+    await manager.whenIdle()
+    const users = buildTranscript(await readEvents(ws, id), 'codex').filter((i) => i.kind === 'user') as { text: string }[]
+    // The refused reply is not recorded as if Codex had received it.
+    expect(users.map((u) => u.text).slice(1)).toEqual(['first reply'])
+  })
+
+  it('keeps End when it is pressed as soon as the turn is over', async () => {
+    for (let i = 0; i < 5; i++) {
+      const { id } = await manager.start(params, codexCtx())
+      // The first broadcast without a process; the exit's own writes may still be pending.
+      await until(id, (r) => r.status === 'waiting' && !r.live)
+      expect((await manager.endIdle(ws, id, 'finished'))?.status).toBe('finished')
+      await manager.whenIdle()
+      expect((await readRun(ws, id)).status).toBe('finished')
+    }
+  })
+
+  it('stops an idle run (a cancelled queue job) and records it', async () => {
+    const { id } = await manager.start(params, codexCtx())
+    await until(id, (r) => r.status === 'waiting' && !r.live)
+    expect((await manager.endIdle(ws, id, 'stopped'))?.status).toBe('stopped')
+    await manager.whenIdle()
+    expect((await readRun(ws, id)).status).toBe('stopped')
+    const t = buildTranscript(await readEvents(ws, id), 'codex')
+    expect(t[t.length - 1]).toMatchObject({ kind: 'notice', text: 'Stopped.' })
+  })
+
+  it('fails with the stderr tail when codex crashes', async () => {
+    const { id } = await manager.start({ ...params, notes: 'CRASH' }, codexCtx())
+    const failed = await until(id, (r) => r.status === 'failed')
+    expect(failed.error).toContain('boom: simulated codex failure')
+    await manager.whenIdle()
+    const t = buildTranscript(await readEvents(ws, id), 'codex')
+    expect(t[t.length - 1]).toMatchObject({ kind: 'notice', level: 'error', text: expect.stringMatching(/^Codex stopped:/) })
+  })
+
+  it('fails a turn codex reports as failed, and one that exits without ending the turn', async () => {
+    const a = await manager.start({ ...params, notes: 'FAIL_TURN' }, codexCtx())
+    expect((await until(a.id, (r) => r.status === 'failed')).error).toContain('stream disconnected')
+    const b = await manager.start({ ...params, notes: 'SILENT' }, codexCtx())
+    expect((await until(b.id, (r) => r.status === 'failed')).error).toContain('exited before the turn ended')
+  })
+
+  it('fails a turn that ends with no output and nothing done, instead of waiting for a reply to nothing', async () => {
+    const { id } = await manager.start({ ...params, notes: 'EMPTY' }, codexCtx())
+    const failed = await until(id, (r) => r.status === 'failed' && !r.live)
+    expect(failed.error).toContain('Codex ended the turn without any answer or action.')
+    // The session is known, so the user can retry with a reply.
+    expect(failed.sessionId).toBe('thread-fake-1')
+    await manager.whenIdle()
+    const t = buildTranscript(await readEvents(ws, id), 'codex')
+    expect(t[t.length - 1]).toMatchObject({ kind: 'notice', level: 'error' })
+    // Something the agent did (here only reasoning, also reported as 0 output tokens) is not an empty turn.
+    const other = await manager.start({ ...params, notes: 'REASONING_ONLY' }, codexCtx())
+    expect((await until(other.id, (r) => r.status !== 'running' && !r.live)).status).toBe('waiting')
+  })
+
+  it('continues a run only with its own agent', async () => {
+    const { id } = await manager.start(params, codexCtx())
+    await until(id, (r) => r.status === 'waiting' && !r.live)
+    await manager.whenIdle()
+    await expect(manager.reply(id, 'hi', async () => ctx())).rejects.toThrow(/uses Codex/)
+  })
+})
+
+describe('RunManager against a fake agy (stream-json in and out)', () => {
+  it('prefixes the Huntgry context to the first message and keeps the process between turns', async () => {
+    const { id } = await manager.start(params, agyCtx())
+    const waiting = await until(id, (r) => r.status === 'waiting')
+    expect(waiting).toMatchObject({ agent: 'antigravity', sessionId: 'conv-fake-1', live: true })
+    expect(waiting.usage).toEqual({ inputTokens: 2000, outputTokens: 70 })
+    await manager.reply(id, 'Approved. WRITE_OUTPUT', async () => agyCtx())
+    const done = await until(id, (r) => r.status === 'waiting' && r.outputFolder !== null)
+    expect(done.live).toBe(true)
+    await manager.flush(id)
+    const t = buildTranscript(await readEvents(ws, id), 'antigravity')
+    // The transcript shows what the user sent, not the context.
+    const users = t.filter((i) => i.kind === 'user') as { text: string }[]
+    expect(users[0].text).not.toContain('huntgry_instructions')
+    const replies = t.filter((i) => i.kind === 'assistant') as { text: string }[]
+    expect(replies[0].text).toBe('echo: <huntgry_instructions>\ntest\n</huntgry_in')
+    expect(replies[1].text).toBe('echo: Approved. WRITE_OUTPUT')
+    expect(t.find((i) => i.kind === 'tool')).toMatchObject({ name: 'view_file', status: 'ok' })
+  })
+
+  it('resumes the conversation after the run was finished', async () => {
+    const { id } = await manager.start(params, agyCtx())
+    await until(id, (r) => r.status === 'waiting')
+    manager.finish(id)
+    await until(id, (r) => r.status === 'finished' && !r.live)
+    await manager.reply(id, 'one more change', async () => agyCtx())
+    const resumed = await until(id, (r) => r.status === 'waiting' && r.live)
+    expect(resumed.sessionId).toBe('conv-fake-1')
+  })
+
+  it('fails with a readable reason when the quota is used up', async () => {
+    const { id } = await manager.start({ ...params, notes: 'QUOTA' }, agyCtx())
+    const failed = await until(id, (r) => r.status === 'failed')
+    expect(failed.error).toMatch(/^Antigravity's quota is used up: RESOURCE_EXHAUSTED \(code 429\)/)
+    await manager.whenIdle()
+    const t = buildTranscript(await readEvents(ws, id), 'antigravity')
+    expect(t.map((i) => i.kind)).toEqual(['user', 'result', 'notice'])
+    expect(t[2]).toMatchObject({ level: 'error', text: expect.stringMatching(/^Antigravity stopped: .*quota/) })
+  })
+
+  it('reports a crash with the stderr tail', async () => {
+    const { id } = await manager.start({ ...params, notes: 'CRASH' }, agyCtx())
+    expect((await until(id, (r) => r.status === 'failed')).error).toContain('panic: simulated agy failure')
+  })
+})
+
+describe('runs recorded before agents', () => {
+  it('read as Claude runs', async () => {
+    const { id } = await manager.start(params, ctx())
+    await until(id, (r) => r.status === 'waiting')
+    expect(runs[runs.length - 1].agent).toBe('claude')
+    await manager.flush(id)
+    const file = join(ws, '.huntgry/runs', id, 'run.json')
+    const raw = JSON.parse(await readFile(file, 'utf8'))
+    delete raw.agent
+    await writeFile(file, JSON.stringify(raw))
+    expect((await readRun(ws, id)).agent).toBe('claude')
+  })
+})
+
+async function realpathOf(p: string): Promise<string> {
+  return (await import('node:fs/promises')).realpath(p)
+}

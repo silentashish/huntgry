@@ -1,7 +1,8 @@
-import { Badge, Button, NavLink, ScrollArea, Stack, Text } from '@mantine/core'
+import { Badge, Button, Group, NavLink, ScrollArea, Stack, Text } from '@mantine/core'
 import { IconPlus } from '@tabler/icons-react'
 import type { RunSummary } from '@shared/runner-types'
-import { STATUS_LABEL } from './status'
+import { AGENT_LABEL } from '@shared/runner-types'
+import { AGENT_COLOR, runStatusLabel, STATUS_LABEL } from './status'
 
 interface Props {
   runs: RunSummary[]
@@ -47,9 +48,14 @@ export function RunList({ runs, selected, onSelect }: Props) {
                 <Text size="xs" c="dimmed">
                   {new Date(r.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
                 </Text>
-                <Badge size="xs" variant="light" color={STATUS_LABEL[r.status].color}>
-                  {STATUS_LABEL[r.status].label}
-                </Badge>
+                <Group gap={4}>
+                  <Badge size="xs" variant="outline" color={AGENT_COLOR[r.agent]}>
+                    {AGENT_LABEL[r.agent]}
+                  </Badge>
+                  <Badge size="xs" variant="light" color={STATUS_LABEL[r.status].color}>
+                    {runStatusLabel(r.status, r.agent)}
+                  </Badge>
+                </Group>
               </Stack>
             }
             style={{ borderRadius: 'var(--mantine-radius-md)' }}

@@ -75,7 +75,7 @@ src/
 │   ├── browser/                # in-app browser: one WebContentsView per tab, session hardening, address rules
 │   ├── apply/                  # auto-apply: session per tab, CDP resume upload, page-reply checks
 │   ├── resume/                 # resume file → lines (docx, pdf, txt/md) → draft profile (parse.ts)
-│   └── cli/                    # runs the resume-tailor skill via `claude -p` (stream-json), run history
+│   └── cli/                    # runs the resume-tailor skill via an agent CLI (claude / codex / agy), run history
 ├── preload/                    # index.ts composes window.huntgry from <feature>.ts + events.ts;
 │                               # browser-page.ts is the in-app tabs' autofill preload (exposes nothing)
 └── renderer/src/               # React 19 + Mantine UI, no Node access
@@ -158,9 +158,11 @@ HUNTGRY_ALLOW_LOCAL_URLS=1 npm run dev         # then set an application's posti
 
 ## Tailoring a resume
 
-**Tailor** runs the installed resume-tailor skill through the `claude` CLI, in the open
+**Tailor** runs the installed resume-tailor skill through an agent CLI — Claude Code
+(`claude`), Codex (`codex`) or Antigravity (`agy`) — in the open
 workspace: paste a job description, or give an employer or ATS posting URL (job board URLs
-such as Indeed cannot be read directly; send those from **Jobs**), follow Claude's gap analysis, answer
+such as Indeed cannot be read directly; send those from **Jobs**), pick the agent (the
+default one from **Settings** is preselected), follow its gap analysis, answer
 its approval question, and open the resulting `resume.pdf` / `cover.pdf`. Runs are kept in
 `<workspace>/.huntgry/runs/` and can be reopened and continued after a restart.
 
@@ -169,6 +171,8 @@ queues one run per job in `<workspace>/.huntgry/queue.json` and starts them itse
 time by default (up to four), a couple of seconds apart. The queue is shown at the top of
 **Tailor**. Each run still stops at the approval step: it shows **Needs your reply**, and the
 next job starts in its place. Jobs with only a board summary (Indeed) are skipped with a note.
+**Tailor all** picks one agent for the batch; each queued job can switch to another agent
+until it starts, so one job can go to Claude and the next to Codex.
 After a restart the queue is paused until you press **Resume**.
 
 **Settings** shows whether `claude`, the skill and its dependencies are found, which
@@ -179,6 +183,14 @@ downloads the skill from its latest GitHub release into `~/.claude/skills`. Sign
 happens once in a terminal (`claude auth login`). The skill needs `pdflatex` (TinyTeX works without admin rights), poppler (`brew install poppler`) and
 a few Python modules, which **Install Python dependencies** puts in a venv in the app's
 data folder. You do not have to change your shell PATH.
+
+The **Agents** card in **Settings** lists Claude, Codex and Antigravity with their CLI and
+version, whether each can see the skill, and which one is the default. Codex and Antigravity
+use the skill installed for Claude: **Install skill** links it into their own skills folder
+(`~/.agents/skills/resume-tailor`, `~/.gemini/antigravity-cli/skills/resume-tailor`). Install
+and sign in to those CLIs yourself (`codex login`, `agy`). See
+[docs/changes/22-multi-agent.md](docs/changes/22-multi-agent.md) for how each agent is run and
+isolated.
 
 ## Knowledge graph
 

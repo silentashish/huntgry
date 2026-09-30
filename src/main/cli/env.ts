@@ -97,12 +97,21 @@ export function composePath(...segments: (string | null | undefined)[]): string 
  * the renderer) pins a binary, e.g. to test an older Claude Code.
  */
 export async function findClaude(): Promise<string | null> {
-  const pinned = process.env.HUNTGRY_CLAUDE_PATH
+  return findCli('claude')
+}
+
+/**
+ * Resolves an agent CLI (`claude`, `codex`, `agy`) the same way: well-known
+ * folders, the login-shell PATH, the app's PATH. `HUNTGRY_<NAME>_PATH` in the
+ * app's own environment pins a binary (e.g. `HUNTGRY_CLAUDE_PATH`).
+ */
+export async function findCli(name: string): Promise<string | null> {
+  const pinned = process.env[`HUNTGRY_${name.toUpperCase()}_PATH`]
   if (pinned) return (await isExecutable(pinned)) ? pinned : null
   const dirs = composePath(wellKnownBinDirs().join(delimiter), await loginShellPath(), process.env.PATH).split(
     delimiter
   )
-  return findInDirs('claude', dirs)
+  return findInDirs(name, dirs)
 }
 
 export async function findTexBin(): Promise<string | null> {
