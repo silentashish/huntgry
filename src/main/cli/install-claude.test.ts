@@ -9,6 +9,7 @@ import {
   NOT_SIGNED_IN,
   parseAuthStatus,
   requireSignedIn,
+  stream,
   updateClaude
 } from './install-claude'
 
@@ -140,4 +141,19 @@ describe.skipIf(process.platform === 'win32')('requireSignedIn (checked in main 
     await expect(requireSignedIn(await fake('{"loggedIn": true}', 0), { ...process.env })).resolves.toBeUndefined()
     await expect(requireSignedIn(await fake("error: unknown command 'auth'", 1), { ...process.env })).resolves.toBeUndefined()
   })
+})
+
+describe.skipIf(process.platform === 'win32')('installer timeout', () => {
+  it('kills an installer that ignores SIGTERM, children included, so the next install can run', async () => {
+    const script = join(tmp, 'stubborn.sh')
+    // Ignores SIGTERM and leaves a child holding the output pipe, like install.sh running curl.
+    await writeFile(script, '#!/bin/bash\ntrap "" TERM\nsleep 30 &\necho started\nwhile true; do sleep 1; done\n')
+    await chmod(script, 0o755)
+    const log: string[] = []
+    const started = Date.now()
+    const code = await stream('/bin/bash', [script], { ...process.env }, (l) => log.push(l), 300, 300)
+    expect(code).not.toBe(0)
+    expect(Date.now() - started).toBeLessThan(5000)
+    expect(log).toContain('Timed out.')
+  }, 10_000)
 })

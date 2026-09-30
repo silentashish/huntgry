@@ -107,19 +107,38 @@ function installerEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return env
 }
 
-function stream(
+/**
+ * Runs an installer, streaming its output lines to `log`. On timeout the whole
+ * process group gets SIGTERM, then SIGKILL after `killGraceMs`: `close` waits
+ * for every holder of the pipes (e.g. a `curl` started by install.sh), and a
+ * promise that never settles would keep `busy` set until the app restarts.
+ */
+export function stream(
   cmd: string,
   args: string[],
   env: NodeJS.ProcessEnv,
   log: (line: string) => void,
-  timeout = INSTALL_TIMEOUT_MS
+  timeout = INSTALL_TIMEOUT_MS,
+  killGraceMs = 5000
 ): Promise<number> {
   return new Promise((resolve) => {
     log(`$ ${[cmd, ...args].join(' ')}`)
-    const child = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+    // Own process group (POSIX), so a timeout reaches the installer's children too.
+    const child = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
+    const kill = (signal: NodeJS.Signals) => {
+      try {
+        if (child.pid && process.platform !== 'win32') process.kill(-child.pid, signal)
+        else child.kill(signal)
+      } catch {
+        // already gone
+      }
+    }
+    let killTimer: NodeJS.Timeout | undefined
     const timer = setTimeout(() => {
       log('Timed out.')
-      child.kill('SIGTERM')
+      kill('SIGTERM')
+      killTimer = setTimeout(() => kill('SIGKILL'), killGraceMs)
+      killTimer.unref()
     }, timeout)
     const onData = (chunk: Buffer) =>
       chunk
@@ -134,10 +153,12 @@ function stream(
     child.on('error', (err) => {
       log(err.message)
       clearTimeout(timer)
+      clearTimeout(killTimer)
       resolve(1)
     })
     child.on('close', (code) => {
       clearTimeout(timer)
+      clearTimeout(killTimer)
       resolve(code ?? 1)
     })
   })
