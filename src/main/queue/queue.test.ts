@@ -376,6 +376,68 @@ describe('TailorQueue', () => {
     await rm(other, { recursive: true, force: true })
   })
 
+  it('starts each job with its own agent, changeable until it starts', async () => {
+    const agents: string[] = []
+    queue = new TailorQueue(
+      deps({
+        start: async (params, agent) => {
+          agents.push(agent)
+          started.push({ params, at: Date.now() })
+          return manager.start(params, ctx())
+        }
+      })
+    )
+    for (const id of ['url:a', 'url:b']) jobs.set(id, job(id))
+    await queue.setPaused(true)
+    const res = await queue.enqueue({ jobIds: ['url:a', 'url:b'], options, agent: 'codex' })
+    // Enqueuing resumes the queue; hold it to change one row first.
+    await queue.setPaused(true)
+    expect(res.state.items.map((i) => i.agent)).toEqual(['codex', 'codex'])
+    const b = res.state.items[1]
+    await queue.setAgent(b.id, 'antigravity')
+    await queue.setPaused(false)
+    const s = await until(all('needs-reply'))
+    expect(agents.sort()).toEqual(['antigravity', 'codex'])
+    await expect(queue.setAgent(s.items[0].id, 'claude')).rejects.toThrow(/before the job starts/)
+  })
+
+  it('does not retry a used-up quota automatically, but does retry a rate limit', async () => {
+    const stub = (id: string): RunSummary => ({
+      id,
+      title: 'x',
+      params: { coverLetter: false, dateStyle: 'right' },
+      agent: 'antigravity',
+      status: 'running',
+      sessionId: null,
+      createdAt: '2026-09-30T00:00:00.000Z',
+      updatedAt: '2026-09-30T00:00:00.000Z',
+      outputFolder: null,
+      outputFiles: [],
+      costUsd: 0,
+      live: true
+    })
+    const ids = ['20260930-010203-aaaaaa', '20260930-010203-bbbbbb']
+    queue = new TailorQueue(deps({ start: async () => stub(ids.shift()!), retryDelayMs: 60_000 }))
+    for (const id of ['url:a', 'url:b']) jobs.set(id, job(id))
+    await queue.enqueue({ jobIds: ['url:a', 'url:b'], options })
+    const s = await until((st) => st.items.every((i) => i.runId))
+    const [a, b] = s.items
+    queue.onRun({ ...stub(a.runId!), status: 'failed', error: "Antigravity's quota is used up: RESOURCE_EXHAUSTED (code 429)" })
+    queue.onRun({ ...stub(b.runId!), status: 'failed', error: 'API Error: 429 Too Many Requests' })
+    expect(queue.state().items.map((i) => [i.status, i.attempts])).toEqual([
+      ['failed', 0],
+      ['queued', 1]
+    ])
+  })
+
+  it('reads items saved before agents could be chosen as Claude items', async () => {
+    await mkdir(join(ws, '.huntgry'), { recursive: true })
+    const at = '2026-09-30T00:00:00.000Z'
+    const item = { id: 'q-20260930-010203-a1b2c3', jobId: 'url:a', title: 'x', options, status: 'queued', runId: null, attempts: 0, createdAt: at, updatedAt: at }
+    await writeFile(queueFile(ws), JSON.stringify({ version: 1, concurrency: 2, items: [item] }))
+    expect((await queue.sync()).items[0].agent).toBe('claude')
+  })
+
   it('ignores a broken queue file', async () => {
     await mkdir(join(ws, '.huntgry'), { recursive: true })
     await writeFile(queueFile(ws), '{not json')
@@ -397,6 +459,9 @@ describe('queue input validation', () => {
     expect(() => requireEnqueueInput({ jobIds: Array.from({ length: 101 }, (_, i) => `url:${i}`), options: ok })).toThrow(/at most 100/)
     expect(() => requireEnqueueInput({ jobIds: ['url:a'], options: { dateStyle: 'right' } })).toThrow(/cover letters/)
     expect(() => requireEnqueueInput({ jobIds: ['url:a'], options: ok, agent: 'gpt' })).toThrow(/agent/)
+    expect(requireEnqueueInput({ jobIds: ['url:a'], options: ok, agent: 'codex' }).agent).toBe('codex')
+    // No agent: the default agent from Settings.
+    expect(requireEnqueueInput({ jobIds: ['url:a'], options: ok }, 'antigravity').agent).toBe('antigravity')
     expect(() => requireEnqueueInput({ jobIds: ['url:a'], options: ok, concurrency: 5 })).toThrow(/1 to 4/)
     expect(() => requireConcurrency(0)).toThrow()
     expect(() => requireConcurrency(1.5)).toThrow()

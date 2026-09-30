@@ -14,15 +14,15 @@ import {
   type QueueOptions,
   type QueueState
 } from '@shared/queue-types'
-import type { RunSummary, StartRunParams } from '@shared/runner-types'
+import { DEFAULT_AGENT, isAgentId, type AgentId, type RunSummary, type StartRunParams } from '@shared/runner-types'
 import { MAX_TEXT } from '../cli/command'
 import { newRunId } from '../cli/runs'
 import { HUNTGRY_DIR } from '../workspace/constants'
 
 /**
- * Bulk tailoring queue: starts one tailoring run per queued job, at most
- * `concurrency` of them working at once and `spawnGapMs` apart (Claude's
- * server limits bursts of new sessions). A run that stops at the approval
+ * Bulk tailoring queue: starts one tailoring run per queued job, each with its
+ * own agent, at most `concurrency` of them working at once and `spawnGapMs`
+ * apart (Claude's server limits bursts of new sessions). A run that stops at the approval
  * step frees its slot; the user answers it on the Tailor page. Electron-free:
  * the app passes the workspace, the job store and the run starter in.
  */
@@ -55,6 +55,8 @@ const INTERRUPTED = 'Huntgry was closed while this job was starting or running. 
 /** Bulk runs never start from a board summary: nobody is there to notice the resume was tailored to a snippet. */
 const PASTE_HINT = 'Open the posting, add its description with "Paste a job" on the Jobs page, and tailor that job.'
 const RATE_LIMIT = /temporarily limiting requests|rate.?limit|too many requests|\b429\b|overloaded/i
+/** A used-up quota (Antigravity answers 429 too) does not clear in seconds: no automatic retry. */
+const QUOTA = /quota/i
 
 export const queueFile = (workspace: string): string => join(workspace, HUNTGRY_DIR, QUEUE_FILE)
 
@@ -69,8 +71,16 @@ export function requireConcurrency(n: unknown): number {
   return n
 }
 
-/** Checks what the renderer sends with "Tailor all". */
-export function requireEnqueueInput(input: unknown): Required<Omit<EnqueueInput, 'concurrency'>> & {
+export function requireAgent(agent: unknown): AgentId {
+  if (!isAgentId(agent)) throw new Error('Unknown agent.')
+  return agent
+}
+
+/** Checks what the renderer sends with "Tailor all"; `fallback` is the agent used when none is given. */
+export function requireEnqueueInput(
+  input: unknown,
+  fallback: AgentId = DEFAULT_AGENT
+): Required<Omit<EnqueueInput, 'concurrency'>> & {
   concurrency?: number
 } {
   const p = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
@@ -82,13 +92,13 @@ export function requireEnqueueInput(input: unknown): Required<Omit<EnqueueInput,
   if (o.dateStyle !== 'inline' && o.dateStyle !== 'right') throw new Error('Invalid date style.')
   if (o.notes !== undefined && (typeof o.notes !== 'string' || o.notes.length > MAX_TEXT))
     throw new Error('The notes are too long.')
-  if (p.agent !== undefined && p.agent !== 'claude') throw new Error('Unknown agent.')
+  if (p.agent !== undefined && !isAgentId(p.agent)) throw new Error('Unknown agent.')
   const options: QueueOptions = { coverLetter: o.coverLetter, dateStyle: o.dateStyle }
   if (typeof o.notes === 'string' && o.notes.trim()) options.notes = o.notes.trim()
   return {
     jobIds: [...new Set(p.jobIds as string[])],
     options,
-    agent: 'claude',
+    agent: p.agent === undefined ? fallback : (p.agent as AgentId),
     ...(p.concurrency !== undefined ? { concurrency: requireConcurrency(p.concurrency) } : {})
   }
 }
@@ -168,6 +178,7 @@ export class TailorQueue {
     const at = new Date(this.now()).toISOString()
     this.items = (Array.isArray(raw.items) ? (raw.items as QueueItem[]) : [])
       .filter((i) => i && QUEUE_ITEM_PATTERN.test(i.id) && JOB_ID_PATTERN.test(i.jobId))
+      .map((i) => ({ ...i, agent: isAgentId(i.agent) ? i.agent : DEFAULT_AGENT }))
       .map((i) => (isWorking(i) ? { ...i, status: 'failed', error: INTERRUPTED, notBefore: undefined, updatedAt: at } : i))
   }
 
@@ -197,7 +208,7 @@ export class TailorQueue {
         jobId: job.id,
         title: [job.title, job.company].filter(Boolean).join(' · '),
         options: { ...input.options },
-        agent: input.agent ?? 'claude',
+        agent: input.agent ?? DEFAULT_AGENT,
         status: 'queued',
         runId: null,
         attempts: 0,
@@ -265,6 +276,18 @@ export class TailorQueue {
   async setPaused(paused: boolean): Promise<QueueState> {
     await this.sync()
     this.paused = paused
+    this.changed()
+    return this.state()
+  }
+
+  /** Per-job override of the agent chosen for the whole request, until the job starts. */
+  async setAgent(itemId: string, agent: AgentId): Promise<QueueState> {
+    await this.sync()
+    const item = this.find(itemId)
+    if (item.runId || (item.status !== 'queued' && item.status !== 'failed' && item.status !== 'cancelled'))
+      throw new Error('The agent can only be changed before the job starts.')
+    item.agent = agent
+    item.updatedAt = new Date(this.now()).toISOString()
     this.changed()
     return this.state()
   }
@@ -368,9 +391,14 @@ export class TailorQueue {
         item.status = 'cancelled'
         break
       case 'failed':
-        if (item.attempts === 0 && !this.answered.has(item.id) && RATE_LIMIT.test(run.error ?? '')) {
+        if (
+          item.attempts === 0 &&
+          !this.answered.has(item.id) &&
+          RATE_LIMIT.test(run.error ?? '') &&
+          !QUOTA.test(run.error ?? '')
+        ) {
           this.requeue(item, this.deps.retryDelayMs ?? 15_000)
-          item.error = `Claude's servers limited new sessions; retrying automatically. (${run.error})`
+          item.error = `The agent's servers limited new sessions; retrying automatically. (${run.error})`
         } else {
           item.status = 'failed'
           item.error = run.error ?? 'The run failed.'
@@ -514,7 +542,7 @@ export class TailorQueue {
     } catch (err) {
       // The user opened another workspace meanwhile: this item belongs to the old queue, which is gone.
       if (this.ws !== ws) return
-      // Starting fails before any Claude process for reasons that are not about this job (Claude
+      // Starting fails before any agent process for reasons that are not about this job (agent
       // signed out, too old or missing, no skill): pause, so the other jobs wait for the fix
       // instead of failing one after another. Resume or Retry once it is fixed.
       if (item.status === 'preparing') {
@@ -525,7 +553,7 @@ export class TailorQueue {
     }
     item.runId = run.id
     if (item.status !== 'preparing') {
-      // Cancelled while Claude was starting.
+      // Cancelled while the agent was starting.
       this.deps.stopRun(run.id)
       return
     }
