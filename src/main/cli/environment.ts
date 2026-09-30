@@ -15,7 +15,7 @@ import {
   SKILL_PYTHON_MODULES,
   wellKnownBinDirs
 } from './env'
-import { claudeInstallKind, parseAuthStatus } from './install-claude'
+import { claudeAuthStatus, claudeInstallKind } from './install-claude'
 import { readSkillInstall } from './install-skill'
 import { claudeVersion as readClaudeVersion, CLAUDE_VERSION_RECOMMENDED, versionAtLeast } from './version'
 
@@ -87,13 +87,11 @@ export async function checkEnvironment(opts: {
   let claudeVersion: string | null = null
   let claudeAuth: ClaudeAuth | null = null
   if (claudePath) {
-    const [version, auth] = await Promise.all([
+    ;[claudeVersion, claudeAuth] = await Promise.all([
       // Refresh the cache the runs use: this is what "Check again" is for (e.g. after an update).
       readClaudeVersion(claudePath, env, { refresh: true }),
-      run(claudePath, ['auth', 'status'], env)
+      claudeAuthStatus(claudePath, env)
     ])
-    claudeVersion = version
-    claudeAuth = parseAuthStatus(auth.code, auth.out)
   }
   const claudeVersionOk = versionAtLeast(claudeVersion, CLAUDE_VERSION_RECOMMENDED)
   const installKind = claudePath ? await claudeInstallKind(claudePath) : null

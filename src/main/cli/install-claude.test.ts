@@ -3,7 +3,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { checkEnvironment } from './environment'
-import { installClaude, installKindOf, parseAuthStatus, updateClaude } from './install-claude'
+import {
+  installClaude,
+  installKindOf,
+  NOT_SIGNED_IN,
+  parseAuthStatus,
+  requireSignedIn,
+  updateClaude
+} from './install-claude'
 
 let tmp: string
 beforeEach(async () => {
@@ -108,4 +115,23 @@ describe.skipIf(process.platform === 'win32')('checkEnvironment', () => {
       else process.env.HUNTGRY_CLAUDE_PATH = before
     }
   }, 30_000)
+})
+
+describe.skipIf(process.platform === 'win32')('requireSignedIn (checked in main before every spawn)', () => {
+  const fake = async (auth: string, code: number) => {
+    const path = join(tmp, `claude-${code}-${auth.length}`)
+    await writeFile(path, `#!/bin/sh\necho '${auth}'\nexit ${code}\n`)
+    await chmod(path, 0o755)
+    return path
+  }
+
+  it('refuses a signed-out CLI so no run is created', async () => {
+    const out = await fake('{"loggedIn": false, "authMethod": "none"}', 1)
+    await expect(requireSignedIn(out, { ...process.env })).rejects.toThrow(NOT_SIGNED_IN)
+  })
+
+  it('lets a signed-in CLI and an unknown state through', async () => {
+    await expect(requireSignedIn(await fake('{"loggedIn": true}', 0), { ...process.env })).resolves.toBeUndefined()
+    await expect(requireSignedIn(await fake("error: unknown command 'auth'", 1), { ...process.env })).resolves.toBeUndefined()
+  })
 })

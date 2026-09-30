@@ -8,7 +8,7 @@ import { emit } from '../events'
 import { buildSystemPrompt, MAX_TEXT, requireStartParams, texRootOf } from './command'
 import { buildChildEnv, findClaude, loginShellPath } from './env'
 import { checkEnvironment, discoverRuntime, installPythonDeps } from './environment'
-import { claudeInstallKind, exclusive, installClaude, updateClaude } from './install-claude'
+import { claudeInstallKind, exclusive, installClaude, requireSignedIn, updateClaude } from './install-claude'
 import { installSkill } from './install-skill'
 import { fetchPostingText } from './posting'
 import { pinnedFetch } from './public-url'
@@ -54,8 +54,12 @@ async function context(): Promise<RunContext> {
     texBin: env.texBin,
     loginPath: await loginShellPath()
   })
-  // Once per binary (cached by real path); an unknown version just leaves out the newer flags.
-  const version = await claudeVersion(env.claudePath, childEnv)
+  const [version] = await Promise.all([
+    // Once per binary (cached by real path); an unknown version just leaves out the newer flags.
+    claudeVersion(env.claudePath, childEnv),
+    // A signed-out CLI would only produce a failed run; say what to do instead (start and resume).
+    requireSignedIn(env.claudePath, childEnv)
+  ])
   const texRoot = texRootOf(env.texBin)
   const allow = [
     ...new Set(

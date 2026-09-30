@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CLAUDE_COMMANDS, type ClaudeAuth, type ClaudeInstallKind, type InstallResult } from '@shared/runner-types'
@@ -52,6 +52,27 @@ export function parseAuthStatus(code: number, out: string): ClaudeAuth | null {
     }
   }
   return code === 1 && /not (logged|signed) in/i.test(out) ? { loggedIn: false } : null
+}
+
+/** `claude auth status`, parsed; `null` when it could not tell (too old, failed, hung). */
+export function claudeAuthStatus(claudePath: string, env: NodeJS.ProcessEnv, timeout = 20_000): Promise<ClaudeAuth | null> {
+  return new Promise((resolve) => {
+    execFile(claudePath, ['auth', 'status'], { env, timeout, maxBuffer: 1 << 20 }, (err, stdout, stderr) => {
+      const code = err ? (typeof err.code === 'number' ? err.code : 1) : 0
+      resolve(parseAuthStatus(code, `${stdout}${stderr}`))
+    })
+  })
+}
+
+export const NOT_SIGNED_IN = `Claude Code is not signed in. Run "${CLAUDE_COMMANDS.login}" in a terminal, then try again.`
+
+/**
+ * Refuses to go on when `claude` says it is signed out. Checked in main before
+ * every spawn (start, resume, draft): the renderer's environment snapshot can
+ * be stale, and IPC input is untrusted. An unknown state does not block.
+ */
+export async function requireSignedIn(claudePath: string, env: NodeJS.ProcessEnv): Promise<void> {
+  if ((await claudeAuthStatus(claudePath, env))?.loggedIn === false) throw new Error(NOT_SIGNED_IN)
 }
 
 let busy = false
