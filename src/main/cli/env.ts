@@ -4,6 +4,7 @@ import { access, opendir, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import type { PreflightItem } from '@shared/runner-types'
+import { SKILL_NAME } from '../workspace/constants'
 
 /**
  * Where the `claude` binary, the resume-tailor skill and the skill's
@@ -116,7 +117,6 @@ export function skillSearchRoots(home = homedir()): string[] {
   return [join(home, '.claude/skills'), join(home, '.claude/plugins')]
 }
 
-const SKILL_NAME = 'resume-tailor'
 const MAX_SKILL_SEARCH_DEPTH = 5
 const MAX_SKILL_SEARCH_ENTRIES = 4000
 

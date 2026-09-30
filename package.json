@@ -36,6 +36,7 @@
     "@mantine/hooks": "^9.6.3",
     "@tabler/icons-react": "^3.48.0",
     "d3-force-3d": "^3.0.6",
+    "fflate": "^0.8.3",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-force-graph-2d": "^1.29.1",
