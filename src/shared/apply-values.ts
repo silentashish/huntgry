@@ -4,7 +4,25 @@ import type { MasterProfile } from './master-profile'
 /** Form values from the master profile (pure; only the contact block and the current employer are used). */
 
 /** Lower-case name particles that belong to the last name ("Ludwig van Beethoven" → "van Beethoven"). */
-const PARTICLES = new Set(['van', 'von', 'de', 'del', 'della', 'der', 'den', 'di', 'da', 'du', 'la', 'le', 'ter', 'bin', 'al', 'st', 'st.'])
+const PARTICLES = new Set([
+  'van',
+  'von',
+  'de',
+  'del',
+  'della',
+  'der',
+  'den',
+  'di',
+  'da',
+  'du',
+  'la',
+  'le',
+  'ter',
+  'bin',
+  'al',
+  'st',
+  'st.'
+])
 
 /**
  * Splits a full name for forms that ask for first and last name separately:

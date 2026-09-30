@@ -60,7 +60,13 @@ describe('Greenhouse', () => {
     const dom = page('greenhouse-form.html', URL)
     const check = forbidSubmit(dom)
     const scan = scanPage(dom.window.document)
-    expect(scan).toMatchObject({ ats: 'greenhouse', confirmation: false, formFound: true, hasResumeInput: true, embedUrl: null })
+    expect(scan).toMatchObject({
+      ats: 'greenhouse',
+      confirmation: false,
+      formFound: true,
+      hasResumeInput: true,
+      embedUrl: null
+    })
 
     const report = fillPage(dom.window.document, VALUES)
     expect(report.ats).toBe('greenhouse')
@@ -84,10 +90,15 @@ describe('Greenhouse', () => {
 
     // Choices stay with the user.
     expect(field(report, 'Country')).toMatchObject({ kind: 'combobox', outcome: 'skipped-unsupported' })
-    expect(field(report, 'Are you legally authorized to work in the United States?').outcome).toBe('skipped-unsupported')
+    expect(field(report, 'Are you legally authorized to work in the United States?').outcome).toBe(
+      'skipped-unsupported'
+    )
     expect(input(dom, '#country').value).toBe('')
     // Custom questions are listed, not answered.
-    expect(field(report, 'What are your salary expectations?')).toMatchObject({ kind: 'textarea', outcome: 'unmatched' })
+    expect(field(report, 'What are your salary expectations?')).toMatchObject({
+      kind: 'textarea',
+      outcome: 'unmatched'
+    })
     expect(field(report, 'What is your notice period?').outcome).toBe('unmatched')
     check()
   })
@@ -153,7 +164,10 @@ describe('Lever', () => {
     expect((dom.window.document.querySelector('[name="comments"]') as HTMLTextAreaElement).value).toBe('')
     expect(input(dom, 'input[name="resume"]').getAttribute(UPLOAD_ATTR)).toBe('resume')
     expect(field(report, 'Gender').outcome).toBe('skipped-unsupported')
-    expect(field(report, 'Will you require visa sponsorship?')).toMatchObject({ kind: 'radio', outcome: 'skipped-unsupported' })
+    expect(field(report, 'Will you require visa sponsorship?')).toMatchObject({
+      kind: 'radio',
+      outcome: 'skipped-unsupported'
+    })
     expect(report.fields.filter((f) => f.kind === 'radio')).toHaveLength(1)
     expect(field(report, 'I agree to be contacted about future opportunities.').outcome).toBe('skipped-unsupported')
     expect(input(dom, 'input[name="consent[marketing]"]').checked).toBe(false)

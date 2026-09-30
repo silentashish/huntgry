@@ -79,7 +79,8 @@ function plan(adapter: Adapter, root: Element): Planned[] {
     let match: Match | null = null
     if (kind === 'file') match = matchFileField(el, fileInputs.length === 1)
     else if (kind === 'text') match = matchTextField(el)
-    if (!match) return { el, key: null, score: 0, outcome: 'unmatched', reason: 'Huntgry does not answer this; fill it in.' }
+    if (!match)
+      return { el, key: null, score: 0, outcome: 'unmatched', reason: 'Huntgry does not answer this; fill it in.' }
     if (claimedByAdapter.has(match.key)) {
       return { el, key: null, score: 0, outcome: 'unmatched', reason: 'Another field already takes this value.' }
     }
@@ -161,7 +162,13 @@ export function fillPage(doc: Document, values: FillValues): FillReport {
 
   for (const p of plan(adapter, root)) {
     const kind = kindOf(p.el)
-    const line: FieldReport = { key: p.key, label: labelOf(p.el), kind, required: isRequired(p.el), outcome: 'unmatched' }
+    const line: FieldReport = {
+      key: p.key,
+      label: labelOf(p.el),
+      kind,
+      required: isRequired(p.el),
+      outcome: 'unmatched'
+    }
     report.fields.push(line)
     if (p.outcome) {
       line.outcome = p.outcome

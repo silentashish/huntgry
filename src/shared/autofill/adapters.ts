@@ -85,9 +85,7 @@ export const generic: Adapter = {
     const forms = Array.from(doc.querySelectorAll('form'))
     const withFile = forms.find((f) => f.querySelector('input[type="file"]'))
     if (withFile) return withFile
-    const best = forms
-      .map((f) => ({ f, n: f.querySelectorAll(TEXTISH).length }))
-      .sort((a, b) => b.n - a.n)[0]
+    const best = forms.map((f) => ({ f, n: f.querySelectorAll(TEXTISH).length })).sort((a, b) => b.n - a.n)[0]
     if (best && best.n >= 2) return best.f
     // Client-rendered forms without a <form> element: only when there is an upload field.
     return doc.querySelector('input[type="file"]') ? doc.body : null

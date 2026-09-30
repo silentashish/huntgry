@@ -42,11 +42,7 @@ export function kindOf(el: FormControl): FieldKind {
   return 'other'
 }
 
-const clean = (text: string | null | undefined) =>
-  (text ?? '')
-    .replace(/[*✱]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
+const clean = (text: string | null | undefined) => (text ?? '').replace(/[*✱]/g, ' ').replace(/\s+/g, ' ').trim()
 
 function textOfIds(doc: Document, ids: string | null): string {
   if (!ids) return ''
@@ -59,7 +55,8 @@ function textOfIds(doc: Document, ids: string | null): string {
 /** A `<label>`'s own text: a wrapping label also contains the control (and a select's options), Lever its field box. */
 function labelText(label: HTMLLabelElement): string {
   const copy = label.cloneNode(true) as Element
-  for (const inner of Array.from(copy.querySelectorAll('select, textarea, input, button, .application-field'))) inner.remove()
+  for (const inner of Array.from(copy.querySelectorAll('select, textarea, input, button, .application-field')))
+    inner.remove()
   return copy.textContent ?? ''
 }
 
