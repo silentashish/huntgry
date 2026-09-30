@@ -113,6 +113,7 @@ export function JobDrawer({ job, onClose, onChange, onTailor }: Props) {
               color="gray"
               leftSection={<IconEyeOff size={16} />}
               loading={busy === 'dismiss'}
+              disabled={busy === 'tailor'}
               onClick={() => act('dismiss', () => api.jobs.update(job.id, { dismissed: !job.dismissed }))}
             >
               {job.dismissed ? 'Restore' : 'Dismiss'}
