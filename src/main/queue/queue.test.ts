@@ -72,6 +72,7 @@ function deps(over: Partial<QueueDeps> = {}): QueueDeps {
       return manager.start(params, ctx())
     },
     stopRun: (id) => manager.stop(id),
+    reply: (id, text) => manager.reply(id, text, async () => ctx()),
     onChange: (s) => states.push(s),
     spawnGapMs: 0,
     retryDelayMs: 50,
@@ -192,6 +193,60 @@ describe('TailorQueue', () => {
     expect(statuses(s)).toEqual(['cancelled', 'cancelled'])
     expect(started).toHaveLength(1)
     expect(manager.isLive(running.items[0].runId!)).toBe(false)
+  })
+
+  it('holds a reply while the queue is full, then sends it before starting new jobs', async () => {
+    for (const id of ['url:a', 'url:b', 'url:c']) jobs.set(id, job(id))
+    await queue.enqueue({ jobIds: ['url:a'], options, concurrency: 1 })
+    const first = await until(all('needs-reply'))
+    const runA = first.items[0].runId!
+    await queue.enqueue({ jobIds: ['url:b'], options: { ...options, notes: 'SLOW' } })
+    await until((st) => st.items[1].status === 'running')
+    await queue.enqueue({ jobIds: ['url:c'], options })
+    // B holds the only slot: A's answer waits instead of making two runs work at once.
+    expect(await queue.reply(runA, 'Approved.')).toBe('held')
+    expect(queue.state().items[0]).toMatchObject({ status: 'queued', pendingReply: 'Approved.' })
+    let peak = 0
+    const t0 = Date.now()
+    while (!all('needs-reply')(queue.state()) && Date.now() - t0 < 5000) {
+      peak = Math.max(peak, queue.state().items.filter((i) => i.status === 'running' || i.status === 'preparing').length)
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    expect(all('needs-reply')(queue.state())).toBe(true)
+    expect(peak).toBe(1)
+    // A's reply went out as soon as B's turn ended, before C started.
+    const aRunning = states.findIndex((st) => st.items[0].status === 'running' && st.items[1]?.status === 'needs-reply')
+    const cStarted = states.findIndex((st) => st.items[2]?.status === 'preparing')
+    expect(aRunning).toBeGreaterThan(-1)
+    expect(aRunning).toBeLessThan(cStarted)
+    await manager.flush(runA)
+    expect(manager.liveRun(runA)?.costUsd).toBeCloseTo(0.02)
+    expect(queue.state().items[0].pendingReply).toBeUndefined()
+  })
+
+  it('sends a reply at once when a slot is free, and leaves runs outside the queue alone', async () => {
+    jobs.set('url:a', job('url:a'))
+    await queue.enqueue({ jobIds: ['url:a'], options })
+    const { items } = await until(all('needs-reply'))
+    const sent = await queue.reply(items[0].runId!, 'Approved.')
+    expect(sent).toMatchObject({ id: items[0].runId, status: 'running' })
+    await until(all('needs-reply'))
+    const outside = await manager.start({ jobDescription: 'x', coverLetter: false, dateStyle: 'right' }, ctx())
+    expect(await queue.reply(outside.id, 'hi')).toBeNull()
+  })
+
+  it('cancelling a job with a held reply stops its waiting run', async () => {
+    for (const id of ['url:a', 'url:b']) jobs.set(id, job(id))
+    await queue.enqueue({ jobIds: ['url:a'], options, concurrency: 1 })
+    const runA = (await until(all('needs-reply'))).items[0].runId!
+    await queue.enqueue({ jobIds: ['url:b'], options: { ...options, notes: 'SLOW' } })
+    await until((st) => st.items[1].status === 'running')
+    expect(await queue.reply(runA, 'Approved.')).toBe('held')
+    await queue.cancel(queue.state().items[0].id)
+    expect(queue.state().items[0]).toMatchObject({ status: 'cancelled' })
+    expect(queue.state().items[0].pendingReply).toBeUndefined()
+    await until((st) => st.items[1].status === 'needs-reply')
+    expect(manager.isLive(runA)).toBe(false)
   })
 
   it('cancel all, retry, remove and clear finished', async () => {

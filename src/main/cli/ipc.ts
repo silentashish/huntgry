@@ -10,6 +10,7 @@ import { checkEnvironment, installPythonDeps } from './environment'
 import { claudeInstallKind, exclusive, installClaude, updateClaude } from './install-claude'
 import { installSkill } from './install-skill'
 import { listRuns, OUTPUT_FILES, readEvents, readRun, RUN_ID_PATTERN } from './runs'
+import { replyThroughQueue } from '../queue/ipc'
 import { context, manager, startTailorRun, venvDir } from './start'
 
 /** Which skill release Huntgry installed (see `install-skill.ts`). */
@@ -92,7 +93,11 @@ export function registerRunnerIpc(): void {
 
   ipcMain.handle(RUNNER_CHANNELS.reply, async (_e, id: unknown, text: unknown) => {
     if (typeof text !== 'string' || !text.trim() || text.length > MAX_TEXT) throw new Error('Type a reply first.')
-    return manager.reply(requireRunId(id), text, context)
+    const runId = requireRunId(id)
+    // A bulk run's reply may have to wait for a free slot (the queue's concurrency).
+    const viaQueue = await replyThroughQueue(runId, text)
+    if (viaQueue === 'held') return currentRun(runId)
+    return viaQueue ?? manager.reply(runId, text, context)
   })
 
   ipcMain.handle(RUNNER_CHANNELS.stop, async (_e, id: unknown) => {

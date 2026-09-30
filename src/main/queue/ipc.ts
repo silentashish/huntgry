@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { QUEUE_CHANNELS } from '@shared/queue-types'
-import { onRunChange, manager, startTailorRun } from '../cli/start'
+import type { RunSummary } from '@shared/runner-types'
+import { context, onRunChange, manager, startTailorRun } from '../cli/start'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
 import { fetchDetails, updateJob } from '../jobs/service'
@@ -16,9 +17,18 @@ const queue = new TailorQueue({
   // #22 picks the agent here; only Claude exists today.
   start: (params) => startTailorRun(params),
   stopRun: (runId) => manager.stop(runId),
+  reply: (runId, text) => manager.reply(runId, text, context),
   onChange: (state) => emit('queue:changed', state)
 })
 onRunChange((run) => queue.onRun(run))
+
+/**
+ * Sends a reply through the queue when the run is one of its jobs waiting for an answer, so
+ * answered runs respect the queue's concurrency. `null` for any other run.
+ */
+export function replyThroughQueue(runId: string, text: string): Promise<RunSummary | 'held' | null> {
+  return queue.reply(runId, text)
+}
 
 /** Saves the queue as it is before the app stops the runs on quit (they reload as failed-retryable). */
 export function stopQueue(): Promise<void> {

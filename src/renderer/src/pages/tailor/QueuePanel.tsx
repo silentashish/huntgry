@@ -114,6 +114,11 @@ export function QueuePanel({ queue, onChange, onOpenRun }: Props) {
                       {item.title}
                     </Text>
                   </Group>
+                  {item.pendingReply && (
+                    <Text size="xs" c="dimmed" mt={2}>
+                      Your reply is held until one of the working runs finishes its turn.
+                    </Text>
+                  )}
                   {item.error && (
                     <Text size="xs" c={item.status === 'failed' ? 'red' : 'dimmed'} mt={2}>
                       {item.error}

@@ -48,6 +48,11 @@ export interface QueueItem {
   attempts: number
   /** The run built `resume.pdf` (it may still wait for the user to finish it). */
   built?: boolean
+  /**
+   * The user's reply to this item's waiting run, held while `concurrency` runs are already
+   * working (the item is `queued` meanwhile). Sent before any new job starts.
+   */
+  pendingReply?: string
   /** Not started before this time (ISO); set for the automatic retry after a rate limit. */
   notBefore?: string
   createdAt: string

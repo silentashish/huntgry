@@ -26,10 +26,12 @@ import { Transcript } from './Transcript'
 interface Props {
   run: RunSummary
   events: unknown[]
+  /** A bulk run whose reply waits for a free slot in the queue. */
+  heldReply?: boolean
 }
 
 /** One run: its conversation, the reply box, and the files it produced. */
-export function RunView({ run, events }: Props) {
+export function RunView({ run, events, heldReply = false }: Props) {
   const items = useMemo(() => buildTranscript(events), [events])
   const { navigate } = useNavigation()
   const [reply, setReply] = useState('')
@@ -44,7 +46,7 @@ export function RunView({ run, events }: Props) {
 
   const working = run.status === 'running'
   // A finished, stopped or failed run can be continued as long as Claude gave it a session.
-  const canReply = !working && !sending && (run.live || run.sessionId !== null)
+  const canReply = !working && !sending && !heldReply && (run.live || run.sessionId !== null)
 
   async function act(fn: () => Promise<unknown>) {
     setError(null)
@@ -171,6 +173,12 @@ export function RunView({ run, events }: Props) {
         </Group>
       )}
 
+      {heldReply && (
+        <Alert color="yellow" variant="light">
+          Your reply is held: the tailoring queue already has as many runs working as it allows. It is sent as soon
+          as one of them finishes its turn (change "at a time" in the queue to allow more).
+        </Alert>
+      )}
       {error && (
         <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
           {error}

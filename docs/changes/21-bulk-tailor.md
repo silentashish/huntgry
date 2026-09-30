@@ -28,11 +28,12 @@ Three facts shaped the design:
 
 | Area | Files | Why |
 | --- | --- | --- |
-| Output attribution | `src/main/cli/runs.ts` (`findOutputFolder`, `folderSlug`), `runner.ts` | The folder whose `<role>/<company>/<job-id>` segments match the run's params wins over a newer one: job id counts most, then company, then role. Folders that other live runs already own are never picked. With no match, the newest folder still wins, as before. |
+| Output attribution | `src/main/cli/runs.ts` (`findOutputFolder`, `folderSlug`), `runner.ts` | The folder whose `<role>/<company>/<job-id>` segments match the run's params wins over a newer one. The job id must be the same slug (`42` does not match `142`) and counts most; company and role only break ties. A folder another live run already owns is never picked, and neither is a folder named after another live run's job id, even before that run records it. With no match, the newest remaining folder wins, as before. |
 | Shared start | `src/main/cli/start.ts` (new, moved out of `ipc.ts`) | The one `RunManager`, `context()`, `stopAllRuns`, `onRunChange` and `startTailorRun` (validate, fetch a URL-only posting, start). The Start button and the queue both use it. #22 adds the agent argument here. |
 | Queue | `src/main/queue/queue.ts` (new, Electron-free), `queue/ipc.ts`, `src/shared/queue-types.ts`, `src/preload/queue.ts`, registries | `TailorQueue`: enqueue (dedupe by canonical job id, skip dismissed and unknown jobs), `pump()` (concurrency, spawn gap, delayed retry), resolve the full posting, start, mark the job **Tailored** when its run actually starts, and follow the run's status through `onRunChange`. Also cancel, cancel all, retry, remove, clear finished, concurrency and pause. Persisted atomically in `<workspace>/.huntgry/queue.json`. IPC checks job ids (`JOB_ID_PATTERN`, now shared), at most 100 per request, options, concurrency 1–4 and item ids. |
 | Quit | `src/main/index.ts` | `stopQueue()` runs before `stopAllRuns()`. The queue stops following its runs first, so a run killed by quitting is saved as *interrupted*, not *cancelled*. |
 | Jobs page | `pages/jobs/index.tsx`, `selection.ts` (new, pure + test), `BulkTailorModal.tsx` (new) | A checkbox on every card. Ticking one does not open the drawer, and dismissed jobs cannot be ticked. **Select all shown** and **Clear** act on the filtered list, and a new search or filter clears the selection. Mantine's `ActionBar` shows the count, **Tailor all** and **Clear**. The confirmation offers cover letters, date style, shared notes and runs at once. It also says how many jobs have only a summary (and how many from Indeed will be skipped), how many were tailored before, and shows the existing dependency warning. Cards show the queue status of their job. |
+| Replies to queue runs | `queue.ts` (`reply`), `queue/ipc.ts` (`replyThroughQueue`), `cli/ipc.ts`, `RunView.tsx` | An answered run works again, so a reply to a queue run waiting for its answer goes through the queue. With a free slot it is sent at once. When `concurrency` runs are already working, it is held (the item goes back to `queued` with `pendingReply`) and sent as soon as a slot frees, before any new job starts and even while paused. The run view says the reply is held and disables the reply box. Runs outside the queue are unchanged. |
 | Tailor page | `pages/tailor/QueuePanel.tsx` (new), `index.tsx`, `RunList.tsx`, `status.ts`, `navigation.ts` | The queue panel sits above the runs whenever the queue has items (or the page is opened with `view: 'queue'`). It shows status counts, runs at once, **Pause/Resume**, **Cancel all** and **Clear finished**. Each row has a status, a *Resume built* badge, the error text, **Reply** / **Open run** (which opens the run in the existing `RunView`), **Cancel**, **Retry** and **Remove**. The run list says how many runs wait for a reply. |
 | Test fixture | `src/main/cli/fixtures/fake-claude.mjs` | `WRITE_OUTPUT_AT:<path>`, `SLOW` and `RATE_LIMIT`. |
 
@@ -45,7 +46,9 @@ stateDiagram-v2
     preparing --> failed: no full posting (Indeed / page unreadable) or start error
     preparing --> running: claude spawned · job marked Tailored
     running --> needs_reply: turn ended (approval step), slot freed
-    needs_reply --> running: user replies on the Tailor page
+    needs_reply --> running: user replies, slot free
+    needs_reply --> queued: user replies, queue full (reply held)
+    queued --> running: held reply sent when a slot frees (before new jobs)
     running --> queued: first-turn rate limit, once, after 15 s
     running --> failed: run failed
     needs_reply --> done: user finishes the run
@@ -91,6 +94,11 @@ sequenceDiagram
 - **Paused after a restart.** Starting runs costs money, so nothing spawns on launch. Items
   that were starting or running when the app quit become *failed* and can be retried. Items
   waiting for a reply stay answerable, because their session resumes with `--resume`.
+- **Replies respect the concurrency limit.** Answering a waiting run makes it work again, so
+  with the queue full the answer is held rather than sent. Held answers go first when a slot
+  frees, because finishing started jobs matters more than starting new ones. Pause does not
+  hold them: it only stops new jobs. The alternative, refusing the reply, would make the user
+  come back later for no reason.
 - **Enqueueing and Retry resume the queue.** Queuing jobs is the user asking for them to start.
   Only a restart, a workspace switch or the Pause button pauses it.
 - **Bulk runs never start from a board summary.** In the single-job flow (#20) the Tailor form
@@ -125,12 +133,15 @@ Unit tests:
   freed at the approval step, the spawn gap, and a job without a full posting failing without a
   spawn while the others run (the summary-only hiring.cafe job is fetched first). It also covers
   crash isolation, one automatic rate-limit retry, cancelling queued and running jobs (the
-  process is killed), cancel all / retry / remove / clear finished, dedupe (aliases, dismissed,
+  process is killed), held replies (the queue full: held, then sent before the next job, never
+  more than `concurrency` working; a free slot: sent at once; cancel stops the waiting run),
+  cancel all / retry / remove / clear finished, dedupe (aliases, dismissed,
   unknown), persistence with a paused reload that marks interrupted items failed, a workspace
   switch, a broken file, and IPC input validation.
 - `src/main/cli/runner.test.ts` checks that two runs building at the same time record their own
-  folder and job URL. This test fails on `main`.
-- `src/main/cli/cli.test.ts` covers `findOutputFolder` with `prefer` / `exclude`.
+  folder and job URL, including overlapping job ids (`42` and `142`, same role and company) where
+  the other run has not recorded its folder yet. Both tests fail on `main`.
+- `src/main/cli/cli.test.ts` covers `findOutputFolder` with `prefer` / `exclude` / `claimedJobIds`.
 - `src/renderer/src/pages/jobs/selection.test.ts` covers toggle, select all shown, the dismissed
   exclusion, the summary counts and the queue badges.
 

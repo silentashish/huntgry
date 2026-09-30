@@ -37,6 +37,8 @@ export interface QueueDeps {
   markTailored(workspace: string, id: string): Promise<unknown>
   start(params: StartRunParams, agent: QueueAgent): Promise<RunSummary>
   stopRun(runId: string): void
+  /** Sends the user's reply to a run (resuming its session if the process is gone). */
+  reply(runId: string, text: string): Promise<RunSummary>
   onChange(state: QueueState): void
   now?(): number
   /** Minimum time between two spawns. */
@@ -267,6 +269,60 @@ export class TailorQueue {
   }
 
   /**
+   * A reply the user typed for a run. A queue run waiting for its reply takes a slot again
+   * once answered, so when `concurrency` runs are already working the reply is held (the
+   * item goes back to `queued`) and sent before any new job starts. Returns the run when the
+   * reply was sent, `'held'` when it waits for a slot, or `null` for a run the queue does not
+   * manage (the caller sends it as usual).
+   */
+  async reply(runId: string, text: string): Promise<RunSummary | 'held' | null> {
+    if (this.stopped) return null
+    const ws = await this.deps.workspace().catch(() => null)
+    if (!ws || ws !== this.ws) return null
+    const item = this.items.find((i) => i.runId === runId && i.status === 'needs-reply')
+    if (!item) return null
+    // Pausing stops new jobs from starting; it does not hold the user's answers.
+    if (this.items.filter(isWorking).length < this.concurrency) return this.sendReply(item, text)
+    item.status = 'queued'
+    item.pendingReply = text
+    item.error = undefined
+    item.updatedAt = new Date(this.now()).toISOString()
+    this.changed()
+    return 'held'
+  }
+
+  /** Takes a slot for the item and sends the reply; on failure the item waits for the user again. */
+  private async sendReply(item: QueueItem, text: string): Promise<RunSummary> {
+    item.status = 'running'
+    item.pendingReply = undefined
+    item.error = undefined
+    item.updatedAt = new Date(this.now()).toISOString()
+    this.save()
+    this.deps.onChange(this.state())
+    try {
+      return await this.deps.reply(item.runId!, text)
+    } catch (err) {
+      if (item.status === 'running') {
+        item.status = 'needs-reply'
+        this.save()
+        this.deps.onChange(this.state())
+      }
+      throw err
+    }
+  }
+
+  /** Sends a held reply now that a slot is free. */
+  private async sendHeld(item: QueueItem): Promise<void> {
+    try {
+      await this.sendReply(item, item.pendingReply!)
+    } catch (err) {
+      item.error = `Your reply could not be sent: ${message(err)}`
+      this.save()
+      this.deps.onChange(this.state())
+    }
+  }
+
+  /**
    * Follows a run's status. `waiting` frees the slot (the user has to answer);
    * a first-turn rate limit is retried once, automatically.
    */
@@ -328,6 +384,7 @@ export class TailorQueue {
     item.runId = null
     item.error = undefined
     item.built = undefined
+    item.pendingReply = undefined
     item.attempts++
     item.notBefore = delayMs > 0 ? new Date(this.now() + delayMs).toISOString() : undefined
     item.updatedAt = new Date(this.now()).toISOString()
@@ -336,8 +393,10 @@ export class TailorQueue {
 
   private cancelItem(item: QueueItem): void {
     // A started run is stopped; its `stopped` summary is ignored since the item is already cancelled.
-    if (item.runId && item.status !== 'queued') this.deps.stopRun(item.runId)
+    // A queued item has no run, unless its reply is held: then its waiting run is stopped too.
+    if (item.runId) this.deps.stopRun(item.runId)
     item.status = 'cancelled'
+    item.pendingReply = undefined
     item.notBefore = undefined
     item.updatedAt = new Date(this.now()).toISOString()
   }
@@ -372,7 +431,9 @@ export class TailorQueue {
 
   private nextQueued(): QueueItem | undefined {
     const now = this.now()
-    return this.items.find((i) => i.status === 'queued' && (!i.notBefore || Date.parse(i.notBefore) <= now))
+    return this.items.find(
+      (i) => i.status === 'queued' && !i.pendingReply && (!i.notBefore || Date.parse(i.notBefore) <= now)
+    )
   }
 
   private async pump(): Promise<void> {
@@ -385,8 +446,15 @@ export class TailorQueue {
       do {
         this.pumpAgain = false
         for (;;) {
-          if (this.stopped || this.paused || !this.ws) break
+          if (this.stopped || !this.ws) break
           if (this.items.filter(isWorking).length >= this.concurrency) break
+          // Answers to runs already under way go before new jobs, paused or not.
+          const held = this.items.find((i) => i.status === 'queued' && i.pendingReply && i.runId)
+          if (held) {
+            await this.sendHeld(held)
+            continue
+          }
+          if (this.paused) break
           const next = this.nextQueued()
           if (!next) break
           const wait = this.lastSpawn + (this.deps.spawnGapMs ?? 2000) - this.now()

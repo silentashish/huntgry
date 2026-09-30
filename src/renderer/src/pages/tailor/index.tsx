@@ -109,7 +109,11 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
               onEnvironmentChange={setEnvironment}
             />
           ) : detail && detail.run.id === selected ? (
-            <RunView run={detail.run} events={detail.events} />
+            <RunView
+              run={detail.run}
+              events={detail.events}
+              heldReply={queue?.items.some((i) => i.runId === detail.run.id && i.pendingReply) ?? false}
+            />
           ) : (
             <Loader />
           )}
