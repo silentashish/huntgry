@@ -76,7 +76,14 @@ describe('claude version', () => {
     expect((await readFile(counter, 'utf8')).trim().split('\n')).toHaveLength(2)
   })
 
-  it('returns null for a binary that fails', async () => {
+  it.skipIf(process.platform === 'win32')('returns null for a binary that fails, until refreshed', async () => {
     expect(await claudeVersion(join(tmp, 'missing'), { ...process.env })).toBeNull()
+    const flaky = join(tmp, 'flaky')
+    await writeFile(flaky, '#!/bin/sh\nexit 1\n')
+    await chmod(flaky, 0o755)
+    expect(await claudeVersion(flaky, { ...process.env })).toBeNull()
+    await writeFile(flaky, '#!/bin/sh\necho "2.1.300 (Claude Code)"\n')
+    expect(await claudeVersion(flaky, { ...process.env })).toBeNull()
+    expect(await claudeVersion(flaky, { ...process.env }, { refresh: true })).toBe('2.1.300')
   })
 })

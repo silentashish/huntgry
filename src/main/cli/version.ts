@@ -52,11 +52,17 @@ const cache = new Map<string, Promise<string | null>>()
 /**
  * `claude --version`, parsed, once per binary. Keyed by the real path: the
  * native launcher is a symlink into `versions/<v>`, so an update changes the
- * key and the cache invalidates itself. `null` when it fails or hangs.
+ * key and the cache invalidates itself. `null` when it fails or hangs; that is
+ * cached too, so a hanging binary delays only the first run, and Settings
+ * (`refresh`) asks again.
  */
-export async function claudeVersion(claudePath: string, env: NodeJS.ProcessEnv): Promise<string | null> {
+export async function claudeVersion(
+  claudePath: string,
+  env: NodeJS.ProcessEnv,
+  opts: { refresh?: boolean } = {}
+): Promise<string | null> {
   const key = await realpath(claudePath).catch(() => claudePath)
-  let pending = cache.get(key)
+  let pending = opts.refresh ? undefined : cache.get(key)
   if (!pending) {
     pending = new Promise((resolve) => {
       execFile(claudePath, ['--version'], { env, timeout: VERSION_TIMEOUT_MS, maxBuffer: 1 << 16 }, (err, stdout) =>
@@ -64,10 +70,6 @@ export async function claudeVersion(claudePath: string, env: NodeJS.ProcessEnv):
       )
     })
     cache.set(key, pending)
-    // A failure (hang, crash) is not cached, so Settings → Check again retries it.
-    void pending.then((v) => {
-      if (v === null) cache.delete(key)
-    })
   }
   return pending
 }

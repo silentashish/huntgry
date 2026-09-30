@@ -10,10 +10,37 @@ export interface PreflightItem {
   detail: string
 }
 
+/** How the `claude` binary was installed (decides how it can be updated). */
+export type ClaudeInstallKind = 'native' | 'homebrew' | 'npm' | 'other'
+
+/** From `claude auth status`. */
+export interface ClaudeAuth {
+  loggedIn: boolean
+  email?: string
+  authMethod?: string
+  subscriptionType?: string
+}
+
+/** Terminal commands the Settings page shows next to its buttons. */
+export const CLAUDE_COMMANDS = {
+  install: 'curl -fsSL https://claude.ai/install.sh | bash',
+  login: 'claude auth login',
+  brewUpgrade: 'brew upgrade claude-code'
+} as const
+
 export interface RunnerEnvironment {
   /** Absolute path of the `claude` binary, or `null` when not found. */
   claudePath: string | null
+  /** `x.y.z`, or `null` when unknown (not found, or `claude --version` failed). */
   claudeVersion: string | null
+  /** The version is known and at least `recommendedClaudeVersion`. */
+  claudeVersionOk: boolean
+  recommendedClaudeVersion: string
+  claudeInstallKind: ClaudeInstallKind | null
+  /** `null` when `claude auth status` could not tell (not found, too old, failed). */
+  claudeAuth: ClaudeAuth | null
+  /** The skill copy Huntgry installed from GitHub, when that is the one in use. */
+  skillInstall: { tag: string; installedAt: string } | null
   /** Folder holding the installed resume-tailor `SKILL.md`, or `null`. */
   skillDir: string | null
   /** Python venv the app puts first on the skill's PATH. */
@@ -28,6 +55,13 @@ export interface RunnerEnvironment {
   ready: boolean
   /** Human-readable problems that block a run, in order of importance. */
   problems: string[]
+  /** Things worth fixing that do not block a run (e.g. an old Claude Code). */
+  warnings: string[]
+}
+
+export interface InstallResult {
+  ok: boolean
+  error?: string
 }
 
 export type DateStyle = 'inline' | 'right'
@@ -99,7 +133,13 @@ export interface RunnerApi {
   /** Locate claude + skill, check dependencies. */
   environment(): Promise<RunnerEnvironment>
   /** (Re)create the Python venv and install the skill's modules; progress arrives as `runner:install-log`. */
-  installPythonDeps(): Promise<{ ok: boolean; error?: string }>
+  installPythonDeps(): Promise<InstallResult>
+  /** Run the official Claude Code installer (`claude.ai/install.sh`); progress on `runner:install-log`. */
+  installClaude(): Promise<InstallResult>
+  /** `claude update` (native/npm); for Homebrew the error carries the command to run. */
+  updateClaude(): Promise<InstallResult>
+  /** Download the resume-tailor skill from its latest GitHub release into ~/.claude/skills. `replace` = Reinstall. */
+  installSkill(replace?: boolean): Promise<InstallResult & { tag?: string }>
   listRuns(): Promise<RunSummary[]>
   getRun(id: string): Promise<RunDetail>
   start(params: StartRunParams): Promise<RunSummary>
@@ -117,6 +157,9 @@ export interface RunnerApi {
 export const RUNNER_CHANNELS = {
   environment: 'runner:environment',
   installPythonDeps: 'runner:install-python-deps',
+  installClaude: 'runner:install-claude',
+  updateClaude: 'runner:update-claude',
+  installSkill: 'runner:install-skill',
   listRuns: 'runner:list-runs',
   getRun: 'runner:get-run',
   start: 'runner:start',
@@ -137,6 +180,6 @@ export interface RunnerEvents {
   'runner:event': { runId: string; seq: number; event: unknown }
   /** The run's summary changed (status, session id, output folder, cost). */
   'runner:run': RunSummary
-  /** A line of `pip`/`venv` output while installing Python dependencies. */
+  /** A line of installer output (Python dependencies, Claude Code, the skill). */
   'runner:install-log': string
 }

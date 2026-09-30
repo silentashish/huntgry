@@ -6,8 +6,10 @@ import { RUNNER_CHANNELS, type RunSummary } from '@shared/runner-types'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
 import { buildSystemPrompt, MAX_TEXT, requireStartParams, texRootOf } from './command'
-import { buildChildEnv, loginShellPath } from './env'
+import { buildChildEnv, findClaude, loginShellPath } from './env'
 import { checkEnvironment, discoverRuntime, installPythonDeps } from './environment'
+import { claudeInstallKind, exclusive, installClaude, updateClaude } from './install-claude'
+import { installSkill } from './install-skill'
 import { fetchPostingText } from './posting'
 import { pinnedFetch } from './public-url'
 import { RunManager, type RunContext } from './runner'
@@ -16,6 +18,9 @@ import { listRuns, OUTPUT_FILES, readEvents, readRun, RUN_ID_PATTERN } from './r
 
 /** The venv the skill's `python3` comes from. Shared by every workspace. */
 const venvDir = (): string => join(app.getPath('userData'), 'skill-venv')
+/** Which skill release Huntgry installed (see `install-skill.ts`). */
+const skillRecordPath = (): string => join(app.getPath('userData'), 'skill-install.json')
+const installLog = (line: string): void => emit('runner:install-log', line)
 
 const manager = new RunManager({
   onEvent: (runId, seq, event) => emit('runner:event', { runId, seq, event }),
@@ -112,11 +117,35 @@ async function outputPath(id: string, file?: string): Promise<string> {
 export function registerRunnerIpc(): void {
   ipcMain.handle(RUNNER_CHANNELS.environment, async () => {
     const workspace = await requireCurrentWorkspace().catch(() => null)
-    return checkEnvironment({ venvDir: venvDir(), workspace: workspace?.path ?? null })
+    return checkEnvironment({ venvDir: venvDir(), workspace: workspace?.path ?? null, skillRecordPath: skillRecordPath() })
   })
 
-  ipcMain.handle(RUNNER_CHANNELS.installPythonDeps, () =>
-    installPythonDeps(venvDir(), (line) => emit('runner:install-log', line))
+  ipcMain.handle(RUNNER_CHANNELS.installPythonDeps, () => installPythonDeps(venvDir(), installLog))
+
+  ipcMain.handle(RUNNER_CHANNELS.installClaude, async () => {
+    if (await findClaude()) return { ok: false, error: 'Claude Code is already installed. Use Update instead.' }
+    return installClaude(installLog, { scratchDir: app.getPath('userData') })
+  })
+
+  ipcMain.handle(RUNNER_CHANNELS.updateClaude, async () => {
+    const claudePath = await findClaude()
+    if (!claudePath) return { ok: false, error: 'The claude CLI was not found. Install it first.' }
+    return updateClaude(installLog, {
+      claudePath,
+      kind: await claudeInstallKind(claudePath),
+      scratchDir: app.getPath('userData')
+    })
+  })
+
+  ipcMain.handle(RUNNER_CHANNELS.installSkill, (_e, replace: unknown) =>
+    exclusive(installLog, () =>
+      installSkill(installLog, {
+        home: homedir(),
+        recordPath: skillRecordPath(),
+        backupDir: join(app.getPath('userData'), 'skill-backups'),
+        replace: replace === true
+      })
+    )
   )
 
   ipcMain.handle(RUNNER_CHANNELS.listRuns, async () => {
