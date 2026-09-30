@@ -23,6 +23,8 @@ import { isAllowedNavigation, loadErrorMessage, normalizeAddress, refusalFor } f
 export class BrowserManager {
   private readonly registry = new TabRegistry()
   private readonly views = new Map<string, WebContentsView>()
+  /** Set once the window closed or the manager was replaced; pending opens then give up. */
+  private disposed = false
   private rect: BrowserRect | null = null
   private visible = false
 
@@ -44,11 +46,14 @@ export class BrowserManager {
 
   /** Opens a tab; blank `input` opens an empty one. */
   async open(input: string, activate = true): Promise<BrowserState> {
+    this.assertOpen()
     const address = input.trim() ? normalizeAddress(input) : ({ ok: true, url: 'about:blank' } as const)
     if (!address.ok) throw new Error(address.message)
     // Refuse before creating the tab, so no tab ever holds an address it may not load.
     const refusal = await refusalFor(address.url)
     if (refusal) throw new Error(refusal)
+    // The window may have closed during the DNS check.
+    this.assertOpen()
     const tab = this.registry.open(address.url, activate)
     const view = new WebContentsView({
       webPreferences: {
@@ -148,9 +153,14 @@ export class BrowserManager {
 
   /** Closes every page (window closed or app quitting) so no renderer process outlives the app. */
   destroyAll(): void {
+    this.disposed = true
     for (const id of this.registry.ids()) this.registry.close(id)
     for (const view of this.views.values()) this.dispose(view, false)
     this.views.clear()
+  }
+
+  private assertOpen(): void {
+    if (this.disposed || this.win.isDestroyed()) throw new Error('The browser is closed.')
   }
 
   private contents(id: string): WebContents {
