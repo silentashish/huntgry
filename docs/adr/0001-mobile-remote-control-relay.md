@@ -227,23 +227,25 @@ sequenceDiagram
     participant W as Renderer
     P->>P: cmd = { v:1, sid, ws, from:'phone', seq:42, ts, ttl:86400, kind:'cmd', id:uuid, name:'queue.setPaused', args:{paused:true} }
     P->>R: RelayFrame { ref: cmd.id, ttl: 86400, ct: box(sessionKey, nonce, cmd) }
+    R->>R: append to inbox[desktop] with deliverySeq (kept until the desktop acks the ref)
     alt desktop connected
-        R->>S: forward
+        R->>S: forward (in deliverySeq order)
     else desktop offline (missed 2 heartbeats)
-        R->>R: append to queued[deviceId] (ciphertext + clear ttl, max 50)
         R-->>P: { queued: true, ref }
         Note over P: shows "Will run when your Mac wakes"
         alt desktop back before ttl
             S->>R: desktop reconnects (wake / network back)
-            R->>S: drain queued in order
+            R->>S: redeliver every unacked frame in deliverySeq order, live frames wait behind them
         else ttl passed
             R->>R: drop frame
             R-->>P: { expired: true, ref } (on the phone's next connection)
         end
     end
-    S->>S: open box, check sid, seq > lastSeq[device] (persisted), id unseen, now − ts ≤ ttl(cmd)
+    S->>S: open box, check sid, seq > lastSeq[device] (persisted), now − ts ≤ ttl(cmd)
     S->>G: dispatch(device, cmd)
+    G->>G: audit lookup by cmd.id: already started or finished? then never execute again (see Delivery)
     G->>G: name ∈ ALLOW_LIST? ws = current workspace id? rate limit ok? args pass the same require*() as ipc.ts
+    G->>G: audit write-ahead { id, name, started } (fsync) before any side effect
     G->>Q: queue.setPaused(true)
     Q->>E: emit('queue:changed', state)
     E->>W: queue:changed (desktop UI updates as if clicked locally)
@@ -251,10 +253,12 @@ sequenceDiagram
     G->>S: event { kind:'event', name:'queue.changed', body: state }
     S->>R: RelayFrame { ct: box(...), pushHint: null }
     R->>P: forward (or store it, and a frame with a pushHint also triggers one generic push when the phone has no socket)
+    G->>G: audit write { id, ok, result } (fsync)
     G->>S: result { kind:'result', re: cmd.id, ok: true, body: state }
-    S->>R: box(...)
-    R->>P: forward
-    G->>G: audit log: device, name, ok, ts
+    S->>R: RelayFrame { ref: cmd.id, ct: box(...), ack: cmd.id }
+    R->>R: delete the command from inbox[desktop], append the result to inbox[device]
+    R->>P: forward (kept until the phone acks the result's ref)
+    P->>R: RelayFrame { ack: ref } after the result is shown and stored
 ```
 
 ### Repository layout
@@ -322,6 +326,7 @@ export interface RelayFrame {
   nonce: string                   // 24 bytes, base64
   ct: string                      // nacl.box ciphertext of an Envelope, base64; the whole frame stays ≤ MAX_FRAME_BYTES
   ttl?: number                    // seconds the relay may hold this frame when the peer is offline
+  ack?: string                    // ref of a frame this sender has durably processed: the relay deletes it from the sender's inbox
   pushHint?: NotificationCategory // desktop → phone only: send one generic push if the phone has no socket
   pushText?: string               // only when "Show details in notifications" is on; ≤ 80 chars, seen by relay/Expo/Apple/Google
 }
@@ -561,6 +566,35 @@ instead of running a `pipeline.start` twenty hours late. The desktop applies the
 on delivery (`now − ts ≤ ttl`), so a lax relay cannot make it run a stale costly command.
 The 2 h / 24 h defaults are editable in Settings.
 
+**Delivery, acknowledgement and idempotency.** The relay never deletes a frame because it was
+sent. Each direction has an inbox in the Durable Object's SQLite storage; every frame gets a
+`deliverySeq` on arrival and stays there until the receiver acks its `ref` or its `ttl`
+passes. The rules:
+
+- **Ordering.** Frames leave an inbox in `deliverySeq` order. When a peer reconnects, every
+  unacked frame is redelivered first, and live frames that arrive meanwhile are appended
+  behind them, so a command sent while the Mac was asleep always runs before one sent after
+  it woke.
+- **The desktop acks only after durable execution.** `remote-audit.jsonl` is a write-ahead
+  log: before any side effect the gateway appends `{ id, name, started }` and fsyncs; after
+  the service call it appends `{ id, ok, result }`. The result frame carries `ack: cmd.id`, so
+  the relay deletes the command the moment the desktop has both executed and recorded it.
+- **Redelivery is idempotent by `cmd.id`.** On every incoming command the gateway looks the
+  id up in the audit log (an index of the last 10 000 ids is kept in memory and rebuilt from
+  the file on start). Finished: resend the stored result, execute nothing. Started but not
+  finished (the app died between the two writes): answer `failed` with "interrupted before it
+  completed, check the queue and send it again", execute nothing. Unknown: execute. Reads
+  (`status.get`, `queue.get`, `run.get`, `jobs.list`, `review.get`, `file.get`) skip the
+  write-ahead entry and may run again freely. Because `seq` still has to increase, the
+  replay check treats a redelivered frame with a known id as a duplicate to answer, not as a
+  replay to reject.
+- **The phone acks results and events the same way**, after it has rendered and persisted
+  them; the relay keeps at most 50 unacked frames per phone and drops the oldest events
+  (never results) beyond that, since the next `status` carries the current state anyway. The
+  phone deduplicates by `id` and `re`.
+- **Retry.** The relay retries only by redelivering on reconnect; there is no timer-based
+  resend while a socket is open, because an open socket either delivers or closes.
+
 ## Security model
 
 **Keys and storage**
@@ -612,11 +646,13 @@ It cannot read or forge frames (Poly1305 tags).
 | Expo push service, then Apple (APNs) / Google (FCM) | Push token, the fixed generic body and the category, `pushText` if enabled, delivery timing. | The encrypted channel. |
 
 **Replay and ordering**: `seq` strictly increasing per sender and session; frames bound to
-`sid` so a frame for another pairing cannot be replayed; `id` deduplicated against a ring of
-the last 1 000 accepted ids; `now − ts ≤ ttl`. **This state survives restarts**: the desktop
-persists, per device, `lastSeq` and the id ring in `userData/remote/devices.json`, and its own
-outgoing `seq`, written atomically (temp file + rename, like `settings.ts`) after every
-accepted or sent frame; the phone persists its outgoing `seq` and the desktop's `lastSeq` in
+`sid` so a frame for another pairing cannot be replayed; `id` looked up in the audit log's
+index of the last 10 000 command ids (a known id is answered from the log, never executed
+again, see *Delivery, acknowledgement and idempotency*); `now − ts ≤ ttl`. **This state
+survives restarts**: the desktop persists, per device, `lastSeq` in
+`userData/remote/devices.json` and its own outgoing `seq`, written atomically (temp file +
+rename, like `settings.ts`) after every accepted or sent frame, and the id index is rebuilt
+from `remote-audit.jsonl` on start; the phone persists its outgoing `seq` and the desktop's `lastSeq` in
 `expo-secure-store` next to its keys. A phone whose counter restarts (reinstall, restore from
 a backup without Keychain, cleared storage) sends a `seq` at or below the persisted `lastSeq`;
 the desktop answers `denied` ("this phone must be paired again") and marks the device
@@ -750,8 +786,8 @@ order; each lands with tests and a `docs/changes/<N>-*.md`.
 | # | Issue | Goal | Depends on |
 | --- | --- | --- | --- |
 | E1 | Remote protocol package | `src/shared/remote/` with `RelayFrame`, `Envelope`, `RemoteCommand`/`RemoteEvent`, the package-owned wire types and enums, guards, `tweetnacl` helpers, TTL table, `LIMITS` with the largest-payload frame-size test; guard test that the folder imports only itself and `tweetnacl`, desktop test that the wire enums equal `AGENT_IDS` / `DateStyle` / `MAX_CONCURRENCY`; workspaces declared for npm and pnpm, both lockfiles regenerated, `npm run check:lockfiles` script. | — |
-| E2 | Relay (Cloudflare Worker + Durable Object) | `relay/`: admin-token room creation, owner/device auth by token hash, WebSocket hibernation, per-device queue with `ttl` and `expired` notices, presence, push hints → Expo API with fixed bodies and coalescing, rate limits; Miniflare tests; deploy script that prints the admin token. | E1 |
-| E3 | Desktop gateway and session | `src/main/remote/`: outbound session with reconnect on `powerMonitor` resume, replay state persisted in `devices.json`, workspace id, gateway dispatching the allow-list onto `startTailorRun` / `TailorQueue` / `RunManager` / `jobs` with the shared validators, `project.ts` DTO projections for every event and response with the marker-exclusion and size tests, `onEvent` next to `emit`, audit log, allow-list guard test, root-`dependencies` and `dist`-size checks. | E1 |
+| E2 | Relay (Cloudflare Worker + Durable Object) | `relay/`: admin-token room creation, owner/device auth by token hash, WebSocket hibernation, per-direction inboxes in SQLite with `deliverySeq`, ack-based deletion, redelivery on reconnect ahead of live frames, `ttl` / `expired` / `tooLarge` notices, presence, push hints → Expo API with fixed bodies and coalescing, rate limits; Miniflare tests including disconnect-before-ack redelivery; deploy script that prints the admin token. | E1 |
+| E3 | Desktop gateway and session | `src/main/remote/`: outbound session with reconnect on `powerMonitor` resume, replay state persisted in `devices.json`, workspace id, gateway dispatching the allow-list onto `startTailorRun` / `TailorQueue` / `RunManager` / `jobs` with the shared validators, `project.ts` DTO projections for every event and response with the marker-exclusion and size tests, `onEvent` next to `emit`, write-ahead audit log with the id index and idempotent redelivery (finished → stored result, started → interrupted, tested with a crash between the two writes), allow-list guard test, root-`dependencies` and `dist`-size checks. | E1 |
 | E4 | Pairing and devices in Settings | QR with one-time secret, approve dialog, device list with last-seen, revoke, unpair everything, relay URL + admin token entry, notification detail and TTL settings, `remote:state` event. | E2, E3 |
 | E5 | Mobile app MVP (iOS, local build) | `mobile/`: scan QR, status, queue with pause/resume/cancel/retry, run view with transcript and reply, presence and "queued / expired" states. Works on a free Apple ID (no push). | E2, E3, E4 |
 | E5b | iOS push | Push registration and categories in the app, APNs key on the EAS project, relay → Expo push verified on a device. **Prerequisite: Apple Developer Program enrolment ($99/yr)**, an owner task tracked in the issue. | E5, Developer Program |
