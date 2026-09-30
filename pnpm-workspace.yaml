@@ -1,4 +1,8 @@
+packages:
+  - src/shared/remote
+  - relay
+  - mobile
+
 allowBuilds:
   electron-winstaller: false
   esbuild: true
-
