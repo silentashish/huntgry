@@ -1,4 +1,5 @@
 import { registerApplicationsIpc } from './applications/ipc'
+import { registerApplyIpc } from './apply/ipc'
 import { registerBrowserIpc } from './browser/ipc'
 import { registerRunnerIpc } from './cli/ipc'
 import { registerGraphIpc } from './graph/ipc'
@@ -22,4 +23,5 @@ export function registerIpcHandlers(): void {
   registerInsightsIpc()
   registerBrowserIpc()
   registerQueueIpc()
+  registerApplyIpc()
 }

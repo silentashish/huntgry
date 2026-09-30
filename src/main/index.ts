@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import icon from '../../resources/icon.png?asset'
 import { stopApplicationsWatcher } from './applications/ipc'
 import { handleFileScheme, registerFileScheme } from './applications/protocol'
+import { stopApply } from './apply/ipc'
 import { attachBrowser, destroyBrowser } from './browser/manager'
 import { stopAllRuns } from './cli/ipc'
 import { stopQueue } from './queue/ipc'
@@ -94,6 +95,8 @@ app.whenReady().then(() => {
 let runsStopped = false
 app.on('before-quit', (event) => {
   stopApplicationsWatcher()
+  // Before the tabs close, so no apply session or debugger outlives them.
+  stopApply()
   destroyBrowser()
   if (runsStopped) return
   event.preventDefault()
