@@ -140,7 +140,10 @@ export function jobIdFor(job: Job): string {
 
 /** What the Tailor form is pre-filled with when a job is sent from the Jobs page. */
 export interface TailorPrefill {
-  /** Always the saved description (`jobDescriptionFor`), so the run never refetches a job board URL. */
+  /**
+   * The saved description (`jobDescriptionFor`), so the run never refetches a job board URL;
+   * empty when the board gave no text at all (a title/URL header alone is not a posting).
+   */
   jobDescription: string
   jobUrl?: string
   company?: string
@@ -153,7 +156,7 @@ export interface TailorPrefill {
 
 export function tailorPrefillFor(job: Job): TailorPrefill {
   return {
-    jobDescription: jobDescriptionFor(job),
+    jobDescription: job.description.trim() ? jobDescriptionFor(job) : '',
     jobUrl: job.url || undefined,
     company: job.company || undefined,
     role: job.title,

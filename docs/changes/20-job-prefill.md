@@ -23,11 +23,11 @@ an empty **job description** and **job id**, and **Start tailoring** failed at o
 
 | Area | Files | Why |
 | --- | --- | --- |
-| Prefill helpers | `src/shared/jobs-types.ts` (`jobIdFor`, `tailorPrefillFor`, `canFetchDetails`) | One pure function turns a saved job into Tailor form values: the saved description (`jobDescriptionFor`, always, even when it is a summary), URL, company, role, source, `descriptionComplete`, and a short folder-safe job id from the board's own id. `canFetchDetails` is the drawer's existing "is there an employer page to load" rule, now shared with the handoff. Bulk tailoring (#21) can reuse them. |
+| Prefill helpers | `src/shared/jobs-types.ts` (`jobIdFor`, `tailorPrefillFor`, `canFetchDetails`) | One pure function turns a saved job into Tailor form values: the saved description (`jobDescriptionFor`, even when it is a summary; empty when the board saved no text at all, since a title/URL header alone is not a posting), URL, company, role, source, `descriptionComplete`, and a short folder-safe job id from the board's own id. `canFetchDetails` is the drawer's existing "is there an employer page to load" rule, now shared with the handoff. Bulk tailoring (#21) can reuse them. |
 | Handoff | `pages/jobs/index.tsx` (`tailor`) | For a summary whose employer page can be loaded (hiring.cafe, URL copies, Indeed jobs with a copy on another board), fetches the full posting first through the existing hidden-window `jobs.fetchDetails`; on failure it hands off the summary. Then marks the job tailored and navigates with `tailorPrefillFor`. |
 | Drawer | `pages/jobs/JobDrawer.tsx` | **Tailor resume** shows a spinner while the posting is fetched (other actions disabled meanwhile). The Indeed and summary notices describe what Tailor resume now does, and no longer suggest the URL can be fetched. |
 | Nav params | `src/renderer/src/navigation.ts` | `PageParams['tailor'].descriptionComplete` so the form knows it got a summary. |
-| Tailor form | `pages/tailor/StartForm.tsx` | A yellow *Only the job board's summary* notice with **Open posting** when the prefill is a summary; the user can still start. The description help text promises URL reads only for employer/ATS pages. |
+| Tailor form | `pages/tailor/StartForm.tsx` | A yellow *Only the job board's summary* notice with **Open posting** while the description is still the board's summary; the user can still start. When the board saved no text at all, an orange *No job description yet* notice asks for a paste and **Start tailoring** stays disabled until there is text (or the URL is changed), so the run never starts from a header alone or refetches a board URL. The description help text promises URL reads only for employer/ATS pages. |
 | Blocked hosts | `src/main/cli/posting.ts` (`refusedMessage`) | A 401/403 from indeed.com / hiringcafe.com now says *"www.indeed.com does not let Huntgry read job pages directly. Open the job on the Jobs page and click Tailor resume, or paste the job description."*; a Cloudflare bot wall on any other site says it asks for a human check. The fetch, its SSRF checks and the no-network rule for Claude are unchanged. |
 
 Job ids: Indeed `2bd2cff5c29c9fca` → `2bd2cff5c29c9fca`; hiring.cafe
@@ -57,6 +57,9 @@ sequenceDiagram
 - **Start with a snippet rather than block.** An Indeed job gives Claude only a one or two
   sentence snippet; the run is thin, but the notice says so and the user can paste the full
   text first. A disabled button would be another dead end.
+- **Require a paste when the board saved no text.** Some Indeed cards have no snippet and some
+  hiring.cafe hits have an empty summary. Handing off the title/URL header alone would enable
+  Start and give Claude no posting; handing off nothing with the board URL would hit the 401.
 - **Fetch the full posting before handing off**, silently falling back to the summary. It is
   what users expect *Tailor resume* to do, and costs a few seconds only when an employer page
   exists. Errors are not shown in the drawer: the summary notice on the Tailor form covers them.
@@ -85,12 +88,15 @@ hiring.cafe job whose employer page does not load):
    URL, company, role, **Job id `2bd2cff5c29c9fca`**, and the summary notice with *Open posting*.
 2. The hiring.cafe job → **Tailor resume**: the fetch fails, the summary is handed off with the
    notice, **Job id `594192`**.
-3. `runner.start` with only `https://www.indeed.com/viewjob?jk=2bd2cff5c29c9fca`: fails before
+3. An Indeed job saved with an empty snippet → **Tailor resume**: empty description, *No job
+   description yet* notice, **Start tailoring** disabled; pasting text enables it and hides the notice.
+4. `runner.start` with only `https://www.indeed.com/viewjob?jk=2bd2cff5c29c9fca`: fails before
    any Claude run with the new *"… does not let Huntgry read job pages directly. Open the job on
    the Jobs page …"* message (Indeed still answers 401).
 
 ![Indeed job drawer](assets/20-indeed-drawer.png)
 ![Tailor form prefilled from an Indeed job](assets/20-tailor-prefill.png)
+![Tailor form for a job saved without a description](assets/20-tailor-empty.png)
 
 ## Follow-ups
 

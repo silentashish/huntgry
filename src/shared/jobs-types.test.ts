@@ -66,6 +66,12 @@ describe('tailorPrefillFor', () => {
     })
   })
 
+  it('hands off no description when the board saved no text, rather than a header alone', () => {
+    const p = tailorPrefillFor(job({ description: '  \n ' }))
+    expect(p.jobDescription).toBe('')
+    expect(p).toMatchObject({ jobId: '2bd2cff5c29c9fca', descriptionComplete: false })
+  })
+
   it('omits an empty company and URL', () => {
     const p = tailorPrefillFor(job({ source: 'pasted', company: '', url: '', descriptionComplete: true }))
     expect(p.company).toBeUndefined()
