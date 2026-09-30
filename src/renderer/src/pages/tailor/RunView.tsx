@@ -1,9 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Badge, Box, Button, Card, Group, Kbd, Loader, Menu, Stack, Text, Textarea, Title } from '@mantine/core'
+import {
+  Alert,
+  Anchor,
+  Badge,
+  Box,
+  Button,
+  Card,
+  Group,
+  Kbd,
+  Loader,
+  Menu,
+  Stack,
+  Text,
+  Textarea,
+  Title
+} from '@mantine/core'
 import { IconFileTypePdf, IconFolder, IconPlayerStop, IconSend } from '@tabler/icons-react'
 import type { RunSummary } from '@shared/runner-types'
 import { buildTranscript } from '@shared/transcript'
 import { api, errorText } from '../../api'
+import { useNavigation } from '../../navigation'
 import { STATUS_LABEL } from './status'
 import { Transcript } from './Transcript'
 
@@ -15,6 +31,7 @@ interface Props {
 /** One run: its conversation, the reply box, and the files it produced. */
 export function RunView({ run, events }: Props) {
   const items = useMemo(() => buildTranscript(events), [events])
+  const { navigate } = useNavigation()
   const [reply, setReply] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -136,6 +153,12 @@ export function RunView({ run, events }: Props) {
           <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
             {run.error}
           </Text>
+          {/* Set by the runner when the CLI rejected a flag (too old). */}
+          {run.error.includes('Update Claude Code') && (
+            <Anchor component="button" size="sm" mt={4} onClick={() => navigate('settings')}>
+              Open Settings
+            </Anchor>
+          )}
         </Alert>
       )}
 

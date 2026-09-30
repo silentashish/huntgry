@@ -15,6 +15,7 @@ import {
   Title
 } from '@mantine/core'
 import type { RunnerEnvironment, StartRunParams } from '@shared/runner-types'
+import { api, errorText } from '../../api'
 import { useNavigation, type PageParams } from '../../navigation'
 
 interface Props {
@@ -22,10 +23,12 @@ interface Props {
   environment: RunnerEnvironment | null
   busy: boolean
   onStart(params: StartRunParams): void
+  /** A fresh environment check after installing something from the form. */
+  onEnvironmentChange(environment: RunnerEnvironment): void
 }
 
 /** The job to tailor for: a pasted description and/or a posting URL, plus the skill's options. */
-export function StartForm({ prefill, environment, busy, onStart }: Props) {
+export function StartForm({ prefill, environment, busy, onStart, onEnvironmentChange }: Props) {
   const { navigate } = useNavigation()
   const [jobDescription, setJobDescription] = useState(prefill?.jobDescription ?? '')
   const [jobUrl, setJobUrl] = useState(prefill?.jobUrl ?? '')
@@ -45,7 +48,24 @@ export function StartForm({ prefill, environment, busy, onStart }: Props) {
   // Once the user edits or pastes the description, it is theirs, not the board's summary.
   const showSummaryNotice =
     prefill?.descriptionComplete === false && (needsPaste || jobDescription === (prefill.jobDescription ?? ''))
-  const blocking = environment && (!environment.claudePath || !environment.skillDir)
+  const blocking =
+    environment && (!environment.claudePath || !environment.skillDir || environment.claudeAuth?.loggedIn === false)
+  const [installingSkill, setInstallingSkill] = useState(false)
+  const [installError, setInstallError] = useState<string | null>(null)
+
+  async function installSkill() {
+    setInstallingSkill(true)
+    setInstallError(null)
+    try {
+      const res = await api.runner.installSkill(false)
+      if (!res.ok) setInstallError(res.error ?? 'Installing the skill failed.')
+      onEnvironmentChange(await api.runner.environment())
+    } catch (err) {
+      setInstallError(errorText(err))
+    } finally {
+      setInstallingSkill(false)
+    }
+  }
 
   return (
     <Card withBorder radius="md" padding="lg">
@@ -65,6 +85,16 @@ export function StartForm({ prefill, environment, busy, onStart }: Props) {
             title={blocking ? 'Cannot run yet' : 'Some dependencies are missing'}
           >
             <Text size="sm">{environment.problems[0]}</Text>
+            {!environment.skillDir && (
+              <Button size="xs" mt="xs" loading={installingSkill} onClick={installSkill}>
+                Install resume-tailor skill
+              </Button>
+            )}
+            {installError && (
+              <Text size="sm" c="red" mt={4}>
+                {installError}
+              </Text>
+            )}
             {!blocking && (
               <Text size="sm" mt={4}>
                 Claude can still do the gap analysis and write the resume data, but the PDF build will fail.
