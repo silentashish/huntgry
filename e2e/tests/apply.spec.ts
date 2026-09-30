@@ -172,7 +172,7 @@ test.describe('apply', () => {
     await browser.apply.expectStatus('Ready to fill')
     await expect(
       app.window.getByText(
-        `This page is on localhost:${mock.port}, not the posting's site, so Huntgry did not fill it. If it is the application form, press Fill form.`
+        `This page is on 127.0.0.1:${mock.altPort}, not the posting's site, so Huntgry did not fill it. If it is the application form, press Fill form.`
       )
     ).toBeVisible()
     expect(await evaluateInTab<string>(app.electronApp, '/lever/', 'document.querySelector(\'input[name="email"]\').value')).toBe('')

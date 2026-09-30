@@ -13,7 +13,7 @@ import { EMPLOYER_POSTINGS, hiringCafePage, indeedPage, postingPage } from './pa
  * - `/postings/employer/:id`, `/postings/lever-style`, `/postings/ashby-style`  posting pages
  * - `/bot-wall`            a 403 "Just a moment…" human check
  * - `/page/one`, `/page/two`, `/hang`  plain pages for the browser's history and Stop
- * - `/redirect/lever`      302 to the Lever form on the *other* loopback origin (`localhost`)
+ * - `/redirect/lever`      302 to the Lever form on the *other* loopback origin (a second 127.0.0.1 port)
  * - `/greenhouse/`, `/lever/`, `/generic/`, `/generic-cover/` + `…/submit` + the thanks pages: the mock ATS
  *   (`scripts/mock-ats/server.mjs`, the same code as `node scripts/mock-ats.mjs`)
  *
@@ -25,9 +25,10 @@ import { EMPLOYER_POSTINGS, hiringCafePage, indeedPage, postingPage } from './pa
 export interface MockServer {
   /** `http://127.0.0.1:<port>`, the origin the fixtures and the board overrides use. */
   origin: string
-  /** `http://localhost:<port>`: the same server on a different origin, for the redirect case. */
+  /** `http://127.0.0.1:<altPort>`: the same handler on a second listener, a different origin for the redirect case. */
   altOrigin: string
   port: number
+  altPort: number
   /** Where the ATS routes record the last submission (`last-submission.json`). */
   submissionFile: string
   /** Every request path the server answered, in order. */
@@ -101,31 +102,45 @@ export async function startMockServer(submissionFile: string): Promise<MockServe
     sendHtml(res, 404, 'Not found')
   }
 
-  const server: Server = createServer(handle)
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => resolve())
-  })
-  const address = server.address()
-  if (!address || typeof address !== 'object') throw new Error('The mock server has no port.')
-  const port = address.port
+  // Two listeners, same handler: the second is the "other origin" (a different port is a different origin), and a
+  // different host:port for the loader's per-host rate limit. Both on 127.0.0.1 only, so nothing depends on how the
+  // machine resolves `localhost`.
+  const listen = async (): Promise<Server> => {
+    const server: Server = createServer(handle)
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => resolve())
+    })
+    return server
+  }
+  const [server, altServer] = await Promise.all([listen(), listen()])
+  const portOf = (s: Server): number => {
+    const address = s.address()
+    if (!address || typeof address !== 'object') throw new Error('The mock server has no port.')
+    return address.port
+  }
+  const port = portOf(server)
+  const altPort = portOf(altServer)
   origin = `http://127.0.0.1:${port}`
-  altOrigin = `http://localhost:${port}`
+  altOrigin = `http://127.0.0.1:${altPort}`
   return {
     origin,
     altOrigin,
     port,
+    altPort,
     submissionFile,
     requests,
     boardEnv: () => ({
       HUNTGRY_JOB_BOARD_BASE_URL_HIRINGCAFE: origin,
-      // Indeed on the other loopback name: a different host for the loader's per-host rate limit.
+      // Indeed on the second port: a different host:port for the loader's per-host rate limit.
       HUNTGRY_JOB_BOARD_BASE_URL_INDEED: altOrigin
     }),
-    close: () => {
+    close: async () => {
       for (const res of hanging) res.destroy()
-      server.closeAllConnections()
-      return new Promise<void>((resolve) => server.close(() => resolve()))
+      for (const s of [server, altServer]) {
+        s.closeAllConnections()
+        await new Promise<void>((resolve) => s.close(() => resolve()))
+      }
     }
   }
 }
