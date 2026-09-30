@@ -380,12 +380,15 @@ workflow and one in the repository settings: set `continue-on-error: false` on t
 Branches → main → Require status checks to pass* and add `e2e (macOS)` (and `unit + typecheck`
 if wanted). Nothing else changes.
 
-**Linux.** An experimental `e2e (Linux, experimental)` job runs the same suite on
-`ubuntu-latest` under `xvfb-run --auto-servernum` (with the Electron runtime libraries
-installed and Ubuntu 24.04's unprivileged user-namespace restriction lifted for Chromium's
-sandbox). It is `continue-on-error` as well and never a required check: macOS is the primary
-target, and the Settings specs plant the fake `pdflatex` under `~/Library/TinyTeX`, a macOS
-path.
+**Linux.** There is no Linux job. A trial of the suite on `ubuntu-latest` under
+`xvfb-run --auto-servernum` (with the Electron runtime libraries installed and Ubuntu 24.04's
+unprivileged user-namespace restriction lifted) failed every test at launch with *Missing X
+server or $DISPLAY*: the harness builds the app's environment from scratch (`appEnv` in
+`e2e/fixtures/app.ts`, so no developer variable leaks in) and does not pass `DISPLAY` through,
+so the app never sees the xvfb server. Two more things would need doing before Linux can count:
+pass `DISPLAY` and `XAUTHORITY` through on Linux, and give the Settings specs a Linux location
+for the fake `pdflatex` (they plant it under `~/Library/TinyTeX`, a macOS path). macOS is the
+primary target, so this stays a follow-up; the trial run is linked from the #50 PR.
 
 ## Adding a page object and a spec
 

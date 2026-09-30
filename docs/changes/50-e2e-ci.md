@@ -14,7 +14,7 @@ makes it required once the build time and the flake rate are known.
 | Area | Files | Why |
 | --- | --- | --- |
 | e2e workflow | `.github/workflows/e2e.yml` | `pull_request`, `push` to `main`, `workflow_dispatch`; `concurrency` per ref with cancel-in-progress; `permissions: contents: read`; job `e2e (macOS)` on `macos-latest` with `timeout-minutes: 30` and `continue-on-error: true`: setup-node (Node 26, README says ≥ 22.12 and there is no `engines`) with npm cache, Electron binary cache (`~/Library/Caches/electron`, keyed on the lockfile's electron version, restored before `npm ci`), `npm ci`, `npm run build`, `npx playwright test -c e2e/playwright.config.ts` with `CI=1`, job summary, and on failure two 7-day artifacts: the HTML report and the traces folder. |
-| Linux trial | `.github/workflows/e2e.yml` (`e2e-linux`) | The same suite on `ubuntu-latest` under `xvfb-run --auto-servernum`, experimental (`continue-on-error`). See "Linux" below for the trial's outcome. |
+| Linux trial | (removed) | An `e2e (Linux, experimental)` job on `ubuntu-latest` under `xvfb-run --auto-servernum` was tried once on the PR and dropped; see "Linux" below. |
 | Unit workflow | `.github/workflows/ci.yml` | `unit + typecheck` on `ubuntu-latest`: `npm test`, `npm run typecheck`, also optional. Separate workflow so each has its own badge and can be made required on its own. |
 | Job summary | `.github/scripts/e2e-summary.mjs`, `e2e/playwright.config.ts` | When `CI` is set the config adds Playwright's JSON reporter (`e2e/.results/results.json`); the script writes pass / fail / flaky / skipped counts and the duration to `$GITHUB_STEP_SUMMARY` (`if: always()`), and says where the artifacts are when something failed. |
 | Docs | `docs/testing/e2e.md` ("CI"), `README.md` (badges, link) | What runs, where the report and the traces land, `gh run download` + `npx playwright show-trace`, why the check is optional and the one-step change to make it required. |
@@ -46,7 +46,17 @@ description lists the conflicts and how they were resolved; the branch must be r
 
 ## Linux
 
-RESULT_PLACEHOLDER
+The trial job (`ubuntu-latest`, `xvfb-run --auto-servernum`, Electron runtime libraries installed,
+`kernel.apparmor_restrict_unprivileged_userns=0` for Chromium's sandbox) reached the tests and
+then failed all 81 at `electron.launch` with *Missing X server or $DISPLAY*
+([run 36789448194](https://github.com/silentashish/huntgry/actions/runs/36789448194)). The
+cause is in the harness, not the runner: `appEnv` (`e2e/fixtures/app.ts`) builds the app's
+environment from scratch so nothing from the developer's shell leaks in, and `DISPLAY` is not on
+its list, so the app under test never sees xvfb's server. Passing `DISPLAY` / `XAUTHORITY`
+through on Linux is a one-line change, but the Settings specs would fail next (their fake
+`pdflatex` goes under `~/Library/TinyTeX`, a macOS path), so per the ticket the job is left out
+and this is a follow-up. The artifact upload steps did run on that failure, which is a second
+proof of the artifact path besides the deliberate failure below.
 
 ## How this was tested
 
