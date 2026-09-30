@@ -42,7 +42,8 @@ function release(zip: Uint8Array, digest: string | null = `sha256:${sha256Hex(zi
 function fakeFetch(json: unknown, zip: Uint8Array): FetchLike {
   return async (url) => {
     if (url.startsWith('https://api.github.com/')) return new Response(JSON.stringify(json), { status: 200 })
-    if (url === DL) return new Response(zip, { status: 200 })
+    // `slice()` gives a Uint8Array over a plain ArrayBuffer, which is what BodyInit accepts.
+    if (url === DL) return new Response(zip.slice(), { status: 200 })
     return new Response('not found', { status: 404 })
   }
 }
