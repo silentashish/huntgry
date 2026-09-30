@@ -14,8 +14,9 @@ import { spawnSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '..')
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const root = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 const workspaces = root.workspaces ?? []
 
