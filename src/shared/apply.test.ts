@@ -26,6 +26,8 @@ describe('applyUrlFor', () => {
     )
     expect(applyUrlFor('https://careers.example.com/jobs/42#apply')).toBe('https://careers.example.com/jobs/42')
     expect(applyUrlFor('https://jobs.lever.co/acme')).toBe('https://jobs.lever.co/acme')
+    expect(applyUrlFor('https://careers.example.com/jobs/42/')).toBe('https://careers.example.com/jobs/42/')
+    expect(applyUrlFor('http://localhost:4173/greenhouse/')).toBe('http://localhost:4173/greenhouse/')
   })
 
   it('refuses anything but http(s)', () => {

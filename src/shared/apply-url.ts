@@ -31,11 +31,10 @@ export function applyUrlFor(jobUrl: string): string {
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('The posting URL must be http(s).')
   const parts = url.pathname.split('/').filter(Boolean)
-  // jobs.lever.co/<company>/<posting-id>[/apply]
-  if (LEVER_HOST.test(url.hostname) && parts.length === 2) parts.push('apply')
-  // jobs.ashbyhq.com/<company>/<posting-id>[/application]
-  if (ASHBY_HOST.test(url.hostname) && parts.length === 2) parts.push('application')
-  url.pathname = `/${parts.join('/')}`
+  // jobs.lever.co/<company>/<posting-id>[/apply], jobs.ashbyhq.com/<company>/<posting-id>[/application]
+  const page = LEVER_HOST.test(url.hostname) ? 'apply' : ASHBY_HOST.test(url.hostname) ? 'application' : null
+  // Other paths are left exactly as they are (some sites care about a trailing slash).
+  if (page && parts.length === 2) url.pathname = `/${[...parts, page].join('/')}`
   url.hash = ''
   return url.href
 }
