@@ -153,10 +153,20 @@ export interface AppOptions {
   workspace: FixtureWorkspace | null
 }
 
-export const test = base.extend<AppOptions & { app: AppFixture }, { sandboxAudit: void }>({
-  workspace: [null, { option: true }],
+/** Hooks other fixtures override (e2e/fixtures/servers/fixture.ts): none by default. */
+export interface AppHooks {
+  /** Runs on the seeded workspace copy before launch (e.g. to point posting URLs at a per-run mock server). */
+  prepareWorkspace: ((path: string) => Promise<void>) | null
+  /** Extra environment for the app (on top of `appEnv`), e.g. the job-board overrides of the mock server. */
+  launchEnv: Record<string, string>
+}
 
-  app: async ({ workspace }, use, testInfo) => {
+export const test = base.extend<AppOptions & AppHooks & { app: AppFixture }, { sandboxAudit: void }>({
+  workspace: [null, { option: true }],
+  prepareWorkspace: async ({}, use) => use(null),
+  launchEnv: async ({}, use) => use({}),
+
+  app: async ({ workspace, prepareWorkspace, launchEnv }, use, testInfo) => {
     const sandbox = await createSandbox()
     // From here on the sandbox is removed whatever happens, seeding and launch included.
     let current: LaunchedApp | null = null
@@ -164,9 +174,10 @@ export const test = base.extend<AppOptions & { app: AppFixture }, { sandboxAudit
       let seeded: string | null = null
       if (workspace) {
         seeded = await seedWorkspace(workspace, sandbox.workspaces)
+        if (prepareWorkspace) await prepareWorkspace(seeded)
         await rememberWorkspace(sandbox.userData, seeded)
       }
-      current = await launchApp(sandbox)
+      current = await launchApp(sandbox, launchEnv)
       const fixture: AppFixture = {
         get electronApp() {
           return current!.electronApp
@@ -182,7 +193,7 @@ export const test = base.extend<AppOptions & { app: AppFixture }, { sandboxAudit
         relaunch: async () => {
           await closeApp(current!.electronApp)
           current = null
-          current = await launchApp(sandbox)
+          current = await launchApp(sandbox, launchEnv)
         }
       }
       await use(fixture)

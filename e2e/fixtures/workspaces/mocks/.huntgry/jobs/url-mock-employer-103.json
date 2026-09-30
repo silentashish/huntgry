@@ -1,0 +1,17 @@
+{
+  "id": "url:mock-employer-103",
+  "source": "url",
+  "sourceId": "mock-employer-103",
+  "title": "Infrastructure Engineer",
+  "company": "Tyrell Robotics",
+  "location": "Remote",
+  "remote": true,
+  "salary": "$140,000 – $170,000 / year",
+  "postedAt": "2026-09-20T12:00:00.000Z",
+  "url": "http://mock-server.invalid/postings/employer/103",
+  "boardUrl": null,
+  "description": "Requirements: Four years of infrastructure work with Kubernetes on AWS and Go tooling.\n\nTechnologies: Go, Kubernetes, AWS",
+  "descriptionComplete": false,
+  "tags": ["Go", "Kubernetes", "AWS"],
+  "fetchedAt": "2026-09-26T10:00:00.000Z"
+}

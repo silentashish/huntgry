@@ -8,7 +8,7 @@ import type { ElectronApplication } from '@playwright/test'
  * before launch. Plus stubs for the native dialogs Playwright cannot drive.
  */
 
-export const FIXTURE_WORKSPACES = ['empty-profile', 'demo', 'legacy', 'not-a-workspace'] as const
+export const FIXTURE_WORKSPACES = ['empty-profile', 'demo', 'legacy', 'not-a-workspace', 'mocks'] as const
 export type FixtureWorkspace = (typeof FIXTURE_WORKSPACES)[number]
 
 const FIXTURES = resolve(__dirname, 'workspaces')
