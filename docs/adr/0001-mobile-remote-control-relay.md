@@ -264,7 +264,8 @@ huntgry/                      # root package.json gains "workspaces"; pnpm-works
 ├── src/shared/remote/        # protocol.ts (schema, versions), guards.ts (runtime checks),
 │   │                         # crypto.ts (box/secretbox helpers over tweetnacl), package.json
 │   │                         # ("@huntgry/remote-protocol") so Metro resolves it as a workspace package
-│   └── …                     # may import nothing outside this folder (guard test, like #24's)
+│   └── …                     # standalone: imports only files in this folder and `tweetnacl` (guard test, like #24's);
+│                             # every wire type is defined here, the desktop maps its own types onto them
 ├── src/shared/remote-types.ts   # RemoteApi + channels for the Settings page (Electron only)
 ├── src/main/remote/          # gateway.ts, session.ts, pairing.ts, devices.ts, audit.ts, ipc.ts
 ├── src/preload/remote.ts
@@ -296,6 +297,19 @@ before this work, recorded in the PR).
 Everything below lives in `src/shared/remote/protocol.ts`, with hand-written `require*`
 guards next to it in the style of the existing `ipc.ts` files (the codebase has no schema
 library; keep it that way unless the guard file grows past a few hundred lines).
+
+**Package boundary.** `@huntgry/remote-protocol` is consumed by three bundlers (electron-vite
+for main, Metro for the phone, wrangler for the relay), so it is a real package: its
+`package.json` declares `tweetnacl` as its only dependency, and it imports nothing from the
+rest of `src/shared`. Every type that crosses the wire is **defined in the package**, not
+imported: `RemoteRun`, `RemoteQueueState`, `RemoteTranscriptItem`, `RemoteEnqueueInput`,
+`ReviewDetail`, and the enums the phone may send (`REMOTE_AGENT_IDS`, `REMOTE_DATE_STYLES`,
+`REMOTE_MAX_CONCURRENCY`). The desktop keeps its own `RunSummary`, `QueueState`,
+`EnqueueInput` and `AGENT_IDS`, and `src/main/remote/project.ts` maps between the two (a
+projection for events and responses, a translation for incoming commands). Two tests hold the
+boundary: the E1 guard test fails on any import from outside the folder other than
+`tweetnacl`, and a desktop test asserts that the package's enums equal `AGENT_IDS`,
+`DateStyle` and `MAX_CONCURRENCY`, so a new agent id cannot be added on one side only.
 
 ```ts
 /**
@@ -351,7 +365,7 @@ export type RemoteCommand =
   | { name: 'queue.setPaused'; args: { paused: boolean } }
   | { name: 'queue.cancel'; args: { itemId: string } }
   | { name: 'queue.retry'; args: { itemId: string } }
-  | { name: 'queue.enqueue'; args: EnqueueInput }               // existing type; ≤ MAX_ENQUEUE, saved job ids only
+  | { name: 'queue.enqueue'; args: RemoteEnqueueInput }         // package-owned mirror of EnqueueInput; ≤ MAX_ENQUEUE, saved job ids only
   | { name: 'pipeline.start'; args: PipelineStartInput }         // #31: jobIds, concurrency 1–4, agent, fallback?, budget?
   | { name: 'pipeline.pause' } | { name: 'pipeline.resume' } | { name: 'pipeline.stop' }
   | { name: 'jobs.list'; args: { filter?: string; limit?: number } }
@@ -402,16 +416,30 @@ export interface StatusSummary {
   queue: { active: number; needsReply: number; failed: number; paused: boolean }
   pipeline: { status: 'idle' | 'running' | 'paused' | 'waiting-limit' | 'finished'; until?: string } | null
   review: { unreviewed: number }
-  agents: { id: AgentId; ready: boolean }[]
+  agents: { id: RemoteAgentId; ready: boolean }[]
+}
+
+/** Enums the phone may send; a desktop test asserts they equal AGENT_IDS, DateStyle and MAX_CONCURRENCY. */
+export const REMOTE_AGENT_IDS = ['claude', 'codex', 'antigravity'] as const
+export type RemoteAgentId = (typeof REMOTE_AGENT_IDS)[number]
+export const REMOTE_DATE_STYLES = ['inline', 'right'] as const
+export const REMOTE_MAX_CONCURRENCY = 4
+
+export interface RemoteEnqueueInput {
+  jobIds: string[]                // saved job ids only, ≤ 100
+  options: { coverLetter: boolean; dateStyle: (typeof REMOTE_DATE_STYLES)[number]; notes?: string }
+  concurrency?: number            // 1..REMOTE_MAX_CONCURRENCY
+  agent?: RemoteAgentId
 }
 ```
 
 Versioning rules: `v` is the major; both sides send `protocol: {min, max}` in `hello` and
 speak the highest common major; a command the desktop does not know returns
 `error.code = 'unsupported'` (the phone greys the button and asks to update Huntgry); new
-optional fields are minor changes and need no bump. Payload types that already exist
-(`QueueState`, `RunSummary`, `TranscriptItem`, `EnqueueInput`) are reused as is, so the phone
-renders the same data the Tailor page renders.
+optional fields are minor changes and need no bump. The wire types mirror the desktop's
+shared types field for field where the phone needs the field, so the phone renders the same
+data the Tailor page renders, but they are package-owned copies, not imports (see the package
+boundary above and the DTO rules below).
 
 **How a push happens.** Events are encrypted, so the relay cannot read them; the desktop
 tells it, in clear, which frames deserve a push. For each paired device the desktop keeps the
@@ -531,7 +559,7 @@ audit file with the hash.
   `MAX_TEXT` limit, the same validators, delivered to the same sandboxed process (no network,
   allow-listed scripts, `--setting-sources ""` for Claude, #8) or held by the queue like a
   desktop reply (#21). There is no "run this prompt" command, and no remote command changes
-  tools, permissions, settings or flags. The phone chooses an agent only from `AGENT_IDS`
+  tools, permissions, settings or flags. The phone chooses an agent only from `REMOTE_AGENT_IDS` (tested equal to `AGENT_IDS`)
   and options only from the enums the desktop form allows (`DateStyle`, `coverLetter`,
   concurrency 1–4); there is no model, flag or path argument in any command.
 - **Costly commands are rate-limited on the desktop**: `queue.enqueue` and `pipeline.start`
@@ -627,7 +655,7 @@ order; each lands with tests and a `docs/changes/<N>-*.md`.
 
 | # | Issue | Goal | Depends on |
 | --- | --- | --- | --- |
-| E1 | Remote protocol package | `src/shared/remote/` with `RelayFrame`, `Envelope`, `RemoteCommand`/`RemoteEvent`, guards, `tweetnacl` helpers, TTL table, guard test that the folder imports nothing else; workspaces declared for npm and pnpm, both lockfiles regenerated, `npm run check:lockfiles` script. | — |
+| E1 | Remote protocol package | `src/shared/remote/` with `RelayFrame`, `Envelope`, `RemoteCommand`/`RemoteEvent`, the package-owned wire types and enums, guards, `tweetnacl` helpers, TTL table; guard test that the folder imports only itself and `tweetnacl`, desktop test that the wire enums equal `AGENT_IDS` / `DateStyle` / `MAX_CONCURRENCY`; workspaces declared for npm and pnpm, both lockfiles regenerated, `npm run check:lockfiles` script. | — |
 | E2 | Relay (Cloudflare Worker + Durable Object) | `relay/`: admin-token room creation, owner/device auth by token hash, WebSocket hibernation, per-device queue with `ttl` and `expired` notices, presence, push hints → Expo API with fixed bodies and coalescing, rate limits; Miniflare tests; deploy script that prints the admin token. | E1 |
 | E3 | Desktop gateway and session | `src/main/remote/`: outbound session with reconnect on `powerMonitor` resume, replay state persisted in `devices.json`, workspace id, gateway dispatching the allow-list onto `startTailorRun` / `TailorQueue` / `RunManager` / `jobs` with the shared validators, `onEvent` next to `emit`, audit log, allow-list guard test, root-`dependencies` and `dist`-size checks. | E1 |
 | E4 | Pairing and devices in Settings | QR with one-time secret, approve dialog, device list with last-seen, revoke, unpair everything, relay URL + admin token entry, notification detail and TTL settings, `remote:state` event. | E2, E3 |
