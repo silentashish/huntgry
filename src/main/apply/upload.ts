@@ -28,22 +28,34 @@ const nodeIdOf = (result: unknown, path: 'root' | 'self'): number => {
   return typeof id === 'number' ? id : 0
 }
 
+export interface UploadOptions {
+  timeoutMs?: number
+  /** Checked before every command; `false` (the page changed) cancels the upload before it touches the page. */
+  shouldContinue?: () => boolean
+}
+
 /** Attaches `files` to the element matching `selector` in the top frame. */
 export async function uploadFile(
   attach: () => Cdp,
   selector: string,
   files: string[],
-  timeoutMs = UPLOAD_TIMEOUT_MS
+  { timeoutMs = UPLOAD_TIMEOUT_MS, shouldContinue = () => true }: UploadOptions = {}
 ): Promise<void> {
+  const check = () => {
+    if (!shouldContinue()) throw new Error('The page changed; the upload was cancelled.')
+  }
+  check()
   const dbg = attach()
   try {
     const root = nodeIdOf(await withTimeout(dbg.sendCommand('DOM.getDocument', { depth: 0 }), timeoutMs), 'root')
     if (!root) throw new Error('Could not read the page.')
+    check()
     const nodeId = nodeIdOf(
       await withTimeout(dbg.sendCommand('DOM.querySelector', { nodeId: root, selector }), timeoutMs),
       'self'
     )
     if (!nodeId) throw new Error('The upload field is no longer on the page.')
+    check()
     await withTimeout(dbg.sendCommand('DOM.setFileInputFiles', { nodeId, files }), timeoutMs)
   } finally {
     try {

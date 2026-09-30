@@ -39,6 +39,14 @@ class FakeTab implements ApplyPage {
   loads = new Set<(full: boolean) => void>()
   closes = new Set<() => void>()
   sent: string[] = []
+  /** When set, fill replies wait here until `releaseFills()` (a slow page). */
+  heldFills: Array<() => void> | null = null
+
+  releaseFills() {
+    const held = this.heldFills ?? []
+    this.heldFills = null
+    for (const reply of held) reply()
+  }
 
   constructor(html: string, url: string) {
     this.dom = new JSDOM(html, { url })
@@ -61,6 +69,12 @@ class FakeTab implements ApplyPage {
     this.sent.push(channel)
     const { requestId, values } = payload as { requestId: string; values?: FillValues }
     const doc = this.dom.window.document
+    if (channel === AUTOFILL_CHANNELS.fill && this.heldFills) {
+      this.heldFills.push(() =>
+        this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result: fillPage(doc, values as FillValues) })
+      )
+      return
+    }
     queueMicrotask(() => {
       if (channel === AUTOFILL_CHANNELS.detect) {
         this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result: scanPage(doc) })
@@ -93,9 +107,18 @@ class FakeDebugger implements Cdp {
   attached = false
   failOn: string | null = null
   files: string[] = []
+  /** When set, this command waits for `open()` (a slow CDP round trip). */
+  gate: { method: string; open(): void; wait: Promise<void> } | null = null
 
-  sendCommand(method: string, params?: object): Promise<unknown> {
+  holdOn(method: string) {
+    let open = () => undefined as void
+    const wait = new Promise<void>((resolve) => (open = resolve))
+    this.gate = { method, open: () => open(), wait }
+  }
+
+  async sendCommand(method: string, params?: object): Promise<unknown> {
     this.log.push(method)
+    if (this.gate?.method === method) await this.gate.wait
     if (method === this.failOn) return Promise.reject(new Error(`${method} failed`))
     const p = (params ?? {}) as Record<string, unknown>
     if (method === 'DOM.getDocument') return Promise.resolve({ root: { nodeId: 1 } })
@@ -241,6 +264,43 @@ describe('ApplyService', () => {
     expect(service.current()!.message).toMatch(/upload failed/)
   })
 
+  it('drops a fill whose page was replaced by the confirmation page meanwhile', async () => {
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', GH_URL)
+    const { service, dbg } = setup(tab)
+    await service.start(ID)
+    tab.heldFills = []
+    tab.load(fixture('greenhouse-form.html'), GH_URL)
+    await until(service, 'filling')
+    // The user submits; the site's confirmation page loads while the old fill is still pending.
+    tab.load(fixture('greenhouse-confirmation.html'), `${GH_URL}/confirmation`)
+    await until(service, 'submitted-detected')
+    tab.releaseFills()
+    await new Promise((r) => setTimeout(r, 30))
+    expect(service.current()).toMatchObject({ status: 'submitted-detected', report: null })
+    expect(dbg.log).toEqual([])
+  })
+
+  it('cancels an upload in flight when the page confirms submission', async () => {
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', GH_URL)
+    const dbg = new FakeDebugger()
+    dbg.holdOn('DOM.querySelector')
+    const { service } = setup(tab, dbg)
+    await service.start(ID)
+    tab.load(fixture('greenhouse-form.html'), GH_URL)
+    await vi.waitFor(() => expect(dbg.log).toContain('DOM.querySelector'))
+    // A single-page form swaps in its "submitted" view (the preload's watcher reports it).
+    tab.reply(AUTOFILL_CHANNELS.confirmation, { url: GH_URL })
+    await until(service, 'submitted-detected')
+    dbg.gate?.open()
+    await vi.waitFor(() => expect(dbg.log.at(-1)).toBe('detach'))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(dbg.log).not.toContain('DOM.setFileInputFiles')
+    expect(dbg.attached).toBe(false)
+    expect(service.current()!.status).toBe('submitted-detected')
+  })
+
   it('reports a confirmation page and leaves tracking alone', async () => {
     const dir = await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
     const tab = new FakeTab('', GH_URL)
@@ -336,7 +396,7 @@ describe('uploadFile', () => {
       dbg.attached = true
       return dbg
     }
-    await expect(uploadFile(attach, '[x]', ['/tmp/a.pdf'], 20)).rejects.toThrow(/did not respond/)
+    await expect(uploadFile(attach, '[x]', ['/tmp/a.pdf'], { timeoutMs: 20 })).rejects.toThrow(/did not respond/)
     expect(dbg.attached).toBe(false)
   })
 

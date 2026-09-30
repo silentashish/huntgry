@@ -50,8 +50,9 @@ interface Context {
   unsubscribe: Array<() => void>
   /** The page URL filled automatically, so a re-detect of the same page does not fill again. */
   autoFilledUrl: string | null
-  busy: boolean
-  /** Bumped on every load, so stale retries give up. */
+  /** The page generation (`loadSeq`) a fill is running for, or null. */
+  fillingSeq: number | null
+  /** Bumped on every load and on a single-page confirmation, so stale detects, fills and uploads give up. */
   loadSeq: number
   timers: Set<ReturnType<typeof setTimeout>>
 }
@@ -99,7 +100,7 @@ export class ApplyService {
       coverPath,
       unsubscribe: [],
       autoFilledUrl: null,
-      busy: false,
+      fillingSeq: null,
       loadSeq: 0,
       timers: new Set()
     }
@@ -119,7 +120,10 @@ export class ApplyService {
     ctx.unsubscribe.push(
       page.onMessage(AUTOFILL_CHANNELS.result, (payload) => this.onResult(payload)),
       page.onMessage(AUTOFILL_CHANNELS.confirmation, () => {
-        if (this.ctx === ctx) this.update({ status: 'submitted-detected', message: CONFIRMED })
+        if (this.ctx !== ctx) return
+        // The page is a different page now: any fill or upload still running for the form is stale.
+        ctx.loadSeq++
+        this.update({ status: 'submitted-detected', message: CONFIRMED })
       }),
       page.onLoad((fullLoad) => {
         if (this.ctx !== ctx) return
@@ -206,25 +210,37 @@ export class ApplyService {
     }
   }
 
+  /**
+   * Fills the page that is loaded now. Everything it does is tied to that
+   * page (its `loadSeq`): if the user navigates or submits meanwhile, the
+   * rest of the work (uploads, the final status) is dropped, so it can never
+   * touch the next document or overwrite "submitted" with "filled".
+   */
   private async fillPage(ctx: Context): Promise<void> {
-    if (ctx.busy) return
-    ctx.busy = true
+    const seq = ctx.loadSeq
+    if (ctx.fillingSeq === seq) return
+    ctx.fillingSeq = seq
+    const current = () => this.ctx === ctx && ctx.loadSeq === seq
     this.update({ status: 'filling', message: null })
     try {
       const report = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { values: ctx.values }))
-      if (this.ctx !== ctx) return
+      if (!current()) return
       ctx.autoFilledUrl = report.url
       // Text first, files last: Lever's resume parser overwrites empty text fields after an upload.
-      for (const field of report.fields) if (field.outcome === 'to-upload') await this.upload(ctx, field)
+      for (const field of report.fields) {
+        if (!current()) return
+        if (field.outcome === 'to-upload') await this.upload(ctx, field, current)
+      }
+      if (!current()) return
       this.update({ status: 'filled', ats: report.ats, report, message: summary(report.fields) })
     } catch (err) {
-      if (this.ctx === ctx) this.update({ status: 'error', message: `Filling failed: ${errorMessage(err)}` })
+      if (current()) this.update({ status: 'error', message: `Filling failed: ${errorMessage(err)}` })
     } finally {
-      ctx.busy = false
+      if (ctx.fillingSeq === seq) ctx.fillingSeq = null
     }
   }
 
-  private async upload(ctx: Context, field: FieldReport): Promise<void> {
+  private async upload(ctx: Context, field: FieldReport, current: () => boolean): Promise<void> {
     const cover = field.key === 'coverLetter'
     const path = cover ? ctx.coverPath : ctx.resumePath
     if (!path || !this.session) {
@@ -236,7 +252,7 @@ export class ApplyService {
     const selector = `[${UPLOAD_ATTR}="${cover ? 'cover' : 'resume'}"]`
     const tabId = this.session.tabId
     try {
-      await uploadFile(() => this.deps.attachDebugger(tabId), selector, [path])
+      await uploadFile(() => this.deps.attachDebugger(tabId), selector, [path], { shouldContinue: current })
       field.outcome = 'uploaded'
       field.value = basename(path)
     } catch (err) {
