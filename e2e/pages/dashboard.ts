@@ -9,8 +9,8 @@ import { expect, type Locator, type Page } from '@playwright/test'
 export class Dashboard {
   readonly heading: Locator
   readonly refreshButton: Locator
+  /** The search, status and sort controls, by the accessible names the page gives them (`aria-label`). */
   readonly searchInput: Locator
-  /** The status MultiSelect; its placeholder is its only accessible name while nothing is selected. */
   readonly statusFilter: Locator
   readonly sortSelect: Locator
   readonly table: Locator
@@ -23,9 +23,9 @@ export class Dashboard {
   constructor(readonly page: Page) {
     this.heading = page.getByRole('heading', { name: 'Dashboard', level: 2 })
     this.refreshButton = page.getByRole('button', { name: 'Refresh' })
-    this.searchInput = page.getByPlaceholder('Search company, role, title, notes')
-    this.statusFilter = page.getByRole('combobox', { name: 'All but archived' })
-    this.sortSelect = page.getByRole('combobox').filter({ hasText: /first$|^Company$/ })
+    this.searchInput = page.getByRole('textbox', { name: 'Search applications' })
+    this.statusFilter = page.getByRole('combobox', { name: 'Filter by status' })
+    this.sortSelect = page.getByRole('combobox', { name: 'Sort applications' })
     this.table = page.getByRole('table')
     this.nothingMatches = page.getByText('Nothing matches.')
     this.clearFiltersLink = page.getByRole('button', { name: 'Clear filters' })

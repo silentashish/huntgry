@@ -65,6 +65,12 @@ test.describe('dashboard rows', () => {
     await dash.expectCompanies(['Initech', 'Wayne'])
     await dash.statCard('Total').click()
 
+    // Sorting by company puts Acme first, whatever the file mtimes say.
+    await dash.pickStatus(dash.sortSelect, 'Company')
+    await expect(dash.rows.first()).toContainText('Acme')
+    await expect(dash.rows.last()).toContainText('Wayne')
+    await dash.pickStatus(dash.sortSelect, 'Newest first')
+
     // Search matches company, role, job title and notes, case-insensitively.
     await dash.searchInput.fill('globex')
     await dash.expectCompanies(['Globex'])
@@ -86,10 +92,19 @@ test.describe('dashboard rows', () => {
     const id = 'software-engineer/acme/acme-4821'
     expect(await tracking(app.workspace!, id)).toEqual({ status: 'generated', notes: '' })
 
+    // The app stamps the UTC date (toISOString) at write time; take it before and after the action so a
+    // run that straddles UTC midnight accepts either day.
+    const utcDate = () => new Date().toISOString().slice(0, 10)
+    const before = utcDate()
     await dash.pickStatus(dash.rowStatus('Acme'), 'Applied')
     await expect(dash.row('Acme')).toContainText(/applied \d{4}-\d{2}-\d{2}/)
-    const today = new Date().toISOString().slice(0, 10)
-    await expect.poll(() => tracking(app.workspace!, id)).toEqual({ status: 'applied', appliedAt: today, notes: '' })
+    const after = utcDate()
+    await expect.poll(() => tracking(app.workspace!, id)).toMatchObject({ status: 'applied', notes: '' })
+    const written = await tracking(app.workspace!, id)
+    expect(Object.keys(written).sort()).toEqual(['appliedAt', 'notes', 'status'])
+    expect(written.appliedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect([before, after]).toContain(written.appliedAt)
+    const today = written.appliedAt as string
 
     // The summary cards follow.
     await expect(dash.statCard('Applied')).toHaveText('Applied2')

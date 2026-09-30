@@ -27,7 +27,9 @@ the profile already has, so the insights card and the graph overlay had nothing 
 | Insights specs | `e2e/tests/insights.spec.ts` (6) | The gap list (Kafka ×2, then Airflow, GraphQL, React, Spark; Kubernetes noted); "Not me" persisted in `.huntgry/profile-insights.json`, still gone after a relaunch, restored; "I have this" into the Globex experience (preview lines, technologies and highlight on disk, the Skills card and the editor follow) and into a new skills group; the Claude draft with no agent in the sandbox shows *The claude CLI was not found. See Settings.* and writes nothing; an emptied section's badge deep-links into that editor tab. |
 | Docs | `docs/testing/e2e.md`, `e2e/fixtures/workspaces/README.md` | Fixture contents, how to extend `demo`, the new page objects, the Mantine locator pitfalls the specs hit. |
 
-Nothing under `src/` changed.
+| Renderer (review) | `src/renderer/src/pages/dashboard/index.tsx` | The search box, the status multi-select and the sort select had no accessible name (only placeholders, and the multi-select's placeholder disappears once a status is picked). They now carry `aria-label="Search applications"`, `"Filter by status"` and `"Sort applications"`, and the page object locates them by role and name. No `data-testid`. |
+
+That is the only change under `src/`: three `aria-label`s, no logic.
 
 ```mermaid
 flowchart LR
@@ -82,7 +84,8 @@ flowchart LR
 - **Apply readiness stops at "enabled".** Adding the URL in the drawer unblocks Apply; the
   Apply flow itself is #49.
 - **`appliedAt` asserted with the UTC date**, the same `toISOString().slice(0, 10)` the app
-  uses, so the spec matches the app across time zones.
+  uses. The spec takes the date before and after the click and accepts either, so a run that
+  straddles UTC midnight still passes (review).
 
 ## How to test
 
