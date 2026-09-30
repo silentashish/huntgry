@@ -337,6 +337,25 @@ describe('run store', () => {
       files: ['job-description.md', 'resume_data.json']
     })
   })
+
+  it("prefers the folder matching the run's role, company and job id over a newer one", async () => {
+    const mine = join(tmp, 'engineer/acme/a1')
+    const other = join(tmp, 'engineer/globex/b2')
+    await mkdir(mine, { recursive: true })
+    await mkdir(other, { recursive: true })
+    const since = Date.now() - 1000
+    await writeFile(join(mine, 'resume.pdf'), 'a')
+    await new Promise((r) => setTimeout(r, 20))
+    await writeFile(join(other, 'resume.pdf'), 'b')
+    expect((await findOutputFolder(tmp, since))?.folder).toBe(join('engineer', 'globex', 'b2'))
+    const hinted = await findOutputFolder(tmp, since, { prefer: { role: 'Engineer', company: 'Acme Inc', jobId: 'A1' } })
+    expect(hinted?.folder).toBe(join('engineer', 'acme', 'a1'))
+    // No match: the newest wins, but never a folder another live run owns.
+    const globex = join('engineer', 'globex', 'b2')
+    const acme = join('engineer', 'acme', 'a1')
+    expect((await findOutputFolder(tmp, since, { prefer: { company: 'Initech' }, exclude: [globex] }))?.folder).toBe(acme)
+    expect(await findOutputFolder(tmp, since, { exclude: [globex, acme] })).toBeNull()
+  })
 })
 
 describe('posting fetch (main process, no network for Claude)', () => {

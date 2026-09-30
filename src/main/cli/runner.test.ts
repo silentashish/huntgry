@@ -145,6 +145,33 @@ describe('RunManager against a fake claude', () => {
     expect((await readRun(ws, id)).status).toBe('failed')
   })
 
+  it('two runs building at the same time each record their own application folder', async () => {
+    const a = await manager.start(
+      { ...params, company: 'Acme', jobId: 'a1', jobUrl: 'https://a.example/1' },
+      ctx()
+    )
+    const b = await manager.start(
+      { ...params, company: 'Globex', jobId: 'b2', jobUrl: 'https://b.example/2' },
+      ctx()
+    )
+    await until(a.id, (r) => r.status === 'waiting')
+    await until(b.id, (r) => r.status === 'waiting')
+    // A writes first but answers last, after B wrote a newer folder.
+    await manager.reply(a.id, 'Approved. WRITE_OUTPUT_AT:engineer/acme/a1 SLOW', async () => ctx())
+    await new Promise((r) => setTimeout(r, 50))
+    await manager.reply(b.id, 'Approved. WRITE_OUTPUT_AT:engineer/globex/b2', async () => ctx())
+    const doneB = await until(b.id, (r) => r.status === 'waiting' && r.outputFolder !== null)
+    const doneA = await until(a.id, (r) => r.status === 'waiting' && r.outputFolder !== null)
+    expect(doneA.outputFolder).toBe(join('engineer', 'acme', 'a1'))
+    expect(doneB.outputFolder).toBe(join('engineer', 'globex', 'b2'))
+    await manager.flush(a.id)
+    await manager.flush(b.id)
+    const trackA = JSON.parse(await readFile(join(ws, 'engineer/acme/a1/huntgry.json'), 'utf8'))
+    const trackB = JSON.parse(await readFile(join(ws, 'engineer/globex/b2/huntgry.json'), 'utf8'))
+    expect(trackA.jobUrl).toBe('https://a.example/1')
+    expect(trackB.jobUrl).toBe('https://b.example/2')
+  })
+
   it('stop kills the process and records it', async () => {
     const { id } = await manager.start(params, ctx())
     await until(id, (r) => r.status === 'waiting')

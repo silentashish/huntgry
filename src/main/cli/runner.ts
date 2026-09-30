@@ -249,7 +249,15 @@ export class RunManager {
       r.status = 'waiting'
       const since = entry.turnStartedAt - 1000
       entry.queue = entry.queue.then(async () => {
-        const out = await findOutputFolder(entry.ctx.workspace, since).catch(() => null)
+        // Other runs may be building at the same time: never take a folder another live run owns.
+        const others = [...this.live.values()]
+          .filter((e) => e !== entry && e.run.outputFolder)
+          .map((e) => e.run.outputFolder!)
+        const { role, company, jobId } = r.params
+        const out = await findOutputFolder(entry.ctx.workspace, since, {
+          prefer: { role, company, jobId },
+          exclude: others
+        }).catch(() => null)
         if (out) {
           r.outputFolder = out.folder
           r.outputFiles = out.files
