@@ -41,7 +41,7 @@ Requirements: Node.js ≥ 22.12 (developed on Node 26) and npm. macOS is the pri
 npm install          # the Electron binary is downloaded on first launch
 npm run dev          # electron-vite dev server + Electron window (HMR for the renderer)
 npm test             # vitest: workspace, profile format and resume parser (no Electron needed)
-npm run typecheck    # tsc for main/preload (node) and renderer (web)
+npm run typecheck    # tsc for main/preload (node), renderer (web) and in-page autofill code (page)
 npm run build        # typecheck + production bundles in out/
 npm start            # preview the production build
 npm run dist         # packaged app (Huntgry.app / dmg / zip) in release/ via electron-builder
@@ -73,15 +73,17 @@ src/
 │   ├── insights/               # gap insights from job descriptions, dismissals, Claude-drafted evidence
 │   ├── jobs/                   # job boards: hidden-window loader, hiring.cafe / Indeed / posting parsers, .huntgry/jobs store
 │   ├── browser/                # in-app browser: one WebContentsView per tab, session hardening, address rules
+│   ├── apply/                  # auto-apply: session per tab, CDP resume upload, page-reply checks
 │   ├── resume/                 # resume file → lines (docx, pdf, txt/md) → draft profile (parse.ts)
 │   └── cli/                    # runs the resume-tailor skill via `claude -p` (stream-json), run history
-├── preload/                    # index.ts composes window.huntgry from <feature>.ts + events.ts
+├── preload/                    # index.ts composes window.huntgry from <feature>.ts + events.ts;
+│                               # browser-page.ts is the in-app tabs' autofill preload (exposes nothing)
 └── renderer/src/               # React 19 + Mantine UI, no Node access
     ├── navigation.ts           # pages, typed params, navigate(), leave guard
     ├── components/shell/       # AppLayout: navbar + page area
     └── pages/<page>/           # dashboard, jobs, browser, tailor, graph, profile, settings
 resources/                      # app icon (svg source, png, icns)
-scripts/                        # icon rendering, dev Electron branding
+scripts/                        # icon rendering, dev Electron branding, mock-ats.mjs (local test forms)
 ```
 
 ### Adding a feature
@@ -130,6 +132,29 @@ Each tab is an Electron `WebContentsView` owned by the main process (see
 `BrowserManager.getWebContents(tabId)`, `attachDebugger(tabId)` (Chrome DevTools Protocol,
 e.g. `DOM.setFileInputFiles` for the resume upload), and unpacked extensions dropped into
 `<userData>/browser-extensions/<name>/`, which load into the browser session at startup.
+
+## Applying
+
+**Apply** (the send icon on a Dashboard row, **Apply in browser** in the application drawer,
+**Apply** on a finished Tailor run) opens the posting's application form in a new Browser
+tab, fills it from your master profile and attaches the tailored `resume.pdf` (and
+`cover.pdf` when the form has a cover-letter upload). **Huntgry never submits**: you review
+the page, answer the rest and press the site's own Submit button. An Apply panel beside the
+page lists what was filled, attached, or left to you (custom questions, dropdowns, consent
+and demographic questions are always yours). When the site shows its "application
+submitted" page, the panel offers **Mark as applied**; nothing changes until you press it.
+
+Greenhouse and Lever forms are recognised (Lever postings open on `/apply`); other sites
+get a careful generic match on labels and `autocomplete` that leaves anything ambiguous
+empty. Apply needs `resume.pdf` and the posting URL. See `docs/changes/24-auto-apply.md`.
+
+To try it without applying anywhere, run the local mock ATS and allow loopback URLs in a
+dev build (ignored by packaged builds):
+
+```bash
+node scripts/mock-ats.mjs                      # http://localhost:4173/{greenhouse,lever,generic}/
+HUNTGRY_ALLOW_LOCAL_URLS=1 npm run dev         # then set an application's posting URL to one of them
+```
 
 ## Tailoring a resume
 
