@@ -384,12 +384,12 @@ export type RemoteCommand =
   | { name: 'device.setPushToken'; args: { expoPushToken: string } }
   | { name: 'device.setNotifications'; args: { categories: NotificationCategory[] } }
 
-/** Desktop → phone. Payloads are the existing shared types wherever one exists. */
+/** Desktop → phone. Payloads are the projected DTOs below, never the desktop's own types. */
 export type RemoteEvent =
   | { name: 'status'; body: StatusSummary }                       // heartbeat every 30 s + on change
-  | { name: 'queue.changed'; body: QueueState }                   // = 'queue:changed'
-  | { name: 'run.changed'; body: RunSummary }                     // = 'runner:run'
-  | { name: 'run.transcript'; body: { runId: string; items: TranscriptItem[]; seq: number } }
+  | { name: 'queue.changed'; body: RemoteQueueState }             // projected from 'queue:changed'
+  | { name: 'run.changed'; body: RemoteRun }                      // projected from 'runner:run'
+  | { name: 'run.transcript'; body: { runId: string; items: RemoteTranscriptItem[]; seq: number } }
   | { name: 'pipeline.changed'; body: PipelineState }             // #31: counts, waitingLimitUntil, eta
   | { name: 'pipeline.finished'; body: PipelineSummary }
   | { name: 'review.needed'; body: { count: number; latest: ReviewItem } }
@@ -431,7 +431,63 @@ export interface RemoteEnqueueInput {
   concurrency?: number            // 1..REMOTE_MAX_CONCURRENCY
   agent?: RemoteAgentId
 }
+
+/**
+ * Phone-safe projections. `src/main/remote/project.ts` builds these from RunSummary,
+ * QueueState and TranscriptItem; nothing else is ever serialised to the phone.
+ */
+export interface RemoteRun {
+  id: string
+  title: string
+  agent: RemoteAgentId
+  status: 'running' | 'waiting' | 'finished' | 'failed' | 'stopped'
+  job: { company?: string; role?: string; jobId?: string; source?: string }   // from params, minus jobDescription / jobUrl / notes
+  options: { coverLetter: boolean; dateStyle: (typeof REMOTE_DATE_STYLES)[number] }
+  createdAt: string
+  updatedAt: string
+  files: ('resume.pdf' | 'cover.pdf')[]   // which outputs exist; never outputFolder or the file list
+  costUsd: number
+  usage?: { inputTokens: number; outputTokens: number }
+  live: boolean
+  error?: string                          // ≤ 1 KiB, truncated
+}
+
+export interface RemoteQueueItem {
+  id: string
+  jobId: string
+  title: string
+  agent: RemoteAgentId
+  status: 'queued' | 'preparing' | 'running' | 'needs-reply' | 'done' | 'failed' | 'cancelled'
+  runId: string | null
+  error?: string                          // ≤ 1 KiB
+  attempts: number
+  built?: boolean
+  hasPendingReply: boolean                // never the held reply text
+  notBefore?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RemoteQueueState { items: RemoteQueueItem[]; concurrency: number; paused: boolean }
+
+/** TranscriptItem with bounded text: `output` and `text` are cut at 8 KiB with `truncated: true`. */
+export type RemoteTranscriptItem =
+  | { kind: 'user' | 'assistant' | 'notice'; id: string; text: string; truncated?: boolean; level?: 'info' | 'error' }
+  | { kind: 'tool'; id: string; name: string; summary: string; status: 'running' | 'ok' | 'error'; output?: string; truncated?: boolean }
+  | { kind: 'result'; id: string; ok: boolean; text: string; costUsd: number; durationMs: number; denials: string[]; usage?: { inputTokens: number; outputTokens: number } }
 ```
+
+**DTO rules.** The desktop's `RunSummary` carries `params.jobDescription` (up to `MAX_TEXT`,
+200 000 characters), `params.notes`, `params.jobUrl`, `sessionId`, `outputFolder` and
+`outputFiles`; `QueueItem` carries the held `pendingReply` text; `runner:run` and
+`queue:changed` emit those whole objects. None of that goes to the phone. `project.ts` is the
+single place that turns desktop types into `RemoteRun`, `RemoteQueueState` and
+`RemoteTranscriptItem`, and it is used for **every** path: the `run.changed` and
+`queue.changed` events, and the `runs.list`, `run.get`, `queue.get` and `review.list`
+responses. A projection test feeds a `RunSummary` with a marker job description, notes, URL,
+session id, output folder and a queue item with a marker `pendingReply` through every
+projector and asserts none of the markers appears in the serialised output; it also asserts
+every DTO serialises under the plaintext budget with the largest allowed fields.
 
 Versioning rules: `v` is the major; both sides send `protocol: {min, max}` in `hello` and
 speak the highest common major; a command the desktop does not know returns
@@ -575,7 +631,7 @@ audit file with the hash.
 | Transcript items of a run | Yes, on `run.get` | Contains the gap analysis, which quotes master-profile facts (roles, skills, numbers). Toggle **Show transcripts on phone** (default on). |
 | Review notes, open gaps, proposed reframings | Yes, on `review.get` | Profile facts again, plus the wording being approved. |
 | `resume.pdf` / `cover.pdf` | Yes, only on `file.get`, chunked, relay drops chunks after delivery or 10 min | The tailored resume *is* profile content, rendered. The phone caches it in its sandbox only while the app is open. |
-| The raw `master-profile.md` file, `job-description.md` text, workspace paths, run `events.jsonl`, agent credentials | **Never** | No command returns them; `StatusSummary` carries the workspace *name* and a random id only. |
+| The raw `master-profile.md` file, `job-description.md` text, run `params.jobDescription` / `notes` / `jobUrl`, `sessionId`, `outputFolder`, held `pendingReply` text, workspace paths, run `events.jsonl`, agent credentials | **Never** | No command or event carries them: every run, queue and transcript payload goes through the `project.ts` DTOs (see the DTO rules), and `StatusSummary` carries the workspace *name* and a random id only. |
 | Notification bodies | Generic by default | With details on, ≤ 80 chars of clear text reach the relay, Expo and Apple/Google. |
 
 So "the master profile never leaves the laptop" is true of the file, not of its content:
@@ -657,7 +713,7 @@ order; each lands with tests and a `docs/changes/<N>-*.md`.
 | --- | --- | --- | --- |
 | E1 | Remote protocol package | `src/shared/remote/` with `RelayFrame`, `Envelope`, `RemoteCommand`/`RemoteEvent`, the package-owned wire types and enums, guards, `tweetnacl` helpers, TTL table; guard test that the folder imports only itself and `tweetnacl`, desktop test that the wire enums equal `AGENT_IDS` / `DateStyle` / `MAX_CONCURRENCY`; workspaces declared for npm and pnpm, both lockfiles regenerated, `npm run check:lockfiles` script. | — |
 | E2 | Relay (Cloudflare Worker + Durable Object) | `relay/`: admin-token room creation, owner/device auth by token hash, WebSocket hibernation, per-device queue with `ttl` and `expired` notices, presence, push hints → Expo API with fixed bodies and coalescing, rate limits; Miniflare tests; deploy script that prints the admin token. | E1 |
-| E3 | Desktop gateway and session | `src/main/remote/`: outbound session with reconnect on `powerMonitor` resume, replay state persisted in `devices.json`, workspace id, gateway dispatching the allow-list onto `startTailorRun` / `TailorQueue` / `RunManager` / `jobs` with the shared validators, `onEvent` next to `emit`, audit log, allow-list guard test, root-`dependencies` and `dist`-size checks. | E1 |
+| E3 | Desktop gateway and session | `src/main/remote/`: outbound session with reconnect on `powerMonitor` resume, replay state persisted in `devices.json`, workspace id, gateway dispatching the allow-list onto `startTailorRun` / `TailorQueue` / `RunManager` / `jobs` with the shared validators, `project.ts` DTO projections for every event and response with the marker-exclusion and size tests, `onEvent` next to `emit`, audit log, allow-list guard test, root-`dependencies` and `dist`-size checks. | E1 |
 | E4 | Pairing and devices in Settings | QR with one-time secret, approve dialog, device list with last-seen, revoke, unpair everything, relay URL + admin token entry, notification detail and TTL settings, `remote:state` event. | E2, E3 |
 | E5 | Mobile app MVP (iOS, local build) | `mobile/`: scan QR, status, queue with pause/resume/cancel/retry, run view with transcript and reply, presence and "queued / expired" states. Works on a free Apple ID (no push). | E2, E3, E4 |
 | E5b | iOS push | Push registration and categories in the app, APNs key on the EAS project, relay → Expo push verified on a device. **Prerequisite: Apple Developer Program enrolment ($99/yr)**, an owner task tracked in the issue. | E5, Developer Program |
