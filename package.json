@@ -3,6 +3,11 @@
   "productName": "Huntgry",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "src/shared/remote",
+    "relay",
+    "mobile"
+  ],
   "description": "Local-first Electron dashboard around the Claude resume-tailor skill",
   "main": "./out/main/index.js",
   "scripts": {
@@ -12,12 +17,14 @@
     "start": "electron-vite preview",
     "dist": "npm run build && electron-builder",
     "icons": "sh scripts/build-icons.sh",
-    "test": "vitest run",
+    "test": "npm run check:lockfiles && vitest run",
     "test:watch": "vitest",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web && npm run typecheck:page",
+    "check:lockfiles": "node scripts/check-lockfiles.mjs",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web && npm run typecheck:page && npm run typecheck:remote",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck:page": "tsc --noEmit -p tsconfig.page.json",
+    "typecheck:remote": "tsc --noEmit -p src/shared/remote/tsconfig.json",
     "postinstall": "node -e \"require('electron')\" && node scripts/brand-dev-electron.cjs"
   },
   "devDependencies": {
@@ -45,6 +52,7 @@
     "react-force-graph-2d": "^1.29.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "tweetnacl": "^1.0.3",
     "unpdf": "^1.8.1"
   }
 }
