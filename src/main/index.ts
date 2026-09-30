@@ -5,6 +5,7 @@ import { stopApplicationsWatcher } from './applications/ipc'
 import { handleFileScheme, registerFileScheme } from './applications/protocol'
 import { stopApply } from './apply/ipc'
 import { attachBrowser, destroyBrowser } from './browser/manager'
+import { setPackagedBuild } from './cli/env'
 import { stopAllRuns } from './cli/ipc'
 import { stopQueue } from './queue/ipc'
 import { registerIpcHandlers } from './ipc'
@@ -13,6 +14,8 @@ import { registerIpcHandlers } from './ipc'
 // bundle name and icon from electron-builder; `npm run dev` gets them from
 // scripts/brand-dev-electron.cjs plus the dock icon set below.
 app.setName('Huntgry')
+// CLI discovery's e2e escape hatch (HUNTGRY_E2E) is only honoured by unpackaged builds.
+setPackagedBuild(app.isPackaged)
 
 // Custom schemes must be registered before the app is ready.
 registerFileScheme()

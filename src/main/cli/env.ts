@@ -29,6 +29,40 @@ export function wellKnownBinDirs(home = homedir()): string[] {
   ]
 }
 
+/**
+ * `HUNTGRY_E2E=1` puts CLI discovery in an isolated mode for the end-to-end
+ * tests (see docs/testing/e2e.md): no login-shell PATH, no machine-wide
+ * folders, only the folders below `HOME` and the app's own PATH, both of which
+ * the test harness controls. Off in packaged builds, whatever the environment
+ * says; main sets the build kind once at startup (`setPackagedBuild`).
+ */
+export const E2E_ENV = 'HUNTGRY_E2E'
+
+let packagedBuild = true
+
+/** Called once from main with `app.isPackaged`; until then the app counts as packaged, so the escape stays off. */
+export function setPackagedBuild(isPackaged: boolean): void {
+  packagedBuild = isPackaged
+}
+
+export function isolatedDiscovery(env: NodeJS.ProcessEnv = process.env, isPackaged = packagedBuild): boolean {
+  return !isPackaged && env[E2E_ENV] === '1'
+}
+
+/**
+ * Directories `findCli` searches, in order: the well-known folders, the
+ * login-shell PATH, the app's PATH. In isolated mode (`HUNTGRY_E2E=1`), only
+ * the well-known folders below `home` and the app's PATH.
+ */
+export async function cliSearchDirs(env: NodeJS.ProcessEnv = process.env, home = homedir()): Promise<string[]> {
+  const wellKnown = wellKnownBinDirs(home)
+  if (isolatedDiscovery(env)) {
+    const underHome = wellKnown.filter((dir) => dir.startsWith(home + '/'))
+    return composePath(underHome.join(delimiter), env.PATH).split(delimiter)
+  }
+  return composePath(wellKnown.join(delimiter), await loginShellPath(env), env.PATH).split(delimiter)
+}
+
 /** TeX distributions, most specific first. TinyTeX installs per user and needs no sudo. */
 export function texBinCandidates(home = homedir()): string[] {
   return [
@@ -65,7 +99,9 @@ let loginPathCache: Promise<string> | null = null
  * The PATH an interactive login shell would have, so tools installed through
  * shell profiles (nvm, asdf, brew shellenv) are found. Cached; empty on failure.
  */
-export function loginShellPath(): Promise<string> {
+export function loginShellPath(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  // Isolated mode: the user's shell profiles must not leak their PATH into the app or its children.
+  if (isolatedDiscovery(env)) return Promise.resolve('')
   loginPathCache ??= new Promise((resolve) => {
     const shell = process.env.SHELL || '/bin/zsh'
     execFile(shell, ['-ilc', 'printf "__PATH__%s" "$PATH"'], { timeout: 5000 }, (err, stdout) => {
@@ -108,10 +144,7 @@ export async function findClaude(): Promise<string | null> {
 export async function findCli(name: string): Promise<string | null> {
   const pinned = process.env[`HUNTGRY_${name.toUpperCase()}_PATH`]
   if (pinned) return (await isExecutable(pinned)) ? pinned : null
-  const dirs = composePath(wellKnownBinDirs().join(delimiter), await loginShellPath(), process.env.PATH).split(
-    delimiter
-  )
-  return findInDirs(name, dirs)
+  return findInDirs(name, await cliSearchDirs())
 }
 
 export async function findTexBin(): Promise<string | null> {
