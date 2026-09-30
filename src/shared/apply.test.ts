@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyUrlFor, atsForHost, isGreenhouseEmbedUrl } from './apply-url'
+import { applyUrlFor, atsForHost, isGreenhouseEmbedUrl, isTrustedApplyPage } from './apply-url'
 import { asUrl, currentCompany, fillValuesFrom, splitName } from './apply-values'
 import { emptyContact, type ExperienceEntry, type MasterProfile } from './master-profile'
 
@@ -42,6 +42,19 @@ describe('applyUrlFor', () => {
     expect(atsForHost('job-boards.eu.greenhouse.io')).toBe('greenhouse')
     expect(atsForHost('jobs.lever.co')).toBe('lever')
     expect(atsForHost('greenhouse.io.evil.example')).toBe('generic')
+  })
+
+  it('trusts the posting origin and https Greenhouse / Lever hosts only', () => {
+    const apply = 'https://careers.example.com/jobs/42'
+    expect(isTrustedApplyPage('https://careers.example.com/apply/42?step=2', apply)).toBe(true)
+    expect(isTrustedApplyPage('https://job-boards.greenhouse.io/embed/job_app?for=x', apply)).toBe(true)
+    expect(isTrustedApplyPage('https://jobs.lever.co/acme/1/apply', apply)).toBe(true)
+    expect(isTrustedApplyPage('http://jobs.lever.co/acme/1/apply', apply)).toBe(false)
+    expect(isTrustedApplyPage('https://careers.example.com.evil.example/apply', apply)).toBe(false)
+    expect(isTrustedApplyPage('https://greenhouse.io.evil.example/x', apply)).toBe(false)
+    expect(isTrustedApplyPage('http://careers.example.com/jobs/42', apply)).toBe(false)
+    expect(isTrustedApplyPage('http://localhost:4173/lever/', 'http://localhost:4173/lever/')).toBe(true)
+    expect(isTrustedApplyPage('not a url', apply)).toBe(false)
   })
 
   it('accepts only https Greenhouse embed URLs', () => {

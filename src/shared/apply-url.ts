@@ -39,6 +39,22 @@ export function applyUrlFor(jobUrl: string): string {
   return url.href
 }
 
+/**
+ * Whether Huntgry may fill `pageUrl` on its own during an apply session: the
+ * posting's own origin (where the tab was opened), or a Greenhouse / Lever
+ * host over https. Anything else (a redirect to another site, a page that
+ * merely looks like an ATS form) waits for the user to press Fill form.
+ */
+export function isTrustedApplyPage(pageUrl: string, applyUrl: string): boolean {
+  try {
+    const page = new URL(pageUrl)
+    if (page.origin === new URL(applyUrl).origin) return true
+    return page.protocol === 'https:' && atsForHost(page.hostname) !== 'generic'
+  } catch {
+    return false
+  }
+}
+
 /** A Greenhouse embedded-form URL (`…greenhouse.io/embed/job_app?…`), safe to open in the tab directly. */
 export function isGreenhouseEmbedUrl(value: string): boolean {
   try {

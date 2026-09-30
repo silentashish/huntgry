@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import type { ApplySession, FieldReport, FillValues, PageScan } from '@shared/apply-types'
-import { applyUrlFor, isGreenhouseEmbedUrl } from '@shared/apply-url'
+import { applyUrlFor, isGreenhouseEmbedUrl, isTrustedApplyPage } from '@shared/apply-url'
 import { AUTOFILL_CHANNELS, UPLOAD_ATTR } from '@shared/autofill-channels'
 import { resolveApplicationFile, resolveApplicationFolder } from '../applications/safe-path'
 import { readApplication } from '../applications/scan'
@@ -159,7 +159,8 @@ export class ApplyService {
   }
 
   private require(sessionId: string): Context {
-    if (!this.ctx || this.ctx.sessionId !== sessionId) throw new Error('This apply session has ended. Press Apply again.')
+    if (!this.ctx || this.ctx.sessionId !== sessionId)
+      throw new Error('This apply session has ended. Press Apply again.')
     return this.ctx
   }
 
@@ -177,8 +178,12 @@ export class ApplyService {
       this.update({ status: 'submitted-detected', message: CONFIRMED })
       return
     }
+    // Only the posting's own site or a Greenhouse / Lever host is filled (or followed into an embedded form)
+    // without asking: markup alone (scan.ats, a resume upload, an iframe) is not proof, since any page can
+    // look like an ATS form.
+    const trusted = this.session !== null && isTrustedApplyPage(scan.url, this.session.applyUrl)
     if (!scan.formFound) {
-      if (scan.embedUrl && isGreenhouseEmbedUrl(scan.embedUrl) && this.session) {
+      if (trusted && scan.embedUrl && isGreenhouseEmbedUrl(scan.embedUrl) && this.session) {
         this.update({ status: 'opened', message: 'This page embeds a Greenhouse form; opening it directly.' })
         await this.deps.navigate(this.session.tabId, scan.embedUrl).catch((err: unknown) => {
           this.update({ status: 'error', message: errorMessage(err) })
@@ -201,10 +206,15 @@ export class ApplyService {
       return
     }
     // Known ATS forms fill on their own; on other sites only a page with a resume upload counts as an application form.
-    const auto = scan.url !== ctx.autoFilledUrl && (scan.ats !== 'generic' || scan.hasResumeInput)
+    const auto = trusted && scan.url !== ctx.autoFilledUrl && (scan.ats !== 'generic' || scan.hasResumeInput)
     if (auto) {
       ctx.autoFilledUrl = scan.url
       await this.fillPage(ctx)
+    } else if (!trusted) {
+      this.update({
+        status: 'ready',
+        message: `This page is on ${hostOf(scan.url)}, not the posting's site, so Huntgry did not fill it. If it is the application form, press Fill form.`
+      })
     } else if (this.session?.status !== 'filled') {
       this.update({ status: 'ready', message: 'Press Fill form to fill this page.' })
     }
@@ -331,14 +341,20 @@ const CONFIRMED = 'The site shows its "application submitted" page. Mark this ap
 function summary(fields: FieldReport[]): string {
   const count = (...outcomes: FieldReport['outcome'][]) => fields.filter((f) => outcomes.includes(f.outcome)).length
   const filled = count('filled', 'uploaded')
-  const open = fields.filter(
-    (f) => f.required && !['filled', 'uploaded', 'kept'].includes(f.outcome)
-  ).length
+  const open = fields.filter((f) => f.required && !['filled', 'uploaded', 'kept'].includes(f.outcome)).length
   const parts = [`Filled ${filled} field${filled === 1 ? '' : 's'}.`]
   if (open) parts.push(`${open} required field${open === 1 ? '' : 's'} still need${open === 1 ? 's' : ''} you.`)
   if (count('upload-failed')) parts.push('An upload failed; attach the file yourself.')
   parts.push('Review the form, then press the site’s Submit button yourself.')
   return parts.join(' ')
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host || 'another site'
+  } catch {
+    return 'another site'
+  }
 }
 
 function errorMessage(err: unknown): string {

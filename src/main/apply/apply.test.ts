@@ -330,6 +330,41 @@ describe('ApplyService', () => {
     expect(service.current()!.ats).toBe('lever')
   })
 
+  it('does not fill a page on another origin on its own, however much it looks like an ATS form', async () => {
+    const careers = 'https://careers.example.com/jobs/1'
+    await application({ 'job-description.md': `Engineer\n${careers}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', careers)
+    const { service, dbg, navigated } = setup(tab)
+    await service.start(ID)
+    // Redirected elsewhere: Greenhouse markup on an unrelated host.
+    tab.load(fixture('greenhouse-form.html'), 'https://evil.example/apply')
+    await until(service, 'ready')
+    expect(service.current()!.message).toMatch(/evil\.example.*Fill form/)
+    expect(tab.sent).toEqual([AUTOFILL_CHANNELS.detect])
+    expect((tab.dom.window.document.getElementById('first_name') as HTMLInputElement).value).toBe('')
+    expect(dbg.log).toEqual([])
+    // Nor is an embedded form on such a page followed.
+    tab.load(fixture('greenhouse-embed-host.html'), 'https://evil.example/careers')
+    await until(service, 'ready')
+    expect(navigated).toEqual([])
+    // The user can still fill it deliberately.
+    tab.load(fixture('greenhouse-form.html'), 'https://evil.example/apply')
+    await until(service, 'ready')
+    await service.fill(service.current()!.id)
+    expect(service.current()!.status).toBe('filled')
+    expect((tab.dom.window.document.getElementById('first_name') as HTMLInputElement).value).toBe('Ada')
+  })
+
+  it('fills a Greenhouse or Lever host reached from the posting (redirect, embed)', async () => {
+    const careers = 'https://careers.example.com/jobs/1'
+    await application({ 'job-description.md': `Engineer\n${careers}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', careers)
+    const { service } = setup(tab)
+    await service.start(ID)
+    tab.load(fixture('greenhouse-form.html'), 'https://job-boards.greenhouse.io/embed/job_app?for=acme&token=1')
+    await until(service, 'filled')
+  })
+
   it('opens an embedded Greenhouse form directly', async () => {
     const careers = 'https://acme.example/careers/engineer'
     await application({ 'job-description.md': `Engineer\n${careers}\n`, 'resume.pdf': '%PDF' })
