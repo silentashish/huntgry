@@ -48,6 +48,8 @@ interface Live {
   ctx: RunContext
   adapter: AgentAdapter
   stderr: string
+  /** The current turn ended (the agent waits); reset by the next `send`. */
+  turnEnded: boolean
   /** Why the last turn failed, as the agent reported it (cleared by a good turn). */
   turnError?: string
   /** Items the agent produced in the current turn (messages, commands, edits). */
@@ -270,6 +272,7 @@ export class RunManager {
       seq,
       stopping: false,
       finishing: false,
+      turnEnded: false,
       turnContent: 0,
       turnStartedAt: Date.now()
     }
@@ -305,7 +308,7 @@ export class RunManager {
         r.error = entry.aborted
       } else if (entry.finishing || (code === 0 && !exec && !entry.turnError)) {
         r.status = 'finished'
-      } else if (r.status !== 'waiting' || entry.turnError) {
+      } else if (!entry.turnEnded || entry.turnError) {
         // An exec agent that exits cleanly after its turn is between turns ("waiting"), not finished.
         r.status = 'failed'
         const stderr = entry.stderr.trim()
@@ -341,6 +344,7 @@ export class RunManager {
     entry.run.status = 'running'
     entry.turnStartedAt = Date.now()
     entry.turnContent = 0
+    entry.turnEnded = false
     const event: HuntgryEvent = { type: 'huntgry', subtype: 'user_message', text, ts: new Date().toISOString() }
     this.record(entry, event)
     this.touch(entry)
@@ -390,7 +394,7 @@ export class RunManager {
         signal.usage?.outputTokens === 0
       entry.turnError = signal.error ?? (empty ? `${entry.adapter.label} ended the turn without any answer or action.` : undefined)
       r.error = entry.turnError
-      r.status = 'waiting'
+      entry.turnEnded = true
       const since = entry.turnStartedAt - 1000
       entry.queue = entry.queue.then(async () => {
         // Other runs may be building at the same time: never take a folder another live run owns,
@@ -414,6 +418,10 @@ export class RunManager {
             )
           }
         }
+        // Only now does the run read as waiting, so every summary that says so carries the output
+        // folder (a summary queued earlier, e.g. for the session id, still reads as running).
+        // The process may have ended meanwhile (failed, stopped, finished): that verdict stands.
+        if (r.status === 'running') r.status = 'waiting'
       })
       this.touch(entry)
     }

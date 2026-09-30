@@ -7,6 +7,7 @@ import { stopApply } from './apply/ipc'
 import { attachBrowser, destroyBrowser } from './browser/manager'
 import { setPackagedBuild } from './cli/env'
 import { stopAllRuns } from './cli/ipc'
+import { initPipeline, stopPipeline } from './pipeline/ipc'
 import { stopQueue } from './queue/ipc'
 import { registerIpcHandlers } from './ipc'
 
@@ -87,6 +88,8 @@ app.whenReady().then(() => {
   handleFileScheme()
   registerIpcHandlers()
   createWindow()
+  // Resumes an unattended pipeline interrupted by a restart, keeps the Mac awake while it has work.
+  initPipeline()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -104,7 +107,8 @@ app.on('before-quit', (event) => {
   if (runsStopped) return
   event.preventDefault()
   // The queue stops following its runs first, so they reload as interrupted, not cancelled.
-  void stopQueue()
+  void stopPipeline()
+    .then(stopQueue)
     .then(stopAllRuns)
     .catch((err: unknown) => console.error('Stopping runs before quit failed:', err))
     .finally(() => {

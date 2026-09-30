@@ -1,3 +1,4 @@
+import type { PipelineRecord } from './pipeline-types'
 import type { AgentId, DateStyle } from './runner-types'
 
 /**
@@ -57,6 +58,23 @@ export interface QueueItem {
   notBefore?: string
   createdAt: string
   updatedAt: string
+  /** Unattended pipeline item (#31): unattended prompt, auto-finished, retried with backoff, result Unreviewed. */
+  unattended?: true
+  pipelineId?: string
+  /** Automatic retries used (≤ 2); `attempts` keeps counting every start. */
+  retries?: number
+  /** What the last failure was (usage limit, transient, stall, …). */
+  lastFailure?: string
+  /** For `done` unattended items: how the result was recorded. */
+  outcome?: 'unreviewed' | 'needs-attention'
+  /** The application folder (`<role>/<company>/<job-id>`) of a done unattended item. */
+  applicationId?: string
+  /** The app died once while this item was working; a second time fails it. */
+  interruptedOnce?: true
+  /** The one automatic "continue" reply was sent after the agent stopped without building. */
+  nudged?: true
+  /** ISO time the agent process first started (budget: started jobs). */
+  startedAt?: string
 }
 
 export interface QueueState {
@@ -74,6 +92,17 @@ export interface EnqueueInput {
   concurrency?: number
   /** Agent for every job of this request (each item can be changed until it starts); the default agent when absent. */
   agent?: QueueAgent
+  /** Unattended pipeline items (main only; the pipeline sets both). */
+  unattended?: true
+  pipelineId?: string
+}
+
+/** The queue file on disk: items plus the pipeline record, if any. */
+export interface QueueFile {
+  version: 1
+  concurrency: number
+  items: QueueItem[]
+  pipeline?: PipelineRecord | null
 }
 
 export interface EnqueueResult {

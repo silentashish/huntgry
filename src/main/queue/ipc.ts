@@ -9,13 +9,18 @@ import { loadAndExtract } from '../jobs/loader'
 import { findCanonical } from '../jobs/store'
 import { requireAgent, requireConcurrency, requireEnqueueInput, requireItemId, TailorQueue } from './queue'
 
-const queue = new TailorQueue({
+/** The app's one queue; the pipeline attaches its policy to it. */
+export const queue = new TailorQueue({
   workspace: async () => (await requireCurrentWorkspace()).path,
   findJob: findCanonical,
   fetchDetails: (ws, id) => fetchDetails(ws, id, loadAndExtract),
   markTailored: (ws, id) => updateJob(ws, id, { tailored: true }),
   start: (params, agent, workspace) => startTailorRun({ ...params, agent }, workspace),
   stopRun: (runId, workspace) => manager.stopAny(workspace, runId),
+  finishRun: (runId, workspace) => {
+    if (manager.isLive(runId)) manager.finish(runId)
+    else manager.endIdle(workspace, runId, 'finished').catch((err) => console.error('Finishing the run failed:', err))
+  },
   reply: (runId, text, workspace) => manager.reply(runId, text, () => contextForRun(runId, workspace)),
   onChange: (state) => emit('queue:changed', state)
 })

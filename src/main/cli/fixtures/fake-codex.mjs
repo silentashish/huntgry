@@ -1,6 +1,6 @@
 // Stands in for `codex exec --json … -` / `codex exec resume <thread> --json … -` in tests.
 // One turn per process: reads the whole prompt from stdin (until it is closed), answers, exits 0.
-//   "WRITE_OUTPUT" -> writes software-engineer/acme/42/{resume.pdf,build-report.json} under cwd first
+//   "WRITE_OUTPUT" -> writes software-engineer/acme/<job id from the prompt, else 42>/{resume.pdf,build-report.json} under cwd first
 //   "SLOW" -> waits 300 ms before answering
 //   "CRASH" -> prints to stderr and exits 3 before the turn ends
 //   "FAIL_TURN" -> prints turn.failed and exits 1
@@ -41,7 +41,7 @@ if (text.includes('FAIL_TURN')) {
   process.exit(1)
 }
 if (text.includes('WRITE_OUTPUT')) {
-  const dir = `${process.cwd()}/software-engineer/acme/42`
+  const dir = `${process.cwd()}/software-engineer/acme/${/Job id: ([\w-]+)/.exec(text)?.[1] ?? '42'}`
   mkdirSync(dir, { recursive: true })
   writeFileSync(`${dir}/resume.pdf`, '%PDF-1.4 fake')
   writeFileSync(`${dir}/build-report.json`, '{"ok": true}')

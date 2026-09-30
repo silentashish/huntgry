@@ -14,7 +14,7 @@
 //   "VERIFY_FAIL" -> like WRITE_NOTES, but build-report.json says ok: false with a failed hard check
 //   "NO_NOTES" -> like WRITE_OUTPUT (resume.pdf + ok report) without review-notes.md
 // Every mode is also honoured on a reply, so the second turn of a session can differ from the first
-// ("ASK" then "WRITE_NOTES" via the reply text). A reply containing "SECOND:<mode>" uses <mode>.
+// ("ASK" then "WRITE_NOTES" via the reply text); "SECOND:" in a reply is stripped, so a reply can say "SECOND:VERIFY_FAIL".
 // Closing stdin ends the process with code 0.
 // FAKE_CLAUDE_UNKNOWN=--flag in the env: behaves like an older CLI that rejects that flag.
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -39,8 +39,8 @@ for await (const line of createInterface({ input: process.stdin })) {
   const msg = JSON.parse(line)
   let text = String(msg.message?.content ?? '')
   turn++
-  const second = /SECOND:([A-Z_]+)/.exec(text)?.[1]
-  if (second) text = second
+  // "SECOND:" marks the mode words meant for this turn (the rest of the reply is kept, e.g. WRITE_OUTPUT_AT).
+  if (text.includes('SECOND:')) text = text.replace(/SECOND:/g, '')
   if (text.includes('CRASH')) {
     process.stderr.write('boom: simulated failure\n')
     process.exit(3)
