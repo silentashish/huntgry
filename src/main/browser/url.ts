@@ -1,4 +1,5 @@
 import { MAX_URL_LENGTH } from '@shared/browser-types'
+import { assertPublicUrl, resolveHost, type ResolveHost } from '../cli/public-url'
 
 /**
  * Address-bar input and navigation rules for the embedded browser. Pure, so
@@ -50,6 +51,21 @@ export function isAllowedNavigation(url: string): boolean {
     return protocol === 'http:' || protocol === 'https:'
   } catch {
     return false
+  }
+}
+
+/**
+ * Why `url` may not be loaded, or `null` when it may: a local or
+ * private-network address, or a name that does not resolve (so a typo says
+ * "Could not find …", not "private address").
+ */
+export async function refusalFor(url: string, resolve: ResolveHost = resolveHost): Promise<string | null> {
+  if (url === BLANK) return null
+  try {
+    await assertPublicUrl(url, resolve)
+    return null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
   }
 }
 

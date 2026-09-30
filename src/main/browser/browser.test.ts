@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { MAX_URL_LENGTH } from '@shared/browser-types'
 import { TabRegistry } from './tabs'
-import { isAllowedNavigation, loadErrorMessage, normalizeAddress } from './url'
+import { isAllowedNavigation, loadErrorMessage, normalizeAddress, refusalFor } from './url'
 import { requireRect, requireTabId, requireText } from './validate'
 
 describe('normalizeAddress', () => {
@@ -53,6 +53,25 @@ describe('loadErrorMessage', () => {
     expect(loadErrorMessage(-105, 'ERR_NAME_NOT_RESOLVED', 'https://nope.example/')).toBe(
       'Could not load nope.example (ERR_NAME_NOT_RESOLVED).'
     )
+  })
+})
+
+describe('refusalFor', () => {
+  const resolve = async (host: string) => {
+    if (host === 'nope.example') throw new Error('ENOTFOUND')
+    return host === 'intranet.example' ? ['10.0.0.5'] : ['93.184.216.34']
+  }
+
+  it('allows public hosts and the empty page', async () => {
+    expect(await refusalFor('https://jobs.example.com/1', resolve)).toBeNull()
+    expect(await refusalFor('about:blank', resolve)).toBeNull()
+  })
+
+  it('tells a private address from a name that does not resolve', async () => {
+    expect(await refusalFor('http://127.0.0.1:8080/', resolve)).toMatch(/127\.0\.0\.1:8080.*private/)
+    expect(await refusalFor('https://intranet.example/', resolve)).toMatch(/private/)
+    const unknown = await refusalFor('https://nope.example/', resolve)
+    expect(unknown).toBe('Could not find nope.example.')
   })
 })
 

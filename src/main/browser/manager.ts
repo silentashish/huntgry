@@ -9,11 +9,10 @@ import {
   type WebContents
 } from 'electron'
 import type { BrowserRect, BrowserState } from '@shared/browser-types'
-import { isPublicHost } from '../cli/public-host'
 import { emit } from '../events'
 import { browserSession, setDownloadRefusedHandler } from './session'
 import { TabRegistry } from './tabs'
-import { isAllowedNavigation, loadErrorMessage, normalizeAddress } from './url'
+import { isAllowedNavigation, loadErrorMessage, normalizeAddress, refusalFor } from './url'
 
 /**
  * The embedded browser: one `WebContentsView` per tab, children of the main
@@ -47,6 +46,9 @@ export class BrowserManager {
   async open(input: string, activate = true): Promise<BrowserState> {
     const address = input.trim() ? normalizeAddress(input) : ({ ok: true, url: 'about:blank' } as const)
     if (!address.ok) throw new Error(address.message)
+    // Refuse before creating the tab, so no tab ever holds an address it may not load.
+    const refusal = await refusalFor(address.url)
+    if (refusal) throw new Error(refusal)
     const tab = this.registry.open(address.url, activate)
     const view = new WebContentsView({
       webPreferences: {
@@ -63,7 +65,7 @@ export class BrowserManager {
     this.views.set(tab.id, view)
     this.win.contentView.addChildView(view)
     this.wire(tab.id, view.webContents)
-    await this.load(tab.id, address.url)
+    this.load(tab.id, address.url)
     this.layout()
     this.changed()
     return this.state()
@@ -90,7 +92,11 @@ export class BrowserManager {
   async navigate(id: string, input: string): Promise<BrowserState> {
     const address = normalizeAddress(input)
     if (!address.ok) throw new Error(address.message)
-    await this.load(id, address.url)
+    this.contents(id)
+    // A refused address leaves the tab as it was (page, URL and Open in browser all still agree).
+    const refusal = await refusalFor(address.url)
+    if (refusal) throw new Error(refusal)
+    this.load(id, address.url)
     this.changed()
     return this.state()
   }
@@ -114,7 +120,7 @@ export class BrowserManager {
   }
 
   async openExternal(id: string): Promise<void> {
-    const url = this.contents(id).getURL() || this.registry.get(id)?.url || ''
+    const url = this.contents(id).getURL()
     if (/^https?:\/\//i.test(url)) await shell.openExternal(url)
   }
 
@@ -158,12 +164,9 @@ export class BrowserManager {
     return undefined
   }
 
-  private async load(id: string, url: string): Promise<void> {
+  /** Loads an address that passed `refusalFor`. */
+  private load(id: string, url: string): void {
     this.registry.patch(id, { url, error: null })
-    if (url !== 'about:blank' && !(await isPublicHost(url))) {
-      this.registry.patch(id, { error: loadErrorMessage(-20, 'ERR_BLOCKED_BY_CLIENT', url) })
-      return
-    }
     // Failures arrive as `did-fail-load`; the promise only rejects for the same reason.
     this.contents(id)
       .loadURL(url)
@@ -224,7 +227,13 @@ export class BrowserManager {
     wc.on('did-fail-load', (_e, code, description, url, isMainFrame) => {
       if (!isMainFrame) return
       const error = loadErrorMessage(code, description, url)
-      if (error) sync({ error, loading: false })
+      if (!error) return
+      // The request guard cancels without a reason; re-check to tell a private address from an unknown name.
+      if (description === 'ERR_BLOCKED_BY_CLIENT') {
+        void refusalFor(url).then((refusal) => sync({ error: refusal ?? error, loading: false }))
+      } else {
+        sync({ error, loading: false })
+      }
     })
     wc.on('render-process-gone', (_e, details) => {
       sync({ error: `The page stopped (${details.reason}). Reload to try again.`, loading: false })
