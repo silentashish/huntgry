@@ -126,6 +126,8 @@ export interface StartRunParams {
   source?: JobSourceTag
   /** Agent to run with; the default agent from Settings when absent. */
   agent?: AgentId
+  /** Unattended run (#31): the unattended system prompt, auto-finished, result Unreviewed. */
+  unattended?: true
 }
 
 /** Recorded with the application in `huntgry.json`, so the Dashboard can show where a job came from. */
@@ -163,6 +165,22 @@ export interface RunSummary {
   /** The process is alive (a reply can be sent without resuming). */
   live: boolean
   error?: string
+  /** Started by the unattended pipeline (#31): replies and re-runs keep the unattended prompt. */
+  unattended?: true
+  /** Claude's latest `rate_limit_event` (absent for other agents and API-key sessions). */
+  rateLimit?: RunRateLimit
+  /** ISO time of the last stdout line of the current process; the pipeline's stall watchdog reads it. */
+  lastOutputAt?: string
+}
+
+/** From Claude Code's `rate_limit_event` → `rate_limit_info`. */
+export interface RunRateLimit {
+  status: 'allowed' | 'allowed_warning' | 'rejected'
+  /** Unix epoch seconds when the window resets. */
+  resetsAt?: number
+  rateLimitType?: string
+  /** 0–1 of the window used. */
+  utilization?: number
 }
 
 /** A rendered piece of the conversation, derived from the raw stream-json events. */

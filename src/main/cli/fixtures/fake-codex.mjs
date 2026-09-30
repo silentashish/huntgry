@@ -4,6 +4,7 @@
 //   "SLOW" -> waits 300 ms before answering
 //   "CRASH" -> prints to stderr and exits 3 before the turn ends
 //   "FAIL_TURN" -> prints turn.failed and exits 1
+//   "USAGE_LIMIT" -> turn.failed with Codex's usage-limit message (try again at Sep 24th, 2026 7:24 AM), exits 1
 //   "SILENT" -> exits 0 without ending the turn
 //   "EMPTY" -> ends the turn with no item and zero output tokens, exits 0
 //   "REASONING_ONLY" -> ends the turn with only a reasoning item (still zero output tokens reported)
@@ -30,6 +31,10 @@ if (text.includes('EMPTY') || text.includes('REASONING_ONLY')) {
   if (text.includes('REASONING_ONLY')) out({ type: 'item.completed', item: { id: 'item_0', type: 'reasoning', text: 'thinking' } })
   out({ type: 'turn.completed', usage: { input_tokens: 500, cached_input_tokens: 0, output_tokens: 0 } })
   process.exit(0)
+}
+if (text.includes('USAGE_LIMIT')) {
+  out({ type: 'turn.failed', error: { message: "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 24th, 2026 7:24 AM." } })
+  process.exit(1)
 }
 if (text.includes('FAIL_TURN')) {
   out({ type: 'turn.failed', error: { message: 'stream disconnected before completion' } })
