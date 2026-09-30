@@ -1,3 +1,4 @@
+import { isLoopbackUrl } from './dev-urls'
 import { assertPublicUrl, resolveHost, type ResolveHost } from './public-url'
 
 /**
@@ -39,3 +40,19 @@ export const isPublicHost: PublicHostCheck = createPublicHostCheck()
 
 /** URL patterns `guardSession` checks: everything that can leave the machine from a page. */
 export const GUARDED_URLS = ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*']
+
+/**
+ * The `webRequest.onBeforeRequest` listener of a guarded session: cancels
+ * every request whose host is not public. With `allowLoopback` (the dev-only
+ * `HUNTGRY_ALLOW_LOCAL_URLS=1` allowance, see cli/dev-urls.ts) loopback
+ * addresses pass without a check; private-network addresses stay refused.
+ */
+export function createRequestGuard(
+  allowLoopback: boolean,
+  check: PublicHostCheck = isPublicHost
+): (details: { url: string }, callback: (response: { cancel: boolean }) => void) => void {
+  return (details, callback) => {
+    if (allowLoopback && isLoopbackUrl(details.url)) return callback({ cancel: false })
+    void check(details.url).then((ok) => callback({ cancel: !ok }))
+  }
+}

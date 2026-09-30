@@ -1,8 +1,8 @@
 import { app, session, type Session, type WebContents } from 'electron'
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { isLoopbackUrl, localUrlsAllowed } from '../cli/dev-urls'
-import { GUARDED_URLS, isPublicHost } from '../cli/public-host'
+import { localUrlsAllowed } from '../cli/dev-urls'
+import { createRequestGuard, GUARDED_URLS } from '../cli/public-host'
 
 /**
  * The embedded browser's cookie jar: a persistent partition of its own (not
@@ -37,11 +37,7 @@ export function browserSession(): Session {
   })
   // Same SSRF guard as the job-board loader: no page, redirect or subresource may reach localhost or the private network
   // (except loopback in a dev build started with HUNTGRY_ALLOW_LOCAL_URLS=1, for the mock ATS of #24).
-  const loopbackOk = localUrlsAllowed(app.isPackaged)
-  s.webRequest.onBeforeRequest({ urls: GUARDED_URLS }, (details, callback) => {
-    if (loopbackOk && isLoopbackUrl(details.url)) return callback({ cancel: false })
-    void isPublicHost(details.url).then((ok) => callback({ cancel: !ok }))
-  })
+  s.webRequest.onBeforeRequest({ urls: GUARDED_URLS }, createRequestGuard(localUrlsAllowed(app.isPackaged)))
   configured = s
   void loadExtensions(s)
   return s

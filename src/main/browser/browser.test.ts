@@ -73,6 +73,14 @@ describe('refusalFor', () => {
     const unknown = await refusalFor('https://nope.example/', resolve)
     expect(unknown).toBe('Could not find nope.example.')
   })
+
+  it('with the dev loopback allowance lets loopback through and still refuses the private network', async () => {
+    expect(await refusalFor('http://127.0.0.1:8080/', resolve, true)).toBeNull()
+    expect(await refusalFor('http://localhost:8080/lever/', resolve, true)).toBeNull()
+    expect(await refusalFor('http://10.0.0.5/', resolve, true)).toMatch(/10\.0\.0\.5.*private/)
+    expect(await refusalFor('http://169.254.169.254/latest', resolve, true)).toMatch(/private/)
+    expect(await refusalFor('https://intranet.example/', resolve, true)).toMatch(/private/)
+  })
 })
 
 describe('TabRegistry', () => {

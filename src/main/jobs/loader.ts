@@ -1,6 +1,7 @@
-import { BrowserWindow, session } from 'electron'
-import { GUARDED_URLS, isPublicHost } from '../cli/public-host'
-import { assertPublicUrl } from '../cli/public-url'
+import { app, BrowserWindow, session } from 'electron'
+import { localUrlsAllowed } from '../cli/dev-urls'
+import { createRequestGuard, GUARDED_URLS } from '../cli/public-host'
+import { refusalFor } from '../browser/url'
 import { isBlockedPage } from './blocked'
 
 /**
@@ -30,10 +31,9 @@ function configureSession(): Electron.Session {
   s.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))
   s.on('will-download', (e) => e.preventDefault())
   // A posting URL is user input: neither it, nor a redirect, nor anything the page requests may reach
-  // localhost or the private network (SSRF). Checked per request, cached per host for a minute.
-  s.webRequest.onBeforeRequest({ urls: GUARDED_URLS }, (details, callback) => {
-    void isPublicHost(details.url).then((ok) => callback({ cancel: !ok }))
-  })
+  // localhost or the private network (SSRF). Checked per request, cached per host for a minute. Loopback
+  // passes only in a dev build started with HUNTGRY_ALLOW_LOCAL_URLS=1 (mock job boards), like the browser session.
+  s.webRequest.onBeforeRequest({ urls: GUARDED_URLS }, createRequestGuard(localUrlsAllowed(app.isPackaged)))
   configured = s
   return s
 }
@@ -61,11 +61,9 @@ async function load(url: string, extract: string, timeoutMs: number): Promise<Lo
   } catch {
     return { status: 'error', message: 'Not a valid URL.' }
   }
-  try {
-    await assertPublicUrl(url)
-  } catch (err) {
-    return { status: 'error', message: err instanceof Error ? err.message : String(err) }
-  }
+  // Same rule as the embedded browser: public hosts only, loopback only with the dev allowance.
+  const refusal = await refusalFor(url, undefined, localUrlsAllowed(app.isPackaged))
+  if (refusal) return { status: 'error', message: refusal }
   const wait = (lastLoad.get(host) ?? 0) + MIN_GAP_MS - Date.now()
   if (wait > 0) await new Promise((r) => setTimeout(r, wait))
   lastLoad.set(host, Date.now())
