@@ -1,0 +1,12 @@
+<!-- A form whose only upload is an unlabelled PDF field (a portfolio / work sample, no resume field). Written
+     2026-09-30 after review: the tailored resume must never be uploaded here, and the page must not be
+     auto-filled as an application. -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>Submit your portfolio - Example Co</title></head><body>
+<h1>Share your work</h1>
+<form action="/generic/portfolio" method="POST" enctype="multipart/form-data">
+  <p><label for="n">Full name</label> <input id="n" name="full_name"></p>
+  <p><label for="e">Email</label> <input id="e" name="email" type="email"></p>
+  <p><input id="upload" name="upload" type="file" accept=".pdf"></p>
+  <p><button type="submit">Send</button></p>
+</form>
+</body></html>

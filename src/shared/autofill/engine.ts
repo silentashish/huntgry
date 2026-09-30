@@ -67,7 +67,6 @@ function plan(adapter: Adapter, root: Element): Planned[] {
     if (el && isControl(el) && isRelevant(el) && !known.has(el)) known.set(el, key)
   }
   const claimedByAdapter = new Set(known.values())
-  const fileInputs = controls.filter((c) => kindOf(c) === 'file')
 
   const planned: Planned[] = controls.map((el) => {
     const adapterKey = known.get(el)
@@ -77,10 +76,15 @@ function plan(adapter: Adapter, root: Element): Planned[] {
       return { el, key: null, score: 0, outcome: 'skipped-unsupported', reason: 'A choice; pick it yourself.' }
     }
     let match: Match | null = null
-    if (kind === 'file') match = matchFileField(el, fileInputs.length === 1)
+    if (kind === 'file') match = matchFileField(el)
     else if (kind === 'text') match = matchTextField(el)
-    if (!match)
-      return { el, key: null, score: 0, outcome: 'unmatched', reason: 'Huntgry does not answer this; fill it in.' }
+    if (!match) {
+      const reason =
+        kind === 'file'
+          ? 'Not a resume or cover-letter upload; attach it yourself.'
+          : 'Huntgry does not answer this; fill it in.'
+      return { el, key: null, score: 0, outcome: 'unmatched', reason }
+    }
     if (claimedByAdapter.has(match.key)) {
       return { el, key: null, score: 0, outcome: 'unmatched', reason: 'Another field already takes this value.' }
     }
@@ -135,7 +139,7 @@ export function scanPage(doc: Document): PageScan {
     text: (doc.body?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 3000),
     confirmation: adapter.isConfirmation(url, doc),
     formFound: controls.some((c) => kindOf(c) === 'text' || kindOf(c) === 'file'),
-    hasResumeInput: controls.some((c) => matchFileField(c, true)?.key === 'resume' || c.id === 'resume'),
+    hasResumeInput: controls.some((c) => matchFileField(c)?.key === 'resume'),
     embedUrl
   }
 }

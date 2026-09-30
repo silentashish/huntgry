@@ -61,27 +61,37 @@ function byRules(words: string): TextKey | null {
   return null
 }
 
-/** Best guess for a text field, or `null`. */
+/**
+ * Best guess for a text field, or `null`. A negative word in *any* of the
+ * label, `name`, `id` or placeholder rules the field out before anything else
+ * is considered: `<label>Company <input name=previous_employer>` or a
+ * `reference_email` labelled "Email" is never the applicant's own.
+ */
 export function matchTextField(el: FormControl): Match | null {
-  const auto = (el.getAttribute('autocomplete') ?? '').toLowerCase().trim().split(/\s+/).pop() ?? ''
   const label = identifierWords(labelOf(el))
+  const ids = identifierWords(`${el.getAttribute('name') ?? ''} ${el.id}`.trim())
+  const placeholder = identifierWords(el.getAttribute('placeholder') ?? '')
+  if ([label, ids, placeholder].some((words) => NEGATIVE.test(words))) return null
+  const auto = (el.getAttribute('autocomplete') ?? '').toLowerCase().trim().split(/\s+/).pop() ?? ''
+  if (AUTOCOMPLETE[auto]) return { key: AUTOCOMPLETE[auto], score: 3 }
+  const idKey = byRules(ids)
+  if (idKey) return { key: idKey, score: 2 }
   // A long label is a custom question ("Why do you want to join…"), not a contact field.
   const labelKey = label.length <= 80 ? byRules(label) : null
-  const negative = NEGATIVE.test(label)
-  if (AUTOCOMPLETE[auto] && !negative) return { key: AUTOCOMPLETE[auto], score: 3 }
-  const idKey = negative ? null : byRules(identifierWords(`${el.getAttribute('name') ?? ''} ${el.id}`.trim()))
-  if (idKey) return { key: idKey, score: 2 }
   if (labelKey) return { key: labelKey, score: 1 }
   return null
 }
 
-/** `resume` or `coverLetter` for a file input, from its label, name, id and group heading. */
-export function matchFileField(el: FormControl, onlyFileInput: boolean): Match | null {
+/**
+ * `resume` or `coverLetter` for a file input, only when its label, name, id or
+ * group heading says so. An unnamed or other upload ("Portfolio", "Work
+ * sample", `name=attachment` with `accept=.pdf`) is left to the user: the
+ * tailored resume must never land in a field that did not ask for it.
+ */
+export function matchFileField(el: FormControl): Match | null {
   if (kindOf(el) !== 'file') return null
   const words = identifierWords(`${labelOf(el)} ${el.getAttribute('name') ?? ''} ${el.id}`)
   if (/\bcover\b/.test(words)) return { key: 'coverLetter', score: 2 }
   if (/\b(resume|cv|curriculum)\b|résumé/.test(words)) return { key: 'resume', score: 2 }
-  const accept = (el.getAttribute('accept') ?? '').toLowerCase()
-  if (onlyFileInput && (!accept || /pdf|doc/.test(accept))) return { key: 'resume', score: 1 }
   return null
 }

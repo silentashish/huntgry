@@ -214,11 +214,51 @@ describe('generic heuristic', () => {
     // Passwords are never reported or touched.
     expect(report.fields.some((f) => f.label.includes('password'))).toBe(false)
     expect(field(report, 'Upload your CV')).toMatchObject({ key: 'resume', outcome: 'to-upload' })
+    // A label that contradicts a negative field name: the name wins, the field is left alone.
+    expect(field(report, 'Company')).toMatchObject({ key: null, outcome: 'unmatched' })
+    expect(input(dom, '[name="previous_employer"]').value).toBe('')
+    expect(input(dom, '[name="reference_email"]').value).toBe('')
+    expect(report.fields.filter((f) => f.key === 'email').map((f) => f.label)).toEqual(['Email address'])
+    // Uploads that did not ask for a resume are never marked.
+    expect(field(report, 'Portfolio')).toMatchObject({ key: null, kind: 'file', outcome: 'unmatched' })
+    expect(field(report, 'Work sample')).toMatchObject({ key: null, kind: 'file', outcome: 'unmatched' })
+    expect(input(dom, '#pf').hasAttribute(UPLOAD_ATTR)).toBe(false)
+    expect(input(dom, '#ws').hasAttribute(UPLOAD_ATTR)).toBe(false)
+    expect(dom.window.document.querySelectorAll(`[${UPLOAD_ATTR}]`)).toHaveLength(1)
     expect(field(report, 'Gender (optional)').outcome).toBe('skipped-unsupported')
     expect(field(report, 'Are you authorized to work in the country?').outcome).toBe('skipped-unsupported')
     expect(field(report, 'I consent to the processing of my data.').outcome).toBe('skipped-unsupported')
     expect(report.hasSubmitButton).toBe(true)
     check()
+  })
+
+  it('never takes a lone unlabelled or portfolio upload for the resume', () => {
+    const dom = page('generic-portfolio.html', URL)
+    expect(scanPage(dom.window.document)).toMatchObject({ ats: 'generic', formFound: true, hasResumeInput: false })
+    const report = fillPage(dom.window.document, VALUES)
+    expect(report.fields.find((f) => f.kind === 'file')).toMatchObject({ key: null, outcome: 'unmatched' })
+    expect(input(dom, '#upload').hasAttribute(UPLOAD_ATTR)).toBe(false)
+  })
+
+  it('rules a field out when its name or placeholder is negative, whatever its label', () => {
+    const dom = new JSDOM(
+      `<form>
+        <label>Company <input name="previous_employer"></label>
+        <label>Email <input name="reference_email" autocomplete="email"></label>
+        <label>Phone <input name="phone" placeholder="Emergency contact number"></label>
+        <label>Email <input name="applicant_email"></label>
+        <input type="file" name="resume">
+      </form>`,
+      { url: URL }
+    )
+    const report = fillPage(dom.window.document, VALUES)
+    expect(report.fields.map((f) => [f.label, f.key, f.outcome])).toEqual([
+      ['Company', null, 'unmatched'],
+      ['Email', null, 'unmatched'],
+      ['Phone', null, 'unmatched'],
+      ['Email', 'email', 'filled'],
+      ['resume', 'resume', 'to-upload']
+    ])
   })
 
   it('recognises a thank-you page without a form', () => {

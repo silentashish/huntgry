@@ -1,7 +1,9 @@
 <!-- A company-hosted application form with no known ATS, for the generic label/autocomplete heuristic.
      Written 2026-09-30 to exercise its rules: autocomplete beats labels, negatives ("Previous employer",
-     "Emergency contact"), an ambiguous pair (two "Phone" fields), a PDF file input, and fields that must stay
-     untouched (EEO select, consent checkbox, radio group, password). -->
+     "Emergency contact"), an ambiguous pair (two "Phone" fields), a CV file input, and fields that must stay
+     untouched (EEO select, consent checkbox, radio group, password). Added after review: labels that contradict
+     their field names (previous_employer labelled "Company", reference_email labelled "Email") and uploads that
+     are not the resume (portfolio without accept, a PDF work sample). -->
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>Apply - Software Engineer - Example Co</title></head><body>
 <h1>Apply: Software Engineer</h1>
 <form id="apply" action="/generic/submit" method="POST" enctype="multipart/form-data">
@@ -18,7 +20,11 @@
   <p><label for="em">Emergency contact phone</label> <input id="em" name="ice" type="tel"></p>
   <p><label for="start">Earliest start date</label> <input id="start" name="start" type="date"></p>
   <p><label for="pw">Create a password</label> <input id="pw" name="pw" type="password"></p>
+  <p><label>Company <input name="previous_employer"></label></p>
+  <p><label for="ref">Email</label> <input id="ref" name="reference_email" type="email"></p>
   <p><label for="cv">Upload your CV</label> <input id="cv" name="attachment_1" type="file" accept=".pdf,.docx"></p>
+  <p><label for="pf">Portfolio</label> <input id="pf" name="portfolio" type="file"></p>
+  <p><label for="ws">Work sample</label> <input id="ws" name="attachment_2" type="file" accept=".pdf"></p>
   <p><label for="why">Why do you want to work here?</label> <textarea id="why" name="why"></textarea></p>
   <p><label for="gender">Gender (optional)</label> <select id="gender" name="gender"><option value="">Choose</option><option>Prefer not to say</option></select></p>
   <fieldset><legend>Are you authorized to work in the country?</legend>
