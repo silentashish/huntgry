@@ -57,6 +57,8 @@ interface Live {
   /** Index the next recorded event gets in `events.jsonl`. */
   seq: number
   stopping: boolean
+  /** Set by `abort()`: the run fails with this reason when the process exits. */
+  aborted?: string
   finishing: boolean
   turnStartedAt: number
 }
@@ -97,7 +99,8 @@ export class RunManager {
       outputFolder: null,
       outputFiles: [],
       costUsd: 0,
-      live: true
+      live: true,
+      ...(params.unattended ? { unattended: true as const } : {})
     }
     await saveRun(ctx.workspace, run)
     this.spawnFor(run, ctx, null, 0)
@@ -144,6 +147,21 @@ export class RunManager {
     const entry = this.live.get(id)
     if (!entry) return
     entry.stopping = true
+    this.kill(entry)
+  }
+
+  /**
+   * Kills a run that Huntgry gave up on (the pipeline's stall watchdog): the run ends `failed`
+   * with `reason`, not `stopped` (which the queue reads as cancelled), so it can be retried.
+   */
+  abort(id: string, reason: string): void {
+    const entry = this.live.get(id)
+    if (!entry) return
+    entry.aborted = reason
+    this.kill(entry)
+  }
+
+  private kill(entry: Live): void {
     entry.child.kill('SIGTERM')
     // Claude handles SIGTERM quickly; make sure nothing is left behind.
     setTimeout(() => {
@@ -255,6 +273,7 @@ export class RunManager {
       turnContent: 0,
       turnStartedAt: Date.now()
     }
+    entry.run.lastOutputAt = new Date().toISOString()
     this.live.set(run.id, entry)
 
     const lines = new LineBuffer()
@@ -281,6 +300,9 @@ export class RunManager {
       const exec = adapter.turnMode === 'exec'
       if (entry.stopping) {
         r.status = 'stopped'
+      } else if (entry.aborted) {
+        r.status = 'failed'
+        r.error = entry.aborted
       } else if (entry.finishing || (code === 0 && !exec && !entry.turnError)) {
         r.status = 'finished'
       } else if (r.status !== 'waiting' || entry.turnError) {
@@ -331,9 +353,21 @@ export class RunManager {
     const event = parseEventLine(line)
     if (!event) return
     const signal = entry.adapter.signal(event)
-    if (signal.type === 'drop') return
-    this.record(entry, event)
     const r = entry.run
+    r.lastOutputAt = new Date().toISOString()
+    if (signal.type === 'drop') return
+    if (signal.type === 'rate-limit') {
+      // Not recorded (nothing for the transcript); the pipeline reads it from the summary.
+      r.rateLimit = {
+        status: signal.status,
+        ...(signal.resetsAt !== undefined ? { resetsAt: signal.resetsAt } : {}),
+        ...(signal.rateLimitType ? { rateLimitType: signal.rateLimitType } : {}),
+        ...(signal.utilization !== undefined ? { utilization: signal.utilization } : {})
+      }
+      this.touch(entry)
+      return
+    }
+    this.record(entry, event)
     if (signal.type === 'keep' && signal.content) entry.turnContent++
     if (signal.type === 'init') {
       r.sessionId = signal.sessionId

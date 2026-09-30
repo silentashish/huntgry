@@ -83,6 +83,26 @@ export async function listRuns(workspace: string): Promise<RunSummary[]> {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
 }
 
+/**
+ * Median wall time (ms) of the newest `sample` finished runs matching `filter`, or `null`
+ * when there are none. The pipeline's duration estimate.
+ */
+export async function medianRunDuration(
+  workspace: string,
+  filter: { unattended?: boolean } = {},
+  sample = 20
+): Promise<number | null> {
+  const runs = (await listRuns(workspace))
+    .filter((r) => r.status === 'finished' && (filter.unattended === undefined || !!r.unattended === filter.unattended))
+    .slice(0, sample)
+    .map((r) => Date.parse(r.updatedAt) - Date.parse(r.createdAt))
+    .filter((ms) => Number.isFinite(ms) && ms > 0)
+    .sort((a, b) => a - b)
+  if (runs.length === 0) return null
+  const mid = Math.floor(runs.length / 2)
+  return runs.length % 2 ? runs[mid] : Math.round((runs[mid - 1] + runs[mid]) / 2)
+}
+
 /** Files a run's application folder can hold that are worth opening from the app. */
 export const OUTPUT_FILES = [
   'resume.pdf',
@@ -92,7 +112,8 @@ export const OUTPUT_FILES = [
   'build-report.json',
   'resume_data.json',
   'cover_data.json',
-  'resume.tex'
+  'resume.tex',
+  'review-notes.md'
 ] as const
 
 /** Lowercase dash slug, as the skill names `<role>/<company>/<job-id>` folders. */

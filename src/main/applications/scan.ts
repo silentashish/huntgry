@@ -25,7 +25,8 @@ export const KNOWN_FILES = [
   'resume_data.json',
   'cover_data.json',
   'resume.tex',
-  'cover.tex'
+  'cover.tex',
+  'review-notes.md'
 ] as const
 
 const PAGE_IMAGE = /^(resume|cover)-page-(\d+)\.jpe?g$/

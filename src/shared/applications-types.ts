@@ -1,3 +1,5 @@
+import type { ReviewTracking } from './review-types'
+
 /**
  * Generated applications: the `<role>/<company>/<job-id>/` folders the
  * resume-tailor skill writes into the workspace, plus Huntgry's tracking
@@ -19,6 +21,8 @@ export interface ApplicationTracking {
   /** Job posting URL; overrides the one found in `job-description.md`. */
   jobUrl?: string
   source?: JobSource
+  /** Set by the unattended pipeline (#31); cleared only by the Review page. */
+  review?: ReviewTracking
 }
 
 export interface BuildSummary {

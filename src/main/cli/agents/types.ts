@@ -1,4 +1,4 @@
-import type { AgentId, TokenUsage } from '@shared/runner-types'
+import type { AgentId, RunRateLimit, TokenUsage } from '@shared/runner-types'
 import type { SandboxPaths } from '../command'
 
 /**
@@ -32,6 +32,8 @@ export type AgentSignal =
   | { type: 'init'; sessionId: string }
   /** The turn ended: the agent waits for the user. `error` = the turn failed. */
   | { type: 'turn-end'; sessionId?: string; costUsd?: number; usage?: TokenUsage; error?: string }
+  /** Claude's `rate_limit_event`: stored on the run (not shown), read by the unattended pipeline. */
+  | { type: 'rate-limit'; status: RunRateLimit['status']; resetsAt?: number; rateLimitType?: string; utilization?: number }
 
 export interface AgentAdapter {
   id: AgentId

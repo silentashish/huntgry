@@ -127,15 +127,71 @@ export function buildClaudeArgs(opts: ClaudeArgsOptions): string[] {
   return args
 }
 
-/** Context every run gets on top of Claude Code's own system prompt. */
-export function buildSystemPrompt(opts: { workspace: string; masterProfile: string; skillDir: string }): string {
+/** The step-3 sentence of an attended run: the agent stops and waits for the user. */
+export const ATTENDED_APPROVAL_LINE =
+  'Follow the skill exactly, including its honesty rule and step 3: stop after the gap analysis, show the proposed reframings and bullets, and wait for the user to approve before writing resume_data.json.'
+
+export const REVIEW_NOTES_FILE = 'review-notes.md'
+
+/** What an unattended run needs beyond the attended prompt (see `unattendedBlock`). */
+export interface UnattendedPromptOptions {
+  /** Standing approvals the run may use as they are (newest first, already capped). */
+  approvals: { sourceFact: string; wording: string }[]
+}
+
+/**
+ * The lines that replace `ATTENDED_APPROVAL_LINE` in an unattended run (#31).
+ * Nobody answers, so the user's standing decision stands in for step 3: use
+ * only direct hits from the master profile and the listed standing approvals,
+ * leave every other reframing out and write it to `review-notes.md` for the
+ * user to review afterwards. The skill itself is unchanged.
+ */
+export function unattendedBlock(opts: UnattendedPromptOptions): string[] {
+  const approvals = JSON.stringify(opts.approvals)
+  return [
+    'UNATTENDED RUN. Nobody is reading this conversation and nobody will answer a question, so never stop to ask and never end your turn with a question. Follow the skill, including its honesty rule, with one change: do steps 1 and 2, then apply the approval rule below instead of step 3, then steps 4 to 7 in this same turn, and end with the absolute path of the application folder.',
+    'APPROVAL RULE (the user\'s standing decision for this run). Without asking, you may use: (a) direct hits: facts the master profile states in the job description\'s own terms; (b) standing approvals from the list below: a reframing whose source fact and wording match one of them (same fact, same or shorter wording, no new number or claim). Everything else, every bridgeable reframing you would normally propose in step 3 and anything you are unsure about, is LEFT OUT of the resume and cover letter: not softened, not invented, not hinted at. The honesty rule still outranks everything.',
+    `REVIEW NOTES. Right after the gap analysis and before the build, write ${REVIEW_NOTES_FILE} in the application folder (it exists since step 1) in exactly this format, and update it if anything changes later:`,
+    '```markdown',
+    '# Review notes',
+    '<!-- huntgry-review v1 · run <run id> · unattended -->',
+    '',
+    '## Used standing approvals',
+    '- Source fact: <verbatim>',
+    '  Wording: <as written in the resume>',
+    '',
+    '## Proposed reframings (not used)',
+    '### R1 · <requirement from the job description>',
+    '- Source fact: <verbatim sentence or bullet from the master profile>',
+    '- Proposed wording: <the bullet you would have written, at most 120 characters>',
+    '- Why unsure: <one line>',
+    '',
+    '## Open gaps',
+    '- <requirement>: nothing honest to say',
+    '',
+    '## Notes',
+    '<anything else the user should know, e.g. the cover letter angle>',
+    '```',
+    'List every reframing you did NOT use (with the verbatim source fact and the exact wording you would have written), every genuine gap left open, and every standing approval you did use. Write "None." under a section that has nothing.',
+    'BUILD AND VERIFY as usual (steps 5 and 6): run build.py, read build-report.json, look at the page images, fix hard failures and rebuild. If a hard check still fails after two rebuilds, stop and say which check fails.',
+    `STANDING APPROVALS (JSON, newest first): ${approvals}`
+  ]
+}
+
+/** Context every run gets on top of Claude Code's own system prompt; `unattended` swaps the step-3 line for the unattended block. */
+export function buildSystemPrompt(opts: {
+  workspace: string
+  masterProfile: string
+  skillDir: string
+  unattended?: UnattendedPromptOptions
+}): string {
   return [
     'You are running inside Huntgry, a desktop app around the resume-tailor skill.',
     'The user reads your messages in a chat panel and answers there; they cannot see tool output unless you summarise it.',
     `CV_HOME is already set in the environment to the workspace: ${opts.workspace}`,
     `The master profile is ${opts.workspace}/${opts.masterProfile}. It is the only source of facts about the user.`,
     `The resume-tailor skill is at ${opts.skillDir}: read ${opts.skillDir}/SKILL.md first and follow it (its references/ and assets/ are there too). Run its scripts only as \`python3 ${opts.skillDir}/scripts/<script>.py …\` with that absolute path, from the workspace, one command per call (no cd, no &&, no environment-variable prefixes). python3, pdflatex and poppler are on PATH. Other shell commands, inline Python, file access outside the workspace and web access are blocked; the job description is in the first message.`,
-    'Follow the skill exactly, including its honesty rule and step 3: stop after the gap analysis, show the proposed reframings and bullets, and wait for the user to approve before writing resume_data.json.',
+    ...(opts.unattended ? unattendedBlock(opts.unattended) : [ATTENDED_APPROVAL_LINE]),
     'Keep role, company and job-id as short lowercase slugs so the output lands in CV_HOME/<role>/<company>/<job-id>/.',
     `Write draft payloads (resume_data.json, cover_data.json) under ${opts.workspace}/.huntgry/drafts/<role>-<company>-<job-id>/, not elsewhere in the workspace; build.py copies what it needs into the application folder.`,
     'When the build is done, end your message with the absolute path of the application folder and the files it contains.'
@@ -214,6 +270,7 @@ export function requireStartParams(input: unknown): StartRunParams {
     if (!isAgentId(p.agent)) throw new Error('Unknown agent.')
     params.agent = p.agent
   }
+  if (p.unattended === true) params.unattended = true
   if (params.jobUrl && !/^https?:\/\//i.test(params.jobUrl))
     throw new Error('The job URL must start with http:// or https://.')
   if (!params.jobDescription?.trim() && !params.jobUrl)
