@@ -416,6 +416,11 @@ export function JobsPage() {
           setSelection(new Set())
           navigate('tailor', { view: 'queue' })
         }}
+        onStarted={() => {
+          setBulkOpen(false)
+          setSelection(new Set())
+          navigate('tailor', { view: 'queue' })
+        }}
       />
       <JobDrawer job={open} onClose={() => setOpenId(null)} onChange={(j) => upsert([j])} onTailor={tailor} />
       <PasteModal

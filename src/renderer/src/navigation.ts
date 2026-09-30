@@ -30,6 +30,8 @@ export interface PageParams {
         agent?: AgentId
       }
     | undefined
+  /** Unattended results to review (#31); opens on one application when given. */
+  review: { applicationId?: string } | undefined
   graph: { nodeId?: string } | undefined
   profile: { section?: ProfileSection } | undefined
   settings: undefined
@@ -44,7 +46,7 @@ export type ProfileSection = 'contact' | 'summary' | 'experience' | 'projects' |
 export type Location = { [P in Page]: { page: P; params: PageParams[P] } }[Page]
 
 /** Navbar order. */
-export const PAGES: readonly Page[] = ['dashboard', 'jobs', 'browser', 'tailor', 'graph', 'profile', 'settings']
+export const PAGES: readonly Page[] = ['dashboard', 'jobs', 'browser', 'tailor', 'review', 'graph', 'profile', 'settings']
 
 /** Pages drawn edge to edge, without the shell's padding and max width. */
 export const FULL_BLEED: ReadonlySet<Page> = new Set<Page>(['browser'])

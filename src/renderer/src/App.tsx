@@ -13,6 +13,7 @@ import { DashboardPage } from './pages/dashboard'
 import { GraphPage } from './pages/graph'
 import { JobsPage } from './pages/jobs'
 import { ProfilePage } from './pages/profile'
+import { ReviewPage } from './pages/review'
 import { SettingsPage } from './pages/settings'
 import { TailorPage } from './pages/tailor'
 
@@ -80,6 +81,8 @@ export function App() {
               return <BrowserPage params={paramsFor(location, 'browser')} />
             case 'tailor':
               return <TailorPage params={paramsFor(location, 'tailor')} />
+            case 'review':
+              return <ReviewPage params={paramsFor(location, 'review')} />
             case 'graph':
               return <GraphPage params={paramsFor(location, 'graph')} />
             case 'settings':
