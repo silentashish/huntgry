@@ -1,0 +1,5 @@
+{
+  "contact": { "name": "Alex Rivera", "email": "alex.rivera@example.com" },
+  "summary": "Backend engineer with TypeScript experience on internal tools.",
+  "skills": [{ "category": "Languages", "items": ["TypeScript", "Go"] }]
+}

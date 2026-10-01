@@ -1,0 +1,5 @@
+{
+  "contact": { "name": "Alex Rivera", "email": "alex.rivera@example.com" },
+  "summary": "Backend engineer moving toward data platforms: Python, SQL and PostgreSQL.",
+  "skills": [{ "category": "Languages", "items": ["Python", "SQL"] }]
+}

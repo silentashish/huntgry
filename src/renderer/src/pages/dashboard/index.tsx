@@ -168,12 +168,14 @@ export function DashboardPage() {
             <TextInput
               style={{ flex: 1 }}
               leftSection={<IconSearch size={16} />}
+              aria-label="Search applications"
               placeholder="Search company, role, title, notes"
               value={filter.text}
               onChange={(e) => setFilter({ ...filter, text: e.currentTarget.value })}
             />
             <MultiSelect
               w={260}
+              aria-label="Filter by status"
               placeholder={filter.statuses.length ? undefined : 'All but archived'}
               data={APPLICATION_STATUSES.map((s) => ({ value: s, label: STATUS_META[s].label }))}
               value={filter.statuses}
@@ -181,6 +183,7 @@ export function DashboardPage() {
               clearable
             />
             <Select
+              aria-label="Sort applications"
               w={150}
               data={[
                 { value: 'newest', label: 'Newest first' },
