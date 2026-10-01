@@ -14,10 +14,14 @@ export type FixtureWorkspace = (typeof FIXTURE_WORKSPACES)[number]
 const FIXTURES = resolve(__dirname, 'workspaces')
 const RESUMES = resolve(__dirname, 'resumes')
 
-/** Copies `e2e/fixtures/workspaces/<name>` into `into/<name>` (dot folders included) and returns its real path. */
+/**
+ * Copies `e2e/fixtures/workspaces/<name>` into `into/<name>` (dot folders included) and returns its real path.
+ * Timestamps are kept: a fixture application folder must not look freshly written, or the runner could take
+ * it for the output of a run that started right after seeding (`findOutputFolder` picks folders by mtime).
+ */
 export async function seedWorkspace(name: FixtureWorkspace, into: string, as: string = name): Promise<string> {
   const target = join(into, as)
-  await cp(join(FIXTURES, name), target, { recursive: true })
+  await cp(join(FIXTURES, name), target, { recursive: true, preserveTimestamps: true })
   return realpath(target)
 }
 
