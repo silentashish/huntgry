@@ -36,7 +36,11 @@ export function RunList({ runs, selected, onSelect }: Props) {
         {runs.map((r) => (
           <NavLink
             key={r.id}
+            // A real button: an <a> without href has no role, no accessible name and cannot take focus.
+            component="button"
+            type="button"
             active={r.id === selected}
+            aria-current={r.id === selected ? 'true' : undefined}
             onClick={() => onSelect(r.id)}
             label={
               <Text size="sm" fw={500} truncate>

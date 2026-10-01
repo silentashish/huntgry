@@ -68,6 +68,9 @@ export function appEnv(sandbox: Sandbox, extra: Record<string, string> = {}): Re
     PATH: `${sandbox.bin}:${SYSTEM_PATH}`,
     HUNTGRY_E2E: '1',
     HUNTGRY_ALLOW_LOCAL_URLS: '1',
+    // The system python3 (the skill's preflight) caches bytecode under ~/Library/Caches; a check still running
+    // when the app quits would recreate the removed sandbox HOME for it.
+    PYTHONDONTWRITEBYTECODE: '1',
     HUNTGRY_E2E_LOOPBACK_ONLY: '1',
     ...extra
   }
@@ -208,6 +211,17 @@ export interface AppFixture extends LaunchedApp {
   relaunch(): Promise<void>
 }
 
+/**
+ * Something a spec needs in the sandbox before the app starts (fake CLIs, a
+ * planted file, a local server): `prepare` runs after the workspace is seeded
+ * and before the first launch. What it returns is added to the app's
+ * environment, for `relaunch()` too. An object, not a bare function: a function
+ * given to `test.use` would be taken for a fixture override.
+ */
+export interface Preparer {
+  prepare(ctx: { sandbox: Sandbox; workspace: string | null }): Promise<Record<string, string> | void>
+}
+
 export interface AppOptions {
   /**
    * Fixture workspace to seed and remember in settings.json before the first
@@ -215,6 +229,8 @@ export interface AppOptions {
    * profile is empty). `null` starts on the workspace picker.
    */
   workspace: FixtureWorkspace | null
+  /** See `Preparer`; `null` prepares nothing. */
+  prepare: Preparer | null
 }
 
 /** Hooks other fixtures override (e2e/fixtures/servers/fixture.ts): none by default. */
@@ -227,10 +243,11 @@ export interface AppHooks {
 
 export const test = base.extend<AppOptions & AppHooks & { app: AppFixture }, { sandboxAudit: void }>({
   workspace: [null, { option: true }],
+  prepare: [null, { option: true }],
   prepareWorkspace: async ({}, use) => use(null),
   launchEnv: async ({}, use) => use({}),
 
-  app: async ({ workspace, prepareWorkspace, launchEnv }, use, testInfo) => {
+  app: async ({ workspace, prepare, prepareWorkspace, launchEnv }, use, testInfo) => {
     const sandbox = await createSandbox()
     // From here on the sandbox is removed whatever happens, seeding and launch included.
     let current: LaunchedApp | null = null
@@ -241,7 +258,9 @@ export const test = base.extend<AppOptions & AppHooks & { app: AppFixture }, { s
         if (prepareWorkspace) await prepareWorkspace(seeded)
         await rememberWorkspace(sandbox.userData, seeded)
       }
-      current = await launchApp(sandbox, launchEnv)
+      // A spec's `prepare` sees the workspace after `prepareWorkspace`; its environment is layered over `launchEnv`.
+      const env = { ...launchEnv, ...((await prepare?.prepare({ sandbox, workspace: seeded })) ?? {}) }
+      current = await launchApp(sandbox, env)
       const fixture: AppFixture = {
         get electronApp() {
           return current!.electronApp
@@ -257,7 +276,7 @@ export const test = base.extend<AppOptions & AppHooks & { app: AppFixture }, { s
         relaunch: async () => {
           await closeApp(current!.electronApp)
           current = null
-          current = await launchApp(sandbox, launchEnv)
+          current = await launchApp(sandbox, env)
         }
       }
       await use(fixture)
