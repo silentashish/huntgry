@@ -10,24 +10,26 @@ const lines = []
 if (!existsSync(file)) {
   lines.push('## e2e', '', `No results file at \`${file}\`: the run did not get as far as the tests.`, '')
 } else {
-  const { stats } = JSON.parse(readFileSync(file, 'utf8'))
+  const { stats = {}, errors = [] } = JSON.parse(readFileSync(file, 'utf8'))
   const failed = stats.unexpected ?? 0
+  const runErrors = Array.isArray(errors) ? errors.length : 0
+  const hasFailure = failed > 0 || runErrors > 0
   const passed = stats.expected ?? 0
   const flaky = stats.flaky ?? 0
   const skipped = stats.skipped ?? 0
   const seconds = Math.round((stats.duration ?? 0) / 1000)
   const minutes = `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
   lines.push(
-    `## e2e: ${failed === 0 ? '✅ passed' : `❌ ${failed} failed`}`,
+    `## e2e: ${hasFailure ? `❌ ${failed} tests failed, ${runErrors} run ${runErrors === 1 ? 'error' : 'errors'}` : '✅ passed'}`,
     '',
-    '| Passed | Failed | Flaky | Skipped | Duration |',
-    '| ---: | ---: | ---: | ---: | ---: |',
-    `| ${passed} | ${failed} | ${flaky} | ${skipped} | ${minutes} |`,
+    '| Passed | Failed | Run errors | Flaky | Skipped | Duration |',
+    '| ---: | ---: | ---: | ---: | ---: | ---: |',
+    `| ${passed} | ${failed} | ${runErrors} | ${flaky} | ${skipped} | ${minutes} |`,
     ''
   )
-  if (failed > 0) {
+  if (hasFailure) {
     lines.push(
-      'The HTML report and the traces of the failed tests are attached to this run as artifacts',
+      'When available, the HTML report and traces of failed tests are attached as artifacts',
       '(`e2e-html-report-*`, `e2e-traces-*`); see docs/testing/e2e.md "CI".',
       ''
     )
