@@ -66,7 +66,11 @@ test.describe('knowledge graph', () => {
   })
 
   test('the Skills table lists every skill with its years, evidence and jobs asking, and the overlay marks the gaps', async ({ app }) => {
-    const started = new Date()
+    const appYear = () => app.electronApp.evaluate(() => {
+      const now = new Date()
+      return now.getFullYear() + now.getMonth() / 12
+    })
+    const started = await appYear()
     const graph = await openGraph(app)
     await graph.showView('Skills')
     await expect(graph.skillsTable.getByRole('columnheader', { name: /^Skill/ })).toBeVisible()
@@ -76,8 +80,8 @@ test.describe('knowledge graph', () => {
     // so it changes at month boundaries; accept either side if the test crosses one.
     const go = graph.skillRow('Go')
     await expect(go.getByRole('cell').nth(1)).toHaveText('Languages')
-    const expectedYears = (at: Date): string => String(Math.round((at.getFullYear() + at.getMonth() / 12 - 2022) * 2) / 2)
-    expect([expectedYears(started), expectedYears(new Date())]).toContain((await go.getByRole('cell').nth(2).innerText()).trim())
+    const expectedYears = (year: number): string => String(Math.round((year - 2022) * 2) / 2)
+    expect([expectedYears(started), expectedYears(await appYear())]).toContain((await go.getByRole('cell').nth(2).innerText()).trim())
     await expect(go.getByRole('cell').nth(3)).toHaveText('2')
     await expect(go.getByRole('cell').nth(4)).toHaveText('2')
     await expect(go.getByText('gap')).toHaveCount(0)
