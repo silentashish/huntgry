@@ -154,6 +154,15 @@ function pagePreview(kind: 'resume' | 'cover'): Buffer {
   })
 }
 
+/** The `mocks` workspace's `cover.pdf` (#49): committed before #47's `coverPdf`, kept byte-for-byte. */
+function mockCoverPdf(company: string): Buffer {
+  return buildPdf([
+    { x: 56, y: 740, text: 'Alex Rivera', size: 16 },
+    { x: 56, y: 720, text: `Dear ${company} hiring team,` },
+    { x: 56, y: 700, text: 'I build backend systems that stay up.' }
+  ])
+}
+
 async function write(path: string, data: Buffer): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, data)
@@ -171,3 +180,14 @@ await write(join(initech, 'cover.pdf'), coverPdf('Platform Engineer', 'Initech')
 await write(join(initech, 'resume-page-1.jpg'), pagePreview('resume'))
 await write(join(initech, 'cover-page-1.jpg'), pagePreview('cover'))
 await write(join(here, 'workspaces/demo/frontend-engineer/wayne/wy-3/resume.pdf'), applicationPdf('Frontend Engineer', 'Wayne Enterprises'))
+// The `mocks` workspace (#49): applications whose posting URLs point at the e2e mock server. `no-resume-mock` has none on purpose.
+for (const [folder, company] of [
+  ['lever-mock/lv-1', 'Acme'],
+  ['greenhouse-mock/gh-1', 'Acme'],
+  ['generic-mock/gen-1', 'Example Co'],
+  ['applied-mock/ap-1', 'Acme'],
+  ['redirect-mock/rd-1', 'Acme']
+]) {
+  await write(join(here, `workspaces/mocks/software-engineer/${folder}/resume.pdf`), applicationPdf('Software Engineer', company))
+}
+await write(join(here, 'workspaces/mocks/software-engineer/generic-mock/gen-1/cover.pdf'), mockCoverPdf('Example Co'))

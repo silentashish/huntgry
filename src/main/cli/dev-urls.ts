@@ -11,6 +11,19 @@ export function localUrlsAllowed(isPackaged: boolean, env: NodeJS.ProcessEnv = p
   return !isPackaged && env[LOCAL_URLS_ENV] === '1'
 }
 
+/**
+ * The end-to-end harness's egress restriction: with `HUNTGRY_E2E_LOOPBACK_ONLY=1`
+ * the in-app browser and the hidden job-board loader refuse every address that
+ * is not loopback, before any lookup or request leaves the machine, so a test
+ * can prove that a public URL is never reached. Unpackaged builds only; a
+ * packaged build ignores the variable and behaves as always.
+ */
+export const LOOPBACK_ONLY_ENV = 'HUNTGRY_E2E_LOOPBACK_ONLY'
+
+export function loopbackOnly(isPackaged: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
+  return !isPackaged && env[LOOPBACK_ONLY_ENV] === '1'
+}
+
 /** `http(s)://localhost`, `127.x.x.x` or `[::1]`, any port. Private-network addresses stay refused. */
 export function isLoopbackUrl(url: string): boolean {
   try {

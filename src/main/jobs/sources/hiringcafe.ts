@@ -12,13 +12,16 @@ import { money } from '../text'
 
 export const HIRINGCAFE_ORIGIN = 'https://hiringcafe.com'
 
-export function hiringCafeSearchUrl(q: { keywords: string; location: string; remoteOnly: boolean }): string {
+export function hiringCafeSearchUrl(
+  q: { keywords: string; location: string; remoteOnly: boolean },
+  origin: string = HIRINGCAFE_ORIGIN
+): string {
   // Location in the free-text query narrows results to near nothing; `matchesLocation` applies it instead.
   const state: Record<string, unknown> = {
     searchQuery: q.keywords.trim()
   }
   if (q.remoteOnly) state.workplaceTypes = ['Remote']
-  return `${HIRINGCAFE_ORIGIN}/?searchState=${encodeURIComponent(JSON.stringify(state))}`
+  return `${origin}/?searchState=${encodeURIComponent(JSON.stringify(state))}`
 }
 
 /**

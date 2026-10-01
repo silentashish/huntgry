@@ -11,12 +11,15 @@ import { htmlToText } from '../text'
 
 export const INDEED_ORIGIN = 'https://www.indeed.com'
 
-export function indeedSearchUrl(q: { keywords: string; location: string; remoteOnly: boolean }): string {
+export function indeedSearchUrl(
+  q: { keywords: string; location: string; remoteOnly: boolean },
+  origin: string = INDEED_ORIGIN
+): string {
   const params = new URLSearchParams({ q: q.keywords.trim() })
   if (q.remoteOnly) params.set('l', 'Remote')
   else if (q.location.trim()) params.set('l', q.location.trim())
   params.set('sort', 'date')
-  return `${INDEED_ORIGIN}/jobs?${params.toString()}`
+  return `${origin}/jobs?${params.toString()}`
 }
 
 export const INDEED_EXTRACT = `(() => {
@@ -29,7 +32,7 @@ type Obj = Record<string, unknown>
 const obj = (v: unknown): Obj => (typeof v === 'object' && v !== null ? (v as Obj) : {})
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 
-export function parseIndeedCards(data: unknown, now = new Date()): Job[] {
+export function parseIndeedCards(data: unknown, now = new Date(), origin: string = INDEED_ORIGIN): Job[] {
   const results = Array.isArray(obj(data).results) ? (obj(data).results as unknown[]) : []
   const jobs: Job[] = []
   for (const raw of results) {
@@ -37,7 +40,7 @@ export function parseIndeedCards(data: unknown, now = new Date()): Job[] {
     const key = str(r.jobkey)
     const title = str(r.displayTitle) || str(r.title)
     if (!/^[0-9a-f]{8,32}$/i.test(key) || !title || r.expired === true) continue
-    const url = `${INDEED_ORIGIN}/viewjob?jk=${key}`
+    const url = `${origin}/viewjob?jk=${key}`
     const location = str(r.formattedLocation)
     jobs.push({
       id: `indeed:${key}`,

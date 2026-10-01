@@ -45,6 +45,11 @@ export function setPackagedBuild(isPackaged: boolean): void {
   packagedBuild = isPackaged
 }
 
+/** What main reported through `setPackagedBuild` (packaged until told otherwise). */
+export function isPackagedBuild(): boolean {
+  return packagedBuild
+}
+
 export function isolatedDiscovery(env: NodeJS.ProcessEnv = process.env, isPackaged = packagedBuild): boolean {
   return !isPackaged && env[E2E_ENV] === '1'
 }

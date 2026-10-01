@@ -59,14 +59,27 @@ export function isAllowedNavigation(url: string): boolean {
  * Why `url` may not be loaded, or `null` when it may: a local or
  * private-network address, or a name that does not resolve (so a typo says
  * "Could not find …", not "private address"). `allowLoopback` is the dev-only
- * mock-ATS allowance (`localUrlsAllowed`).
+ * mock-ATS allowance (`localUrlsAllowed`); `loopbackOnly` is the e2e
+ * harness's egress restriction (`loopbackOnly` in cli/dev-urls.ts), decided
+ * before any lookup.
  */
 export async function refusalFor(
   url: string,
   resolve: ResolveHost = resolveHost,
-  allowLoopback = false
+  allowLoopback = false,
+  loopbackOnly = false
 ): Promise<string | null> {
   if (url === BLANK) return null
+  if (loopbackOnly && !isLoopbackUrl(url)) {
+    // A local or private-network literal keeps its usual message; a name is refused without being looked up
+    // (the stand-in resolver answers with a documentation address, never a real lookup).
+    try {
+      await assertPublicUrl(url, async () => ['203.0.113.1'])
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err)
+    }
+    return `Refusing to load ${hostOf(url)}: this test build may only reach loopback addresses.`
+  }
   if (allowLoopback && isLoopbackUrl(url)) return null
   try {
     await assertPublicUrl(url, resolve)

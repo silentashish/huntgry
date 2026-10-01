@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { Job, JobQuery, SearchResult, SearchSource, SourceResult } from '@shared/jobs-types'
+import { boardOrigin } from './board-url'
 import type { LoadResult } from './loader'
 import { HIRINGCAFE_EXTRACT, hiringCafeSearchUrl, matchesLocation, parseHiringCafeHits } from './sources/hiringcafe'
 import { INDEED_EXTRACT, indeedSearchUrl, parseIndeedCards } from './sources/indeed'
@@ -16,11 +17,15 @@ const SOURCES: Record<
   { url(q: JobQuery): string; extract: string; parse(data: unknown, q: JobQuery): Job[] }
 > = {
   'hiring.cafe': {
-    url: hiringCafeSearchUrl,
+    url: (q) => hiringCafeSearchUrl(q, boardOrigin('hiring.cafe')),
     extract: HIRINGCAFE_EXTRACT,
     parse: (d, q) => parseHiringCafeHits(d).filter((j) => matchesLocation(j, q.location))
   },
-  indeed: { url: indeedSearchUrl, extract: INDEED_EXTRACT, parse: (d) => parseIndeedCards(d) }
+  indeed: {
+    url: (q) => indeedSearchUrl(q, boardOrigin('indeed')),
+    extract: INDEED_EXTRACT,
+    parse: (d) => parseIndeedCards(d, new Date(), boardOrigin('indeed'))
+  }
 }
 
 export function validateQuery(input: unknown): JobQuery {
