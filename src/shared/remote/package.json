@@ -1,0 +1,24 @@
+{
+  "name": "@huntgry/remote-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Wire contract between the Huntgry desktop, the relay and the phone: types, guards, limits and tweetnacl helpers (ADR-0001)",
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "sideEffects": false,
+  "files": [
+    "*.ts",
+    "!*.test.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "tweetnacl": "^1.0.3"
+  }
+}
