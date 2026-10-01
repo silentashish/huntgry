@@ -11,10 +11,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# A newer push to the same PR (or branch) cancels the run still going for the older one.
+# A newer push to the same PR (or branch) cancels the run still going for the older one;
+# runs on `main` are trunk history and always finish.
 concurrency:
   group: e2e-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # No secrets are needed: the suite talks only to fakes on 127.0.0.1.
 permissions:
@@ -64,6 +65,7 @@ jobs:
         if: always()
         run: node .github/scripts/e2e-summary.mjs e2e/.results/results.json
 
+      # The report is only needed when something failed; the traces (below) are uploaded whenever they exist.
       - name: Upload the HTML report
         if: failure()
         uses: actions/upload-artifact@v4
@@ -73,8 +75,10 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+      # Traces are recorded on the first retry, so a flaky test (failed once, passed on retry) leaves one
+      # while the step and the job stay green: upload whatever is there, not only on failure.
       - name: Upload traces and screenshots
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-traces-${{ runner.os }}

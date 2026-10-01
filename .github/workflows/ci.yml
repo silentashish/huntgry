@@ -8,9 +8,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# A newer push to the same PR (or branch) cancels the run still going for the older one;
+# runs on `main` are trunk history and always finish.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
