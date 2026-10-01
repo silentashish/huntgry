@@ -17,10 +17,14 @@ if (!existsSync(file)) {
   const passed = stats.expected ?? 0
   const flaky = stats.flaky ?? 0
   const skipped = stats.skipped ?? 0
+  const noTestsPassed = !hasFailure && passed === 0 && flaky === 0
   const seconds = Math.round((stats.duration ?? 0) / 1000)
   const minutes = `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
+  const heading = hasFailure
+    ? `❌ ${failed} tests failed, ${runErrors} run ${runErrors === 1 ? 'error' : 'errors'}`
+    : noTestsPassed ? '⚠️ no tests passed' : '✅ passed'
   lines.push(
-    `## e2e: ${hasFailure ? `❌ ${failed} tests failed, ${runErrors} run ${runErrors === 1 ? 'error' : 'errors'}` : '✅ passed'}`,
+    `## e2e: ${heading}`,
     '',
     '| Passed | Failed | Run errors | Flaky | Skipped | Duration |',
     '| ---: | ---: | ---: | ---: | ---: | ---: |',
