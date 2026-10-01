@@ -100,6 +100,15 @@ class FakeSocket implements SocketLike {
 
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms))
 
+/** Polls until `pred` holds (fsyncs make reply timing vary under load), then lets queued sends finish. */
+async function waitFor(pred: () => boolean, ms = 5000): Promise<void> {
+  const t0 = Date.now()
+  while (!pred()) {
+    if (Date.now() - t0 > ms) throw new Error('timed out waiting for the desktop')
+    await tick(5)
+  }
+}
+
 let dir: string
 let ws: string
 let devices: DeviceStore
@@ -211,10 +220,10 @@ describe('RemoteSession', () => {
     session.start(creds)
     await online()
     const cmd = command(phone, 'queue.setPaused', { paused: true }, identity.id)
-    relay.deliver(fromPhone(cmd))
-    await tick(50)
-    await session.flush()
     const results = () => relay.framesTo(phone.id).filter((f) => f.ack !== undefined)
+    relay.deliver(fromPhone(cmd))
+    await waitFor(() => results().length >= 1)
+    await session.flush()
     const frames = results()
     expect(frames).toHaveLength(1)
     expect(frames[0].ack).toBe(cmd.id)
@@ -228,7 +237,7 @@ describe('RemoteSession', () => {
 
     // A second frame: a new nonce, the next seq.
     relay.deliver(fromPhone(command(phone, 'queue.get', undefined, identity.id)))
-    await tick(50)
+    await waitFor(() => results().length >= 2)
     await session.flush()
     const second = results()[1]
     expect(second.nonce).not.toBe(frames[0].nonce)
@@ -248,7 +257,7 @@ describe('RemoteSession', () => {
 
     const foreign = command(phone, 'queue.setPaused', { paused: true }, identity.id, { sid: 'another-sid' })
     relay.deliver(fromPhone(foreign))
-    await tick(50)
+    await waitFor(() => relay.framesTo(phone.id).length >= 1)
     await session.flush()
     const [frame] = relay.framesTo(phone.id)
     expect(open(frame)).toMatchObject({ kind: 'result', ok: false, error: { code: 'denied' } })
@@ -261,7 +270,7 @@ describe('RemoteSession', () => {
     await online()
     const hello: Envelope = { v: 1, sid: phone.sid, from: 'phone', seq: ++phone.seq, ts: new Date().toISOString(), ttl: 60, kind: 'hello', id: 'hello-1', body: { protocol: { min: 1, max: 1 }, name: 'Renamed iPhone', appVersion: '1.0.0' } satisfies HelloBody }
     relay.deliver(fromPhone(hello))
-    await tick(50)
+    await waitFor(() => relay.framesTo(phone.id).length >= 2)
     await session.flush()
     const [h, s] = relay.framesTo(phone.id).map(open)
     expect(h.kind).toBe('hello')
@@ -273,7 +282,7 @@ describe('RemoteSession', () => {
     expect(devices.get(phone.id)!.name).toBe('Renamed iPhone')
 
     relay.deliver(fromPhone({ v: 1, sid: phone.sid, from: 'phone', seq: ++phone.seq, ts: new Date().toISOString(), ttl: 60, kind: 'ping', id: 'ping-1', body: null }))
-    await tick(50)
+    await waitFor(() => relay.framesTo(phone.id).some((f) => f.ack === 'ping-1'))
     await session.flush()
     const pong = relay.framesTo(phone.id).map(open).find((e) => e.kind === 'pong')
     expect(pong).toBeDefined()
@@ -317,8 +326,7 @@ describe('RemoteSession', () => {
 
     relay.refuse = true
     relay.drop()
-    await tick(60)
-    expect(relay.connects).toBeGreaterThanOrEqual(3)
+    await waitFor(() => relay.connects >= 3)
     expect(session.isOnline()).toBe(false)
     relay.refuse = false
     session.reconnectNow() // powerMonitor resume
@@ -326,19 +334,17 @@ describe('RemoteSession', () => {
     // The replay counter survives the reconnects: the next command is accepted and the desktop's seq continues.
     relay.sent = []
     relay.deliver(fromPhone(command(phone, 'queue.get', undefined, identity.id)))
-    await tick(50)
+    await waitFor(() => relay.framesTo(phone.id).some((f) => f.ack !== undefined))
     await session.flush()
-    expect(open(relay.framesTo(phone.id)[0]).ok).toBe(true)
+    expect(open(relay.framesTo(phone.id).find((f) => f.ack !== undefined)!).ok).toBe(true)
   })
 
   it('reports a refused authentication as offline with a credentials error and keeps retrying', async () => {
     relay.owner = 'someone-else'
     session.start(creds)
-    await tick(30)
+    await waitFor(() => /credentials|authentication/i.test(session.current().error ?? ''))
     expect(session.isOnline()).toBe(false)
-    expect(session.current().error).toMatch(/credentials|authentication/i)
-    await tick(60)
-    expect(relay.connects).toBeGreaterThan(1)
+    await waitFor(() => relay.connects > 1)
   })
 
   it('sends heartbeat status only to recently active devices and device.revoked on revoke', async () => {
@@ -347,9 +353,9 @@ describe('RemoteSession', () => {
     const idle = fakePhone((await devices.keyPair())!, 'Idle')
     await devices.add(idle.record)
     await devices.update(phone.id, { lastSeen: new Date().toISOString() })
+    await waitFor(() => relay.framesTo(phone.id).length > 0)
     await tick(100)
     await session.flush()
-    expect(relay.framesTo(phone.id).length).toBeGreaterThan(0)
     expect(relay.framesTo(idle.id)).toHaveLength(0)
     for (const f of relay.framesTo(phone.id)) {
       const e = open(f)
