@@ -194,6 +194,18 @@ next job starts in its place. Jobs with only a board summary (Indeed) are skippe
 until it starts, so one job can go to Claude and the next to Codex.
 After a restart the queue is paused until you press **Resume**.
 
+**Run unattended** (the second mode of **Tailor all**) tailors up to 100 jobs without anyone
+answering: each run uses only your master-profile facts and your *standing approvals*, leaves every
+other reframing out, lists it in `review-notes.md`, and builds and verifies in one go. Results land
+as **Unreviewed** on the new **Review** page (and cannot be auto-applied until you approve them);
+approving ticked reframings saves them as standing approvals in
+`<workspace>/.huntgry/approved-reframings.json`, which later unattended runs may reuse and which
+**Settings** lists. The pipeline pauses on a usage limit until the agent's reset time (or switches the
+remaining jobs to a fallback agent), retries transient failures and stalls with backoff, keeps the
+Mac awake while it has work (closing the lid on battery still sleeps), resumes after a restart, stops
+on an optional budget, and leaves a summary card on the Dashboard with a macOS notification and a dock
+badge. See [docs/changes/31-unattended-pipeline.md](docs/changes/31-unattended-pipeline.md).
+
 **Settings** shows whether `claude`, the skill and its dependencies are found, which
 Claude Code version is installed and whether it is signed in. **Install Claude Code** runs
 the official installer, **Update Claude Code** updates an older one (Homebrew installs get
