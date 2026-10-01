@@ -45,6 +45,9 @@ jobs:
 
       - run: npm ci
 
+      # `npm test` checks both tracked lockfiles and invokes pnpm in a temporary directory.
+      - run: npm install --global pnpm@12.5.1
+
       - run: npm test
 
       - run: npm run typecheck
