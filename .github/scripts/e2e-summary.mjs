@@ -32,12 +32,30 @@ try {
   process.exit(0)
 }
 
-const stats = report?.stats ?? {}
-const errors = report?.errors
-const failed = stats.unexpected ?? 0
+// Parseable is not enough: `{}` or `{"stats":{"expected":1}}` would read as a run. The report must
+// have a `stats` object with numeric `expected` and `unexpected` (the counts a run always writes),
+// any present `flaky` / `skipped` numeric, all non-negative, and `errors`, when present, an array.
+const isCount = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0
+function invalidReason(data) {
+  const stats = data?.stats
+  if (!stats || typeof stats !== 'object' || Array.isArray(stats)) return '`stats` is not an object'
+  for (const key of ['expected', 'unexpected']) if (!isCount(stats[key])) return `\`stats.${key}\` is not a non-negative number`
+  for (const key of ['flaky', 'skipped']) if (stats[key] !== undefined && !isCount(stats[key])) return `\`stats.${key}\` is not a non-negative number`
+  if (data.errors !== undefined && !Array.isArray(data.errors)) return '`errors` is not an array'
+  return null
+}
+const invalid = report === null || typeof report !== 'object' || Array.isArray(report) ? 'the report is not an object' : invalidReason(report)
+if (invalid) {
+  emit(['## e2e: ⚠️ unreadable results', '', `The results file \`${file}\` is not a Playwright report (${invalid}): the run probably ended before Playwright finished writing it. Check the "Playwright e2e" step log.`, ''])
+  process.exit(0)
+}
+
+const stats = report.stats
+const errors = report.errors
+const failed = stats.unexpected
 const runErrors = Array.isArray(errors) ? errors.length : 0
 const hasFailure = failed > 0 || runErrors > 0
-const passed = stats.expected ?? 0
+const passed = stats.expected
 const flaky = stats.flaky ?? 0
 const skipped = stats.skipped ?? 0
 const noTestsPassed = !hasFailure && passed === 0 && flaky === 0
