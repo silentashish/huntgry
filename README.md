@@ -1,5 +1,8 @@
 # Huntgry
 
+[![e2e](https://github.com/silentashish/huntgry/actions/workflows/e2e.yml/badge.svg)](https://github.com/silentashish/huntgry/actions/workflows/e2e.yml)
+[![ci](https://github.com/silentashish/huntgry/actions/workflows/ci.yml/badge.svg)](https://github.com/silentashish/huntgry/actions/workflows/ci.yml)
+
 ## Initial Idea
 
 Architecture converted from [`initial-idea.excalidraw`](./initial-idea.excalidraw).
@@ -52,7 +55,8 @@ npm run icons        # regenerate resources/icon.png + icon.icns from resources/
 
 End-to-end tests live in `e2e/` and run the built app in a sandbox (own `userData`, `HOME`
 and `PATH`, so they never see your workspace, settings or agent CLIs). How they isolate the
-app, how to add a page object or a spec and how to debug a failure is in
+app, how to add a page object or a spec, how to debug a failure and what the GitHub Actions
+run (optional check, `.github/workflows/e2e.yml`) leaves behind is in
 [docs/testing/e2e.md](docs/testing/e2e.md).
 
 On macOS, `npm run dev` launches the Electron binary from `node_modules`, which would

@@ -1,0 +1,84 @@
+# End-to-end tests (Playwright driving the built Electron app), see docs/testing/e2e.md "CI".
+#
+# The check is OPTIONAL for now: every job has `continue-on-error: true` and the workflow is
+# not in branch protection, so a red run never blocks a merge. To make it required later, set
+# `continue-on-error: false` on the `e2e` job and add "e2e (macOS)" to the required checks.
+name: e2e
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same PR (or branch) cancels the run still going for the older one.
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+# No secrets are needed: the suite talks only to fakes on 127.0.0.1.
+permissions:
+  contents: read
+
+env:
+  # README: Node.js >= 22.12, developed on Node 26 (package.json has no `engines`).
+  NODE_VERSION: 26
+
+jobs:
+  e2e:
+    name: e2e (macOS)
+    # macOS is the app's primary target and the runner has a window session: no xvfb needed.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Read the Electron version from the lockfile
+        id: electron
+        run: echo "version=$(node -p "require('./package-lock.json').packages['node_modules/electron'].version")" >> "$GITHUB_OUTPUT"
+
+      # `npm ci` runs electron's postinstall, which downloads the binary into this folder (@electron/get);
+      # restoring it first turns the download into a cache hit.
+      - name: Cache the Electron binary
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/electron
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ steps.electron.outputs.version }}
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Playwright e2e
+        run: npx playwright test -c e2e/playwright.config.ts
+        env:
+          CI: 1
+
+      - name: Job summary
+        if: always()
+        run: node .github/scripts/e2e-summary.mjs e2e/.results/results.json
+
+      - name: Upload the HTML report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-html-report-${{ runner.os }}
+          path: e2e/.results/html-report
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload traces and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-traces-${{ runner.os }}
+          path: e2e/.results/test-output
+          retention-days: 7
+          if-no-files-found: ignore
+
