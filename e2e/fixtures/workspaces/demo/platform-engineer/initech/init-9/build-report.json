@@ -1,0 +1,6 @@
+{
+  "ok": true,
+  "verify": { "results": [{ "check": "one_page", "passed": true, "hard": true }], "warnings": 0 },
+  "render": { "pages": 1 },
+  "style_warnings": []
+}

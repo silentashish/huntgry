@@ -79,3 +79,7 @@ Backend engineer with seven years of experience building payment and reporting s
 ## Gaps and constraints
 
 - No Kubernetes in production yet.
+
+## Volunteering
+
+- Mentor at the Portland Code Club since 2020.
