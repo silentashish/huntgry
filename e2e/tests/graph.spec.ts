@@ -66,15 +66,18 @@ test.describe('knowledge graph', () => {
   })
 
   test('the Skills table lists every skill with its years, evidence and jobs asking, and the overlay marks the gaps', async ({ app }) => {
+    const started = new Date()
     const graph = await openGraph(app)
     await graph.showView('Skills')
     await expect(graph.skillsTable.getByRole('columnheader', { name: /^Skill/ })).toBeVisible()
     await expect(graph.skillsTable.getByRole('columnheader', { name: /^Jobs asking/ })).toBeVisible()
 
-    // A skill the profile has: group, years from the experience dates, evidence, asked by two jobs.
+    // Acme's Go experience runs from Jan 2022 to Present. The value rounds to half-years,
+    // so it changes at month boundaries; accept either side if the test crosses one.
     const go = graph.skillRow('Go')
     await expect(go.getByRole('cell').nth(1)).toHaveText('Languages')
-    await expect(go.getByRole('cell').nth(2)).toHaveText('4.5')
+    const expectedYears = (at: Date): string => String(Math.round((at.getFullYear() + at.getMonth() / 12 - 2022) * 2) / 2)
+    expect([expectedYears(started), expectedYears(new Date())]).toContain((await go.getByRole('cell').nth(2).innerText()).trim())
     await expect(go.getByRole('cell').nth(3)).toHaveText('2')
     await expect(go.getByRole('cell').nth(4)).toHaveText('2')
     await expect(go.getByText('gap')).toHaveCount(0)
