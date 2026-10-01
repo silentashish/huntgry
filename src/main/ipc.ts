@@ -7,6 +7,7 @@ import { registerInsightsIpc } from './insights/ipc'
 import { registerJobsIpc } from './jobs/ipc'
 import { registerProfileIpc } from './profile/ipc'
 import { registerQueueIpc } from './queue/ipc'
+import { registerRemoteIpc } from './remote/ipc'
 import { registerWorkspaceIpc } from './workspace/ipc'
 
 /**
@@ -24,4 +25,5 @@ export function registerIpcHandlers(): void {
   registerBrowserIpc()
   registerQueueIpc()
   registerApplyIpc()
+  registerRemoteIpc()
 }
