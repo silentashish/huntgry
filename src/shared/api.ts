@@ -9,6 +9,7 @@ import type { JobsApi } from './jobs-types'
 import type { PipelineApi } from './pipeline-types'
 import type { QueueApi } from './queue-types'
 import type { ReviewApi } from './review-types'
+import type { RemoteApi } from './remote-types'
 import type { ProfileApi, WorkspaceApi } from './workspace-types'
 
 /**
@@ -38,6 +39,8 @@ export interface HuntgryApi {
   review: ReviewApi
   /** Unattended pipeline over the queue: plan, start, pause, resume, stop, state, last summary. */
   pipeline: PipelineApi
+  /** Remote control: the relay session, its credentials and paired phones (ADR-0001). */
+  remote: RemoteApi
   /** Main → renderer events, restricted to `EVENT_CHANNELS`. */
   on: Subscribe
 }

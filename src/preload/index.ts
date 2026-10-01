@@ -11,6 +11,7 @@ import { jobs } from './jobs'
 import { pipeline } from './pipeline'
 import { queue } from './queue'
 import { review } from './review'
+import { remote } from './remote'
 import { profile, workspace } from './workspace'
 
 // Sandboxed preload: only `electron` may be required (local modules are bundled
@@ -29,6 +30,7 @@ const api: HuntgryApi = {
   apply,
   review,
   pipeline,
+  remote,
   on
 }
 
