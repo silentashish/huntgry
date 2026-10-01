@@ -13,6 +13,12 @@ import { APPLICATION_DEPTH, HUNTGRY_DIR, IGNORED_ENTRIES, MAX_SCAN_ENTRIES } fro
 
 export const RUN_ID_PATTERN = /^\d{8}-\d{6}-[0-9a-f]{6}$/
 
+/** Checks a run id from the renderer or a phone; the same shape `newRunId` produces. */
+export function requireRunId(id: unknown): string {
+  if (typeof id !== 'string' || !RUN_ID_PATTERN.test(id)) throw new Error('Invalid run id.')
+  return id
+}
+
 export function runsDir(workspace: string): string {
   return join(workspace, HUNTGRY_DIR, 'runs')
 }

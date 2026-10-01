@@ -1,7 +1,8 @@
 import { app, ipcMain, shell } from 'electron'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
-import { isAgentId, RUNNER_CHANNELS, type AgentId, type RunSummary } from '@shared/runner-types'
+import { isAgentId, RUNNER_CHANNELS, type AgentId, type RunSummary, type TranscriptItem } from '@shared/runner-types'
+import { buildTranscript } from '@shared/transcript'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
 import { MAX_TEXT } from './command'
@@ -10,7 +11,7 @@ import { findClaude, findSkillDir } from './env'
 import { checkEnvironment, installPythonDeps } from './environment'
 import { claudeInstallKind, exclusive, installClaude, updateClaude } from './install-claude'
 import { installSkill } from './install-skill'
-import { listRuns, OUTPUT_FILES, readEvents, readRun, RUN_ID_PATTERN } from './runs'
+import { listRuns, OUTPUT_FILES, readEvents, readRun, requireRunId } from './runs'
 import { replyThroughQueue } from '../queue/ipc'
 import { contextForRun, defaultAgent, manager, setDefaultAgent, startTailorRun, venvDir } from './start'
 
@@ -23,11 +24,6 @@ export { stopAllRuns } from './start'
 function requireAgent(agent: unknown): AgentId {
   if (!isAgentId(agent)) throw new Error('Unknown agent.')
   return agent
-}
-
-function requireRunId(id: unknown): string {
-  if (typeof id !== 'string' || !RUN_ID_PATTERN.test(id)) throw new Error('Invalid run id.')
-  return id
 }
 
 async function currentRun(id: string): Promise<RunSummary> {
@@ -45,6 +41,34 @@ async function outputPath(id: string, file?: string): Promise<string> {
   if (file === undefined) return folder
   if (!(OUTPUT_FILES as readonly string[]).includes(file)) throw new Error('Unknown output file.')
   return join(folder, file)
+}
+
+/** Runs for the remote gateway (ADR-0001): the same helpers and rules as the handlers below, minus open / reveal. */
+export const runsForRemote = {
+  list: async (): Promise<RunSummary[]> => {
+    const workspace = await requireCurrentWorkspace()
+    const runs = await listRuns(workspace.path)
+    return runs.map((r) => (manager.isLive(r.id) ? { ...manager.liveRun(r.id)!, live: true } : r))
+  },
+  get: async (runId: string): Promise<{ run: RunSummary; items: TranscriptItem[] }> => {
+    const workspace = await requireCurrentWorkspace()
+    await manager.flush(runId)
+    const run = await currentRun(runId)
+    return { run, items: buildTranscript(await readEvents(workspace.path, runId), run.agent) }
+  },
+  reply: (runId: string, text: string): Promise<RunSummary> => manager.reply(runId, text, () => contextForRun(runId)),
+  stop: async (runId: string): Promise<RunSummary> => {
+    manager.stop(runId)
+    return currentRun(runId)
+  },
+  finish: async (runId: string): Promise<RunSummary> => {
+    if (manager.isLive(runId)) {
+      manager.finish(runId)
+      return currentRun(runId)
+    }
+    const workspace = await requireCurrentWorkspace()
+    return (await manager.endIdle(workspace.path, runId, 'finished')) ?? currentRun(runId)
+  }
 }
 
 /** Environment checks and tailoring runs of the resume-tailor skill. */
