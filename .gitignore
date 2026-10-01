@@ -28,6 +28,9 @@ pnpm-debug.log*
 # Testing and coverage
 coverage/
 .nyc_output/
+e2e/.results/
+playwright-report/
+test-results/
 
 # IDE and editors
 .vscode/*

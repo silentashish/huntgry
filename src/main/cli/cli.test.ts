@@ -14,7 +14,17 @@ import {
   runTitle,
   userMessageLine
 } from './command'
-import { buildChildEnv, composePath, findSkillDir, parsePreflight } from './env'
+import {
+  buildChildEnv,
+  cliSearchDirs,
+  composePath,
+  E2E_ENV,
+  findSkillDir,
+  isolatedDiscovery,
+  loginShellPath,
+  parsePreflight,
+  setPackagedBuild
+} from './env'
 import { fetchPostingText, htmlToText, type Fetcher } from './posting'
 import { assertPublicUrl, isPrivateAddress, pinnedFetch, type ResolveHost } from './public-url'
 import { findOutputFolder, newRunId, runDir, RUN_ID_PATTERN } from './runs'
@@ -92,6 +102,55 @@ describe('child environment', () => {
     await writeFile(join(personal, 'SKILL.md'), '')
     expect(await findSkillDir([join(tmp, 'skills')])).toBe(personal)
     expect(await findSkillDir([join(tmp, 'missing')])).toBeNull()
+  })
+})
+
+describe('isolated CLI discovery (HUNTGRY_E2E, used by the e2e harness)', () => {
+  afterEach(() => setPackagedBuild(true))
+
+  it('is off unless the build is unpackaged and the variable is exactly "1"', () => {
+    expect(isolatedDiscovery({ [E2E_ENV]: '1' }, true)).toBe(false)
+    expect(isolatedDiscovery({}, false)).toBe(false)
+    expect(isolatedDiscovery({ [E2E_ENV]: 'yes' }, false)).toBe(false)
+    expect(isolatedDiscovery({ [E2E_ENV]: '1' }, false)).toBe(true)
+    // The module default is "packaged", so nothing changes before main reports the build kind.
+    expect(isolatedDiscovery({ [E2E_ENV]: '1' })).toBe(false)
+    setPackagedBuild(false)
+    expect(isolatedDiscovery({ [E2E_ENV]: '1' })).toBe(true)
+  })
+
+  it('searches only the folders below HOME and the app PATH, never the machine-wide folders or the login shell', async () => {
+    setPackagedBuild(false)
+    const dirs = await cliSearchDirs({ [E2E_ENV]: '1', PATH: '/tmp/fake-bin:/usr/bin' }, '/tmp/home')
+    expect(dirs[0]).toBe('/tmp/home/.local/bin')
+    expect(dirs).toContain('/tmp/fake-bin')
+    expect(dirs).toContain('/usr/bin')
+    expect(dirs).not.toContain('/opt/homebrew/bin')
+    expect(dirs).not.toContain('/usr/local/bin')
+    expect(dirs.every((d) => d.startsWith('/tmp/home/') || d === '/tmp/fake-bin' || d === '/usr/bin')).toBe(true)
+    await expect(loginShellPath({ [E2E_ENV]: '1' })).resolves.toBe('')
+  })
+
+  it('keeps the machine-wide folders and the login-shell PATH out of the child PATH too', () => {
+    setPackagedBuild(false)
+    const env = buildChildEnv({
+      base: { [E2E_ENV]: '1', PATH: '/sandbox/bin:/usr/bin', HOME: '/tmp/home' },
+      workspace: '/ws',
+      venvDir: '/venv',
+      texBin: null,
+      loginPath: '/opt/homebrew/bin:/Users/dev/.local/bin',
+      home: '/tmp/home'
+    })
+    const path = env.PATH!.split(':')
+    expect(path.slice(0, 3)).toEqual(['/venv/bin', '/tmp/home/.local/bin', '/tmp/home/.claude/local'])
+    expect(path).toContain('/sandbox/bin')
+    expect(path).not.toContain('/opt/homebrew/bin')
+    expect(path).not.toContain('/usr/local/bin')
+    expect(path).not.toContain('/Users/dev/.local/bin')
+    // Off outside isolated mode: the same call without the variable keeps them.
+    const normal = buildChildEnv({ base: { PATH: '/usr/bin' }, workspace: '/ws', venvDir: '/venv', texBin: null, loginPath: '/opt/homebrew/bin', home: '/tmp/home' })
+    expect(normal.PATH!.split(':')).toContain('/opt/homebrew/bin')
+    expect(normal.PATH!.split(':')).toContain('/usr/local/bin')
   })
 })
 
