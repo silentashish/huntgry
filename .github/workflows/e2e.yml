@@ -11,8 +11,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# A newer push to the same PR (or branch) cancels the run still going for the older one;
-# runs on `main` are trunk history and always finish.
+# A newer push to the same PR (or branch) cancels the run still going for the older one. A run
+# on `main` is never cancelled, but GitHub keeps only one pending run per group: while a `main`
+# run is going, a newer `main` push replaces the older pending one, so not every `main` commit
+# is guaranteed a run of its own.
 concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}

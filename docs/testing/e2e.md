@@ -345,8 +345,11 @@ Two GitHub Actions workflows, both **optional checks** for now:
 | `.github/workflows/ci.yml` | `unit + typecheck` | `ubuntu-latest` | `npm test`, `npm run typecheck` |
 
 Triggers: every `pull_request`, every `push` to `main`, and the "Run workflow" button
-(`workflow_dispatch`). A newer push to the same PR branch cancels the older run (`concurrency`,
-`cancel-in-progress` only off `main`: runs on `main` always finish).
+(`workflow_dispatch`). A newer push to the same PR branch cancels the older run (`concurrency`
+with `cancel-in-progress` only off `main`). A run on `main` is never cancelled, but GitHub
+queues at most one pending run per group: while a `main` run is going, a newer `main` push
+replaces the older pending one, so not every `main` commit is guaranteed a run of its own
+(the latest always gets one).
 `permissions: contents: read` is all they need: the suite reaches only fakes on `127.0.0.1`,
 so there are no secrets. The e2e job has a 30-minute timeout. Two caches make the second run
 fast: `actions/setup-node`'s npm cache (keyed on `package-lock.json`) and the Electron binary
