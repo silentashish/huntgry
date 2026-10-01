@@ -345,7 +345,8 @@ Two GitHub Actions workflows, both **optional checks** for now:
 | `.github/workflows/ci.yml` | `unit + typecheck` | `ubuntu-latest` | `npm test`, `npm run typecheck` |
 
 Triggers: every `pull_request`, every `push` to `main`, and the "Run workflow" button
-(`workflow_dispatch`). A newer push to the same ref cancels the older run (`concurrency`).
+(`workflow_dispatch`). A newer push to the same PR branch cancels the older run (`concurrency`,
+`cancel-in-progress` only off `main`: runs on `main` always finish).
 `permissions: contents: read` is all they need: the suite reaches only fakes on `127.0.0.1`,
 so there are no secrets. The e2e job has a 30-minute timeout. Two caches make the second run
 fast: `actions/setup-node`'s npm cache (keyed on `package-lock.json`) and the Electron binary
@@ -353,12 +354,18 @@ fast: `actions/setup-node`'s npm cache (keyed on `package-lock.json`) and the El
 `npm ci` so electron's postinstall finds the download already there).
 
 **What a run leaves behind.** The job summary (the run page, under the job) has the pass /
-fail / flaky / skipped counts and the duration; the config adds a JSON reporter when `CI` is
-set (`e2e/.results/results.json`) and `.github/scripts/e2e-summary.mjs` turns it into that
-table. When a test fails the run uploads two artifacts, kept for 7 days:
-`e2e-html-report-macOS` (the Playwright HTML report) and `e2e-traces-macOS`
-(`e2e/.results/test-output/`: `trace.zip`, `test-failed-1.png`, `error-context.md` and the
-main-process output per failed test). To look at a trace:
+fail / run-error / flaky / skipped counts and the duration; the config adds a JSON reporter when
+`CI` is set (`e2e/.results/results.json`) and `.github/scripts/e2e-summary.mjs` turns it into
+that table (a missing or truncated results file becomes a warning line, never a failed step).
+Two artifacts, kept for 7 days, with different conditions:
+
+| Artifact | Uploaded when | Contents |
+| --- | --- | --- |
+| `e2e-traces-macOS` | **every run** that produced any (`if: always()`, skipped silently when `e2e/.results/test-output/` is empty): failed tests and flaky ones alike | `trace.zip` (recorded on the first retry), `test-failed-1.png`, `error-context.md` and the main-process output, one folder per failed attempt |
+| `e2e-html-report-macOS` | **only when the job failed** (`if: failure()`) | the Playwright HTML report |
+
+A test that fails once and passes on retry is reported as *flaky*, keeps the job green, and
+still gets its trace uploaded; only the HTML report is then absent. To look at a trace:
 
 ```bash
 # Actions → the run → Artifacts → download e2e-traces-macOS.zip, then
@@ -369,16 +376,16 @@ unzip e2e-html-report-macOS.zip -d /tmp/e2e-report && npx playwright show-report
 ```
 
 `gh run download <run-id> -n e2e-traces-macOS -D /tmp/e2e-traces` does the download from the
-terminal. Traces are recorded on the first retry in CI (`on-first-retry`), so a test that fails
-once and passes on retry (reported as *flaky*) has a trace too.
+terminal.
 
 **Why the check is optional.** Every job has `continue-on-error: true` and neither workflow is
 in branch protection, so a red e2e run shows on the PR but never blocks a merge, until the
-build time and the flake rate are known. **To make it required** later, one change in the
-workflow and one in the repository settings: set `continue-on-error: false` on the `e2e` job in
-`e2e.yml` (otherwise a failed job still reports the run as successful), then *Settings →
-Branches → main → Require status checks to pass* and add `e2e (macOS)` (and `unit + typecheck`
-if wanted). Nothing else changes.
+build time and the flake rate are known. **To make it required** later, one change per
+workflow and one in the repository settings: set `continue-on-error: false` on the job you want
+to count, the `e2e` job in `e2e.yml` and/or the `unit` job in `ci.yml` (with it left `true` a
+failed job still reports the run as successful, so the required check would never go red), then
+*Settings → Branches → main → Require status checks to pass* and add `e2e (macOS)` and/or
+`unit + typecheck`. Nothing else changes.
 
 **Linux.** There is no Linux job. A trial of the suite on `ubuntu-latest` under
 `xvfb-run --auto-servernum` (with the Electron runtime libraries installed and Ubuntu 24.04's
