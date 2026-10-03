@@ -41,21 +41,22 @@ when it was reached from a company page.
 | --- | --- | --- |
 | Adapter | `src/shared/autofill/adapters/ashby.ts`, `adapters/index.ts` | Recognised by host or markup (container, a system field, or the success panel). The form root is `.ashby-application-form-container`, so the autofill pane above it is never scanned or reported. `known`: name → `fullName`, email, `#_systemfield_resume` → resume. Phone and LinkedIn go through the generic label matcher, and "Preferred Name" is ruled out by its negative word. #63 hooks: `ready` (a system field is rendered inside the container), `uploadOrder: 'files-first'`, `uploadGroup` / `uploadAttached` read from Ashby's widget (`missing` / `pending` / `attached`), `afterUpload` (wait for the item's delete button), and `choices` (the location autocomplete and the date picker). `isConfirmation` is the success panel. |
 | Embeds | `src/shared/apply-embeds.ts` | An Ashby `EmbedRule`: https `jobs.ashbyhq.com` only, a `/<org>/<job-uuid>[/application]` path only. A new optional `EmbedRule.page(url)` turns the iframe URL into the page to open: for Ashby, the job's `/application` without the embed parameters. `embedPageFor(value)` checks a URL against the rules and returns `{ ats, url }`. |
-| Service | `src/main/apply/service.ts` | Follows any embed rule (it was Greenhouse only), opening `embedPageFor(scan.embedUrl).url`, so main both validates and builds the URL. The panel message names the ATS. |
+| Service | `src/main/apply/service.ts` | Follows any embed rule (it was Greenhouse only), opening `embedPageFor(scan.embedUrl, { allowLoopback })`'s `url`, so main both validates and builds the URL (and trusts that page's origin, as #63 does for Greenhouse). The panel message names the ATS. Everything else comes from #63's engine, which calls the Ashby hooks: the readiness wait and the late-form watch use `ready`, the two-pass fill uses `uploadOrder`, the upload check uses `uploadGroup` / `uploadAttached`, and the parser wait uses `afterUpload`. |
 | Trust | `src/shared/apply-url.ts` | `AUTO_TRUSTED_ATS` gains `ashby`, so the followed `jobs.ashbyhq.com` form fills without **Fill form**, like Greenhouse and Lever. https only, exact host suffix. |
-| Mock | `scripts/mock-ats/ashby.mjs` (+ `.d.mts`), `scripts/mock-ats/server.mjs` | `/ashby/` serves an empty `#root` and renders the captured form `renderMs` after `load` (default 500 ms). The resume widget behaves like Ashby's: spinner, then the item with delete and "Replace", and a toast on failure. It uploads to `/ashby/upload` (recorded in `ashby-uploads.json`). The parser pane posts to `/ashby/parse` (recorded) and fills only empty fields; `?parsed=1` renders as if it had been used, and `?failUpload=1` makes the upload fail. Submit posts the answers plus the uploaded file to `/ashby/submit` and swaps in the success panel. `server.mjs` gains an optional per-site `routes()` hook and `sendJson`. |
-| Fixtures | `src/shared/autofill/fixtures/ashby-form.html`, `ashby-embed-host.html`, `e2e/fixtures/workspaces/mocks/software-engineer/ashby-mock/as-1` | The live form, anonymised (Acme, fake UUIDs), plus a LinkedIn custom question. A careers page with Ashby's embed iframe. A `mocks` application whose posting is `/ashby/?parsed=1`. |
+| Mock | `scripts/mock-ats/ashby.mjs` (+ `.d.mts`), `scripts/mock-ats/server.mjs` | `/ashby/` serves an empty `#root` and renders the captured form `renderMs` after `load` (default 500 ms). The resume widget behaves like Ashby's: spinner, then the item with delete and "Replace", and a toast on failure. It uploads to `/ashby/upload`, recorded in the mock ATS's `uploads.json` (#63's `recordUpload`: site `ashby`, `kind`, size, sha256). The parser pane posts to `/ashby/parse` (recorded) and fills only empty fields. Switches: `?parsed=1` (the parser was already used), `?failUpload=1` (Ashby rejects the upload), `?clearPhone=once\|always` (the page wipes the phone after it is filled), `?staggerMs=` (the resume question first, the rest later). `/ashby/<job-uuid>[/application]` serves the form, and `/ashby/careers` is a company page that injects Ashby's embed iframe 800 ms after load. Submit posts the answers plus the uploaded file to `/ashby/submit` and swaps in the success panel. `server.mjs` gains an optional per-site `routes()` hook and `sendJson`. |
+| Fixtures | `src/shared/autofill/fixtures/ashby-form.html`, `ashby-embed-host.html`, `e2e/fixtures/workspaces/mocks/software-engineer/ashby-mock/as-1` | The live form, anonymised (Acme, fake UUIDs), plus a LinkedIn custom question. A careers page with Ashby's embed iframe. Five `mocks` applications on the mock Ashby: `ashby-mock` (`?parsed=1`), `ashby-late-mock` (`?renderMs=5000&staggerMs=4000&clearPhone=once`), `ashby-wipe-mock` (`?clearPhone=always`), `ashby-reject-mock` (`?failUpload=1`) and `ashby-embed-mock` (`/ashby/careers`). |
 | Tests | `adapters/ashby.test.ts`, `src/shared/apply.test.ts`, `src/main/apply/apply.test.ts`, `e2e/tests/apply-ashby.spec.ts` | See below. |
 
 ### Shared engine changes
 
 Kept to the extension points #63 set up: one registry line, one `EMBED_RULES` entry, and these:
 
-- `EmbedRule.page?` (optional) and `embedPageFor()` in `apply-embeds.ts`.
-- `service.ts`: `isGreenhouseEmbedUrl(scan.embedUrl)` → `embedPageFor(scan.embedUrl)`, and the message is now
-  "This page embeds the <ATS> application form; opening it directly."
+- `EmbedRule.page?` (optional) and `embedPageFor(value, { allowLoopback })` in `apply-embeds.ts`.
+- `service.ts`: `embedRuleFor(embed, …)` → `embedPageFor(scan.embedUrl, …)` (it opens the rule's page), and the
+  message is now "This page embeds the <ATS> application form; opening it directly."
 - `AUTO_TRUSTED_ATS` += `ashby`.
-- `scripts/mock-ats/server.mjs`: the `ashby` site, an optional `routes()` per site, and `sendJson`.
+- `scripts/mock-ats/server.mjs`: the `ashby` site, an optional `routes()` per site (given `uploadsFile`,
+  `recordUpload`, `sendJson` and `sendHtml`), and `sendJson`.
 
 ```mermaid
 flowchart TD
@@ -100,14 +101,11 @@ flowchart TD
   `app.ashbyhq.com` is not an embed host.
 - **The location combobox is left to the user**, as the AC asks. `choices` names it, and today the engine already
   reports `role=combobox` as *Your choice*.
-- **No new readiness or verify code here.** The settle and the re-verify belong to #63's engine, and the Ashby hooks
-  (`ready`, `uploadAttached`, `afterUpload`) have no runtime consumer until #63 lands (PR review). Until then:
-  - The service's fixed re-detects (load+1 s, then load+4 s) catch a form that renders within about 4 s, so a slower
-    Ashby API leaves the page on *Ready to fill*.
-  - An upload Ashby rejects is still reported *Attached*, because the service marks it right after the CDP call.
-  - A value the page clears after the fill is still reported *Filled*.
-
-  This PR is rebased onto #63 and re-verified with e2e cases for each of these before it merges.
+- **No new readiness or verify code here.** The settle and the re-verify belong to #63's engine; this adapter only
+  provides the hooks it calls. The PR review asked for proof that they are really called, so the e2e has a case per
+  hook that fails when the hook is removed. Checked by removing each one locally:
+  - Without `ready`: the late, staggered form is filled before its questions exist, so the name is missing.
+  - Without `uploadAttached`: a rejected upload is reported *Attached*.
 
 ## How to test
 
@@ -125,25 +123,25 @@ node scripts/mock-ats.mjs  # then open http://localhost:4173/ashby/ (or /ashby/?
 - **Service:** an Ashby posting opens `/application`, is `ready` while the shell is empty, and fills and uploads once
   the form renders. An embedded job opens `jobs.ashbyhq.com/<org>/<id>/application` and fills there. A board-only
   iframe or an untrusted page is not followed.
-- **e2e:** (1) a fake-agent Tailor run with the posting `…/ashby/` → **Apply** on the run → the late form fills the
+- **e2e** (`apply-ashby.spec.ts`, six cases): (1) a fake-agent Tailor run with the posting `…/ashby/` → **Apply** on the run → the late form fills the
   name, email, phone and LinkedIn. The widget shows `resume.pdf` and "Replace". The mock recorded exactly one upload
-  with the run's own `resume.pdf` size, and no parse. The autofill input holds no file, and the values are still there
-  1.5 s later. The test presses Submit, the mock's payload holds the values and the file, and the panel says
+  of the run's own `resume.pdf` (same size and sha256), and no parse. The autofill input holds no file. The test presses Submit, the mock's payload holds the values and the file, and the panel says
   **Submitted**. (2) `?parsed=1` from the Dashboard: the parser's name and email are **Kept yours**, phone and
-  LinkedIn are filled, and resume.pdf is attached.
+  LinkedIn are filled, and resume.pdf is attached. (3) A form rendered 5 s after load, later than the service's
+  fixed re-detects, and staggered (resume question first, the rest 4 s later), with the phone wiped once after it is
+  filled: everything is filled, the phone is restored by the re-verify, and the resume is attached. (4) A phone wiped
+  every time is reported **Rejected** ("The page cleared it after filling"), and the other fields hold. (5) An upload
+  Ashby rejects (the toast, no file listed) is reported **Attach yourself**, never *Attached*. (6) A company page that
+  injects Ashby's embed iframe late: the tab opens `/ashby/<job>/application` (the dev-only loopback embed allowance),
+  then fills and attaches there.
 
 Screenshots: `docs/changes/assets/64-ashby-filled-page.png`, `64-ashby-filled-panel.png`, `64-ashby-kept-page.png`, `64-ashby-kept-panel.png`
 (written by the e2e as test attachments).
 
 ## Follow-ups
 
-- Once #63 lands (required before merge): check that the engine reads `ready`, `uploadOrder`, `uploadAttached` and
-  `afterUpload` for Ashby. Add e2e cases for a render later than the last fixed retry (`?renderMs=`), an upload the
-  mock fails (`?failUpload=1`: a toast, so `upload-failed` and never *Attached*), and a value cleared after the fill
-  (re-applied once, else `rejected`).
-- An Ashby embed on a company domain cannot be exercised end-to-end: the embed rule requires https on
-  `jobs.ashbyhq.com`. It is covered by unit and service tests. A loopback override for embed hosts in dev (as #63 plans
-  for Greenhouse) would allow an e2e.
+- The real `jobs.ashbyhq.com` embed path is covered by unit and service tests. The e2e drives the same rule through
+  the dev-only loopback allowance.
 - Board-only embeds (`/<org>?embed=js`): the user picks a job inside the iframe, and the iframe's `src` does not
   change. A follow-up could read `ashby_jid` from the host page URL.
 - Verify against a few more live orgs: "Name" vs "Legal Name", forms without a phone question, and multi-file
