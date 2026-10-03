@@ -80,92 +80,100 @@ async function applyFromDashboard(page: Page, company: string): Promise<BrowserP
   return new BrowserPage(page)
 }
 
+/** The Lever form holds the profile after the parser ran, and its widget shows resume.pdf. */
+async function expectLeverFilled(app: { electronApp: Parameters<typeof evaluateInTab>[0] }) {
+  await expectInTab(app.electronApp, '/lever/', `document.querySelector('.filename').textContent`, 'resume.pdf')
+  await expectInTab(app.electronApp, '/lever/', `getComputedStyle(document.querySelector('.resume-upload-success')).display`, 'inline-block')
+  // The parser fills only empty fields ("Parsed Name"); none of Huntgry's values were replaced.
+  for (const [selector, expected] of [
+    ['input[name="name"]', PROFILE.full],
+    ['input[name="email"]', PROFILE.email],
+    ['input[name="phone"]', PROFILE.phone],
+    ['input[name="urls[LinkedIn]"]', PROFILE.linkedin],
+    ['input[name="urls[GitHub]"]', PROFILE.github]
+  ]) {
+    expect(await evaluateInTab(app.electronApp, '/lever/', value(selector)), selector).toBe(expected)
+  }
+}
+
+/** One Tailor run with the fake agent, approved, so the run has its own fresh resume.pdf. */
+async function generate(page: Page, job: { jobUrl: string; company: string; role: string; jobId: string }, folder: string) {
+  await new Shell(page).goTo('tailor')
+  const tailor = new TailorPage(page)
+  await tailor.start({ ...job, description: `# ${job.role}\n\n${job.company} is hiring a ${job.role}. Go, PostgreSQL.` })
+  await tailor.expectStatus('Waiting for you')
+  await tailor.reply('Approved')
+  await expect(tailor.outputLine(folder)).toBeVisible()
+  await expect(tailor.outputButton('Apply')).toBeEnabled()
+  await expect(tailor.applyReason).toHaveCount(0)
+  return tailor
+}
+
+const SITES = [
+  {
+    site: 'greenhouse',
+    path: '/greenhouse/',
+    title: 'Job Application for Software Engineer at Acme',
+    job: { company: 'Hydrate Co', role: 'Platform Engineer', jobId: 'GH-63' },
+    folder: 'platform-engineer/hydrate-co/gh-63',
+    expectFilled: (app: { electronApp: Parameters<typeof evaluateInTab>[0] }) => expectGreenhouseFilled(app, '/greenhouse/'),
+    answers: {} as Record<string, string>,
+    thanks: '/greenhouse/confirmation',
+    payload: { first_name: PROFILE.first, last_name: PROFILE.last, email: PROFILE.email, phone: PROFILE.phone, question_1000008: PROFILE.linkedin }
+  },
+  {
+    site: 'lever',
+    path: '/lever/',
+    title: 'Acme - Software Engineer',
+    job: { company: 'Parse Co', role: 'Backend Engineer', jobId: 'LV-63' },
+    folder: 'backend-engineer/parse-co/lv-63',
+    expectFilled: expectLeverFilled,
+    answers: { 'textarea[required]': 'Yes, remote from Portland.', 'input[name="location"]': 'Portland, OR' },
+    thanks: '/lever/thanks',
+    payload: { name: PROFILE.full, email: PROFILE.email, phone: PROFILE.phone, 'urls[LinkedIn]': PROFILE.linkedin }
+  }
+] as const
+
 test.describe('apply with the generated resume', () => {
-  test('Tailor run → Apply: the Greenhouse form is filled after hydration, the run’s own resume.pdf is attached', async ({
-    app,
-    mock
-  }) => {
-    const folder = 'platform-engineer/hydrate-co/gh-63'
-    await new Shell(app.window).goTo('tailor')
-    const tailor = new TailorPage(app.window)
-    await tailor.start({
-      jobUrl: `${mock.origin}/greenhouse/`,
-      description: '# Platform Engineer\n\nHydrate Co is hiring a Platform Engineer. Go, PostgreSQL.',
-      company: 'Hydrate Co',
-      role: 'Platform Engineer',
-      jobId: 'GH-63'
+  for (const s of SITES) {
+    test(`Tailor run → Apply on ${s.site}: filled, the run’s own resume.pdf attached and submitted by the test`, async ({
+      app,
+      mock
+    }) => {
+      const tailor = await generate(app.window, { jobUrl: `${mock.origin}${s.path}`, ...s.job }, s.folder)
+      await tailor.outputButton('Apply').click()
+      await new Shell(app.window).expectActive('browser')
+      const browser = new BrowserPage(app.window)
+      await expectTabLoaded(app.electronApp, s.path, s.title)
+      await browser.apply.expectStatus('Filled: review and submit')
+      await expect(app.window.getByText(`${s.job.role} · ${s.job.company}`)).toBeVisible()
+      await expect(app.window.getByText('resume.pdf', { exact: true }).locator('..')).toContainText('Attached')
+      await s.expectFilled(app)
+
+      // The file the site received is exactly this run's resume.pdf.
+      const [upload] = (await uploads(mock)).filter((u) => u.site === s.site)
+      expect(upload).toMatchObject({ file: 'resume.pdf' })
+      expect(upload.sha256).toBe(await sha256(join(app.workspace!, s.folder, 'resume.pdf')))
+      expect(await exists(mock.submissionFile)).toBe(false)
+
+      // The test presses the site's Submit; the payload carries the contact values and the uploaded resume.
+      await pressSubmitInTab(app.electronApp, s.path, s.answers)
+      await expectTabLoaded(app.electronApp, s.thanks, 'Acme')
+      const submission = JSON.parse(await readFile(mock.submissionFile, 'utf8'))
+      expect(submission.site).toBe(s.site)
+      expect(submission.fields).toMatchObject({ ...s.payload, resume: { file: 'resume.pdf', bytes: upload.bytes } })
+      await browser.apply.expectStatus('Submitted')
     })
-    await tailor.expectStatus('Waiting for you')
-    await tailor.reply('Approved')
-    await expect(tailor.outputLine(folder)).toBeVisible()
-    await expect(tailor.outputButton('Apply')).toBeEnabled()
-    await expect(tailor.applyReason).toHaveCount(0)
-
-    await tailor.outputButton('Apply').click()
-    await new Shell(app.window).expectActive('browser')
-    const browser = new BrowserPage(app.window)
-    await expectTabLoaded(app.electronApp, '/greenhouse/', 'Job Application for Software Engineer at Acme')
-    await browser.apply.expectStatus('Filled: review and submit')
-    await expect(app.window.getByText('Platform Engineer · Hydrate Co')).toBeVisible()
-    await expect(app.window.getByText('resume.pdf', { exact: true }).locator('..')).toContainText('Attached')
-
-    await expectGreenhouseFilled(app, '/greenhouse/')
-    // The file the site received is exactly this run's resume.pdf.
-    const [upload] = (await uploads(mock)).filter((u) => u.site === 'greenhouse')
-    expect(upload).toMatchObject({ field: 'resume', file: 'resume.pdf' })
-    expect(upload.sha256).toBe(await sha256(join(app.workspace!, folder, 'resume.pdf')))
-    expect(await exists(mock.submissionFile)).toBe(false)
-
-    // The test presses the site's Submit; the payload carries the names and the uploaded resume.
-    await pressSubmitInTab(app.electronApp, '/greenhouse/')
-    await expectTabLoaded(app.electronApp, '/greenhouse/confirmation', 'Acme')
-    const submission = JSON.parse(await readFile(mock.submissionFile, 'utf8'))
-    expect(submission.fields).toMatchObject({
-      first_name: PROFILE.first,
-      last_name: PROFILE.last,
-      email: PROFILE.email,
-      phone: PROFILE.phone,
-      question_1000008: PROFILE.linkedin,
-      resume: { file: 'resume.pdf', bytes: upload.bytes }
-    })
-    await browser.apply.expectStatus('Submitted')
-  })
+  }
 
   test('Dashboard row → Apply on Lever: attached through the résumé parser, contact values kept', async ({ app, mock }) => {
     const browser = await applyFromDashboard(app.window, 'Lever Mock')
     await expectTabLoaded(app.electronApp, '/lever/', 'Acme - Software Engineer')
     await browser.apply.expectStatus('Filled: review and submit')
     await expect(app.window.getByText('resume.pdf', { exact: true }).locator('..')).toContainText('Attached')
-
-    // The widget shows the file and the parser ran; it did not replace what Huntgry filled.
-    await expectInTab(app.electronApp, '/lever/', `document.querySelector('.filename').textContent`, 'resume.pdf')
-    await expectInTab(app.electronApp, '/lever/', `getComputedStyle(document.querySelector('.resume-upload-success')).display`, 'inline-block')
-    for (const [selector, expected] of [
-      ['input[name="name"]', PROFILE.full],
-      ['input[name="email"]', PROFILE.email],
-      ['input[name="phone"]', PROFILE.phone],
-      ['input[name="urls[LinkedIn]"]', PROFILE.linkedin],
-      ['input[name="urls[GitHub]"]', PROFILE.github]
-    ]) {
-      expect(await evaluateInTab(app.electronApp, '/lever/', value(selector)), selector).toBe(expected)
-    }
+    await expectLeverFilled(app)
     const [upload] = (await uploads(mock)).filter((u) => u.site === 'lever')
-    expect(upload).toMatchObject({ file: 'resume.pdf' })
     expect(upload.sha256).toBe(await sha256(join(app.workspace!, 'software-engineer/lever-mock/lv-1/resume.pdf')))
-
-    await pressSubmitInTab(app.electronApp, '/lever/', {
-      'textarea[required]': 'Yes, remote from Portland.',
-      'input[name="location"]': 'Portland, OR'
-    })
-    await expectTabLoaded(app.electronApp, '/lever/thanks', 'Acme')
-    const submission = JSON.parse(await readFile(mock.submissionFile, 'utf8'))
-    expect(submission.fields).toMatchObject({
-      name: PROFILE.full,
-      email: PROFILE.email,
-      phone: PROFILE.phone,
-      'urls[LinkedIn]': PROFILE.linkedin,
-      resume: { file: 'resume.pdf', bytes: upload.bytes }
-    })
   })
 
   test('drawer → "Apply in browser" on Greenhouse fills and attaches the same way', async ({ app, mock }) => {
@@ -207,6 +215,19 @@ test.describe('apply with the generated resume', () => {
     await expectTabLoaded(app.electronApp, '/greenhouse/', 'Job Application for Software Engineer at Acme')
     await browser.apply.expectStatus('Filled: review and submit')
     await expectGreenhouseFilled(app, '/greenhouse/')
+    expect(await exists(mock.submissionFile)).toBe(false)
+  })
+
+  test("a posting whose Apply link opens the form in the same tab: filled once the user follows it", async ({ app, mock }) => {
+    const browser = await applyFromDashboard(app.window, 'Link Mock')
+    await expectTabLoaded(app.electronApp, '/company/posting-link', 'Software Engineer - Acme')
+    await browser.apply.expectStatus('Ready to fill')
+    await expect(app.window.getByText(/Open it with the page's own Apply button/)).toBeVisible()
+    await clickLinkInTab(app.electronApp, '/company/posting-link', '#apply')
+    await expectTabLoaded(app.electronApp, '/greenhouse/', 'Job Application for Software Engineer at Acme')
+    await browser.apply.expectStatus('Filled: review and submit')
+    await expectGreenhouseFilled(app, '/greenhouse/')
+    expect((await listTabs(app.electronApp)).length).toBe(1)
     expect(await exists(mock.submissionFile)).toBe(false)
   })
 

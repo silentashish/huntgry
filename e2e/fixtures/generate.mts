@@ -189,7 +189,8 @@ for (const [folder, company] of [
   ['redirect-mock/rd-1', 'Acme'],
   // #63: a Greenhouse board that redirects to the company site with a late embed, and a posting whose Apply opens a new tab.
   ['company-embed-mock/ce-1', 'Acme'],
-  ['popup-mock/pp-1', 'Acme']
+  ['popup-mock/pp-1', 'Acme'],
+  ['link-mock/ln-1', 'Acme']
 ]) {
   await write(join(here, `workspaces/mocks/software-engineer/${folder}/resume.pdf`), applicationPdf('Software Engineer', company))
 }
