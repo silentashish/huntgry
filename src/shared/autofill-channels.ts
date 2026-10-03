@@ -4,7 +4,9 @@
  * with a request id; the page answers on `result`. Once per page it sends
  * `confirmation` when the site's "application submitted" page appears after a
  * detect, and `formAppeared` when a form (or an embedded form) renders after
- * a detect found none.
+ * a detect found none. `step` is sent whenever a multi-step site (Workday)
+ * moves to another step, renders more of it or finishes being busy, without
+ * a navigation.
  */
 export const AUTOFILL_CHANNELS = {
   detect: 'huntgry:autofill:detect',
@@ -13,7 +15,8 @@ export const AUTOFILL_CHANNELS = {
   afterUpload: 'huntgry:autofill:after-upload',
   result: 'huntgry:autofill:result',
   confirmation: 'huntgry:autofill:confirmation',
-  formAppeared: 'huntgry:autofill:form-appeared'
+  formAppeared: 'huntgry:autofill:form-appeared',
+  step: 'huntgry:autofill:step'
 } as const
 
 /** Attribute the page script puts on a file input so main can find it over CDP. */

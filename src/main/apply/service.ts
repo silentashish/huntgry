@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
-import type { ApplySession, FieldReport, FillReport, FillValues, PageScan, UploadState } from '@shared/apply-types'
+import type { AdapterStep, ApplyAts, ApplySession, FieldReport, FillReport, FillValues, PageScan, UploadState } from '@shared/apply-types'
 import { embedRuleFor } from '@shared/apply-embeds'
 import { applyUrlFor, isTrustedApplyPage } from '@shared/apply-url'
 import { AUTOFILL_CHANNELS, UPLOAD_ATTR } from '@shared/autofill-channels'
@@ -79,8 +79,16 @@ interface Context {
   embedFollows: number
   /** The company page an embedded form was opened from, to reload it when the embed expired. */
   embedHost: string | null
-  /** The page (URL and step) filled automatically, so a re-detect of the same page does not fill again. */
-  autoFilledUrl: string | null
+  /**
+   * Per page and step (URL plus step title): the profile fields a completed fill has handled (`*` for a whole
+   * single-page form). A re-detect fills again only for fields the step rendered since (#65); a fill that was cut
+   * short handles nothing, so the next detect of a still-current step retries it.
+   */
+  handled: Map<string, Set<string>>
+  /** What the last accepted detect saw (see `pageKey`), to ignore a step report the service already acted on. */
+  pageKey: string | null
+  /** The step changed in place (fields added or replaced) while its fill ran: look again once the fill is done. */
+  recheck: boolean
   /** The page generation (`loadSeq`) a fill is running for, or null. */
   fillingSeq: number | null
   /** Bumped on every load and on a single-page confirmation, so stale detects, fills and uploads give up. */
@@ -156,7 +164,9 @@ export class ApplyService {
       landed: false,
       embedFollows: 0,
       embedHost: null,
-      autoFilledUrl: null,
+      handled: new Map(),
+      pageKey: null,
+      recheck: false,
       fillingSeq: null,
       loadSeq: 0,
       timers: new Set()
@@ -172,7 +182,8 @@ export class ApplyService {
       status: 'opened',
       report: null,
       hasCover: coverPath !== null,
-      message: null
+      message: null,
+      step: null
     }
     this.watch(ctx)
     if (this.deps.onTabOpened) {
@@ -196,6 +207,11 @@ export class ApplyService {
         // The page is a different page now: any fill or upload still running for the form is stale.
         ctx.loadSeq++
         this.update({ status: 'submitted-detected', message: CONFIRMED })
+      }),
+      // A multi-step site (Workday) moved to another step, rendered more of it or stopped being busy, without a
+      // navigation. The detect only invalidates running work when the page really differs from what it last saw.
+      page.onMessage(AUTOFILL_CHANNELS.step, () => {
+        if (this.ctx === ctx) void this.detect(ctx, null, 0)
       }),
       page.onMessage(AUTOFILL_CHANNELS.formAppeared, () => {
         // A form or an embedded form rendered after the detect found none (late iframe, client-rendered form).
@@ -223,6 +239,7 @@ export class ApplyService {
       page.onLoad((fullLoad) => {
         if (this.ctx !== ctx) return
         const seq = ++ctx.loadSeq
+        ctx.recheck = false
         // A single-page app swaps its view after the URL changes; give it a moment.
         if (fullLoad) void this.detect(ctx, seq, 0)
         else this.later(ctx, 500, () => void this.detect(ctx, seq, 0))
@@ -279,7 +296,8 @@ export class ApplyService {
     return this.ctx
   }
 
-  private async detect(ctx: Context, seq: number, attempt: number): Promise<void> {
+  /** `seq` is the load the detect belongs to, or null for a page's step report (a new generation only if the page changed). */
+  private async detect(ctx: Context, seq: number | null, attempt: number): Promise<void> {
     let scan: PageScan
     try {
       scan = parsePageScan(await this.request(ctx, AUTOFILL_CHANNELS.detect, {}))
@@ -287,8 +305,30 @@ export class ApplyService {
       // The page navigated away or is still busy; the next load detects again.
       return
     }
-    if (this.ctx !== ctx || ctx.loadSeq !== seq) return
-    this.update({ ats: scan.ats })
+    if (this.ctx !== ctx) return
+    const key = pageKey(scan)
+    if (seq === null) {
+      if (ctx.fillingSeq !== null && ctx.pageKey !== null && stepId(ctx.pageKey) === stepId(key)) {
+        // The step being filled reported again (an in-page navigation's detect got there first), or it changed in
+        // place (Workday replaces the resume input once it has the file): the running fill or upload stays valid.
+        if (key !== ctx.pageKey) ctx.recheck = true
+        return
+      }
+      if (key !== ctx.pageKey) {
+        seq = ++ctx.loadSeq
+        ctx.recheck = false
+      } else if (!scan.ready) {
+        // Only the site's busy state changed.
+        return
+      } else {
+        // The same step, now ready (Workday finished reading the resume): carry on without invalidating anything.
+        seq = ctx.loadSeq
+      }
+    } else if (ctx.loadSeq !== seq) {
+      return
+    }
+    ctx.pageKey = key
+    this.update({ ats: scan.ats, step: stepOf(scan) })
     if (scan.confirmation) {
       this.update({ status: 'submitted-detected', message: CONFIRMED })
       return
@@ -305,10 +345,15 @@ export class ApplyService {
       })
       return
     }
+    // A posting, a "how to apply" choice, a sign-in wall or another step of the site's flow: the user acts in the
+    // page; Huntgry presses nothing and fills nothing. The page reports the next step (or the next load detects it).
     if (scan.step !== 'form') {
-      this.update({ status: 'ready', message: STEP_MESSAGE[scan.step] })
+      this.update({ status: 'waiting', report: null, message: stepMessage(scan.ats, scan.step, scan.stepTitle) })
       return
     }
+    // A step filled earlier whose last input the site has since replaced (Workday lists the uploaded resume
+    // instead of its drop zone): what was filled still stands.
+    if (!scan.formFound && scan.stepTitle && ctx.handled.has(stepKey(scan.url, scan.stepTitle))) return
     if (!scan.formFound) {
       const embed = scan.embedUrl
       if (trusted && embed && embedRuleFor(embed, { allowLoopback: this.deps.allowLocalEmbeds === true })) {
@@ -333,7 +378,8 @@ export class ApplyService {
         return
       }
       const delay = (this.deps.retryDelaysMs ?? DEFAULT_RETRIES)[attempt]
-      if (delay !== undefined) this.later(ctx, delay, () => void this.detect(ctx, seq, attempt + 1))
+      const at = seq
+      if (delay !== undefined) this.later(ctx, delay, () => void this.detect(ctx, at, attempt + 1))
       this.update({
         status: 'ready',
         message:
@@ -341,12 +387,15 @@ export class ApplyService {
       })
       return
     }
+    // The site is still working on the step (Workday reading the resume, which rewrites My Information): fill after.
+    if (!scan.ready && trusted && unhandled(ctx, scan)) {
+      this.update({ status: 'waiting', message: BUSY })
+      return
+    }
     // Known ATS forms fill on their own; on other sites only a page with a resume upload counts as an application form.
-    // A multi-step form is filled once per step.
-    const pageKey = `${scan.url}#${scan.stepTitle ?? ''}`
-    const auto = trusted && pageKey !== ctx.autoFilledUrl && (scan.ats !== 'generic' || scan.hasResumeInput)
+    // A multi-step form is filled once per step, and again only for fields the step rendered since.
+    const auto = trusted && unhandled(ctx, scan) && (scan.ats !== 'generic' || scan.hasResumeInput)
     if (auto) {
-      ctx.autoFilledUrl = pageKey
       await this.fillPage(ctx)
     } else if (!trusted) {
       this.update({
@@ -374,7 +423,16 @@ export class ApplyService {
       // The preload waits for the page to settle, fills, then checks a moment later that the values held.
       let report = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { values: ctx.values }))
       if (!current()) return
-      if (report.url) ctx.autoFilledUrl ??= `${report.url}#`
+      if (report.step && report.step !== 'form') {
+        // Fill form pressed on a step that is the user's (a sign-in wall…): the page was left untouched.
+        this.update({
+          status: 'waiting',
+          report: null,
+          step: { kind: report.step, title: report.stepTitle ?? null },
+          message: stepMessage(report.ats, report.step, report.stepTitle ?? null)
+        })
+        return
+      }
       const uploads = report.fields.filter((f) => f.outcome === 'to-upload')
       // Default order is text first, files last: Lever's resume parser only fills empty fields, after an upload.
       // A `files-first` adapter reported its file fields only; its text is filled after the upload.
@@ -394,7 +452,13 @@ export class ApplyService {
         if (!current()) return
         report = withFilesFrom(text, report)
       }
+      this.markHandled(ctx, report)
       this.update({ status: 'filled', ats: report.ats, report, message: summary(report.fields) })
+      if (ctx.recheck) {
+        ctx.recheck = false
+        // Fields the step rendered meanwhile get filled now (finally clears fillingSeq first).
+        queueMicrotask(() => void this.detect(ctx, ctx.loadSeq, 0))
+      }
     } catch (err) {
       if (current()) this.update({ status: 'error', message: `Filling failed: ${errorMessage(err)}` })
     } finally {
@@ -407,6 +471,24 @@ export class ApplyService {
         }
       }
     }
+  }
+
+  /**
+   * A fill completed: remember what the step handled, and keep the lines of an
+   * earlier fill of the same step for fields this one no longer sees (Workday
+   * replaces the resume input once it has the file).
+   */
+  private markHandled(ctx: Context, report: FillReport): void {
+    const step = stepKey(report.url, report.stepTitle ?? null)
+    const done = ctx.handled.get(step) ?? new Set<string>()
+    const previous = this.session?.report
+    if (previous && done.size && stepKey(previous.url, previous.stepTitle ?? null) === step) {
+      const seen = new Set(report.fields.map((f) => f.key))
+      report.fields = [...report.fields, ...previous.fields.filter((f) => f.key && !seen.has(f.key))]
+    }
+    for (const f of report.fields) if (f.key) done.add(f.key)
+    if (report.stepFields == null) done.add('*')
+    ctx.handled.set(step, done)
   }
 
   /**
@@ -535,13 +617,44 @@ export class ApplyService {
 
 const CONFIRMED = 'The site shows its "application submitted" page. Mark this application as applied?'
 
-/** What the panel says on a page that is a step of the apply flow but not a form to fill. */
-const STEP_MESSAGE: Record<Exclude<PageScan['step'], 'form'>, string> = {
-  posting: "This is the job posting. Press the site's Apply button; Huntgry fills the form when it appears.",
-  choice: 'The site asks how to apply. Choose an option in the page; Huntgry fills the form when it appears.',
-  'account-wall':
-    'The site asks you to sign in or create an account. Do that in the page yourself; Huntgry fills the next steps.',
-  other: 'This page is not an application form. Huntgry fills the form when it appears.'
+const stepOf = (scan: PageScan): ApplySession['step'] =>
+  scan.step === 'form' && !scan.stepTitle ? null : { kind: scan.step, title: scan.stepTitle }
+
+/** A page and step: a multi-step site keeps its URL while the step changes. */
+const stepKey = (url: string, stepTitle: string | null) => `${url}#${stepTitle ?? ''}`
+
+/** What a detect saw, apart from the site's busy state (`ready`); two detects with the same key saw the same page. */
+const pageKey = (scan: PageScan) =>
+  [scan.ats, scan.url, scan.step, scan.stepTitle, scan.confirmation, scan.stepFields, scan.formFound].join('\n')
+
+/** The page and step part of a `pageKey` (without what the step currently shows). */
+const stepId = (key: string) => key.split('\n').slice(0, 5).join('\n')
+
+/** Whether the step shows a field no completed fill has handled yet (single-page forms: not filled yet at all). */
+function unhandled(ctx: Context, scan: PageScan): boolean {
+  const done = ctx.handled.get(stepKey(scan.url, scan.stepTitle))
+  if (!done) return true
+  if (scan.stepFields === null) return !done.has('*')
+  return scan.stepFields.split(',').some((k) => k && !done.has(k))
+}
+
+const BUSY = 'The site is still working on this step (for example, reading your resume). Huntgry fills it once it is done.'
+
+/** What the user does on a step that is theirs. Huntgry never presses the site's buttons. */
+function stepMessage(ats: ApplyAts, step: AdapterStep, title: string | null): string {
+  const workday = ats === 'workday'
+  switch (step) {
+    case 'posting':
+      return 'This is the job posting. Press "Apply" in the page yourself; Huntgry continues on the next step.'
+    case 'choice':
+      return workday
+        ? 'Choose how to apply in the page: "Autofill with Resume" (Huntgry attaches your resume.pdf) or "Apply Manually". Huntgry does not press either.'
+        : 'The site asks how to apply. Choose an option in the page; Huntgry continues on the next step.'
+    case 'account-wall':
+      return `Sign in or create your ${workday ? 'Workday ' : ''}account in the page yourself. Huntgry fills nothing here (no email, never a password) and fills the next steps once you are past it.`
+    default:
+      return `Nothing for Huntgry on this step${title ? ` ("${title}")` : ''}. Answer it in the page and continue; Huntgry fills the steps it knows.`
+  }
 }
 
 /** Greenhouse's page for an embed whose token expired (`/embed/job_board?…&error=true`). */

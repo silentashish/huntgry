@@ -6,7 +6,7 @@ import { JSDOM } from 'jsdom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApplySession, FillReport, FillValues } from '@shared/apply-types'
 import { AUTOFILL_CHANNELS } from '@shared/autofill-channels'
-import { detectConfirmation, fillPage, scanPage, verifyFill } from '@shared/autofill/engine'
+import { detectConfirmation, fillPage, scanPage, uploadStateOf, verifyFill, type UploadKey } from '@shared/autofill/engine'
 import { refusalFor } from '../browser/url'
 import { isLoopbackUrl, localUrlsAllowed } from '../cli/dev-urls'
 import { ApplyService, type ApplyDeps, type ApplyPage } from './service'
@@ -40,7 +40,7 @@ class FakeTab implements ApplyPage {
   loads = new Set<(full: boolean) => void>()
   navigations = new Set<(url: string) => void>()
   closes = new Set<() => void>()
-  /** What the page's upload widget shows after an attach. */
+  /** What the page's upload widget shows after an attach; `engine` asks the real adapter, waiting like the preload does. */
   uploadAnswer: string = 'attached'
   lastReport: FillReport | null = null
   sent: string[] = []
@@ -84,13 +84,42 @@ class FakeTab implements ApplyPage {
     for (const l of this.closes) l()
   }
 
+  /** An in-page navigation (pushState): the DOM changes, main hears `did-navigate-in-page`, no step report yet. */
+  navigateInPage(html: string, url = this.dom.window.location.href) {
+    this.dom = new JSDOM(html, { url })
+    for (const l of this.loads) l(false)
+  }
+
+  /** A single-page app moving to another step in place (same URL), as the preload's step watcher reports it. */
+  step(html: string) {
+    this.dom = new JSDOM(html, { url: this.dom.window.location.href })
+    this.reply(AUTOFILL_CHANNELS.step, { url: this.dom.window.location.href })
+  }
+
+  /** The preload's upload-state wait, against the real adapter. */
+  private async engineUploadState(key: UploadKey, fileName: string, timeoutMs: number): Promise<string> {
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+      const state = uploadStateOf(this.dom.window.document, key, fileName)
+      if (state === 'attached' || Date.now() >= deadline) return state
+      await new Promise((r) => setTimeout(r, 20))
+    }
+  }
+
   reply(channel: string, payload: unknown) {
     for (const l of this.listeners.get(channel) ?? []) l(payload)
   }
 
   send(channel: string, payload: unknown): void {
     this.sent.push(channel)
-    const { requestId, values, text } = payload as { requestId: string; values?: FillValues; text?: boolean }
+    const { requestId, values, text, key, fileName, timeoutMs } = payload as {
+      requestId: string
+      values?: FillValues
+      text?: boolean
+      key?: UploadKey
+      fileName?: string
+      timeoutMs?: number
+    }
     const doc = this.dom.window.document
     if (channel === AUTOFILL_CHANNELS.fill && this.heldFills) {
       // The page did the fill already; only its answer is late.
@@ -103,7 +132,11 @@ class FakeTab implements ApplyPage {
       let result: unknown
       if (channel === AUTOFILL_CHANNELS.detect) result = scanPage(doc)
       else if (channel === AUTOFILL_CHANNELS.fill) result = await this.fill(values as FillValues, text)
-      else if (channel === AUTOFILL_CHANNELS.uploadState) result = this.uploadAnswer
+      else if (channel === AUTOFILL_CHANNELS.uploadState)
+        result =
+          this.uploadAnswer === 'engine'
+            ? await this.engineUploadState(key ?? 'resume', fileName ?? '', timeoutMs ?? 1000)
+            : this.uploadAnswer
       else if (channel === AUTOFILL_CHANNELS.afterUpload)
         result = this.lastReport && (await verifyFill(doc, values as FillValues, this.lastReport, { settleMs: 0 }))
       else return
@@ -139,6 +172,8 @@ class FakeDebugger implements Cdp {
   attached = false
   failOn: string | null = null
   files: string[] = []
+  /** Runs after `DOM.setFileInputFiles`, like the site's widget reacting to the file. */
+  onSetFiles: (() => void) | null = null
   /** What `DOM.getDocument` says the tab's document is (undefined: not reported). */
   documentURL: string | undefined = undefined
   /** When set, this command waits for `open()` (a slow CDP round trip). */
@@ -160,7 +195,10 @@ class FakeDebugger implements Cdp {
       this.log.push(`selector ${String(p.selector)}`)
       return Promise.resolve({ nodeId: 7 })
     }
-    if (method === 'DOM.setFileInputFiles') this.files = p.files as string[]
+    if (method === 'DOM.setFileInputFiles') {
+      this.files = p.files as string[]
+      this.onSetFiles?.()
+    }
     return Promise.resolve({})
   }
 
@@ -626,8 +664,9 @@ describe('ApplyService', () => {
       )
     }
     tab.load(fixture('greenhouse-form.html'), GH_URL)
-    await until(service, 'ready')
-    expect(service.current()!.message).toMatch(/sign in or create an account/)
+    await until(service, 'waiting')
+    expect(service.current()!.message).toMatch(/Sign in or create your account in the page yourself/)
+    expect(service.current()!.step).toEqual({ kind: 'account-wall', title: null })
     expect(tab.sent).toEqual([AUTOFILL_CHANNELS.detect])
   })
 
@@ -691,6 +730,304 @@ describe('ApplyService', () => {
     // Listeners are gone: a late load does nothing.
     first.load(fixture('greenhouse-form.html'), GH_URL)
     expect(first.loads.size).toBe(0)
+  })
+})
+
+describe('ApplyService on Workday', () => {
+  const JOB = 'https://acme.wd1.myworkdayjobs.com/en-US/AcmeCareers/job/Remote-USA/Software-Engineer_JR-1001'
+  const WD_ID = 'software-engineer/acme/wd-1'
+  const workdayApp = () => application({ 'job-description.md': `Engineer\n${JOB}\n`, 'resume.pdf': '%PDF' }, WD_ID)
+  /** A tab whose upload-state answer comes from the Workday adapter's widget check. */
+  const wdTab = () => {
+    const tab = new FakeTab('', JOB)
+    tab.uploadAnswer = 'engine'
+    return tab
+  }
+  /** Workday's widget lists a file a little after the attach (and after its parse): allow it 600 ms. */
+  const wdSetup = (tab: FakeTab, dbg = new FakeDebugger(), extra: Partial<ApplyDeps> = {}) =>
+    setup(tab, dbg, { uploadConfirmMs: 600, ...extra })
+  const value = (tab: FakeTab, selector: string) => (tab.dom.window.document.querySelector(selector) as HTMLInputElement).value
+
+  /** Workday's widget: the drop zone gives way to the uploaded-file list once the file is in (and parsed). */
+  const showUploaded = (tab: FakeTab, delayMs = 50) => () => {
+    setTimeout(() => {
+      const zone = tab.dom.window.document.querySelector('[data-automation-id="file-upload-drop-zone"]')
+      if (zone)
+        zone.outerHTML =
+          '<div data-automation-id="file-upload-successful"><div data-automation-id="file-upload-item">resume.pdf</div></div>'
+    }, delayMs)
+  }
+
+  it('walks posting → choice → sign-in wall → My Information → My Experience, filling only the form steps, once each', async () => {
+    await workdayApp()
+    const tab = wdTab()
+    const dbg = new FakeDebugger()
+    dbg.onSetFiles = showUploaded(tab, 120)
+    const { service } = wdSetup(tab, dbg)
+    const session = await service.start(WD_ID)
+    expect(session.applyUrl).toBe(JOB)
+
+    tab.load(fixture('workday-posting.html'), JOB)
+    await until(service, 'waiting')
+    expect(service.current()).toMatchObject({ ats: 'workday', step: { kind: 'posting', title: 'Job posting' } })
+    expect(service.current()!.message).toMatch(/Press "Apply" in the page yourself/)
+
+    tab.load(fixture('workday-apply-choice.html'), `${JOB}/apply`)
+    await vi.waitFor(() => expect(service.current()!.step?.kind).toBe('choice'))
+    expect(service.current()!.message).toMatch(/"Autofill with Resume".*"Apply Manually"/)
+
+    tab.load(fixture('workday-signin.html'), `${JOB}/apply/applyManually`)
+    await vi.waitFor(() => expect(service.current()!.step?.kind).toBe('account-wall'))
+    expect(service.current()).toMatchObject({ status: 'waiting', report: null })
+    expect(service.current()!.message).toMatch(/Sign in or create your Workday account in the page yourself/)
+    expect(value(tab, '[data-automation-id="email"]')).toBe('')
+    expect(value(tab, '[data-automation-id="password"]')).toBe('')
+    expect(tab.sent).not.toContain(AUTOFILL_CHANNELS.fill)
+
+    // The user signs in; Workday swaps in My Information without a navigation.
+    tab.step(fixture('workday-my-information.html'))
+    await until(service, 'filled')
+    expect(service.current()!.step).toEqual({ kind: 'form', title: 'My Information' })
+    expect(value(tab, '#name--legalName--firstName')).toBe('Ada')
+    expect(value(tab, '#phoneNumber--phoneNumber')).toBe('+1 555 123 4567')
+    expect(dbg.log).toEqual([])
+
+    // Next (pressed by the user) → My Experience, same URL: the resume goes in and Workday's widget confirms it.
+    tab.step(fixture('workday-my-experience.html'))
+    await vi.waitFor(() => expect(service.current()!.step?.title).toBe('My Experience'))
+    await until(service, 'filled')
+    expect(service.current()!.report?.fields.find((f) => f.key === 'resume')).toMatchObject({
+      outcome: 'uploaded',
+      value: 'resume.pdf'
+    })
+    expect(value(tab, '[data-automation-id="linkedinQuestion"]')).toBe(VALUES.linkedin)
+    expect(dbg.log.filter((l) => l === 'DOM.setFileInputFiles')).toHaveLength(1)
+
+    // The same step reported again (a re-render) is not filled or uploaded twice.
+    const fills = tab.sent.filter((c) => c === AUTOFILL_CHANNELS.fill).length
+    tab.reply(AUTOFILL_CHANNELS.step, {})
+    await new Promise((r) => setTimeout(r, 50))
+    expect(tab.sent.filter((c) => c === AUTOFILL_CHANNELS.fill)).toHaveLength(fills)
+
+    // Application Questions is the user's.
+    tab.step(fixture('workday-application-questions.html'))
+    await until(service, 'waiting')
+    expect(service.current()).toMatchObject({ report: null, step: { kind: 'other', title: 'Application Questions' } })
+    expect(service.current()!.message).toMatch(/Nothing for Huntgry on this step \("Application Questions"\)/)
+  })
+
+  it('a step reported again while its fill is running (in-page navigation, then the watcher) does not cancel it', async () => {
+    await workdayApp()
+    const tab = wdTab()
+    const { service } = wdSetup(tab)
+    await service.start(WD_ID)
+    tab.load(fixture('workday-signin.html'), `${JOB}/apply/applyManually`)
+    await until(service, 'waiting')
+
+    // The in-page navigation's detect sees My Information and starts filling; the page is slow to answer.
+    tab.heldFills = []
+    tab.navigateInPage(fixture('workday-my-information.html'))
+    await until(service, 'filling')
+    await vi.waitFor(() => expect(tab.heldFills).toHaveLength(1))
+    // Then the preload's watcher reports the same step.
+    tab.reply(AUTOFILL_CHANNELS.step, {})
+    await new Promise((r) => setTimeout(r, 30))
+    tab.releaseFills()
+    await until(service, 'filled')
+    expect(service.current()!.report?.fields.find((f) => f.key === 'firstName')).toMatchObject({ outcome: 'filled' })
+    expect(value(tab, '#name--legalName--firstName')).toBe('Ada')
+  })
+
+  it('a duplicate step report during the resume upload keeps the upload and its confirmation', async () => {
+    await workdayApp()
+    const tab = wdTab()
+    const dbg = new FakeDebugger()
+    dbg.holdOn('DOM.setFileInputFiles')
+    dbg.onSetFiles = showUploaded(tab, 20)
+    const { service } = wdSetup(tab, dbg)
+    await service.start(WD_ID)
+    tab.load(fixture('workday-signin.html'), `${JOB}/apply/applyManually`)
+    await until(service, 'waiting')
+    tab.navigateInPage(fixture('workday-my-experience.html'))
+    await vi.waitFor(() => expect(dbg.log).toContain('DOM.setFileInputFiles'))
+    tab.reply(AUTOFILL_CHANNELS.step, {})
+    await new Promise((r) => setTimeout(r, 30))
+    dbg.gate!.open()
+    await until(service, 'filled')
+    expect(service.current()!.report?.fields.find((f) => f.key === 'resume')).toMatchObject({ outcome: 'uploaded' })
+    expect(dbg.log.filter((l) => l === 'DOM.setFileInputFiles')).toHaveLength(1)
+  })
+
+  it('Workday starting to read the resume mid-upload (busy, then ready) neither cancels nor repeats the attach', async () => {
+    await workdayApp()
+    const tab = wdTab()
+    const dbg = new FakeDebugger()
+    dbg.holdOn('DOM.setFileInputFiles')
+    dbg.onSetFiles = showUploaded(tab, 20)
+    const { service } = wdSetup(tab, dbg)
+    await service.start(WD_ID)
+    tab.load(fixture('workday-signin.html'), `${JOB}/apply/autofillWithResume`)
+    await until(service, 'waiting')
+    tab.navigateInPage(fixture('workday-autofill-resume.html'))
+    await vi.waitFor(() => expect(dbg.log).toContain('DOM.setFileInputFiles'))
+    const banner = '<div data-automation-id="resumeParsing" role="status">Reading your resume…</div>'
+    tab.dom.window.document.body.insertAdjacentHTML('beforeend', banner)
+    tab.reply(AUTOFILL_CHANNELS.step, {})
+    await new Promise((r) => setTimeout(r, 30))
+    dbg.gate!.open()
+    await until(service, 'filled')
+    expect(service.current()!.report?.fields.find((f) => f.key === 'resume')).toMatchObject({ outcome: 'uploaded' })
+    tab.dom.window.document.querySelector('[data-automation-id="resumeParsing"]')!.remove()
+    tab.reply(AUTOFILL_CHANNELS.step, {})
+    await new Promise((r) => setTimeout(r, 50))
+    expect(service.current()).toMatchObject({ status: 'filled' })
+    expect(service.current()!.report?.fields.find((f) => f.key === 'resume')).toMatchObject({ outcome: 'uploaded' })
+    expect(dbg.log.filter((l) => l === 'DOM.setFileInputFiles')).toHaveLength(1)
+  })
+
+  it('Workday replacing the resume input (a step change in place) while the attach is confirmed keeps the upload', async () => {
+    await workdayApp()
+    const tab = wdTab()
+    const dbg = new FakeDebugger()
+    const { service } = wdSetup(tab, dbg)
+    dbg.onSetFiles = () => {
+      // Upload in progress, then the uploaded-file list replaces the drop zone and the watcher reports the change.
+      showUploaded(tab, 60)()
+      setTimeout(() => tab.reply(AUTOFILL_CHANNELS.step, {}), 80)
+    }
+    await service.start(WD_ID)
+    tab.load(fixture('workday-signin.html'), `${JOB}/apply/autofillWithResume`)
+    await until(service, 'waiting')
+    tab.step(fixture('workday-autofill-resume.html'))
+    await until(service, 'filled')
+    await new Promise((r) => setTimeout(r, 100))
+    expect(service.current()).toMatchObject({ status: 'filled', step: { kind: 'form', title: 'Autofill with Resume' } })
+    expect(service.current()!.report?.fields.find((f) => f.key === 'resume')).toMatchObject({ outcome: 'uploaded' })
+    expect(dbg.log.filter((l) => l === 'DOM.setFileInputFiles')).toHaveLength(1)
+  })
+
+  it('fills a field the step renders after the first fill, and keeps the earlier lines', async () => {
+    await workdayApp()
+    const tab = wdTab()
+    const { service } = wdSetup(tab)
+    await service.start(WD_ID)
+    tab.load(fixture('workday-signin.html'), `${JOB}/apply/applyManually`)
+    await until(service, 'waiting')
+
+    // My Information arrives without its email field yet.
+    const full = new JSDOM(fixture('workday-my-information.html')).window.document
+    const emailField = full.querySelector('[data-automation-id="formField-email"]')!.outerHTML
+    full.querySelector('[data-automation-id="formField-email"]')!.remove()
+    tab.step(`<!DOCTYPE html>${full.documentElement.outerHTML}`)
+    await until(service, 'filled')
+    expect(service.current()!.report?.fields.some((f) => f.key === 'email')).toBe(false)
+    const fills = tab.sent.filter((c) => c === AUTOFILL_CHANNELS.fill).length
+
+    // The email field renders; the watcher reports the change, and only the new field gets filled.
+    tab.dom.window.document
+      .querySelector('[data-automation-id="formField-phoneType"]')!
+      .insertAdjacentHTML('beforebegin', emailField)
+    tab.reply(AUTOFILL_CHANNELS.step, {})
+    await vi.waitFor(() => expect(value(tab, '#emailAddress--emailAddress')).toBe('ada@example.com'))
+    await until(service, 'filled')
+    expect(tab.sent.filter((c) => c === AUTOFILL_CHANNELS.fill)).toHaveLength(fills + 1)
+    const report = service.current()!.report!
+    expect(report.fields.find((f) => f.key === 'email')).toMatchObject({ outcome: 'filled' })
+    expect(report.fields.find((f) => f.key === 'firstName')).toMatchObject({ outcome: 'filled' })
+
+    // The same step reported again with nothing new is not filled again.
+    tab.reply(AUTOFILL_CHANNELS.step, {})
+    await new Promise((r) => setTimeout(r, 50))
+    expect(tab.sent.filter((c) => c === AUTOFILL_CHANNELS.fill)).toHaveLength(fills + 1)
+  })
+
+  it('keeps the resume line when a later field on My Experience is filled after the upload', async () => {
+    await workdayApp()
+    const tab = wdTab()
+    const dbg = new FakeDebugger()
+    dbg.onSetFiles = showUploaded(tab, 20)
+    const { service } = wdSetup(tab, dbg)
+    await service.start(WD_ID)
+    tab.load(fixture('workday-signin.html'), `${JOB}/apply/applyManually`)
+    await until(service, 'waiting')
+    const full = new JSDOM(fixture('workday-my-experience.html')).window.document
+    const social = full.querySelector('[data-automation-id="socialNetworkSection"]')!
+    const socialHtml = social.outerHTML
+    social.remove()
+    tab.step(`<!DOCTYPE html>${full.documentElement.outerHTML}`)
+    await until(service, 'filled')
+    expect(service.current()!.report?.fields.find((f) => f.key === 'resume')).toMatchObject({ outcome: 'uploaded' })
+
+    tab.dom.window.document.querySelector('[data-automation-id="websiteSection"]')!.insertAdjacentHTML('afterend', socialHtml)
+    tab.reply(AUTOFILL_CHANNELS.step, {})
+    await vi.waitFor(() => expect(service.current()!.report?.fields.some((f) => f.key === 'linkedin')).toBe(true))
+    const report = service.current()!.report!
+    expect(report.fields.find((f) => f.key === 'linkedin')).toMatchObject({ outcome: 'filled' })
+    expect(report.fields.find((f) => f.key === 'resume')).toMatchObject({ outcome: 'uploaded', value: 'resume.pdf' })
+    expect(dbg.log.filter((l) => l === 'DOM.setFileInputFiles')).toHaveLength(1)
+  })
+
+  it('waits while Workday reads the resume, then fills My Information around what its parser put in', async () => {
+    await workdayApp()
+    const tab = wdTab()
+    const { service } = wdSetup(tab)
+    await service.start(WD_ID)
+    tab.load(fixture('workday-signin.html'), `${JOB}/apply/autofillWithResume`)
+    await until(service, 'waiting')
+
+    const parsing = fixture('workday-my-information.html').replace(
+      '</body>',
+      '<div data-automation-id="resumeParsing" role="status">Reading your resume…</div></body>'
+    )
+    tab.step(parsing)
+    await vi.waitFor(() => expect(service.current()!.message).toMatch(/still working on this step/))
+    expect(service.current()).toMatchObject({ status: 'waiting', step: { kind: 'form', title: 'My Information' } })
+    expect(tab.sent).not.toContain(AUTOFILL_CHANNELS.fill)
+
+    // The parser fills (and overwrites) some fields, then the spinner goes.
+    const doc = tab.dom.window.document
+    ;(doc.querySelector('#name--legalName--firstName') as HTMLInputElement).value = 'Augusta'
+    ;(doc.querySelector('#emailAddress--emailAddress') as HTMLInputElement).value = 'ada@parsed.example'
+    doc.querySelector('[data-automation-id="resumeParsing"]')!.remove()
+    tab.reply(AUTOFILL_CHANNELS.step, {})
+    await until(service, 'filled')
+    const report = service.current()!.report!
+    expect(report.fields.find((f) => f.key === 'firstName')).toMatchObject({ outcome: 'kept', value: 'Augusta' })
+    expect(report.fields.find((f) => f.key === 'email')).toMatchObject({ outcome: 'kept', value: 'ada@parsed.example' })
+    expect(report.fields.find((f) => f.key === 'phone')).toMatchObject({ outcome: 'filled' })
+    expect(value(tab, '#name--legalName--lastName')).toBe('Lovelace')
+  })
+
+  it('reports the upload as failed when Workday never lists the file', async () => {
+    await workdayApp()
+    const tab = wdTab()
+    const dbg = new FakeDebugger()
+    const { service } = wdSetup(tab, dbg, { uploadConfirmMs: 200 })
+    await service.start(WD_ID)
+    tab.load(fixture('workday-autofill-resume.html'), `${JOB}/apply/autofillWithResume`)
+    await until(service, 'filling')
+    await until(service, 'filled')
+    expect(service.current()!.report?.fields.find((f) => f.key === 'resume')).toMatchObject({
+      outcome: 'upload-failed',
+      reason: 'The site did not show resume.pdf as attached; attach it yourself.'
+    })
+    // #63 marks the input again and tries once more before giving up.
+    expect(dbg.log.filter((l) => l === 'DOM.setFileInputFiles')).toHaveLength(2)
+  })
+
+  it('Fill form on the sign-in wall fills nothing and says what to do', async () => {
+    await workdayApp()
+    const tab = wdTab()
+    const { service } = wdSetup(tab)
+    const session = await service.start(WD_ID)
+    tab.load(fixture('workday-create-account.html'), `${JOB}/apply/applyManually`)
+    await until(service, 'waiting')
+    await service.fill(session.id)
+    expect(service.current()).toMatchObject({ status: 'waiting', report: null, step: { kind: 'account-wall' } })
+    for (const id of ['email', 'password', 'verifyPassword', 'beecatcher']) {
+      expect(value(tab, `[data-automation-id="${id}"]`), id).toBe('')
+    }
+    expect((tab.dom.window.document.querySelector('[data-automation-id="createAccountCheckbox"]') as HTMLInputElement).checked).toBe(false)
   })
 })
 

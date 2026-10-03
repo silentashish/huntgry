@@ -21,6 +21,9 @@
  * /company/posting-link have only an "Apply" link to the form (new tab /
  * same tab).
  *
+ * /workday/ is a client-rendered multi-step Workday flow (see workday.mjs)
+ * whose resume uploads are recorded to `uploadsFile` too.
+ *
  * Pressing a page's own Submit button posts to the mock, which records what
  * it received (field names, text values, attached file names and sizes; not
  * the file bytes) to `submissionFile` (default
@@ -37,6 +40,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
+import { createWorkdayMock, WORKDAY_POSTING } from './workday.mjs'
 
 /** Where the CLI records submissions: `<tmp>/huntgry-mock-ats/last-submission.json`. */
 export function defaultSubmissionFile() {
@@ -155,11 +159,12 @@ export function createMockAts(options) {
   const log = options.log ?? (() => undefined)
   const read = (name) => readFileSync(join(fixturesDir, name), 'utf8')
   const sites = { ...mockAtsSites(read), ...(options.extraSites ?? {}) }
+  const workday = createWorkdayMock({ read, record: (req) => recordUpload('workday', req, uploadsFile), log })
   const index = () => `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Mock ATS</title></head><body>
 <h1>Huntgry mock ATS</h1><p>Local copies of application forms for testing auto-apply. Nothing leaves this machine.</p>
 <ul>${Object.keys(sites)
     .map((s) => `<li><a href="/${s}/">${s}</a></li>`)
-    .join('')}</ul></body></html>`
+    .join('')}<li><a href="${WORKDAY_POSTING}">workday</a></li></ul></body></html>`
 
   /** Routes beside the per-site ones: scripts, uploads, parser, company pages and embeds. */
   function special(req, res, url) {
@@ -240,11 +245,11 @@ export function createMockAts(options) {
   return {
     submissionFile,
     uploadsFile,
-    sites: Object.keys(sites),
+    sites: [...Object.keys(sites), 'workday'],
     index,
     handle(req, res) {
       const url = new URL(req.url ?? '/', 'http://localhost')
-      if (special(req, res, url)) return true
+      if (special(req, res, url) || workday.handle(req, res)) return true
       const [site, action] = url.pathname.split('/').filter(Boolean)
       const mock = sites[site]
       if (!mock) return false

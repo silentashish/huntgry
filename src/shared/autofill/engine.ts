@@ -1,4 +1,4 @@
-import type { FieldKey, FieldReport, FillReport, FillValues, PageScan, UploadState } from '../apply-types'
+import type { AdapterStep, ApplyAts, FieldKey, FieldReport, FillReport, FillValues, PageScan, UploadState } from '../apply-types'
 import { EMBED_RULES, embedPathMatches } from '../apply-embeds'
 import { adapterFor, type Adapter, type UploadProbe } from './adapters'
 import { UPLOAD_ATTR, UPLOAD_GROUP_ATTR } from '../autofill-channels'
@@ -139,9 +139,44 @@ export function scanPage(doc: Document): PageScan {
     formFound: controls.some((c) => kindOf(c) === 'text' || kindOf(c) === 'file'),
     hasResumeInput: controls.some((c) => matchFileField(c)?.key === 'resume'),
     embedUrl: embedUrlOf(doc, url),
-    step: adapter.step?.(doc) ?? 'form',
-    stepTitle: adapter.stepTitle?.(doc)?.trim().slice(0, 120) || null
+    ...stepOf(adapter, doc, root)
   }
+}
+
+interface StepInfo {
+  step: AdapterStep
+  stepTitle: string | null
+  stepFields: string | null
+  ready: boolean
+}
+
+/**
+ * The adapter's view of the step. `stepFields` (multi-step adapters only)
+ * lists the profile fields the step shows now, so fields a step renders late
+ * count as a change; `ready` is the adapter's `ready` answer right now (a
+ * promise counts as ready; the preload's readiness wait awaits it).
+ */
+function stepOf(adapter: Adapter, doc: Document, root: Element | null): StepInfo {
+  const ready = adapter.ready?.(doc)
+  return {
+    step: adapter.step?.(doc) ?? 'form',
+    stepTitle: adapter.stepTitle?.(doc)?.trim().slice(0, 120) || null,
+    stepFields: adapter.step ? fieldKeysOf(adapter, root) : null,
+    ready: typeof ready === 'boolean' ? ready : true
+  }
+}
+
+function fieldKeysOf(adapter: Adapter, root: Element | null): string {
+  if (!root) return ''
+  const keys = new Set<FieldKey>()
+  for (const p of plan(adapter, root)) if (p.key && !p.outcome) keys.add(p.key)
+  return [...keys].sort().join(',')
+}
+
+/** Where the page is in the site's apply flow (cheap; the preload's step watcher polls it). */
+export function pageStep(doc: Document): { ats: ApplyAts } & StepInfo {
+  const adapter = adapterFor(pageUrl(doc), doc)
+  return { ats: adapter.ats, ...stepOf(adapter, doc, adapter.formRoot(doc)) }
 }
 
 /**
@@ -213,9 +248,10 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
   const url = pageUrl(doc)
   const adapter = adapterFor(url, doc)
   const uploadOrder = adapter.uploadOrder ?? 'text-first'
-  const report: FillReport = { ats: adapter.ats, url: url.href, fields: [], hasSubmitButton: false, uploadOrder }
-  if ((adapter.step?.(doc) ?? 'form') !== 'form') return report
   const root = adapter.formRoot(doc)
+  const { step, stepTitle, stepFields } = stepOf(adapter, doc, root)
+  const report: FillReport = { ats: adapter.ats, url: url.href, fields: [], hasSubmitButton: false, uploadOrder, step, stepTitle, stepFields }
+  if (step !== 'form') return report
   if (!root) return report
   const writeText = options.text ?? uploadOrder === 'text-first'
   report.hasSubmitButton = hasSubmitButton(root)

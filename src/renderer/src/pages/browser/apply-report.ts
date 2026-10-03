@@ -1,10 +1,11 @@
-import type { ApplyStatus, FieldReport, FillOutcome, FillReport } from '@shared/apply-types'
+import type { AdapterStep, ApplySession, ApplyStatus, FieldReport, FillOutcome, FillReport } from '@shared/apply-types'
 
 /** Display helpers for the Apply panel (pure, unit-tested). */
 
 export const STATUS_META: Record<ApplyStatus, { label: string; color: string }> = {
   opened: { label: 'Loading page', color: 'blue' },
   ready: { label: 'Ready to fill', color: 'blue' },
+  waiting: { label: 'Your turn in the page', color: 'yellow' },
   filling: { label: 'Filling', color: 'blue' },
   filled: { label: 'Filled: review and submit', color: 'teal' },
   'submitted-detected': { label: 'Submitted', color: 'teal' },
@@ -48,4 +49,20 @@ export function groupReport(report: FillReport | null): ReportGroup[] {
     { title: 'Filled', fields: done },
     { title: 'Your choice', fields: choices }
   ].filter((g) => g.fields.length > 0)
+}
+
+const STEP_LABEL: Record<AdapterStep, string> = {
+  posting: 'Job posting',
+  choice: 'How to apply',
+  'account-wall': 'Sign in or create account',
+  form: 'Application form',
+  other: 'Other step'
+}
+
+/** "Step: My Information", "Step: Sign in or create account (Create Account/Sign In)"; null when the site has no steps. */
+export function stepLabel(step: ApplySession['step']): string | null {
+  if (!step) return null
+  const kind = STEP_LABEL[step.kind]
+  if (step.kind === 'form') return `Step: ${step.title ?? kind}`
+  return step.title && step.title !== kind ? `Step: ${kind} (${step.title})` : `Step: ${kind}`
 }
