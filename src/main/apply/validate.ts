@@ -1,4 +1,5 @@
-import type { ApplyAts, FieldKey, FieldKind, FieldReport, FillOutcome, FillReport, PageScan } from '@shared/apply-types'
+import { ADAPTER_STEPS, APPLY_ATS, type UploadState } from '@shared/apply-types'
+import type { FieldKey, FieldKind, FieldReport, FillOutcome, FillReport, PageScan } from '@shared/apply-types'
 
 /**
  * Shape checks for what a browser tab sends back. The tab runs a job site
@@ -6,7 +7,7 @@ import type { ApplyAts, FieldKey, FieldKind, FieldReport, FillOutcome, FillRepor
  * enum values, bounded strings, at most 200 fields.
  */
 
-const ATS: readonly ApplyAts[] = ['greenhouse', 'lever', 'generic']
+const ATS = APPLY_ATS
 const KEYS: readonly FieldKey[] = [
   'firstName',
   'lastName',
@@ -57,7 +58,9 @@ export function parsePageScan(input: unknown): PageScan {
     confirmation: o.confirmation === true,
     formFound: o.formFound === true,
     hasResumeInput: o.hasResumeInput === true,
-    embedUrl: embed || null
+    embedUrl: embed || null,
+    step: oneOf(o.step, ADAPTER_STEPS, 'form'),
+    stepTitle: typeof o.stepTitle === 'string' && o.stepTitle.trim() ? o.stepTitle.trim().slice(0, 120) : null
   }
 }
 
@@ -83,5 +86,16 @@ function parseField(input: unknown): FieldReport {
 export function parseFillReport(input: unknown): FillReport {
   const o = obj(input)
   const fields = Array.isArray(o.fields) ? o.fields.slice(0, 200).map(parseField) : []
-  return { ats: oneOf(o.ats, ATS, 'generic'), url: httpUrl(o.url), fields, hasSubmitButton: o.hasSubmitButton === true }
+  return {
+    ats: oneOf(o.ats, ATS, 'generic'),
+    url: httpUrl(o.url),
+    fields,
+    hasSubmitButton: o.hasSubmitButton === true,
+    uploadOrder: o.uploadOrder === 'files-first' ? 'files-first' : 'text-first'
+  }
+}
+
+/** The page's answer about its upload widget; anything unexpected counts as not attached. */
+export function parseUploadState(input: unknown): UploadState {
+  return input === 'attached' || input === 'pending' ? input : 'missing'
 }

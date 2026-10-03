@@ -13,12 +13,15 @@ import {
   Stack,
   Text,
   Textarea,
-  Title
+  Title,
+  Tooltip
 } from '@mantine/core'
 import { IconFileTypePdf, IconFolder, IconPlayerStop, IconSend } from '@tabler/icons-react'
+import type { ApplicationRecord } from '@shared/applications-types'
 import { AGENT_LABEL, type RunSummary } from '@shared/runner-types'
 import { buildTranscript } from '@shared/transcript'
 import { api, errorText } from '../../api'
+import { APPLY_HINT, applyBlocker } from '../../components/apply/blocker'
 import { useApply } from '../../components/apply/useApply'
 import { useNavigation } from '../../navigation'
 import { AGENT_COLOR, runCost, runStatusLabel, STATUS_LABEL } from './status'
@@ -43,7 +46,27 @@ export function RunView({ run, events, heldReply = false }: Props) {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
-  const applier = useApply(setError)
+  // Apply's own errors are shown next to its button, not at the end of the transcript (#63).
+  const [applyError, setApplyError] = useState<string | null>(null)
+  const applier = useApply(setApplyError)
+  const [application, setApplication] = useState<Pick<ApplicationRecord, 'files' | 'jobUrl'> | null>(null)
+  const filesKey = run.outputFiles.join('\n')
+
+  // The application record says whether Apply can work (resume.pdf on disk, a posting URL), the same check as
+  // the Dashboard's; re-read when the run's files or status change, since the resume may be rebuilt later.
+  useEffect(() => {
+    const folder = run.outputFolder
+    setApplication(null)
+    if (!folder) return
+    let alive = true
+    api.applications
+      .get(folder)
+      .then((record) => alive && setApplication({ files: record.files, jobUrl: record.jobUrl }))
+      .catch(() => alive && setApplication({ files: run.outputFiles, jobUrl: null }))
+    return () => {
+      alive = false
+    }
+  }, [run.outputFolder, filesKey, run.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Block body: Chromium's scrollIntoView returns a Promise, which React would take for a cleanup function.
   useEffect(() => {
@@ -74,6 +97,7 @@ export function RunView({ run, events, heldReply = false }: Props) {
   }
 
   const has = (f: string) => run.outputFiles.includes(f)
+  const blocker = applyBlocker(application ?? { files: run.outputFiles, jobUrl: 'unknown' })
 
   return (
     <Stack gap="md">
@@ -103,16 +127,21 @@ export function RunView({ run, events, heldReply = false }: Props) {
           </Text>
           {(run.outputFolder || canEnd) && (
             <Group gap="xs">
-              {run.outputFolder && has('resume.pdf') && (
-                <Button
-                  size="xs"
-                  leftSection={<IconSend size={16} />}
-                  loading={applier.busy}
-                  onClick={() => run.outputFolder && applier.apply({ id: run.outputFolder })}
-                  title="Fill the posting's application form in the in-app browser; you submit it yourself"
-                >
-                  Apply
-                </Button>
+              {run.outputFolder && (
+                <Tooltip label={blocker ?? APPLY_HINT} multiline maw={260}>
+                  <Button
+                    size="xs"
+                    leftSection={<IconSend size={16} />}
+                    loading={applier.busy}
+                    disabled={blocker !== null || application === null}
+                    onClick={() => {
+                      setApplyError(null)
+                      if (run.outputFolder) applier.apply({ id: run.outputFolder })
+                    }}
+                  >
+                    Apply
+                  </Button>
+                </Tooltip>
               )}
               {run.outputFolder && has('resume.pdf') && (
                 <Button
@@ -164,6 +193,11 @@ export function RunView({ run, events, heldReply = false }: Props) {
                 </Menu>
               )}
             </Group>
+          )}
+          {run.outputFolder && (applyError || blocker) && (
+            <Text size="xs" c={applyError ? 'red' : 'dimmed'} data-testid="apply-reason">
+              {applyError ?? `Apply: ${blocker}`}
+            </Text>
           )}
           {run.outputFolder && (
             <Text size="xs" c="dimmed" ff="monospace">

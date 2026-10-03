@@ -54,6 +54,8 @@ describe('hiring.cafe', () => {
       })
     ).toEqual([])
     expect(parseHiringCafeHits(null)).toEqual([])
+    // A hit without apply_url has no posting URL (not the board's home page, #63).
+    expect(parseHiringCafeHits({ hits: [{ id: 'n', job_information: { title: 'T' } }] })[0].url).toBe('')
     const url = new URL(hiringCafeSearchUrl({ keywords: 'platform engineer', location: 'Atlanta', remoteOnly: true }))
     expect(JSON.parse(url.searchParams.get('searchState')!)).toEqual({
       searchQuery: 'platform engineer',

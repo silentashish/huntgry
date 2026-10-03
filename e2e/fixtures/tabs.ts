@@ -99,3 +99,31 @@ export async function stubOpenExternal(electronApp: ElectronApplication): Promis
   })
   return () => electronApp.evaluate(() => (globalThis as { __huntgryOpened?: string[] }).__huntgryOpened ?? [])
 }
+
+/** Polls `script` (an expression) in the tab with `urlPart` until it returns `expected`. */
+export async function expectInTab<T>(
+  electronApp: ElectronApplication,
+  urlPart: string,
+  script: string,
+  expected: T,
+  timeout = 15_000
+): Promise<void> {
+  await expect
+    .poll(() => evaluateInTab<T>(electronApp, urlPart, script).catch(() => undefined), {
+      message: `${script} in the tab with "${urlPart}"`,
+      timeout
+    })
+    .toEqual(expected)
+}
+
+/**
+ * Clicks a link of the page in the tab, as the user would (e.g. the site's own
+ * "Apply now"). Only the test does this; the app never clicks anything.
+ */
+export async function clickLinkInTab(electronApp: ElectronApplication, urlPart: string, selector: string): Promise<void> {
+  await evaluateInTab<boolean>(
+    electronApp,
+    urlPart,
+    `(() => { const a = document.querySelector(${JSON.stringify(selector)}); if (!a) throw new Error('No ' + ${JSON.stringify(selector)}); a.click(); return true })()`
+  )
+}

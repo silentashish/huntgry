@@ -46,6 +46,7 @@ export const test = base.extend<{ mock: MockServer }, { mockServer: MockServer }
   mock: async ({ mockServer }, use) => {
     mockServer.requests.length = 0
     await rm(mockServer.submissionFile, { force: true })
+    await rm(mockServer.uploadsFile, { force: true })
     await use(mockServer)
   },
   prepareWorkspace: async ({ mockServer }, use) => use((path) => rewriteMockUrls(path, mockServer.origin)),

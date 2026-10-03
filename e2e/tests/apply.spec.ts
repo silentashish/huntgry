@@ -54,7 +54,7 @@ test.describe('apply', () => {
     await expect(browser.apply.group('Filled')).toBeVisible()
     await expect(browser.apply.group('Needs you')).toBeVisible()
     await expect(browser.apply.group('Your choice')).toBeVisible()
-    for (const value of ['Alex Rivera', 'alex.rivera@example.com', '(555) 010-0199', 'Portland, OR', 'https://github.com/alex-rivera-example']) {
+    for (const value of ['Alex Rivera', 'alex.rivera@example.com', '(555) 010-0199', 'https://github.com/alex-rivera-example']) {
       await expect(app.window.getByText(value, { exact: true }).locator('..')).toContainText('Filled')
     }
     await expect(app.window.getByText('resume.pdf', { exact: true }).locator('..')).toContainText('Attached')
@@ -64,10 +64,15 @@ test.describe('apply', () => {
       'alex.rivera@example.com'
     )
     expect(await evaluateInTab<number>(app.electronApp, '/lever/', 'document.querySelector(\'input[name="resume"]\').files.length')).toBe(1)
+    // The location is an autocomplete (a suggestion must be picked): left to the user, never typed into.
+    await expect(browser.apply.field('Current location *')).toContainText("Pick it from the site's suggestions.")
     expect(await exists(mock.submissionFile)).toBe(false)
 
-    // The test, not the app, answers the required question and presses the site's Submit.
-    await pressSubmitInTab(app.electronApp, '/lever/', { 'textarea[required]': 'Yes, remote from Portland.' })
+    // The test, not the app, answers the required questions and presses the site's Submit.
+    await pressSubmitInTab(app.electronApp, '/lever/', {
+      'textarea[required]': 'Yes, remote from Portland.',
+      'input[name="location"]': 'Portland, OR'
+    })
     await expectTabLoaded(app.electronApp, '/lever/thanks', 'Acme')
     const submission = JSON.parse(await readFile(mock.submissionFile, 'utf8'))
     expect(submission.site).toBe('lever')
@@ -166,20 +171,33 @@ test.describe('apply', () => {
     await new BrowserPage(app.window).apply.expectStatus('Filled: review and submit')
   })
 
-  test('a redirect to another origin is not filled until "Fill form" is pressed', async ({ app, mock }) => {
+  test("the posting URL's redirect landing is filled; a page the user goes to on another origin waits for Fill form", async ({
+    app,
+    mock
+  }) => {
+    // #63: a posting URL that redirects (a Greenhouse board → the company's site) lands on the posting's site.
     const browser = await applyFromDashboard(app.window, 'Redirect Mock', `${mock.altOrigin}/lever/`)
     await expectTabLoaded(app.electronApp, `${mock.altOrigin}/lever/`, 'Acme - Software Engineer')
+    await browser.apply.expectStatus('Filled: review and submit')
+    expect(await evaluateInTab<string>(app.electronApp, '/lever/', 'document.querySelector(\'input[name="email"]\').value')).toBe(
+      'alex.rivera@example.com'
+    )
+
+    // `localhost` is another origin than 127.0.0.1: a page reached by the user afterwards is not filled on its own.
+    const other = `http://localhost:${mock.port}/lever/`
+    await browser.go(other)
+    await expectTabLoaded(app.electronApp, other, 'Acme - Software Engineer')
     await browser.apply.expectStatus('Ready to fill')
     await expect(
       app.window.getByText(
-        `This page is on 127.0.0.1:${mock.altPort}, not the posting's site, so Huntgry did not fill it. If it is the application form, press Fill form.`
+        `This page is on localhost:${mock.port}, not the posting's site, so Huntgry did not fill it. If it is the application form, press Fill form.`
       )
     ).toBeVisible()
-    expect(await evaluateInTab<string>(app.electronApp, '/lever/', 'document.querySelector(\'input[name="email"]\').value')).toBe('')
+    expect(await evaluateInTab<string>(app.electronApp, other, 'document.querySelector(\'input[name="email"]\').value')).toBe('')
 
     await browser.apply.fillButton.click()
     await browser.apply.expectStatus('Filled: review and submit')
-    expect(await evaluateInTab<string>(app.electronApp, '/lever/', 'document.querySelector(\'input[name="email"]\').value')).toBe(
+    expect(await evaluateInTab<string>(app.electronApp, other, 'document.querySelector(\'input[name="email"]\').value')).toBe(
       'alex.rivera@example.com'
     )
     await expect(app.window.getByText('resume.pdf', { exact: true }).locator('..')).toContainText('Attached')

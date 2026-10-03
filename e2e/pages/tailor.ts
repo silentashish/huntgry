@@ -68,7 +68,8 @@ export class TailorPage {
   }
 
   /** Fills the form with a pasted description and the folder-naming fields, then starts. */
-  async start(job: { description: string; company?: string; role?: string; jobId?: string }): Promise<void> {
+  async start(job: { description: string; company?: string; role?: string; jobId?: string; jobUrl?: string }): Promise<void> {
+    if (job.jobUrl !== undefined) await this.jobUrl.fill(job.jobUrl)
     await this.jobDescription.fill(job.description)
     if (job.company !== undefined) await this.company.fill(job.company)
     if (job.role !== undefined) await this.role.fill(job.role)
@@ -114,6 +115,11 @@ export class TailorPage {
   /** "Resume", "Cover letter", "Show in Finder", "Apply" of the open run (not the queue's Resume). */
   outputButton(name: 'Resume' | 'Cover letter' | 'Show in Finder' | 'Apply'): Locator {
     return this.runCard.getByRole('button', { name, exact: true })
+  }
+
+  /** Why the open run's Apply cannot start (or Apply's error), shown under its buttons. */
+  get applyReason(): Locator {
+    return this.page.getByTestId('apply-reason')
   }
 
   async reply(text: string): Promise<void> {

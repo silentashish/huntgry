@@ -6,14 +6,37 @@
  * file paths and pages stay in main.
  */
 
-/** Applicant tracking systems with an adapter; `generic` is the label/autocomplete heuristic. */
-export type ApplyAts = 'greenhouse' | 'lever' | 'generic'
+/**
+ * Applicant tracking systems Huntgry knows; `generic` is the label/autocomplete
+ * heuristic. Each has an adapter in `src/shared/autofill/adapters/` (an ATS
+ * without one yet is recognised by host and filled with the generic rules).
+ */
+export type ApplyAts = 'greenhouse' | 'lever' | 'ashby' | 'workday' | 'generic'
+
+export const APPLY_ATS: readonly ApplyAts[] = ['greenhouse', 'lever', 'ashby', 'workday', 'generic']
 
 export const ATS_LABEL: Record<ApplyAts, string> = {
   greenhouse: 'Greenhouse',
   lever: 'Lever',
+  ashby: 'Ashby',
+  workday: 'Workday',
   generic: 'Unknown site (generic matching)'
 }
+
+/**
+ * Where the page is in the site's apply flow (an adapter's `step` hook):
+ * - `form`: an application form to fill (the default).
+ * - `posting`: the job posting; the user presses the site's Apply.
+ * - `choice`: the site asks how to apply (e.g. Workday's "Autofill with Resume" / "Apply Manually").
+ * - `account-wall`: sign in or create an account; Huntgry fills nothing.
+ * - `other`: anything else.
+ */
+export type AdapterStep = 'form' | 'posting' | 'choice' | 'account-wall' | 'other'
+
+export const ADAPTER_STEPS: readonly AdapterStep[] = ['form', 'posting', 'choice', 'account-wall', 'other']
+
+/** What the site's upload widget shows after an attach: the file, still uploading, or nothing. */
+export type UploadState = 'attached' | 'pending' | 'missing'
 
 /** What a form field is filled with. */
 export type FieldKey =
@@ -90,6 +113,8 @@ export interface FillReport {
   fields: FieldReport[]
   /** The form has a submit button (for the user; Huntgry never presses it). */
   hasSubmitButton: boolean
+  /** The adapter's upload order: `files-first` reports file fields only, and main fills text after the upload (default `text-first`). */
+  uploadOrder?: 'text-first' | 'files-first'
 }
 
 /** What the guest page reports on each load. */
@@ -105,8 +130,12 @@ export interface PageScan {
   formFound: boolean
   /** A résumé/CV file input was found (a good sign this is an application form). */
   hasResumeInput: boolean
-  /** A Greenhouse `/embed/job_app` iframe on a company page; its form is opened directly. */
+  /** An ATS form embedded in an iframe on a company page (e.g. Greenhouse `/embed/job_app`); opened directly. */
   embedUrl: string | null
+  /** The adapter's view of the page (`form` unless the adapter says otherwise). */
+  step: AdapterStep
+  /** The step's title on multi-step forms, or null. */
+  stepTitle: string | null
 }
 
 export type ApplyStatus =

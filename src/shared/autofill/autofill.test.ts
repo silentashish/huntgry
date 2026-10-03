@@ -153,7 +153,9 @@ describe('Lever', () => {
     expect(byName('name')).toBe('Ada Lovelace')
     expect(byName('email')).toBe('ada@example.com')
     expect(byName('phone')).toBe('+1 555 123 4567')
-    expect(byName('location')).toBe('London, UK')
+    // The location is an autocomplete that only takes a suggestion: a choice for the user (#63).
+    expect(byName('location')).toBe('')
+    expect(field(report, 'Current location')).toMatchObject({ kind: 'text', outcome: 'skipped-unsupported' })
     expect(byName('org')).toBe('Analytical Engines')
     expect(byName('urls[LinkedIn]')).toBe('https://www.linkedin.com/in/ada')
     expect(byName('urls[GitHub]')).toBe('https://github.com/ada')

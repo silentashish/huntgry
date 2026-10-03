@@ -225,10 +225,14 @@ export class BrowserManager {
     // Popups become tabs; nothing else may open a window.
     wc.setWindowOpenHandler(({ url, disposition }) => {
       if (url !== 'about:blank' && isAllowedNavigation(url)) {
-        void this.open(url, disposition !== 'background-tab').catch((err: unknown) => {
-          this.registry.patch(id, { error: err instanceof Error ? err.message : String(err) })
-          this.changed()
-        })
+        void this.openTab(url, disposition !== 'background-tab')
+          .then((child) => {
+            for (const listener of popupListeners) listener(id, child)
+          })
+          .catch((err: unknown) => {
+            this.registry.patch(id, { error: err instanceof Error ? err.message : String(err) })
+            this.changed()
+          })
       }
       return { action: 'deny' }
     })
@@ -294,6 +298,14 @@ export class BrowserManager {
 }
 
 let manager: BrowserManager | null = null
+
+const popupListeners = new Set<(openerTabId: string, tabId: string) => void>()
+
+/** #63 hook: a page opened a popup, which became a new tab (the apply session follows its form there). */
+export function onPopupTab(listener: (openerTabId: string, tabId: string) => void): () => void {
+  popupListeners.add(listener)
+  return () => popupListeners.delete(listener)
+}
 
 /** Binds the browser to the main window (a new window, e.g. macOS re-activate, gets a fresh set of tabs). */
 export function attachBrowser(win: BrowserWindow): BrowserManager {

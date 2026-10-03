@@ -6,6 +6,7 @@ import { applicationFileUrl } from '@shared/applications-types'
 import {
   applicationFolder,
   firstUrl,
+  postingUrl,
   humanize,
   isServableFile,
   jobTitleOf,
@@ -150,6 +151,14 @@ describe('helpers', () => {
     expect(jobTitleOf('---\nPlain first line\n')).toBe('Plain first line')
     expect(firstUrl('See [the posting](https://example.com/jobs/1).')).toBe('https://example.com/jobs/1')
     expect(firstUrl('no link')).toBeNull()
+  })
+
+  it("prefers the JD's Posting: line, then an ATS host, over the first link (#63)", () => {
+    const jd = '# Engineer\nWe offer [benefits](https://acme.example/benefits).\nApply: https://job-boards.greenhouse.io/acme/jobs/1\n'
+    expect(postingUrl(jd)).toBe('https://job-boards.greenhouse.io/acme/jobs/1')
+    expect(postingUrl(`${jd}\nPosting: https://jobs.lever.co/acme/2`)).toBe('https://jobs.lever.co/acme/2')
+    expect(postingUrl('About us: https://acme.example/about.')).toBe('https://acme.example/about')
+    expect(postingUrl('no link')).toBeNull()
   })
 
   it('summarizes a missing report as unknown', () => {

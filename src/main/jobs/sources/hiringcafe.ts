@@ -82,7 +82,8 @@ export function parseHiringCafeHits(data: unknown, now = new Date()): Job[] {
       remote: /remote/i.test(workplace),
       salary,
       postedAt: str(v5.estimated_publish_date) || null,
-      url: url || `${HIRINGCAFE_ORIGIN}/`,
+      // No apply_url means no posting to apply on: an empty URL makes Apply say so (it used to open hiring.cafe's home page).
+      url,
       boardUrl: null,
       description: summary.join('\n\n'),
       descriptionComplete: false,
