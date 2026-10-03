@@ -5,8 +5,10 @@ import { registerRunnerIpc } from './cli/ipc'
 import { registerGraphIpc } from './graph/ipc'
 import { registerInsightsIpc } from './insights/ipc'
 import { registerJobsIpc } from './jobs/ipc'
+import { registerPipelineIpc } from './pipeline/ipc'
 import { registerProfileIpc } from './profile/ipc'
 import { registerQueueIpc } from './queue/ipc'
+import { registerReviewIpc } from './review/ipc'
 import { registerWorkspaceIpc } from './workspace/ipc'
 
 /**
@@ -24,4 +26,6 @@ export function registerIpcHandlers(): void {
   registerBrowserIpc()
   registerQueueIpc()
   registerApplyIpc()
+  registerReviewIpc()
+  registerPipelineIpc()
 }

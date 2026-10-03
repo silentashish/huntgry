@@ -21,6 +21,7 @@ import { APPLICATION_STATUSES, type ApplicationRecord, type ApplicationTracking 
 import { api, errorText } from '../../api'
 import { applyBlocker } from '../../components/apply/blocker'
 import { useNavigation } from '../../navigation'
+import { ReviewBadge } from './ReviewBadge'
 import { STATUS_META } from './status'
 
 interface Props {
@@ -172,7 +173,15 @@ export function ApplicationDrawer({ app, onClose, onUpdate, onApply, applying }:
             onBlur={() => notes !== app.tracking.notes && act(() => onUpdate({ notes }))}
           />
 
-          <BuildBadge app={app} />
+          <Group gap="xs">
+            <BuildBadge app={app} />
+            <ReviewBadge app={app} />
+            {(app.tracking.review?.state === 'unreviewed' || app.tracking.review?.state === 'needs-attention') && (
+              <Anchor component="button" size="sm" onClick={() => navigate('review', { applicationId: app.id })}>
+                Open in Review
+              </Anchor>
+            )}
+          </Group>
 
           <Tabs value={tab} onChange={setTab} keepMounted={false}>
             <Tabs.List>

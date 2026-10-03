@@ -26,6 +26,7 @@ import {
   type RunnerEnvironment
 } from '@shared/runner-types'
 import { api, errorText } from '../../api'
+import { StandingApprovalsCard } from './StandingApprovalsCard'
 
 const STATUS: Record<PreflightItem['status'], { color: string; label: string }> = {
   ok: { color: 'green', label: 'OK' },
@@ -153,6 +154,8 @@ export function SettingsPage() {
           )}
 
           <AgentsCard env={env} installing={installing} onLinkSkill={linkSkill} onSetDefault={setDefault} />
+
+          <StandingApprovalsCard />
 
           <Card withBorder radius="md" padding="lg">
             <Title order={4} mb="sm">

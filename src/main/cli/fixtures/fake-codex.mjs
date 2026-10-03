@@ -1,9 +1,10 @@
 // Stands in for `codex exec --json … -` / `codex exec resume <thread> --json … -` in tests.
 // One turn per process: reads the whole prompt from stdin (until it is closed), answers, exits 0.
-//   "WRITE_OUTPUT" -> writes software-engineer/acme/42/{resume.pdf,build-report.json} under cwd first
+//   "WRITE_OUTPUT" -> writes software-engineer/acme/<job id from the prompt, else 42>/{resume.pdf,build-report.json} under cwd first
 //   "SLOW" -> waits 300 ms before answering
 //   "CRASH" -> prints to stderr and exits 3 before the turn ends
 //   "FAIL_TURN" -> prints turn.failed and exits 1
+//   "USAGE_LIMIT" -> turn.failed with Codex's usage-limit message (try again at Sep 24th, 2026 7:24 AM), exits 1
 //   "SILENT" -> exits 0 without ending the turn
 //   "EMPTY" -> ends the turn with no item and zero output tokens, exits 0
 //   "REASONING_ONLY" -> ends the turn with only a reasoning item (still zero output tokens reported)
@@ -31,12 +32,16 @@ if (text.includes('EMPTY') || text.includes('REASONING_ONLY')) {
   out({ type: 'turn.completed', usage: { input_tokens: 500, cached_input_tokens: 0, output_tokens: 0 } })
   process.exit(0)
 }
+if (text.includes('USAGE_LIMIT')) {
+  out({ type: 'turn.failed', error: { message: "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 24th, 2026 7:24 AM." } })
+  process.exit(1)
+}
 if (text.includes('FAIL_TURN')) {
   out({ type: 'turn.failed', error: { message: 'stream disconnected before completion' } })
   process.exit(1)
 }
 if (text.includes('WRITE_OUTPUT')) {
-  const dir = `${process.cwd()}/software-engineer/acme/42`
+  const dir = `${process.cwd()}/software-engineer/acme/${/Job id: ([\w-]+)/.exec(text)?.[1] ?? '42'}`
   mkdirSync(dir, { recursive: true })
   writeFileSync(`${dir}/resume.pdf`, '%PDF-1.4 fake')
   writeFileSync(`${dir}/build-report.json`, '{"ok": true}')

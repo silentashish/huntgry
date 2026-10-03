@@ -48,6 +48,8 @@ interface Live {
   ctx: RunContext
   adapter: AgentAdapter
   stderr: string
+  /** The current turn ended (the agent waits); reset by the next `send`. */
+  turnEnded: boolean
   /** Why the last turn failed, as the agent reported it (cleared by a good turn). */
   turnError?: string
   /** Items the agent produced in the current turn (messages, commands, edits). */
@@ -57,6 +59,8 @@ interface Live {
   /** Index the next recorded event gets in `events.jsonl`. */
   seq: number
   stopping: boolean
+  /** Set by `abort()`: the run fails with this reason when the process exits. */
+  aborted?: string
   finishing: boolean
   turnStartedAt: number
 }
@@ -97,7 +101,8 @@ export class RunManager {
       outputFolder: null,
       outputFiles: [],
       costUsd: 0,
-      live: true
+      live: true,
+      ...(params.unattended ? { unattended: true as const } : {})
     }
     await saveRun(ctx.workspace, run)
     this.spawnFor(run, ctx, null, 0)
@@ -144,6 +149,21 @@ export class RunManager {
     const entry = this.live.get(id)
     if (!entry) return
     entry.stopping = true
+    this.kill(entry)
+  }
+
+  /**
+   * Kills a run that Huntgry gave up on (the pipeline's stall watchdog): the run ends `failed`
+   * with `reason`, not `stopped` (which the queue reads as cancelled), so it can be retried.
+   */
+  abort(id: string, reason: string): void {
+    const entry = this.live.get(id)
+    if (!entry) return
+    entry.aborted = reason
+    this.kill(entry)
+  }
+
+  private kill(entry: Live): void {
     entry.child.kill('SIGTERM')
     // Claude handles SIGTERM quickly; make sure nothing is left behind.
     setTimeout(() => {
@@ -252,9 +272,11 @@ export class RunManager {
       seq,
       stopping: false,
       finishing: false,
+      turnEnded: false,
       turnContent: 0,
       turnStartedAt: Date.now()
     }
+    entry.run.lastOutputAt = new Date().toISOString()
     this.live.set(run.id, entry)
 
     const lines = new LineBuffer()
@@ -281,9 +303,12 @@ export class RunManager {
       const exec = adapter.turnMode === 'exec'
       if (entry.stopping) {
         r.status = 'stopped'
+      } else if (entry.aborted) {
+        r.status = 'failed'
+        r.error = entry.aborted
       } else if (entry.finishing || (code === 0 && !exec && !entry.turnError)) {
         r.status = 'finished'
-      } else if (r.status !== 'waiting' || entry.turnError) {
+      } else if (!entry.turnEnded || entry.turnError) {
         // An exec agent that exits cleanly after its turn is between turns ("waiting"), not finished.
         r.status = 'failed'
         const stderr = entry.stderr.trim()
@@ -319,6 +344,7 @@ export class RunManager {
     entry.run.status = 'running'
     entry.turnStartedAt = Date.now()
     entry.turnContent = 0
+    entry.turnEnded = false
     const event: HuntgryEvent = { type: 'huntgry', subtype: 'user_message', text, ts: new Date().toISOString() }
     this.record(entry, event)
     this.touch(entry)
@@ -331,9 +357,21 @@ export class RunManager {
     const event = parseEventLine(line)
     if (!event) return
     const signal = entry.adapter.signal(event)
-    if (signal.type === 'drop') return
-    this.record(entry, event)
     const r = entry.run
+    r.lastOutputAt = new Date().toISOString()
+    if (signal.type === 'drop') return
+    if (signal.type === 'rate-limit') {
+      // Not recorded (nothing for the transcript); the pipeline reads it from the summary.
+      r.rateLimit = {
+        status: signal.status,
+        ...(signal.resetsAt !== undefined ? { resetsAt: signal.resetsAt } : {}),
+        ...(signal.rateLimitType ? { rateLimitType: signal.rateLimitType } : {}),
+        ...(signal.utilization !== undefined ? { utilization: signal.utilization } : {})
+      }
+      this.touch(entry)
+      return
+    }
+    this.record(entry, event)
     if (signal.type === 'keep' && signal.content) entry.turnContent++
     if (signal.type === 'init') {
       r.sessionId = signal.sessionId
@@ -356,7 +394,7 @@ export class RunManager {
         signal.usage?.outputTokens === 0
       entry.turnError = signal.error ?? (empty ? `${entry.adapter.label} ended the turn without any answer or action.` : undefined)
       r.error = entry.turnError
-      r.status = 'waiting'
+      entry.turnEnded = true
       const since = entry.turnStartedAt - 1000
       entry.queue = entry.queue.then(async () => {
         // Other runs may be building at the same time: never take a folder another live run owns,
@@ -380,6 +418,10 @@ export class RunManager {
             )
           }
         }
+        // Only now does the run read as waiting, so every summary that says so carries the output
+        // folder (a summary queued earlier, e.g. for the session id, still reads as running).
+        // The process may have ended meanwhile (failed, stopped, finished): that verdict stands.
+        if (r.status === 'running') r.status = 'waiting'
       })
       this.touch(entry)
     }

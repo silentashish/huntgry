@@ -84,7 +84,7 @@ export function Transcript({ items }: { items: TranscriptItem[] }) {
   )
 }
 
-function Markdown({ text }: { text: string }) {
+export function Markdown({ text }: { text: string }) {
   return (
     <Typography style={{ fontSize: 'var(--mantine-font-size-sm)' }}>
       <ReactMarkdown
