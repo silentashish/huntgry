@@ -1,5 +1,5 @@
 import type { FillReport, FillValues, PageScan, UploadState } from '../apply-types'
-import { currentAdapter, fillPage, scanPage, uploadStateOf, verifyFill, type UploadKey } from './engine'
+import { currentAdapter, embedUrlsOf, fillPage, scanPage, uploadStateOf, verifyFill, type UploadKey } from './engine'
 import { anyShown, sleep, waitForReady, waitUntil } from './ready'
 import { watchUserEdits, type UserEditOptions } from './user-edits'
 
@@ -82,11 +82,15 @@ export class PageSession {
  * Calls `onFound` once a form or an embedded form shows up on a page that had
  * none (a late iframe, a client-rendered form, an Apply button that reveals
  * the form). No time limit: the person may read the posting for minutes
- * before pressing Apply. Checks are throttled to DOM changes. Returns `stop`.
+ * before pressing Apply. Checks are throttled to DOM changes. An embed that
+ * was already on the page when the watch started does not count: main has
+ * already followed or refused it (an untrusted page), and reporting it again
+ * on every DOM change would loop detects forever. Returns `stop`.
  */
 export function watchForForm(doc: Document, onFound: () => void, { throttleMs = 500 } = {}): () => void {
   const view = doc.defaultView
   if (!view) return () => undefined
+  const known = new Set(embedUrlsOf(doc))
   let timer = 0
   let stopped = false
   const stop = () => {
@@ -98,7 +102,7 @@ export function watchForForm(doc: Document, onFound: () => void, { throttleMs = 
     timer = 0
     if (stopped) return
     const scan = scanPage(doc)
-    if (scan.formFound || scan.embedUrl !== null) {
+    if (scan.formFound || embedUrlsOf(doc).some((url) => !known.has(url))) {
       stop()
       onFound()
     }

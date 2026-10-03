@@ -354,3 +354,31 @@ describe('#63 review regressions', () => {
     }
   })
 })
+
+describe('#63 CodeRabbit regressions', () => {
+  it('does not report an embed that was already on the page (main followed or refused it)', async () => {
+    vi.useFakeTimers()
+    try {
+      const embed = (token: string) =>
+        `<iframe src="https://job-boards.greenhouse.io/embed/job_app?for=acme&token=${token}"></iframe>`
+      const dom = new JSDOM(`<h1>Engineer</h1>${embed('1')}<div id="ads"></div><div id="slot"></div>`, {
+        url: 'https://untrusted.example/careers'
+      })
+      const doc = dom.window.document
+      const found = vi.fn()
+      watchForForm(doc, found)
+      // A page that keeps changing (ads, carousels) must not re-report the refused embed on every mutation.
+      for (let i = 0; i < 5; i++) {
+        doc.getElementById('ads')!.append(doc.createElement('span'))
+        await vi.advanceTimersByTimeAsync(1000)
+      }
+      expect(found).not.toHaveBeenCalled()
+      // A different embed, or a real form, still counts.
+      doc.getElementById('slot')!.innerHTML = embed('2')
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(found).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

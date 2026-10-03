@@ -150,19 +150,25 @@ export function scanPage(doc: Document): PageScan {
  * opening it (and only allows a loopback mock in dev builds).
  */
 function embedUrlOf(doc: Document, base: URL): string | null {
+  return embedUrlsOf(doc, base)[0] ?? null
+}
+
+/** Every embedded-form iframe URL on the page, in rule then document order. */
+export function embedUrlsOf(doc: Document, base: URL = pageUrl(doc)): string[] {
+  const urls: string[] = []
   for (const rule of EMBED_RULES) {
     for (const iframe of Array.from(doc.querySelectorAll(rule.iframe))) {
       const src = iframe.getAttribute('src')
       if (!src) continue
       try {
         const absolute = new URL(src, base)
-        if (/^https?:$/.test(absolute.protocol) && embedPathMatches(rule, absolute)) return absolute.href
+        if (/^https?:$/.test(absolute.protocol) && embedPathMatches(rule, absolute)) urls.push(absolute.href)
       } catch {
         // Not a URL; try the next iframe.
       }
     }
   }
-  return null
+  return urls
 }
 
 /** Whether the page is the site's "application submitted" page. */
