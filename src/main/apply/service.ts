@@ -398,7 +398,14 @@ export class ApplyService {
     } catch (err) {
       if (current()) this.update({ status: 'error', message: `Filling failed: ${errorMessage(err)}` })
     } finally {
-      if (ctx.fillingSeq === seq) ctx.fillingSeq = null
+      if (ctx.fillingSeq === seq) {
+        ctx.fillingSeq = null
+        // The fill was dropped because a navigation started, but nothing replaced it: the navigation was cancelled,
+        // or was a download / 204 that never commits a document. Do not leave the panel stuck on "Filling".
+        if (this.ctx === ctx && ctx.loadSeq !== seq && this.session?.status === 'filling') {
+          this.update({ status: 'ready', message: 'Press Fill form to fill this page.' })
+        }
+      }
     }
   }
 

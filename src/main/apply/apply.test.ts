@@ -347,7 +347,7 @@ describe('ApplyService', () => {
     await new Promise((r) => setTimeout(r, 30))
     // Nothing reached the debugger, so the new page never received the previous page's resume.
     expect(dbg.log).toEqual([])
-    expect(service.current()!.status).toBe('filling')
+    expect(service.current()!.status).not.toBe('filled')
     tab.finishLoad()
     await until(service, 'ready')
     expect(service.current()!.message).toMatch(/untrusted\.example/)
@@ -371,6 +371,30 @@ describe('ApplyService', () => {
     tab.releaseFills()
     await new Promise((r) => setTimeout(r, 30))
     expect(dbg.log).toEqual([])
+  })
+
+  it('does not stay on "Filling" when a navigation starts but never commits (cancelled, download, 204)', async () => {
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', GH_URL)
+    const starts = new Set<() => void>()
+    tab.onNavigationStart = (listener: () => void) => {
+      starts.add(listener)
+      return () => starts.delete(listener)
+    }
+    const { service, dbg } = setup(tab)
+    await service.start(ID)
+    tab.heldFills = []
+    tab.load(fixture('greenhouse-form.html'), GH_URL)
+    await until(service, 'filling')
+    // A navigation starts; no did-navigate / did-finish-load follows.
+    for (const l of starts) l()
+    tab.releaseFills()
+    await until(service, 'ready')
+    expect(service.current()!.message).toBe('Press Fill form to fill this page.')
+    expect(dbg.log).toEqual([])
+    // Fill form works again on the same page.
+    await service.fill(service.current()!.id)
+    expect(service.current()!.status).toBe('filled')
   })
 
   it('refuses an upload when CDP finds another document than the one filled', async () => {
