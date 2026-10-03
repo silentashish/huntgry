@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { embedRuleFor } from './apply-embeds'
 import { applyUrlFor, atsForHost, isGreenhouseEmbedUrl, isTrustedApplyPage } from './apply-url'
 import { asUrl, currentCompany, fillValuesFrom, splitName } from './apply-values'
 import { emptyContact, type ExperienceEntry, type MasterProfile } from './master-profile'
@@ -42,6 +43,10 @@ describe('applyUrlFor', () => {
     expect(atsForHost('job-boards.eu.greenhouse.io')).toBe('greenhouse')
     expect(atsForHost('jobs.lever.co')).toBe('lever')
     expect(atsForHost('greenhouse.io.evil.example')).toBe('generic')
+    expect(atsForHost('jobs.ashbyhq.com')).toBe('ashby')
+    expect(atsForHost('acme.wd5.myworkdayjobs.com')).toBe('workday')
+    expect(atsForHost('wd3.myworkdaysite.com')).toBe('workday')
+    expect(atsForHost('myworkdayjobs.com.evil.example')).toBe('generic')
   })
 
   it('trusts the posting origin and https Greenhouse / Lever hosts only', () => {
@@ -55,6 +60,8 @@ describe('applyUrlFor', () => {
     expect(isTrustedApplyPage('http://careers.example.com/jobs/42', apply)).toBe(false)
     expect(isTrustedApplyPage('http://localhost:4173/lever/', 'http://localhost:4173/lever/')).toBe(true)
     expect(isTrustedApplyPage('not a url', apply)).toBe(false)
+    // Recognised ATS hosts are not trusted off the posting's origin until their adapter is verified.
+    expect(isTrustedApplyPage('https://acme.wd5.myworkdayjobs.com/x/job/1', apply)).toBe(false)
   })
 
   it('accepts only https Greenhouse embed URLs', () => {
@@ -62,6 +69,9 @@ describe('applyUrlFor', () => {
     expect(isGreenhouseEmbedUrl('https://boards.greenhouse.io/embed/job_app?for=acme&token=1')).toBe(true)
     expect(isGreenhouseEmbedUrl('http://boards.greenhouse.io/embed/job_app?for=acme')).toBe(false)
     expect(isGreenhouseEmbedUrl('https://evil.example/embed/job_app')).toBe(false)
+    expect(isGreenhouseEmbedUrl('https://job-boards.greenhouse.io/embed/job_board?for=acme')).toBe(false)
+    expect(embedRuleFor('https://job-boards.greenhouse.io/embed/job_app?for=acme&validityToken=x')?.ats).toBe('greenhouse')
+    expect(embedRuleFor('javascript:alert(1)')).toBeNull()
   })
 })
 

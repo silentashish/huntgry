@@ -1,4 +1,5 @@
-import type { ApplyAts, FieldKey, FieldKind, FieldReport, FillOutcome, FillReport, PageScan } from '@shared/apply-types'
+import { ADAPTER_STEPS, APPLY_ATS } from '@shared/apply-types'
+import type { FieldKey, FieldKind, FieldReport, FillOutcome, FillReport, PageScan } from '@shared/apply-types'
 
 /**
  * Shape checks for what a browser tab sends back. The tab runs a job site
@@ -6,7 +7,7 @@ import type { ApplyAts, FieldKey, FieldKind, FieldReport, FillOutcome, FillRepor
  * enum values, bounded strings, at most 200 fields.
  */
 
-const ATS: readonly ApplyAts[] = ['greenhouse', 'lever', 'generic']
+const ATS = APPLY_ATS
 const KEYS: readonly FieldKey[] = [
   'firstName',
   'lastName',
@@ -57,7 +58,9 @@ export function parsePageScan(input: unknown): PageScan {
     confirmation: o.confirmation === true,
     formFound: o.formFound === true,
     hasResumeInput: o.hasResumeInput === true,
-    embedUrl: embed || null
+    embedUrl: embed || null,
+    step: oneOf(o.step, ADAPTER_STEPS, 'form'),
+    stepTitle: typeof o.stepTitle === 'string' && o.stepTitle.trim() ? o.stepTitle.trim().slice(0, 120) : null
   }
 }
 

@@ -1,3 +1,4 @@
+import { embedRuleFor } from './apply-embeds'
 import type { ApplyAts } from './apply-types'
 
 /**
@@ -8,13 +9,23 @@ import type { ApplyAts } from './apply-types'
 const GREENHOUSE_HOST = /(^|\.)greenhouse\.io$/i
 const LEVER_HOST = /(^|\.)lever\.co$/i
 const ASHBY_HOST = /(^|\.)ashbyhq\.com$/i
+const WORKDAY_HOST = /(^|\.)myworkday(jobs|site)\.com$/i
 
 /** The ATS an address belongs to by host alone (`generic` when unknown). */
 export function atsForHost(host: string): ApplyAts {
   if (GREENHOUSE_HOST.test(host)) return 'greenhouse'
   if (LEVER_HOST.test(host)) return 'lever'
+  if (ASHBY_HOST.test(host)) return 'ashby'
+  if (WORKDAY_HOST.test(host)) return 'workday'
   return 'generic'
 }
+
+/**
+ * ATS hosts trusted for auto-fill on any https page, even off the posting's
+ * own origin (a company page linking to its Greenhouse board). An ATS joins
+ * this set when its adapter has been verified on live markup.
+ */
+export const AUTO_TRUSTED_ATS: ReadonlySet<ApplyAts> = new Set<ApplyAts>(['greenhouse', 'lever'])
 
 /**
  * The page with the application form for a posting URL: Lever and Ashby put it
@@ -49,7 +60,7 @@ export function isTrustedApplyPage(pageUrl: string, applyUrl: string): boolean {
   try {
     const page = new URL(pageUrl)
     if (page.origin === new URL(applyUrl).origin) return true
-    return page.protocol === 'https:' && atsForHost(page.hostname) !== 'generic'
+    return page.protocol === 'https:' && AUTO_TRUSTED_ATS.has(atsForHost(page.hostname))
   } catch {
     return false
   }
@@ -57,10 +68,5 @@ export function isTrustedApplyPage(pageUrl: string, applyUrl: string): boolean {
 
 /** A Greenhouse embedded-form URL (`…greenhouse.io/embed/job_app?…`), safe to open in the tab directly. */
 export function isGreenhouseEmbedUrl(value: string): boolean {
-  try {
-    const url = new URL(value)
-    return url.protocol === 'https:' && GREENHOUSE_HOST.test(url.hostname) && url.pathname === '/embed/job_app'
-  } catch {
-    return false
-  }
+  return embedRuleFor(value)?.ats === 'greenhouse'
 }

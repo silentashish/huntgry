@@ -20,12 +20,13 @@ const FORBIDDEN = [
 
 function pageSources(): string[] {
   const dir = join(ROOT, 'src/shared/autofill')
-  const own = readdirSync(dir)
-    .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+  const own = (readdirSync(dir, { recursive: true }) as string[])
+    .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts') && !f.startsWith('fixtures'))
     .map((f) => join(dir, f))
   return [
     ...own,
     join(ROOT, 'src/shared/autofill-channels.ts'),
+    join(ROOT, 'src/shared/apply-embeds.ts'),
     join(ROOT, 'src/preload/browser-page.ts'),
     join(ROOT, 'src/main/apply/service.ts'),
     join(ROOT, 'src/main/apply/upload.ts')
@@ -34,7 +35,8 @@ function pageSources(): string[] {
 
 describe('no-submit guard', () => {
   it('covers the engine, the page preload and the apply service', () => {
-    expect(pageSources().length).toBeGreaterThanOrEqual(8)
+    expect(pageSources().length).toBeGreaterThanOrEqual(14)
+    expect(pageSources().some((f) => f.endsWith('adapters/greenhouse.ts'))).toBe(true)
   })
 
   for (const file of pageSources()) {

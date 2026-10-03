@@ -490,7 +490,22 @@ describe('page replies', () => {
       embedUrl: null,
       url: 'https://x.example',
       ats: 'generic',
-      formFound: false
+      formFound: false,
+      step: 'form',
+      stepTitle: null
+    })
+  })
+
+  it('accepts the new ATS names and steps, and nothing else', () => {
+    expect(parsePageScan({ ats: 'workday', step: 'account-wall', stepTitle: ' Sign In ' })).toMatchObject({
+      ats: 'workday',
+      step: 'account-wall',
+      stepTitle: 'Sign In'
+    })
+    expect(parsePageScan({ ats: 'ashby', step: 'submit', stepTitle: 3 })).toMatchObject({
+      ats: 'ashby',
+      step: 'form',
+      stepTitle: null
     })
   })
 

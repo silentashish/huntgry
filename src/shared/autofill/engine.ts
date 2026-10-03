@@ -1,5 +1,5 @@
 import type { FieldKey, FieldReport, FillReport, FillValues, PageScan } from '../apply-types'
-import { isGreenhouseEmbedUrl } from '../apply-url'
+import { EMBED_RULES, embedRuleFor } from '../apply-embeds'
 import { adapterFor, type Adapter } from './adapters'
 import { UPLOAD_ATTR } from '../autofill-channels'
 import {
@@ -121,17 +121,6 @@ export function scanPage(doc: Document): PageScan {
   const adapter = adapterFor(url, doc)
   const root = adapter.formRoot(doc)
   const controls = root ? controlsOf(root) : []
-  const iframe = doc.querySelector('iframe[src*="/embed/job_app"]')
-  const src = iframe?.getAttribute('src') ?? ''
-  let embedUrl: string | null = null
-  if (src) {
-    try {
-      const absolute = new URL(src, url).href
-      if (isGreenhouseEmbedUrl(absolute)) embedUrl = absolute
-    } catch {
-      embedUrl = null
-    }
-  }
   return {
     ats: adapter.ats,
     url: url.href,
@@ -140,8 +129,27 @@ export function scanPage(doc: Document): PageScan {
     confirmation: adapter.isConfirmation(url, doc),
     formFound: controls.some((c) => kindOf(c) === 'text' || kindOf(c) === 'file'),
     hasResumeInput: controls.some((c) => matchFileField(c)?.key === 'resume'),
-    embedUrl
+    embedUrl: embedUrlOf(doc, url),
+    step: adapter.step?.(doc) ?? 'form',
+    stepTitle: adapter.stepTitle?.(doc)?.trim().slice(0, 120) || null
   }
+}
+
+/** The first iframe on the page that holds an ATS's embedded form (see apply-embeds.ts). */
+function embedUrlOf(doc: Document, base: URL): string | null {
+  for (const rule of EMBED_RULES) {
+    for (const iframe of Array.from(doc.querySelectorAll(rule.iframe))) {
+      const src = iframe.getAttribute('src')
+      if (!src) continue
+      try {
+        const absolute = new URL(src, base).href
+        if (embedRuleFor(absolute) === rule) return absolute
+      } catch {
+        // Not a URL; try the next iframe.
+      }
+    }
+  }
+  return null
 }
 
 /** Whether the page is the site's "application submitted" page. */
