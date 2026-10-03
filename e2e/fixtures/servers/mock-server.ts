@@ -15,7 +15,9 @@ import { EMPLOYER_POSTINGS, hiringCafePage, indeedPage, postingPage } from './pa
  * - `/page/one`, `/page/two`, `/hang`  plain pages for the browser's history and Stop
  * - `/redirect/lever`      302 to the Lever form on the *other* loopback origin (a second 127.0.0.1 port)
  * - `/greenhouse/`, `/lever/`, `/generic/`, `/generic-cover/` + `…/submit` + the thanks pages: the mock ATS
- *   (`scripts/mock-ats/server.mjs`, the same code as `node scripts/mock-ats.mjs`)
+ *   (`scripts/mock-ats/server.mjs`, the same code as `node scripts/mock-ats.mjs`), with Greenhouse's hydration and
+ *   S3 upload widget, Lever's résumé parser, `/greenhouse/redirect-company` → `altOrigin/company/careers` with a
+ *   late `/embed/job_app?validityToken=` iframe, and `/company/posting-popup` / `/company/posting-link`
  *
  * The app is pointed at it with `HUNTGRY_JOB_BOARD_BASE_URL_*` (see `boardEnv`) and reaches it because the
  * harness sets `HUNTGRY_ALLOW_LOCAL_URLS=1`. Nothing here submits a form: the ATS routes only record what a
@@ -31,6 +33,8 @@ export interface MockServer {
   altPort: number
   /** Where the ATS routes record the last submission (`last-submission.json`). */
   submissionFile: string
+  /** Uploads the mock Greenhouse S3 and Lever résumé parser received (`uploads.json`: name, bytes, sha256). */
+  uploadsFile: string
   /** Every request path the server answered, in order. */
   requests: string[]
   /** Environment that points the app's job boards at this server. */
@@ -66,6 +70,7 @@ export async function startMockServer(submissionFile: string): Promise<MockServe
   const ats: MockAts = createMockAts({
     fixturesDir: FIXTURES_DIR,
     submissionFile,
+    otherOrigin: () => altOrigin,
     extraSites: { 'generic-cover': { form: genericWithCover, thanks: '/generic-cover/thanks', thanksPage: () => read('generic-thanks.html') } }
   })
 
@@ -129,6 +134,7 @@ export async function startMockServer(submissionFile: string): Promise<MockServe
     port,
     altPort,
     submissionFile,
+    uploadsFile: ats.uploadsFile,
     requests,
     boardEnv: () => ({
       HUNTGRY_JOB_BOARD_BASE_URL_HIRINGCAFE: origin,
