@@ -45,10 +45,10 @@ ready.
 | Adapter registry | `src/shared/autofill/adapters/{types,index,greenhouse,lever,generic,text}.ts` | One file per ATS and a registry, so #64 and #65 add a file and a registry line. Optional hooks: `ready(doc)` (async-capable readiness predicate), `step(doc)` / `stepTitle(doc)` (posting, choice, account wall, form), `uploadOrder` (`text-first` / `files-first`), `uploadGroup(input)`, `uploadAttached(probe)`, `afterUpload: { waitFor, timeoutMs }` (a site parser), `choices` (text inputs that are really pickers). `ApplyAts` gains `ashby` and `workday`; they are recognised by host and use the generic rules until their adapters land. |
 | Embeds | `src/shared/apply-embeds.ts` | DOM-free list of embedded-form rules (iframe selector, https hosts, path), shared by the page engine and main. Another ATS's embed is one entry. A loopback URL is accepted only with `allowLoopback` (dev builds testing the mock). |
 | Readiness | `src/shared/autofill/ready.ts` | `waitForReady`: `load`, then a quiet DOM (500 ms with no mutations), then the adapter's `ready` hook, capped at 6 s. The isolated world cannot see React's state, so readiness is observed from the DOM, never a single fixed sleep. Plus `waitUntil`, `isShown`, `anyShown`. |
-| Engine | `src/shared/autofill/engine.ts`, `upload-state.ts` | `verifyFill`: ~1 s after a fill, every `filled` value is checked; a wiped or replaced value is written once more, a value that still does not hold becomes `rejected`, and file inputs a re-render replaced are marked again. `fillPage` marks the upload widget (`data-huntgry-upload-group`), honours `step` (a non-form step is never filled) and `uploadOrder`, and scrolls the form into view. `uploadStateOf` asks the adapter (or the default: the input holds a file, or the widget shows the file name; a progress bar is `pending`). |
-| Adapters | `adapters/greenhouse.ts`, `adapters/lever.ts` | Greenhouse confirms against its S3 widget, where the `<input>` is replaced by a progress bar and then the file name, finding the widget by its label id if it was re-rendered. Its `#candidate-location` is a choice. Lever confirms against `.filename`, waits for "Success!" / "Couldn't auto-read resume." (`afterUpload`), and its location autocomplete is a choice for the user. |
-| Preload | `src/preload/browser-page.ts`, `src/shared/autofill-channels.ts` | Async replies. `detect` waits for readiness, `fill` fills then verifies, `uploadState` waits for the widget to show the file, and `afterUpload` waits for the site's parser and verifies again. A page with no form is watched for 20 s and sends `formAppeared` once a form or embed renders. Still no `contextBridge`, and still only the top frame. |
-| Service | `src/main/apply/{service,ipc,validate}.ts`, `src/main/browser/manager.ts`, `src/shared/apply-url.ts` | Trusted origins per session: the posting, the landing page of the first navigation (`did-navigate`: its server redirects), and embeds it opened. Later navigations the user makes are not trusted. Embeds are followed immediately and at most 3 times; Greenhouse's `/embed/job_board?error=true` reloads the company page. A popup from the session's tab takes the session over (`onPopupTab`). Uploads are confirmed against the widget, retried once after re-marking a replaced input, never attached twice while `pending`, and otherwise reported `upload-failed` with a reason. Non-form steps get a panel message and are never filled, and a multi-step form fills once per step title. The request timeout is 15 s to cover the readiness wait. |
+| Engine | `src/shared/autofill/engine.ts`, `upload-state.ts`, `user-edits.ts`, `session.ts` | `verifyFill` (async): ~1 s after a fill, every `filled` value is checked; a wiped or replaced value is written once more and read back again after `settleMs` (a site that clears it asynchronously makes it `rejected`), and file inputs a re-render replaced are marked again. A field the person edited after the fill (an `input`/`change` Huntgry did not fire; in the tab only trusted events count) is `kept`, never overwritten. `PageSession` holds the preload's per-document logic (fill, upload state, after-upload verify) so jsdom tests drive it; a marker-only pass (upload retry) keeps the text report. `watchForForm` watches DOM changes with no time limit. `fillPage` marks the upload widget (`data-huntgry-upload-group`), honours `step` (a non-form step is never filled) and `uploadOrder`, and scrolls the form into view. `uploadStateOf` asks the adapter (or the default: the input holds a file, or the widget shows the file name; a progress bar is `pending`). |
+| Adapters | `adapters/greenhouse.ts`, `adapters/lever.ts` | Neither counts a file in `input.files` (CDP sets it even when the site's handler never took the file): only the widget. Greenhouse confirms against its S3 widget, where the `<input>` is replaced by a progress bar and then the file name, finding the widget by its label id if it was re-rendered. Its `#candidate-location` is a choice. Lever confirms against `.filename` (with "Analyzing resume..." checked first as `pending`), waits for "Success!" / "Couldn't auto-read resume." (`afterUpload`), and its location autocomplete is a choice for the user. |
+| Preload | `src/preload/browser-page.ts`, `src/shared/autofill-channels.ts` | Async replies through one `PageSession` per document. `detect` waits for readiness, `fill` fills then verifies, `uploadState` waits for the widget to show the file, and `afterUpload` waits for the site's parser and verifies again. A page with no form is watched (no time limit, re-armed by each detect) and sends `formAppeared` once a form or embed renders. Still no `contextBridge`, and still only the top frame. |
+| Service | `src/main/apply/{service,ipc,validate}.ts`, `src/main/browser/manager.ts`, `src/shared/apply-url.ts` | Trusted origins per session: the posting, the landing page of the first navigation (`did-navigate`: its server redirects), and embeds it opened. Later navigations the user makes are not trusted. Every main-frame navigation start or commit invalidates the work still running for the previous document (before its load finishes), and the CDP upload refuses a document whose URL is not the one filled. Embeds are followed immediately and at most 3 times; Greenhouse's `/embed/job_board?error=true` reloads the company page. A popup from the session's tab takes the session over (`onPopupTab`). Uploads are confirmed against the widget, retried once after re-marking a replaced input, never attached twice while `pending`, and otherwise reported `upload-failed` with a reason. Non-form steps get a panel message and are never filled, and a multi-step form fills once per step title. The request timeout is 15 s to cover the readiness wait. |
 | Job URLs | `src/main/jobs/sources/hiringcafe.ts`, `src/main/applications/scan.ts` | No `apply_url` means no URL (Apply says "No posting URL"). `postingUrl(jd)` prefers the `Posting:` line, then a Greenhouse/Lever/Ashby/Workday link, then the first link. |
 | Tailor run | `src/renderer/src/pages/tailor/RunView.tsx`, `src/main/cli/runner.ts` | Apply reads the application record (re-read when the run's files or status change), is disabled with the Dashboard's reason, and shows its errors right under the buttons. `outputFolder` uses `/`. |
 | Fixtures and mocks | `src/shared/autofill/fixtures/{greenhouse,lever}-form.html`, `scripts/mock-ats/{server.mjs,sites/*.js}`, `e2e/fixtures/servers/*` | Fixtures are refreshed from the 2026-10-03 captures (intl-tel-input phone, location combobox, cover-letter widget; Lever's parser labels, location autocomplete, no form action). The mock replays the behaviours that broke production: hydration reset, S3 upload widget, Lever's parser, JavaScript submit, the company redirect with a late `validityToken` iframe (30 s tokens), and popup and same-tab "Apply now" postings. Uploads are recorded with sha256. |
@@ -140,10 +140,10 @@ the widget never uploaded. That is the bug the owner saw. Lever after the parser
 ## How to test
 
 ```bash
-npm test            # lockfiles + vitest (600 tests)
+npm test            # lockfiles + vitest (611 tests)
 npm run typecheck
 npm run build
-npm run test:e2e    # Playwright on the built app (87 tests)
+npm run test:e2e    # Playwright on the built app (89 tests)
 ```
 
 Unit tests added or changed:
@@ -154,9 +154,14 @@ Unit tests added or changed:
   (`missing` → `pending` progress bar → `attached` file name, and a re-rendered widget); Lever
   `.filename` / "Analyzing resume..." / `afterUpload` visibility; `waitForReady` (DOM quiet,
   `ready` hook, cap); the `step` hook (no fill on a sign-in wall), `files-first`, `choices`.
+- Review regressions (same file): a file in the input but not taken by the Greenhouse/Lever widget is
+  `missing`; a user edit after the fill (and during the upload wait) is kept; a rewrite cleared
+  asynchronously is `rejected`; an upload retry keeps the text report the parser check uses; a form that
+  appears a minute after load is noticed.
 - `src/shared/autofill/adapters/adapters.test.ts`: the registry lists every adapter file once,
   `generic` last.
-- `src/main/apply/apply.test.ts`: redirect landing trusted, `validityToken` embed followed, an
+- `src/main/apply/apply.test.ts`: a pending fill dropped when another document commits before its load
+  finishes, or when a navigation starts; an upload refused when CDP finds another document; redirect landing trusted, `validityToken` embed followed, an
   expired embed reloads the company page, a later page on another origin not trusted; loopback embeds
   only with `allowLocalEmbeds`; popup takeover; an upload the widget never shows fails after one
   retry; `pending` is not re-uploaded; a non-form step fills nothing; page-reply validation of the
@@ -165,12 +170,11 @@ Unit tests added or changed:
 - `src/main/applications/applications.test.ts` (`postingUrl`), `src/main/jobs/jobs.test.ts`
   (HiringCafe without `apply_url`).
 
-E2E (`e2e/tests/apply-generated.spec.ts`, new): Tailor run (fake agent) → Apply on Greenhouse
-(filled after hydration, the widget shows `resume.pdf`, the mock S3's sha256 equals the run's
-`resume.pdf`, and the test-submitted payload has the names, phone, LinkedIn and the file); Dashboard
-row → Lever (attached through the parser, values kept, submission has the file); drawer → Greenhouse;
-company redirect + late `validityToken` embed; popup Apply; a run without a posting URL shows why Apply
-is disabled. `e2e/tests/apply.spec.ts` was updated for the new behaviour.
+E2E (`e2e/tests/apply-generated.spec.ts`, new): Tailor run (fake agent) → Apply on Greenhouse **and**
+Lever (filled after hydration / after the parser, the widget shows `resume.pdf`, the mock's upload
+sha256 equals the run's `resume.pdf`, and the test-submitted payload has the contact values and the
+file); Dashboard row → Lever; drawer → Greenhouse; company redirect + late `validityToken` embed; popup
+Apply; same-tab Apply link; a run without a posting URL shows why Apply is disabled. `e2e/tests/apply.spec.ts` was updated for the new behaviour.
 
 Manually with the mock: `node scripts/mock-ats.mjs`, `HUNTGRY_ALLOW_LOCAL_URLS=1 npm run dev`, and an
 application whose posting URL is `http://localhost:4173/greenhouse/` (or `/lever/`,

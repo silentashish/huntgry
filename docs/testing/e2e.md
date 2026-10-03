@@ -251,7 +251,8 @@ application's own `resume.pdf`. Company-site flows: `/greenhouse/redirect-compan
 `altOrigin/company/careers`, which injects a Greenhouse `/embed/job_app?validityToken=…` iframe
 800 ms after load (a token older than 30 s redirects to `/embed/job_board?error=true`);
 `/company/posting-popup` and `/company/posting-link` show only an "Apply now" link (new tab / same
-tab). `e2e/tests/apply-generated.spec.ts` covers them; `clickLinkInTab` is how the test (never the
+tab). `e2e/tests/apply-generated.spec.ts` covers Tailor → Apply on Greenhouse and Lever, the
+Dashboard and drawer entry points, the redirect + late embed, and both link cases; `clickLinkInTab` is how the test (never the
 app) presses a site's own link, and `expectInTab` polls an expression in a tab.
 
 **How the app is pointed at it.** The harness already sets `HUNTGRY_ALLOW_LOCAL_URLS=1`, which
