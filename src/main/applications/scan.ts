@@ -120,7 +120,7 @@ export async function readApplication(workspace: string, folder: string): Promis
     company: humanize(company),
     jobId,
     jobTitle: jd ? jobTitleOf(jd) : '',
-    jobUrl: tracking.jobUrl ?? (jd ? firstUrl(jd) : null),
+    jobUrl: tracking.jobUrl ?? (jd ? postingUrl(jd) : null),
     createdAt: new Date(created || 0).toISOString(),
     updatedAt: new Date(updated || created || 0).toISOString(),
     files: names.filter((n) => (KNOWN_FILES as readonly string[]).includes(n)).sort(),
@@ -195,10 +195,38 @@ export function jobTitleOf(markdown: string): string {
     .slice(0, 140)
 }
 
+const URL_RE = /https?:\/\/[^\s<>()"'`\]]+/g
+const clean = (url: string) => url.replace(/[.,;:!?*_]+$/, '')
+
 /** First http(s) URL in the text, without trailing punctuation or Markdown brackets. */
 export function firstUrl(text: string): string | null {
-  const m = /https?:\/\/[^\s<>()"'`\]]+/.exec(text)
-  return m ? m[0].replace(/[.,;:!?*_]+$/, '') : null
+  const m = new RegExp(URL_RE.source).exec(text)
+  return m ? clean(m[0]) : null
+}
+
+/** Hosts of applicant tracking systems (an apply form, not a company home page or a benefits link). */
+const ATS_HOST = /(^|\.)(greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|myworkdaysite\.com)$/i
+
+/**
+ * The posting URL a job description names: its `Posting: <url>` line (written
+ * by Huntgry's Jobs page), else the first URL on an ATS host, else the first
+ * URL. A pasted description without a posting link otherwise picks up any
+ * link in the text (#63).
+ */
+export function postingUrl(text: string): string | null {
+  const line = /^\s*(?:\*\*)?posting(?:\*\*)?\s*:\s*(?:\*\*)?\s*(\S+)/im.exec(text)
+  if (line) {
+    const url = firstUrl(line[1])
+    if (url) return url
+  }
+  for (const m of text.matchAll(URL_RE)) {
+    try {
+      if (ATS_HOST.test(new URL(clean(m[0])).hostname)) return clean(m[0])
+    } catch {
+      // Not a URL; keep looking.
+    }
+  }
+  return firstUrl(text)
 }
 
 /** Reads the skill's `build-report.json`: `ok`, `verify.results[].passed`, `render.pages`. */
