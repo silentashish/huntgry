@@ -674,15 +674,17 @@ describe('ApplyService', () => {
     const posting = 'https://jobs.ashbyhq.com/acme/0f3c1f5a-1111-4222-8333-944445555666'
     await application({ 'job-description.md': `Engineer\n${posting}\n`, 'resume.pdf': '%PDF' })
     const tab = new FakeTab('', `${posting}/application`)
-    const { service, opened, dbg } = setup(tab)
+    const { service, opened, dbg } = setup(tab, new FakeDebugger(), { retryDelaysMs: [50] })
     await service.start(ID)
     expect(opened).toEqual([`${posting}/application`])
     // Client-rendered: at load the page is an empty shell. Recognised by host, nothing to fill yet.
     tab.load('<!DOCTYPE html><title>Software Engineer @ Acme</title><div id="root"></div>', `${posting}/application`)
     await until(service, 'ready')
     expect(service.current()!.ats).toBe('ashby')
-    // React renders the form (the service's retry, or Fill form, picks it up).
-    tab.load(fixture('ashby-form.html'), `${posting}/application`)
+    // React renders the form into the same document: no new load event, as on the real SPA. Only the service's
+    // re-detect can pick it up.
+    const rendered = new JSDOM(fixture('ashby-form.html')).window.document.getElementById('root')!.innerHTML
+    tab.dom.window.document.getElementById('root')!.innerHTML = rendered
     await until(service, 'filled')
     const doc = tab.dom.window.document
     expect((doc.getElementById('_systemfield_name') as HTMLInputElement).value).toBe('Ada Lovelace')
