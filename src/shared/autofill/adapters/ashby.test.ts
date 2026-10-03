@@ -95,7 +95,13 @@ describe('Ashby adapter', () => {
   it('fills legal name, email, phone and LinkedIn, and marks only #_systemfield_resume for upload', () => {
     const dom = page()
     const ok = forbidSubmit(dom)
-    const report = fillPage(dom.window.document, VALUES)
+    // files-first: the first pass only marks the resume; main uploads it, then asks for the text.
+    const files = fillPage(dom.window.document, VALUES)
+    expect(files.uploadOrder).toBe('files-first')
+    expect(files.fields.filter((f) => f.key).map((f) => [f.key, f.outcome])).toEqual([['resume', 'to-upload']])
+    expect(files.fields.some((f) => f.outcome === 'filled')).toBe(false)
+    expect($(dom, '#_systemfield_name').value).toBe('')
+    const report = fillPage(dom.window.document, VALUES, { text: true })
     ok()
     expect(report.ats).toBe('ashby')
     expect($(dom, '#_systemfield_name').value).toBe('Ada Lovelace')
@@ -116,7 +122,7 @@ describe('Ashby adapter', () => {
 
   it('leaves preferred name, the location picker, the date picker and every choice to the user', () => {
     const dom = page()
-    const report = fillPage(dom.window.document, VALUES)
+    const report = fillPage(dom.window.document, VALUES, { text: true })
     expect($(dom, '#a5b00002-0000-4000-8000-000000000002').value).toBe('')
     expect(report.fields.find((f) => f.label.startsWith('Preferred Name'))?.outcome).toBe('unmatched')
     // "Where are you currently located?" is an autocomplete combobox: never typed into.
@@ -134,7 +140,7 @@ describe('Ashby adapter', () => {
     const dom = page()
     $(dom, '#_systemfield_name').value = 'Augusta Ada King'
     $(dom, LINKEDIN).value = 'https://linkedin.com/in/ada-king'
-    const report = fillPage(dom.window.document, VALUES)
+    const report = fillPage(dom.window.document, VALUES, { text: true })
     expect($(dom, '#_systemfield_name').value).toBe('Augusta Ada King')
     expect($(dom, LINKEDIN).value).toBe('https://linkedin.com/in/ada-king')
     expect(byKey(report, 'fullName')).toMatchObject({ outcome: 'kept', value: 'Augusta Ada King' })
@@ -149,7 +155,7 @@ describe('Ashby adapter', () => {
     const input = $(dom, '#_systemfield_resume')
     const group = ashby.uploadGroup!(input)
     expect(group?.classList.contains('ashby-application-form-input-file')).toBe(true)
-    const probe = { doc, input, group, fileName: 'resume.pdf' }
+    const probe = { doc, kind: 'resume' as const, input, group, fileName: 'resume.pdf' }
     expect(ashbyUploadState(probe)).toBe('missing')
     // A file in the input alone is not an upload: Ashby has not taken it yet.
     expect(ashby.uploadAttached!(probe)).toBe('missing')
