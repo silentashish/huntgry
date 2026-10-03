@@ -13,6 +13,8 @@ export interface AppSettings {
   currentWorkspace?: string
   /** Agent new tailoring runs use (`AgentId`); read through `agentOr`, so an unknown value means Claude. */
   defaultAgent?: string
+  /** Remote control (ADR-0001): the session is off unless enabled; the two toggles default to details off, transcripts on. */
+  remote?: { enabled?: boolean; notificationDetails?: boolean; transcripts?: boolean }
 }
 
 /** Reads the settings file; a missing or corrupt file yields empty settings. */

@@ -9,6 +9,7 @@ import { insights } from './insights'
 import { runner } from './runner'
 import { jobs } from './jobs'
 import { queue } from './queue'
+import { remote } from './remote'
 import { profile, workspace } from './workspace'
 
 // Sandboxed preload: only `electron` may be required (local modules are bundled
@@ -25,6 +26,7 @@ const api: HuntgryApi = {
   browser,
   queue,
   apply,
+  remote,
   on
 }
 

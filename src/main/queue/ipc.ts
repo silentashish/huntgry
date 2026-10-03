@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { QUEUE_CHANNELS } from '@shared/queue-types'
+import { QUEUE_CHANNELS, type EnqueueInput, type EnqueueResult, type QueueState } from '@shared/queue-types'
 import type { RunSummary } from '@shared/runner-types'
 import { contextForRun, defaultAgent, onRunChange, manager, startTailorRun } from '../cli/start'
 import { requireCurrentWorkspace } from '../current-workspace'
@@ -27,6 +27,16 @@ onRunChange((run) => queue.onRun(run))
  */
 export function replyThroughQueue(runId: string, text: string): Promise<RunSummary | 'held' | null> {
   return queue.reply(runId, text)
+}
+
+/** The queue for the remote gateway (ADR-0001): the same instance and methods the renderer's handlers call. */
+export const queueForRemote = {
+  state: (): Promise<QueueState> => queue.sync(),
+  setPaused: (paused: boolean): Promise<QueueState> => queue.setPaused(paused),
+  cancel: (id: string): Promise<QueueState> => queue.cancel(id),
+  retry: (id: string): Promise<QueueState> => queue.retry(id),
+  enqueue: (input: EnqueueInput): Promise<EnqueueResult> => queue.enqueue(input),
+  reply: replyThroughQueue
 }
 
 /** Saves the queue as it is before the app stops the runs on quit (they reload as failed-retryable). */

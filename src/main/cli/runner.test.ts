@@ -83,7 +83,9 @@ describe('RunManager against a fake claude', () => {
     const { id } = await manager.start(params, ctx())
     await until(id, (r) => r.status === 'waiting')
     await manager.reply(id, 'Approved. WRITE_OUTPUT', async () => ctx())
-    const done = await until(id, (r) => r.status === 'waiting' && r.outputFolder !== null)
+    // Under load the first turn's folder scan can run late and see the folder half-written
+    // (resume.pdf before build-report.json); wait for the second turn's scan.
+    const done = await until(id, (r) => r.status === 'waiting' && r.outputFiles.includes('build-report.json'))
     expect(done.outputFolder).toBe(join('software-engineer', 'acme', '42'))
     expect(done.outputFiles).toEqual(['build-report.json', 'resume.pdf'])
     expect((await readRun(ws, id)).outputFolder).toBe(done.outputFolder)

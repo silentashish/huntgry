@@ -7,6 +7,7 @@ import type { GraphApi } from './graph-types'
 import type { InsightsApi } from './insights-types'
 import type { JobsApi } from './jobs-types'
 import type { QueueApi } from './queue-types'
+import type { RemoteApi } from './remote-types'
 import type { ProfileApi, WorkspaceApi } from './workspace-types'
 
 /**
@@ -32,6 +33,8 @@ export interface HuntgryApi {
   queue: QueueApi
   /** Auto-apply: fill a posting's application form in a browser tab (never submits). */
   apply: ApplyApi
+  /** Remote control: the relay session, its credentials and paired phones (ADR-0001). */
+  remote: RemoteApi
   /** Main → renderer events, restricted to `EVENT_CHANNELS`. */
   on: Subscribe
 }
