@@ -89,8 +89,9 @@ flowchart TD
   container; `hasSubmitButton` still holds (the widget buttons have no `type`), and nothing presses it anyway.
 - **`files-first`.** `#_systemfield_resume` does not run Ashby's parser (only the autofill pane does), but attaching
   first and then filling only empty fields is safe whether or not an org's form parses: parser values are `kept`, never
-  clobbered. Until the #63 engine reads `uploadOrder`, the current text-first order behaves the same on Ashby, because
-  the resume field does not overwrite anything.
+  clobbered. #63's engine honours it: the first `fillPage` pass only marks the resume, the service attaches it and
+  waits for `afterUpload` (the widget's delete button), then asks for the text with `text: true`
+  (`report.uploadOrder === 'files-first'` in `service.ts`).
 - **"Attached" means Ashby's widget lists the file with its delete button.** A file in the `<input>` is not enough,
   since Ashby may still reject or fail the upload (the live capture shows the "failed to upload" toast).
 - **Embeds: the job's `/application`, without the query.** Main opens a URL it built from the validated path, not the
