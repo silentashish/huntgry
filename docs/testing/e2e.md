@@ -222,8 +222,8 @@ Those three flows reach job boards, employer pages and ATS forms. In the suite t
 
 | File | What it holds |
 | --- | --- |
-| `fixture.ts` | `test` for these specs: the `app` fixture plus `mock` (the server, its request log cleared and the last submission removed per test). Before launch it rewrites `http://mock-server.invalid` in the seeded `mocks` workspace to the server's origin and sets the board overrides through `launchEnv`. |
-| `mock-server.ts` | The server: routes below, `origin` (`http://127.0.0.1:<port>`), `altOrigin` (`http://127.0.0.1:<altPort>`: the same handler on a second listener, a different origin), `requests`, `submissionFile`, `close()`. Port 0 for both, never a fixed port, never `localhost` (its resolution is the machine's business). |
+| `fixture.ts` | `test` for these specs: the `app` fixture plus `mock` (the server, its request log cleared and the last submission and recorded uploads removed per test). Before launch it rewrites `http://mock-server.invalid` in the seeded `mocks` workspace to the server's origin and sets the board overrides through `launchEnv`. |
+| `mock-server.ts` | The server: routes below, `origin` (`http://127.0.0.1:<port>`), `altOrigin` (`http://127.0.0.1:<altPort>`: the same handler on a second listener, a different origin), `requests`, `submissionFile`, `uploadsFile`, `close()`. Port 0 for both, never a fixed port, never `localhost` (its resolution is the machine's business). |
 | `pages.ts` | The fictional pages: the board result shapes, the employer postings, a Lever-style and an Ashby-style posting. |
 
 Routes: `/?searchState=…` is a hiring.cafe-shaped search page (`__NEXT_DATA__` with
@@ -236,6 +236,23 @@ employer pages with a JSON-LD `JobPosting` and a full description; `/postings/le
 `/lever/`, `/generic/`, `/generic-cover/` (+ `…/submit`, the thanks pages). The ATS routes are
 `scripts/mock-ats/server.mjs`, the same module `node scripts/mock-ats.mjs` runs; `generic-cover`
 is the generic form with a cover-letter upload added, so `cover.pdf` is exercised.
+
+**The ATS mocks behave like the live sites (#63).** Static forms on the posting's own origin
+hid every reason Apply failed on real pages, so `scripts/mock-ats/sites/*.js` replays what was
+captured on 2026-10-03: Greenhouse **hydrates ~300 ms after `load`** (`?hydrateMs=`), resetting
+values and re-creating file inputs (a fill or upload made before it is lost, and
+`document.documentElement.dataset.hydrated` turns `true`), then uploads a chosen file at once to a
+presigned mock S3 (`/greenhouse/presign`, `/greenhouse/s3`) and swaps the hidden input for the file
+name; Lever posts a chosen résumé to `/lever/parseResume`, whose answer fills the **empty** contact
+fields ("Parsed Name"), then shows the name in `.filename` and "Success!". Both submit with
+JavaScript (the uploaded file is part of the payload). Every upload is appended to
+`mock.uploadsFile` (`uploads.json`) with its size and **sha256**, so a spec proves the site got that
+application's own `resume.pdf`. Company-site flows: `/greenhouse/redirect-company` 302s to
+`altOrigin/company/careers`, which injects a Greenhouse `/embed/job_app?validityToken=…` iframe
+800 ms after load (a token older than 30 s redirects to `/embed/job_board?error=true`);
+`/company/posting-popup` and `/company/posting-link` show only an "Apply now" link (new tab / same
+tab). `e2e/tests/apply-generated.spec.ts` covers them; `clickLinkInTab` is how the test (never the
+app) presses a site's own link, and `expectInTab` polls an expression in a tab.
 
 **How the app is pointed at it.** The harness already sets `HUNTGRY_ALLOW_LOCAL_URLS=1`, which
 the in-app browser session and (since #49) the hidden job-board loader honour for loopback
@@ -277,7 +294,8 @@ Browser tabs are not windows. Two ways to see them, both in `e2e/fixtures/tabs.t
 **the only thing that presses a Submit button is the test**, through
 `pressSubmitInTab(electronApp, urlPart, values)`, which fills the answers the form still needs
 (a required question, a consent checkbox) and clicks the mock's own button inside the tab. The
-mock records the posted fields and file names to `mock.submissionFile` (`last-submission.json`),
+mock records the posted fields and file names to `mock.submissionFile` (`last-submission.json`)
+and every upload to `mock.uploadsFile`,
 and the specs assert that file plus the application's `huntgry.json` ("Mark as applied" writes
 it, "Not yet" does not). Nothing in this ticket adds a code path that submits.
 
