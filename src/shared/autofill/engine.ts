@@ -14,7 +14,9 @@ import {
   type FormControl
 } from './dom'
 import { matchFileField, matchTextField, type Match } from './match'
+import { sleep } from './ready'
 import { defaultUploadAttached } from './upload-state'
+import { editedByUser } from './user-edits'
 
 /**
  * The autofill engine: pure DOM code, run by the browser tab's preload and by
@@ -275,15 +277,32 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
   return report
 }
 
+export interface VerifyOptions {
+  /** How long a value written again must hold before it counts (sites may clear it asynchronously). */
+  settleMs?: number
+}
+
+const keepUserEdit = (line: FieldReport, el: HTMLInputElement | HTMLTextAreaElement) => {
+  line.outcome = 'kept'
+  line.value = el.value.trim().slice(0, 200)
+  line.reason = 'You changed it after Huntgry filled it; left as is.'
+}
+
 /**
  * Checks, a moment after a fill, that every field reported `filled` still
  * holds its value. A late re-render (React hydration) or a resume parser can
- * wipe or replace them: each such value is written once more, and a field
- * that still does not hold it becomes `rejected`. File inputs that lost their
- * upload marker (a re-render replaced them) are marked again. Mutates and
- * returns `report`.
+ * wipe or replace them: each such value is written once more, then read back
+ * after `settleMs` without writing again; a field that does not hold it then
+ * becomes `rejected`. A field the person edited since (see user-edits.ts) is
+ * `kept` and never overwritten. File inputs that lost their upload marker (a
+ * re-render replaced them) are marked again. Mutates and returns `report`.
  */
-export function verifyFill(doc: Document, values: FillValues, report: FillReport): FillReport {
+export async function verifyFill(
+  doc: Document,
+  values: FillValues,
+  report: FillReport,
+  { settleMs = 300 }: VerifyOptions = {}
+): Promise<FillReport> {
   const url = pageUrl(doc)
   if (url.href !== report.url) return report
   const adapter = adapterFor(url, doc)
@@ -292,6 +311,7 @@ export function verifyFill(doc: Document, values: FillValues, report: FillReport
   const byKey = new Map<FieldKey, FormControl>()
   for (const p of plan(adapter, root)) if (p.key && !p.outcome && !byKey.has(p.key)) byKey.set(p.key, p.el)
 
+  const rewritten: Array<{ line: FieldReport; el: HTMLInputElement | HTMLTextAreaElement; value: string }> = []
   for (const line of report.fields) {
     if (!line.key) continue
     if (line.outcome === 'to-upload' && (line.key === 'resume' || line.key === 'coverLetter')) {
@@ -310,15 +330,31 @@ export function verifyFill(doc: Document, values: FillValues, report: FillReport
     }
     const phone = line.key === 'phone'
     if (valueMatches(el, value, phone)) continue
-    if (setNativeValue(el, value, phone)) {
-      highlight(el, 'done')
+    if (editedByUser(el)) {
+      keepUserEdit(line, el)
       continue
     }
-    line.outcome = 'rejected'
-    line.reason = el.value
-      ? `The site changed it to "${el.value.slice(0, 80)}".`
-      : 'The page cleared it after filling; fill it in.'
-    highlight(el, 'attention')
+    setNativeValue(el, value, phone)
+    rewritten.push({ line, el, value })
+  }
+  if (rewritten.length === 0) return report
+
+  // The one permitted rewrite counts only if it still holds a moment later.
+  await sleep(doc, settleMs)
+  if (pageUrl(doc).href !== report.url) return report
+  for (const { line, el, value } of rewritten) {
+    if (editedByUser(el)) {
+      keepUserEdit(line, el)
+    } else if (el.isConnected && valueMatches(el, value, line.key === 'phone')) {
+      highlight(el, 'done')
+    } else {
+      line.outcome = 'rejected'
+      line.reason =
+        el.isConnected && el.value
+          ? `The site changed it to "${el.value.slice(0, 80)}".`
+          : 'The page cleared it after filling; fill it in.'
+      highlight(el, 'attention')
+    }
   }
   return report
 }

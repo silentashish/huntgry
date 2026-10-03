@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { JSDOM } from 'jsdom'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { FieldReport, FillReport, FillValues } from '../apply-types'
 import { UPLOAD_ATTR, UPLOAD_GROUP_ATTR } from '../autofill-channels'
 import { ADAPTERS, type Adapter } from './adapters'
 import { fillPage, scanPage, uploadStateOf, verifyFill } from './engine'
+import { PageSession, watchForForm } from './session'
+import { watchUserEdits } from './user-edits'
 import { anyShown, waitForReady } from './ready'
 
 /**
@@ -50,7 +52,7 @@ function hydrate(dom: JSDOM): void {
 }
 
 describe('verifyFill (hydration reset)', () => {
-  it('writes wiped values again and marks re-created file inputs', () => {
+  it('writes wiped values again and marks re-created file inputs', async () => {
     const dom = new JSDOM(fixture('greenhouse-form.html'), { url: GH })
     const doc = dom.window.document
     const report = fillPage(doc, VALUES)
@@ -60,7 +62,7 @@ describe('verifyFill (hydration reset)', () => {
     expect(input(dom, '#first_name').value).toBe('')
     expect(doc.querySelector(`[${UPLOAD_ATTR}="resume"]`)).toBeNull()
 
-    verifyFill(doc, VALUES, report)
+    await verifyFill(doc, VALUES, report, { settleMs: 0 })
     for (const [selector, value] of [
       ['#first_name', 'Ada'],
       ['#last_name', 'Lovelace'],
@@ -77,7 +79,7 @@ describe('verifyFill (hydration reset)', () => {
     expect(input(dom, '#cover_letter').getAttribute(UPLOAD_ATTR)).toBe('cover')
   })
 
-  it('reports a value the page keeps clearing as rejected, not filled', () => {
+  it('reports a value the page keeps clearing as rejected, not filled', async () => {
     const dom = new JSDOM(fixture('greenhouse-form.html'), { url: GH })
     const doc = dom.window.document
     const report = fillPage(doc, VALUES)
@@ -85,26 +87,26 @@ describe('verifyFill (hydration reset)', () => {
     const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!
     setter.call(email, '')
     email.addEventListener('input', () => setter.call(email, ''))
-    verifyFill(doc, VALUES, report)
+    await verifyFill(doc, VALUES, report, { settleMs: 0 })
     expect(byKey(report, 'email')).toMatchObject({ outcome: 'rejected', reason: 'The page cleared it after filling; fill it in.' })
     expect(byKey(report, 'firstName')?.outcome).toBe('filled')
   })
 
-  it('restores a value a resume parser replaced', () => {
+  it('restores a value a resume parser replaced', async () => {
     const dom = new JSDOM(fixture('lever-form.html'), { url: LEVER })
     const doc = dom.window.document
     const report = fillPage(doc, VALUES)
     input(dom, 'input[name="name"]').value = 'Parsed Name'
-    verifyFill(doc, VALUES, report)
+    await verifyFill(doc, VALUES, report, { settleMs: 0 })
     expect(input(dom, 'input[name="name"]').value).toBe('Ada Lovelace')
     expect(byKey(report, 'fullName')?.outcome).toBe('filled')
   })
 
-  it('leaves the report alone once the page is another page', () => {
+  it('leaves the report alone once the page is another page', async () => {
     const dom = new JSDOM(fixture('greenhouse-form.html'), { url: GH })
     const report = fillPage(dom.window.document, VALUES)
     const other = new JSDOM(fixture('greenhouse-form.html'), { url: `${GH}/confirmation` })
-    expect(verifyFill(other.window.document, VALUES, report).fields).toEqual(report.fields)
+    expect((await verifyFill(other.window.document, VALUES, report)).fields).toEqual(report.fields)
   })
 })
 
@@ -146,6 +148,7 @@ describe('upload state (the site widget, not just the input)', () => {
     ;(doc.querySelector('.resume-upload-working') as HTMLElement).style.display = 'inline'
     expect(uploadStateOf(doc, 'resume', 'resume.pdf')).toBe('pending')
     doc.querySelector('.filename')!.textContent = 'resume.pdf'
+    ;(doc.querySelector('.resume-upload-working') as HTMLElement).style.display = 'none'
     expect(uploadStateOf(doc, 'resume', 'resume.pdf')).toBe('attached')
   })
 
@@ -232,5 +235,122 @@ describe('adapter hooks', () => {
     const report = fillPage(dom.window.document, VALUES)
     expect(report.fields.find((f) => f.label === 'Location (City)')).toMatchObject({ outcome: 'skipped-unsupported' })
     expect(input(dom, '#candidate-location').value).toBe('')
+  })
+})
+
+/** Makes CDP's effect visible to jsdom: the input holds a file, whatever the site did with it. */
+function holdFile(el: HTMLInputElement, name = 'resume.pdf') {
+  Object.defineProperty(el, 'files', { configurable: true, value: [{ name }] })
+}
+
+describe('#63 review regressions', () => {
+  it('Greenhouse and Lever: a file in the input is not attached until the widget takes it', () => {
+    const gh = new JSDOM(fixture('greenhouse-form.html'), { url: GH }).window.document
+    fillPage(gh, VALUES)
+    holdFile(gh.querySelector('#resume') as HTMLInputElement)
+    expect(uploadStateOf(gh, 'resume', 'resume.pdf')).toBe('missing')
+
+    const lever = new JSDOM(fixture('lever-form.html'), { url: LEVER }).window.document
+    fillPage(lever, VALUES)
+    holdFile(lever.querySelector('#resume-upload-input') as HTMLInputElement)
+    // Empty .filename, hidden success label: the parser never took it.
+    expect(uploadStateOf(lever, 'resume', 'resume.pdf')).toBe('missing')
+    ;(lever.querySelector('.resume-upload-working') as HTMLElement).style.display = 'inline'
+    lever.querySelector('.filename')!.textContent = 'resume.pdf'
+    // Still analysing wins over a file name already shown.
+    expect(uploadStateOf(lever, 'resume', 'resume.pdf')).toBe('pending')
+
+    // A plain form keeps the file in its input until submit: there the input is the evidence.
+    const plain = new JSDOM('<form><input name="email"><label>Resume <input type="file" name="resume"></label></form>', {
+      url: 'https://careers.example.com/apply'
+    }).window.document
+    fillPage(plain, VALUES)
+    holdFile(plain.querySelector('input[type="file"]') as HTMLInputElement)
+    expect(uploadStateOf(plain, 'resume', 'resume.pdf')).toBe('attached')
+  })
+
+  it('keeps an edit the person made after the fill, in the verify and after the upload', async () => {
+    const dom = new JSDOM(fixture('lever-form.html'), { url: LEVER })
+    const doc = dom.window.document
+    watchUserEdits(doc, { isUserEvent: () => true })
+    const report = fillPage(doc, VALUES)
+    const email = input(dom, 'input[name="email"]')
+    // The person types another address (an input event Huntgry did not fire).
+    email.value = 'user-edited@example.com'
+    email.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+    // Meanwhile the parser replaced the name (no event): that one is restored.
+    input(dom, 'input[name="name"]').value = 'Parsed Name'
+    await verifyFill(doc, VALUES, report, { settleMs: 0 })
+    expect(email.value).toBe('user-edited@example.com')
+    expect(byKey(report, 'email')).toMatchObject({ outcome: 'kept', value: 'user-edited@example.com' })
+    expect(input(dom, 'input[name="name"]').value).toBe('Ada Lovelace')
+    expect(byKey(report, 'fullName')?.outcome).toBe('filled')
+  })
+
+  it('keeps an edit made during the upload wait (PageSession.afterUpload)', async () => {
+    const dom = new JSDOM(fixture('lever-form.html'), { url: LEVER })
+    const doc = dom.window.document
+    const page = new PageSession(doc, { isUserEvent: () => true, verifyAfterMs: 0, settleMs: 0, quietMs: 0, readyMaxMs: 50 })
+    await page.fill(VALUES)
+    const phone = input(dom, 'input[name="phone"]')
+    phone.value = '+44 20 7946 0000'
+    phone.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    ;(doc.querySelector('.resume-upload-success') as HTMLElement).style.display = 'inline'
+    const report = await page.afterUpload(VALUES)
+    expect(phone.value).toBe('+44 20 7946 0000')
+    expect(report && byKey(report, 'phone')).toMatchObject({ outcome: 'kept' })
+  })
+
+  it('rejects a rewritten value the site clears again asynchronously', async () => {
+    const dom = new JSDOM(fixture('greenhouse-form.html'), { url: GH })
+    const doc = dom.window.document
+    const report = fillPage(doc, VALUES)
+    const email = input(dom, '#email')
+    const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!
+    setter.call(email, '')
+    // React-like: the write is accepted, then thrown away 10 ms later.
+    email.addEventListener('input', () => dom.window.setTimeout(() => setter.call(email, ''), 10))
+    await verifyFill(doc, VALUES, report, { settleMs: 50 })
+    expect(email.value).toBe('')
+    expect(byKey(report, 'email')).toMatchObject({ outcome: 'rejected', reason: 'The page cleared it after filling; fill it in.' })
+  })
+
+  it('an upload retry (marker-only pass) keeps the text report the parser check works from', async () => {
+    const dom = new JSDOM(fixture('lever-form.html'), { url: LEVER })
+    const doc = dom.window.document
+    const page = new PageSession(doc, { verifyAfterMs: 0, settleMs: 0, quietMs: 0, readyMaxMs: 50 })
+    await page.fill(VALUES)
+    // Main re-marks the file input before retrying the upload.
+    const retry = await page.fill(VALUES, false)
+    expect(retry.fields.some((f) => f.outcome === 'filled')).toBe(false)
+    // Then the parser overwrites the name.
+    input(dom, 'input[name="name"]').value = 'Parsed Name'
+    ;(doc.querySelector('.resume-upload-success') as HTMLElement).style.display = 'inline'
+    const verified = await page.afterUpload(VALUES)
+    expect(input(dom, 'input[name="name"]').value).toBe('Ada Lovelace')
+    expect(verified && byKey(verified, 'fullName')?.outcome).toBe('filled')
+  })
+
+  it('notices a form that appears long after the page loaded (no 20 s limit)', async () => {
+    vi.useFakeTimers()
+    try {
+      const dom = new JSDOM('<h1>Engineer</h1><button type="button">Apply</button><div id="slot"></div>', {
+        url: 'https://careers.example.com/jobs/1'
+      })
+      const doc = dom.window.document
+      const found = vi.fn()
+      watchForForm(doc, found)
+      await vi.advanceTimersByTimeAsync(60_000)
+      doc.body.append(doc.createElement('p'))
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(found).not.toHaveBeenCalled()
+      // A minute later the person presses Apply; the form is inserted on the same URL.
+      doc.getElementById('slot')!.innerHTML =
+        '<form><label>Email <input name="email" autocomplete="email"></label><label>Resume <input type="file" name="resume"></label></form>'
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(found).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

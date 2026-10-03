@@ -1,4 +1,5 @@
 import type { FieldKind } from '../apply-types'
+import { asHuntgry } from './user-edits'
 
 /**
  * DOM helpers for the autofill engine. They run in the browser tab's preload
@@ -116,12 +117,14 @@ export function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value
   if (!view) return false
   const proto = tag(el) === 'textarea' ? view.HTMLTextAreaElement.prototype : view.HTMLInputElement.prototype
   const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
-  if (setter) setter.call(el, value)
-  else el.value = value
-  el.dispatchEvent(new view.Event('input', { bubbles: true }))
-  el.dispatchEvent(new view.Event('change', { bubbles: true }))
-  el.dispatchEvent(new view.FocusEvent('blur'))
-  el.dispatchEvent(new view.FocusEvent('focusout', { bubbles: true }))
+  asHuntgry(() => {
+    if (setter) setter.call(el, value)
+    else el.value = value
+    el.dispatchEvent(new view.Event('input', { bubbles: true }))
+    el.dispatchEvent(new view.Event('change', { bubbles: true }))
+    el.dispatchEvent(new view.FocusEvent('blur'))
+    el.dispatchEvent(new view.FocusEvent('focusout', { bubbles: true }))
+  })
   return valueMatches(el, value, phone)
 }
 

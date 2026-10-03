@@ -1,5 +1,5 @@
 import { atsForHost } from '../../apply-url'
-import { defaultUploadAttached } from '../upload-state'
+import { widgetState } from '../upload-state'
 import { headingText, SUBMITTED } from './text'
 import type { Adapter } from './types'
 
@@ -33,13 +33,13 @@ export const greenhouse: Adapter = {
   // "Location (City)" is a react-select that only takes one of its suggestions (captured 2026-10-03).
   choices: ['#candidate-location'],
   // On `change` the board uploads the file to S3 and replaces the <input> with a progress bar, then the file name
-  // (captured 2026-10-03). The widget is found by its label id too, in case the re-render replaced it.
+  // (captured 2026-10-03). Only that widget counts: an <input> that merely holds the file (the handler never ran,
+  // e.g. before hydration) is not attached. The widget is found by its label id too, in case a re-render replaced it.
   uploadAttached: (probe) =>
-    defaultUploadAttached({
-      ...probe,
-      group:
-        probe.group?.isConnected === true
-          ? probe.group
-          : probe.doc.querySelector(`[role="group"][aria-labelledby="${GROUP_LABEL[probe.kind]}"]`)
-    })
+    widgetState(
+      probe.group?.isConnected === true
+        ? probe.group
+        : probe.doc.querySelector(`[role="group"][aria-labelledby="${GROUP_LABEL[probe.kind]}"]`),
+      probe.fileName
+    )
 }
