@@ -51,15 +51,23 @@ export function applyUrlFor(jobUrl: string): string {
 }
 
 /**
- * Whether Huntgry may fill `pageUrl` on its own during an apply session: the
- * posting's own origin (where the tab was opened), or a Greenhouse / Lever
- * host over https. Anything else (a redirect to another site, a page that
- * merely looks like an ATS form) waits for the user to press Fill form.
+ * Whether Huntgry may fill `pageUrl` on its own during an apply session: one
+ * of the session's trusted origins (`trusted`: the posting URL, or the URLs /
+ * origins the session trusts, such as where the posting's own redirects
+ * landed), or a Greenhouse / Lever host over https. Anything else (a page the
+ * user clicked to, a page that merely looks like an ATS form) waits for the
+ * user to press Fill form.
  */
-export function isTrustedApplyPage(pageUrl: string, applyUrl: string): boolean {
+export function isTrustedApplyPage(pageUrl: string, trusted: string | readonly string[]): boolean {
   try {
     const page = new URL(pageUrl)
-    if (page.origin === new URL(applyUrl).origin) return true
+    for (const entry of typeof trusted === 'string' ? [trusted] : trusted) {
+      try {
+        if (entry && page.origin === new URL(entry).origin) return true
+      } catch {
+        // Not a URL; skip it.
+      }
+    }
     return page.protocol === 'https:' && AUTO_TRUSTED_ATS.has(atsForHost(page.hostname))
   } catch {
     return false

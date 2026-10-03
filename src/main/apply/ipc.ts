@@ -1,7 +1,8 @@
-import { ipcMain, type WebContents } from 'electron'
+import { app, ipcMain, type WebContents } from 'electron'
 import { APPLY_CHANNELS } from '@shared/apply-types'
 import { fillValuesFrom } from '@shared/apply-values'
-import { browserManager } from '../browser/manager'
+import { browserManager, onPopupTab } from '../browser/manager'
+import { localUrlsAllowed } from '../cli/dev-urls'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
 import { currentProfilePath } from '../profile/ipc'
@@ -33,6 +34,13 @@ function pageOf(wc: WebContents): ApplyPage {
         wc.removeListener('did-navigate-in-page', inPage)
       }
     },
+    onNavigate: (listener) => {
+      const navigated = (_e: unknown, url: string) => listener(url)
+      wc.on('did-navigate', navigated)
+      return () => {
+        if (!wc.isDestroyed()) wc.removeListener('did-navigate', navigated)
+      }
+    },
     onClosed: (listener) => {
       wc.once('destroyed', listener)
       return () => {
@@ -49,7 +57,9 @@ const service = new ApplyService({
   navigate: (tabId, url) => browserManager().navigate(tabId, url),
   page: (tabId) => pageOf(browserManager().getWebContents(tabId)),
   attachDebugger: (tabId) => browserManager().attachDebugger(tabId),
-  emit: (session) => emit('apply:session', session)
+  emit: (session) => emit('apply:session', session),
+  onTabOpened: (listener) => onPopupTab(listener),
+  allowLocalEmbeds: localUrlsAllowed(app.isPackaged)
 })
 
 function requireApplicationId(id: unknown): string {

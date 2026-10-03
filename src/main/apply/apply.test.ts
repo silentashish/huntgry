@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JSDOM } from 'jsdom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ApplySession, FillValues } from '@shared/apply-types'
+import type { ApplySession, FillReport, FillValues } from '@shared/apply-types'
 import { AUTOFILL_CHANNELS } from '@shared/autofill-channels'
-import { detectConfirmation, fillPage, scanPage } from '@shared/autofill/engine'
+import { detectConfirmation, fillPage, scanPage, verifyFill } from '@shared/autofill/engine'
 import { refusalFor } from '../browser/url'
 import { isLoopbackUrl, localUrlsAllowed } from '../cli/dev-urls'
 import { ApplyService, type ApplyDeps, type ApplyPage } from './service'
@@ -37,7 +37,11 @@ class FakeTab implements ApplyPage {
   dom: JSDOM
   listeners = new Map<string, Set<(payload: unknown) => void>>()
   loads = new Set<(full: boolean) => void>()
+  navigations = new Set<(url: string) => void>()
   closes = new Set<() => void>()
+  /** What the page's upload widget shows after an attach. */
+  uploadAnswer: string = 'attached'
+  lastReport: FillReport | null = null
   sent: string[] = []
   /** When set, fill replies wait here until `releaseFills()` (a slow page). */
   heldFills: Array<() => void> | null = null
@@ -54,7 +58,16 @@ class FakeTab implements ApplyPage {
 
   load(html: string, url: string) {
     this.dom = new JSDOM(html, { url })
+    for (const l of this.navigations) l(url)
     for (const l of this.loads) l(true)
+  }
+
+  /** The preload's fill: fill, then the verify pass (without its delay). */
+  private fill(values: FillValues, text?: boolean): FillReport {
+    const doc = this.dom.window.document
+    const report = verifyFill(doc, values, fillPage(doc, values, { text }))
+    this.lastReport = report
+    return report
   }
 
   close() {
@@ -67,20 +80,23 @@ class FakeTab implements ApplyPage {
 
   send(channel: string, payload: unknown): void {
     this.sent.push(channel)
-    const { requestId, values } = payload as { requestId: string; values?: FillValues }
+    const { requestId, values, text } = payload as { requestId: string; values?: FillValues; text?: boolean }
     const doc = this.dom.window.document
     if (channel === AUTOFILL_CHANNELS.fill && this.heldFills) {
       this.heldFills.push(() =>
-        this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result: fillPage(doc, values as FillValues) })
+        this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result: this.fill(values as FillValues, text) })
       )
       return
     }
     queueMicrotask(() => {
-      if (channel === AUTOFILL_CHANNELS.detect) {
-        this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result: scanPage(doc) })
-      } else if (channel === AUTOFILL_CHANNELS.fill) {
-        this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result: fillPage(doc, values as FillValues) })
-      }
+      let result: unknown
+      if (channel === AUTOFILL_CHANNELS.detect) result = scanPage(doc)
+      else if (channel === AUTOFILL_CHANNELS.fill) result = this.fill(values as FillValues, text)
+      else if (channel === AUTOFILL_CHANNELS.uploadState) result = this.uploadAnswer
+      else if (channel === AUTOFILL_CHANNELS.afterUpload)
+        result = this.lastReport && verifyFill(doc, values as FillValues, this.lastReport)
+      else return
+      this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result })
     })
   }
 
@@ -94,6 +110,11 @@ class FakeTab implements ApplyPage {
   onLoad(listener: (full: boolean) => void) {
     this.loads.add(listener)
     return () => this.loads.delete(listener)
+  }
+
+  onNavigate(listener: (url: string) => void) {
+    this.navigations.add(listener)
+    return () => this.navigations.delete(listener)
   }
 
   onClosed(listener: () => void) {
@@ -157,10 +178,14 @@ async function application(files: Record<string, string>, id = ID): Promise<stri
   return dir
 }
 
-function setup(tab: FakeTab, dbg = new FakeDebugger()) {
+function setup(tab: FakeTab, dbg = new FakeDebugger(), extra: Partial<ApplyDeps> = {}, tabs: Record<string, FakeTab> = {}) {
   const events: Array<ApplySession | null> = []
   const opened: string[] = []
   const navigated: string[] = []
+  const popupListeners = new Set<(opener: string, child: string) => void>()
+  const openPopup = (opener: string, child: string) => {
+    for (const l of popupListeners) l(opener, child)
+  }
   const deps: ApplyDeps = {
     workspace: async () => ws,
     values: async () => VALUES,
@@ -169,7 +194,11 @@ function setup(tab: FakeTab, dbg = new FakeDebugger()) {
       return 'tab-1'
     },
     navigate: async (_id, url) => navigated.push(url),
-    page: () => tab,
+    page: (id) => tabs[id] ?? tab,
+    onTabOpened: (listener) => {
+      popupListeners.add(listener)
+      return () => popupListeners.delete(listener)
+    },
     attachDebugger: () => {
       dbg.attached = true
       dbg.log.push('attach')
@@ -177,9 +206,11 @@ function setup(tab: FakeTab, dbg = new FakeDebugger()) {
     },
     emit: (s) => events.push(s),
     retryDelaysMs: [],
-    requestTimeoutMs: 500
+    requestTimeoutMs: 500,
+    uploadConfirmMs: 50,
+    ...extra
   }
-  return { service: new ApplyService(deps), events, opened, navigated, dbg }
+  return { service: new ApplyService(deps), events, opened, navigated, dbg, openPopup }
 }
 
 /** Waits until the session reaches `status` (the flow is a chain of async hops). */
@@ -344,7 +375,10 @@ describe('ApplyService', () => {
     const tab = new FakeTab('', careers)
     const { service, dbg, navigated } = setup(tab)
     await service.start(ID)
-    // Redirected elsewhere: Greenhouse markup on an unrelated host.
+    // The posting loads first; the user then follows a link elsewhere: Greenhouse markup on an unrelated host.
+    tab.load('<h1>Engineer</h1>', careers)
+    await until(service, 'ready')
+    tab.sent = []
     tab.load(fixture('greenhouse-form.html'), 'https://evil.example/apply')
     await until(service, 'ready')
     expect(service.current()!.message).toMatch(/evil\.example.*Fill form/)
@@ -382,6 +416,121 @@ describe('ApplyService', () => {
     tab.load(fixture('greenhouse-embed-host.html'), careers)
     await vi.waitFor(() => expect(navigated).toHaveLength(1))
     expect(navigated[0]).toMatch(/^https:\/\/job-boards\.greenhouse\.io\/embed\/job_app\?for=acme&token=1000001/)
+  })
+
+  it('trusts where the posting URL redirected to (a Greenhouse board → the company careers site)', async () => {
+    const board = 'https://job-boards.greenhouse.io/acme/jobs/1000001'
+    const careers = 'https://careers.acme.example/positions/1000001?gh_jid=1000001'
+    await application({ 'job-description.md': `Engineer\n${board}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', board)
+    const { service, navigated } = setup(tab)
+    await service.start(ID)
+    // The board's 302 lands on the company site, which embeds the form with a short-lived token.
+    tab.load(fixture('greenhouse-embed-host.html').replace('token=1000001', 'validityToken=abc'), careers)
+    await vi.waitFor(() => expect(navigated).toHaveLength(1))
+    expect(navigated[0]).toMatch(/^https:\/\/job-boards\.greenhouse\.io\/embed\/job_app\?for=acme&validityToken=abc/)
+    expect(service.current()!.message).toMatch(/embeds the application form/)
+
+    // The token expired: Greenhouse shows its error board; the company page is loaded again for a fresh one.
+    tab.load('<h1>Sorry</h1>', 'https://job-boards.greenhouse.io/embed/job_board?for=acme&error=true')
+    await vi.waitFor(() => expect(navigated).toEqual([navigated[0], careers]))
+    expect(service.current()!.message).toMatch(/expired/)
+
+    // A later page the user clicked to on another site is still not trusted.
+    tab.load(fixture('greenhouse-form.html'), 'https://other.example/apply')
+    await until(service, 'ready')
+    expect(service.current()!.message).toMatch(/other\.example/)
+  })
+
+  it('opens a loopback embedded form only when local URLs are allowed (dev builds)', async () => {
+    const host = 'http://127.0.0.1:4173/company/careers'
+    await application({ 'job-description.md': `Engineer\n${host}\n`, 'resume.pdf': '%PDF' })
+    const html = '<iframe src="http://127.0.0.1:4174/embed/job_app?for=acme&validityToken=t"></iframe>'
+    for (const allow of [false, true]) {
+      const tab = new FakeTab('', host)
+      const { service, navigated } = setup(tab, undefined, { allowLocalEmbeds: allow })
+      await service.start(ID)
+      tab.load(html, host)
+      if (allow) await vi.waitFor(() => expect(navigated).toHaveLength(1))
+      else {
+        await until(service, 'ready')
+        expect(navigated).toEqual([])
+      }
+    }
+  })
+
+  it('follows the form into a popup tab opened from the session tab', async () => {
+    const posting = 'https://careers.example.com/jobs/1'
+    await application({ 'job-description.md': `Engineer\n${posting}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', posting)
+    const popup = new FakeTab('', posting)
+    const { service, openPopup } = setup(tab, undefined, {}, { 'tab-2': popup })
+    await service.start(ID)
+    tab.load('<h1>Engineer</h1><a href="/apply/1" target="_blank">Apply</a>', posting)
+    await until(service, 'ready')
+    expect(service.current()!.message).toMatch(/page's own Apply button/)
+    // The user presses the page's Apply; the site opens the form in a new tab.
+    openPopup('tab-9', 'tab-2')
+    expect(service.current()!.tabId).toBe('tab-1')
+    openPopup('tab-1', 'tab-2')
+    expect(service.current()).toMatchObject({ tabId: 'tab-2', status: 'opened' })
+    popup.load(fixture('generic-form.html'), 'https://careers.example.com/apply/1')
+    await until(service, 'filled')
+    expect((popup.dom.window.document.querySelector('#f1') as HTMLInputElement).value).toBe('Ada')
+    // The old tab is no longer followed.
+    tab.load(fixture('greenhouse-confirmation.html'), `${posting}/confirmation`)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(service.current()!.status).toBe('filled')
+  })
+
+  it('reports an upload the site widget never shows as failed, after one retry', async () => {
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', GH_URL)
+    tab.uploadAnswer = 'missing'
+    const { service, dbg } = setup(tab)
+    await service.start(ID)
+    tab.load(fixture('greenhouse-form.html'), GH_URL)
+    await until(service, 'filled')
+    expect(service.current()!.report?.fields.find((f) => f.key === 'resume')).toMatchObject({
+      outcome: 'upload-failed',
+      reason: 'The site did not show resume.pdf as attached; attach it yourself.'
+    })
+    expect(dbg.log.filter((l) => l === 'DOM.setFileInputFiles')).toHaveLength(2)
+    expect(service.current()!.message).toMatch(/upload failed/)
+  })
+
+  it('does not attach twice while the site is still uploading', async () => {
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', GH_URL)
+    tab.uploadAnswer = 'pending'
+    const { service, dbg } = setup(tab)
+    await service.start(ID)
+    tab.load(fixture('greenhouse-form.html'), GH_URL)
+    await until(service, 'filled')
+    expect(dbg.log.filter((l) => l === 'DOM.setFileInputFiles')).toHaveLength(1)
+    expect(service.current()!.report?.fields.find((f) => f.key === 'resume')?.reason).toMatch(/still uploading/)
+  })
+
+  it('tells the user what to do on a non-form step and fills nothing', async () => {
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', GH_URL)
+    const { service } = setup(tab)
+    await service.start(ID)
+    tab.send = function (channel: string, payload: unknown) {
+      const { requestId } = payload as { requestId: string }
+      this.sent.push(channel)
+      queueMicrotask(() =>
+        this.reply(AUTOFILL_CHANNELS.result, {
+          requestId,
+          ok: true,
+          result: { ...scanPage(this.dom.window.document), step: 'account-wall' }
+        })
+      )
+    }
+    tab.load(fixture('greenhouse-form.html'), GH_URL)
+    await until(service, 'ready')
+    expect(service.current()!.message).toMatch(/sign in or create an account/)
+    expect(tab.sent).toEqual([AUTOFILL_CHANNELS.detect])
   })
 
   it('reports a bot wall as blocked, and a page without a form as ready', async () => {

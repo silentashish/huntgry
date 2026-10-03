@@ -22,14 +22,26 @@ export const EMBED_RULES: readonly EmbedRule[] = [
   { ats: 'greenhouse', iframe: 'iframe[src*="/embed/job_app"]', hosts: /(^|\.)greenhouse\.io$/i, path: /^\/embed\/job_app$/ }
 ]
 
-/** The embed rule an https URL matches, or null. */
-export function embedRuleFor(value: string): EmbedRule | null {
+export const embedPathMatches = (rule: EmbedRule, url: URL): boolean => rule.path.test(url.pathname)
+
+const isLoopbackHost = (host: string) => {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase()
+  return h === 'localhost' || h === '::1' || /^127(\.\d{1,3}){3}$/.test(h)
+}
+
+/**
+ * The embed rule a URL matches: an https URL on the rule's hosts, or, with
+ * `allowLoopback` (dev builds testing against the local mock ATS only), an
+ * http(s) loopback URL with the rule's path. Null otherwise.
+ */
+export function embedRuleFor(value: string, { allowLoopback = false } = {}): EmbedRule | null {
   let url: URL
   try {
     url = new URL(value)
   } catch {
     return null
   }
-  if (url.protocol !== 'https:') return null
-  return EMBED_RULES.find((r) => r.hosts.test(url.hostname) && r.path.test(url.pathname)) ?? null
+  const local = allowLoopback && /^https?:$/.test(url.protocol) && isLoopbackHost(url.hostname)
+  if (url.protocol !== 'https:' && !local) return null
+  return EMBED_RULES.find((r) => (local || r.hosts.test(url.hostname)) && embedPathMatches(r, url)) ?? null
 }

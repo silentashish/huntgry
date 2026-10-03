@@ -60,6 +60,11 @@ describe('applyUrlFor', () => {
     expect(isTrustedApplyPage('http://careers.example.com/jobs/42', apply)).toBe(false)
     expect(isTrustedApplyPage('http://localhost:4173/lever/', 'http://localhost:4173/lever/')).toBe(true)
     expect(isTrustedApplyPage('not a url', apply)).toBe(false)
+    // The session's trusted origins (the posting and where its redirects landed).
+    const landing = ['https://job-boards.greenhouse.io/acme/jobs/1', 'https://careers.acme.example']
+    expect(isTrustedApplyPage('https://careers.acme.example/positions/1?gh_jid=1', landing)).toBe(true)
+    expect(isTrustedApplyPage('https://other.example/apply', landing)).toBe(false)
+    expect(isTrustedApplyPage('https://other.example/apply', ['not a url', ''])).toBe(false)
     // Recognised ATS hosts are not trusted off the posting's origin until their adapter is verified.
     expect(isTrustedApplyPage('https://acme.wd5.myworkdayjobs.com/x/job/1', apply)).toBe(false)
   })
@@ -72,6 +77,12 @@ describe('applyUrlFor', () => {
     expect(isGreenhouseEmbedUrl('https://job-boards.greenhouse.io/embed/job_board?for=acme')).toBe(false)
     expect(embedRuleFor('https://job-boards.greenhouse.io/embed/job_app?for=acme&validityToken=x')?.ats).toBe('greenhouse')
     expect(embedRuleFor('javascript:alert(1)')).toBeNull()
+    // The local mock ATS, in dev builds only.
+    const local = 'http://127.0.0.1:4173/embed/job_app?for=acme&validityToken=t'
+    expect(embedRuleFor(local)).toBeNull()
+    expect(embedRuleFor(local, { allowLoopback: true })?.ats).toBe('greenhouse')
+    expect(embedRuleFor('http://10.0.0.1/embed/job_app', { allowLoopback: true })).toBeNull()
+    expect(embedRuleFor('http://127.0.0.1:4173/embed/other', { allowLoopback: true })).toBeNull()
   })
 })
 

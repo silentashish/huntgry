@@ -1,4 +1,4 @@
-import { ADAPTER_STEPS, APPLY_ATS } from '@shared/apply-types'
+import { ADAPTER_STEPS, APPLY_ATS, type UploadState } from '@shared/apply-types'
 import type { FieldKey, FieldKind, FieldReport, FillOutcome, FillReport, PageScan } from '@shared/apply-types'
 
 /**
@@ -86,5 +86,16 @@ function parseField(input: unknown): FieldReport {
 export function parseFillReport(input: unknown): FillReport {
   const o = obj(input)
   const fields = Array.isArray(o.fields) ? o.fields.slice(0, 200).map(parseField) : []
-  return { ats: oneOf(o.ats, ATS, 'generic'), url: httpUrl(o.url), fields, hasSubmitButton: o.hasSubmitButton === true }
+  return {
+    ats: oneOf(o.ats, ATS, 'generic'),
+    url: httpUrl(o.url),
+    fields,
+    hasSubmitButton: o.hasSubmitButton === true,
+    uploadOrder: o.uploadOrder === 'files-first' ? 'files-first' : 'text-first'
+  }
+}
+
+/** The page's answer about its upload widget; anything unexpected counts as not attached. */
+export function parseUploadState(input: unknown): UploadState {
+  return input === 'attached' || input === 'pending' ? input : 'missing'
 }
