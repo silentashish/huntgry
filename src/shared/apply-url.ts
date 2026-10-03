@@ -25,7 +25,7 @@ export function atsForHost(host: string): ApplyAts {
  * own origin (a company page linking to its Greenhouse board). An ATS joins
  * this set when its adapter has been verified on live markup.
  */
-export const AUTO_TRUSTED_ATS: ReadonlySet<ApplyAts> = new Set<ApplyAts>(['greenhouse', 'lever'])
+export const AUTO_TRUSTED_ATS: ReadonlySet<ApplyAts> = new Set<ApplyAts>(['greenhouse', 'lever', 'ashby'])
 
 /**
  * The page with the application form for a posting URL: Lever and Ashby put it
@@ -54,7 +54,7 @@ export function applyUrlFor(jobUrl: string): string {
  * Whether Huntgry may fill `pageUrl` on its own during an apply session: one
  * of the session's trusted origins (`trusted`: the posting URL, or the URLs /
  * origins the session trusts, such as where the posting's own redirects
- * landed), or a Greenhouse / Lever host over https. Anything else (a page the
+ * landed), or a Greenhouse / Lever / Ashby host over https. Anything else (a page the
  * user clicked to, a page that merely looks like an ATS form) waits for the
  * user to press Fill form.
  */
