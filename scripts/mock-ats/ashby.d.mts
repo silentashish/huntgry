@@ -1,19 +1,19 @@
-import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { MockAtsSite } from './server.mjs'
 
-/** `ashby-uploads.json` beside the submission file: one entry per upload or parse the mock Ashby received. */
-export function ashbyUploadsFile(submissionFile: string): string
+/** The job id of the mock embed (`/ashby/careers`) and its form page (`/ashby/<id>/application`). */
+export const ASHBY_JOB_ID: string
 
+/** An entry the mock Ashby adds to the mock ATS's `uploads.json`. */
 export interface AshbyUpload {
+  site: 'ashby'
   kind: 'upload' | 'parse'
+  /** `'1'` when `?failUpload=1` made Ashby reject the upload. */
+  fail?: '1'
   file: string
   type: string
   bytes: number
-  /** Set when `?failUpload=1` made the upload fail. */
-  failed?: true
-  at: string
+  sha256: string
+  receivedAt: string
 }
 
-export function ashbySite(read: (name: string) => string): MockAtsSite & {
-  routes(action: string, req: IncomingMessage, res: ServerResponse, ctx: { submissionFile: string; sendJson(res: ServerResponse, status: number, body: unknown): void }): boolean
-}
+export function ashbySite(read: (name: string) => string): MockAtsSite

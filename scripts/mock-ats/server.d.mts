@@ -10,7 +10,13 @@ export interface MockAtsSite {
     action: string,
     req: IncomingMessage,
     res: ServerResponse,
-    ctx: { submissionFile: string; sendJson: typeof sendJson; log: (line: string) => void }
+    ctx: {
+      uploadsFile: string
+      recordUpload: typeof recordUpload
+      sendJson: typeof sendJson
+      sendHtml: typeof sendHtml
+      log: (line: string) => void
+    }
   ): boolean
 }
 

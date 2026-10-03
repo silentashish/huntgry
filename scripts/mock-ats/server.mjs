@@ -26,7 +26,8 @@
  *
  * Ashby (./ashby.mjs) is client-rendered: an empty #root, the form rendered
  * after `load`, Ashby's resume widget (/ashby/upload, recorded to
- * `uploadsFile`) and its "Autofill from resume" parser (/ashby/parse).
+ * `uploadsFile`), its "Autofill from resume" parser (/ashby/parse), and a
+ * careers page embedding it (/ashby/careers).
  *
  * Pressing a page's own Submit button posts to the mock, which records what
  * it received (field names, text values, attached file names and sizes; not
@@ -265,7 +266,7 @@ export function createMockAts(options) {
       const mock = sites[site]
       if (!mock) return false
       // A site's own endpoints (the mock Ashby's upload and parser).
-      if (action && mock.routes?.(action, req, res, { submissionFile, sendJson, log })) return true
+      if (action && mock.routes?.(action, req, res, { uploadsFile, recordUpload, sendJson, sendHtml, log })) return true
       if (req.method === 'POST' && action === 'submit') {
         recordSubmission(site, req, submissionFile)
           .then((fields) => {

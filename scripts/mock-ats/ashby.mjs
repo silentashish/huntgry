@@ -6,33 +6,36 @@
  * `renderMs` after `load` (default 500 ms, `?renderMs=` to change it). The
  * script copies the live behaviour Huntgry depends on:
  *
- * - `#_systemfield_resume` uploads on `change` (POST /ashby/upload, recorded,
- *   standing in for `ApiCreateFileUploadHandle`). Meanwhile the widget lists
- *   the file with a spinner; once uploaded, with a delete button, and the
- *   dropzone button reads "Replace". A failed upload shows a toast and lists
- *   nothing.
- * - The "Autofill from resume" pane parses its file (POST /ashby/parse,
- *   recorded) and fills the *empty* name and email with parser values.
- *   `?parsed=1` renders the form as if the candidate had already used it.
- * - `?failUpload=1` makes /ashby/upload fail (recorded with `failed: true`):
- *   the widget then shows the "failed to upload" toast and lists no file, as
- *   on the live page when Ashby rejects a file.
+ * - `#_systemfield_resume` uploads on `change` (POST /ashby/upload, standing
+ *   in for `ApiCreateFileUploadHandle`). Meanwhile the widget lists the file
+ *   with a spinner; once uploaded, with a delete button, and the dropzone
+ *   button reads "Replace". A failed upload shows a toast and lists nothing.
+ * - The "Autofill from resume" pane parses its file (POST /ashby/parse) and
+ *   fills the *empty* name and email with parser values.
  * - There is no `<form>`: Submit (`.ashby-application-form-submit-button`)
  *   posts the answers and the uploaded file to /ashby/submit and swaps the
  *   form for Ashby's success panel in place, without a navigation.
  *
- * Uploads and parses are recorded to `ashby-uploads.json` next to the
- * submission file (name, type and size; not the bytes). Nothing here submits
- * on its own: only a person or a test presses Submit.
+ * Switches (query string of the form page):
+ * - `?parsed=1`: rendered as if the candidate had already used the parser.
+ * - `?failUpload=1`: Ashby rejects the upload (the toast, no file listed).
+ * - `?clearPhone=once|always`: the page clears the phone 100 ms after it is
+ *   filled, once or every time (a late re-render that wipes a value).
+ * - `?staggerMs=`: the first render has only the resume question, the rest
+ *   arrives `staggerMs` later (a slow response).
+ *
+ * Routes besides the form: `/ashby/<job-uuid>[/application]` serves the form
+ * too (the page an embed is opened on), and `/ashby/careers` is a company page
+ * with Ashby's embed iframe pointing there, injected 800 ms after load like
+ * Ashby's embed script.
+ *
+ * Uploads and parses are recorded to the mock ATS's `uploads.json` (site
+ * `ashby`, `kind` upload/parse, `fail` when rejected; name, size, sha256).
+ * Nothing here submits on its own: only a person or a test presses Submit.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { Readable } from 'node:stream'
 
-/** Where the mock Ashby records uploads and parses: `ashby-uploads.json` beside the submission file. */
-export function ashbyUploadsFile(submissionFile) {
-  return join(dirname(submissionFile), 'ashby-uploads.json')
-}
+/** The job id the embed and its form page use. */
+export const ASHBY_JOB_ID = '0f3c1f5a-1111-4222-8333-944445555666'
 
 const THANKS = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Software Engineer @ Acme</title></head><body>
 <div class="ashby-application-form-success-container"><div role="status" aria-live="polite" tabindex="-1"><h2>Success</h2>
@@ -89,8 +92,10 @@ const APP = String.raw`
   async function uploadResume(file) {
     showFile(file.name, true)
     const body = new FormData()
+    body.append('kind', 'upload')
+    if (params.get('failUpload') === '1') body.append('fail', '1')
     body.append('file', file)
-    const res = await send(params.get('failUpload') === '1' ? '/ashby/upload?fail=1' : '/ashby/upload', body).catch(() => null)
+    const res = await send('/ashby/upload', body).catch(() => null)
     if (!res || !res.ok) {
       showFile(null)
       toast(file.name + ' failed to upload')
@@ -104,6 +109,7 @@ const APP = String.raw`
     const pending = document.querySelector('.ashby-application-form-autofill-input-pending-layer')
     pending.dataset.state = 'visible'
     const body = new FormData()
+    body.append('kind', 'parse')
     body.append('file', file)
     const res = await send('/ashby/parse', body)
     const parsed = await res.json()
@@ -131,8 +137,30 @@ const APP = String.raw`
       .querySelector('.ashby-application-form-success-container').outerHTML
   }
 
+  // ?staggerMs=: the first render shows only the resume question; the others follow staggerMs later (a slow
+  // GraphQL response), so a fill that does not wait for the system fields finds half a form.
+  function renderUploadOnly() {
+    const root = document.getElementById('root')
+    root.innerHTML = document.getElementById('ashby-form').innerHTML
+    for (const entry of root.querySelectorAll('.ashby-application-form-field-entry')) {
+      if (entry.dataset.fieldPath !== '_systemfield_resume') entry.remove()
+    }
+    root.querySelector('.ashby-application-form-submit-button').remove()
+  }
+
   function render() {
     document.getElementById('root').innerHTML = document.getElementById('ashby-form').innerHTML
+    if (rendered) {
+      // React keeps the widget's state across a re-render.
+      if (uploaded) showFile(uploaded.name, false)
+    }
+    wire()
+  }
+
+  let rendered = false
+  function listen() {
+    if (rendered) return
+    rendered = true
     // React delegates events to the root; so does the mock (CDP's file chooser fires trusted input/change).
     document.getElementById('root').addEventListener('change', (e) => {
       const input = e.target
@@ -140,7 +168,22 @@ const APP = String.raw`
       if (input.id === '_systemfield_resume') uploadResume(input.files[0])
       else if (input.closest('.ashby-application-form-autofill-uploader')) parseResume(input.files[0])
     })
+  }
+
+  function wire() {
+    listen()
     document.querySelector('.ashby-application-form-submit-button').addEventListener('click', () => void submit())
+    // ?clearPhone=once|always: a re-render wipes the phone 100 ms after it is filled.
+    const clear = params.get('clearPhone')
+    if (clear) {
+      const phone = document.querySelector('.ashby-application-form-container input[type="tel"]')
+      let cleared = 0
+      phone.addEventListener('input', () => {
+        if (!phone.value || (clear === 'once' && cleared > 0)) return
+        cleared++
+        setTimeout(() => (phone.value = ''), 100)
+      })
+    }
     // ?parsed=1: the candidate already used "Autofill from resume" (its values are on the form when it appears).
     if (params.get('parsed') === '1') {
       document.getElementById('_systemfield_name').value = PARSED._systemfield_name
@@ -148,7 +191,15 @@ const APP = String.raw`
     }
   }
 
-  window.addEventListener('load', () => setTimeout(render, renderMs))
+  const staggerMs = Number(params.get('staggerMs') ?? 0)
+  window.addEventListener('load', () =>
+    setTimeout(() => {
+      if (!staggerMs) return render()
+      renderUploadOnly()
+      listen()
+      setTimeout(render, staggerMs)
+    }, renderMs)
+  )
 })()
 `
 
@@ -193,29 +244,19 @@ function shell(read) {
 <script>${APP.replace('__PARSED__', JSON.stringify(PARSED))}</script></body></html>`
 }
 
-async function readFiles(req) {
-  const request = new Request(`http://localhost${req.url}`, { method: 'POST', headers: req.headers, body: Readable.toWeb(req), duplex: 'half' })
-  const form = await request.formData()
-  const file = form.get('file')
-  return file && typeof file !== 'string' ? { file: file.name, type: file.type, bytes: file.size } : null
-}
-
-function record(file, entry) {
-  let list = []
-  try {
-    list = JSON.parse(readFileSync(file, 'utf8'))
-  } catch {
-    // First record.
-  }
-  list.push({ ...entry, at: new Date().toISOString() })
-  mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, `${JSON.stringify(list, null, 2)}\n`)
+/** A company careers page that embeds the Ashby job with Ashby's embed script (the iframe arrives late). */
+function careers(host) {
+  const src = `http://${host}/ashby/${ASHBY_JOB_ID}?embed=js&utm_source=careers`
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Careers at Acme</title></head><body>
+<h1>Software Engineer</h1><p>Join Acme.</p><div id="ashby_embed"></div>
+<script>setTimeout(() => { const f = document.createElement('iframe'); f.id = 'ashby_embed_iframe'; f.width = '100%'; f.height = '900'; f.src = ${JSON.stringify(src)}; document.getElementById('ashby_embed').append(f) }, 800)</script>
+</body></html>`
 }
 
 /**
- * The Ashby site for `mockAtsSites`. `routes` answers its own POST endpoints
- * (`/ashby/upload`, `/ashby/parse`); /ashby/submit and the thanks page are the
- * shared ones.
+ * The Ashby site for `mockAtsSites`. `routes` answers its own endpoints
+ * (`/ashby/upload`, `/ashby/parse`, the job page and the careers page);
+ * /ashby/submit and the thanks page are the shared ones.
  *
  * @param {(name: string) => string} read
  */
@@ -224,14 +265,20 @@ export function ashbySite(read) {
     form: () => shell(read),
     thanks: '/ashby/thanks',
     thanksPage: () => THANKS,
-    routes(action, req, res, { submissionFile, sendJson }) {
+    routes(action, req, res, { uploadsFile, recordUpload, sendJson, sendHtml }) {
+      if (req.method === 'GET' && action === ASHBY_JOB_ID) {
+        sendHtml(res, 200, shell(read))
+        return true
+      }
+      if (req.method === 'GET' && action === 'careers') {
+        sendHtml(res, 200, careers(req.headers.host ?? 'localhost'))
+        return true
+      }
       if (req.method !== 'POST' || (action !== 'upload' && action !== 'parse')) return false
-      readFiles(req)
-        .then((upload) => {
-          if (!upload) return sendJson(res, 400, { error: 'No file.' })
-          const failed = action === 'upload' && new URL(req.url ?? '/', 'http://localhost').searchParams.get('fail') === '1'
-          record(ashbyUploadsFile(submissionFile), { kind: action, ...upload, ...(failed ? { failed: true } : {}) })
-          if (failed) return sendJson(res, 500, { error: 'Upload failed.' })
+      recordUpload('ashby', req, uploadsFile)
+        .then((entry) => {
+          if (!entry.file) return sendJson(res, 400, { error: 'No file.' })
+          if (entry.fail === '1') return sendJson(res, 500, { error: 'Upload failed.' })
           if (action === 'upload') return sendJson(res, 200, { handle: `mock-handle-${Date.now()}` })
           // The parser's guesses: they land only in fields that are still empty.
           return sendJson(res, 200, PARSED)

@@ -193,8 +193,12 @@ for (const [folder, company] of [
   ['link-mock/ln-1', 'Acme'],
   // #65: a Workday posting (an older tenant's markup).
   ['workday-mock/wd-1', 'Acme'],
-  // #64: an Ashby posting whose form Ashby's own autofill already filled.
-  ['ashby-mock/as-1', 'Acme']
+  // #64: Ashby postings: already autofilled by Ashby, late and staggered, wiping a value, rejecting the upload, embedded.
+  ['ashby-mock/as-1', 'Acme'],
+  ['ashby-late-mock/al-1', 'Acme'],
+  ['ashby-wipe-mock/aw-1', 'Acme'],
+  ['ashby-reject-mock/ar-1', 'Acme'],
+  ['ashby-embed-mock/ae-1', 'Acme']
 ]) {
   await write(join(here, `workspaces/mocks/software-engineer/${folder}/resume.pdf`), applicationPdf('Software Engineer', company))
 }
