@@ -2,6 +2,7 @@ import { generic } from './generic'
 import { greenhouse } from './greenhouse'
 import { lever } from './lever'
 import type { Adapter } from './types'
+import { workday } from './workday'
 
 /**
  * The adapter registry. To add an ATS: write `adapters/<ats>.ts` exporting an
@@ -11,10 +12,10 @@ import type { Adapter } from './types'
  * embeds in company pages is one entry in `src/shared/apply-embeds.ts`. The
  * engine, the preload and the apply service need no change.
  */
-export const ADAPTERS: readonly Adapter[] = [greenhouse, lever, generic]
+export const ADAPTERS: readonly Adapter[] = [greenhouse, lever, workday, generic]
 
 export type { Adapter, UploadProbe } from './types'
-export { generic, greenhouse, lever }
+export { generic, greenhouse, lever, workday }
 
 /** The first adapter that recognises the page; `generic` always matches. */
 export function adapterFor(url: URL, doc: Document): Adapter {
