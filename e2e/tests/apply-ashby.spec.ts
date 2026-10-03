@@ -1,7 +1,8 @@
-import { access, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { access, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ElectronApplication, Page, TestInfo } from '@playwright/test'
-import { ashbyUploadsFile, type AshbyUpload } from '../../scripts/mock-ats/ashby.mjs'
+import { ASHBY_JOB_ID, type AshbyUpload } from '../../scripts/mock-ats/ashby.mjs'
 import { withFakeAgents } from '../fixtures/fake-agent'
 import { expect, test } from '../fixtures/servers/fixture'
 import { evaluateInTab, expectTabLoaded } from '../fixtures/tabs'
@@ -31,10 +32,12 @@ const LINKEDIN = 'a5b0ffff-0000-4000-8000-00000000ffff'
 
 const exists = (path: string) => access(path).then(() => true, () => false)
 const value = (electronApp: ElectronApplication, selector: string) =>
-  evaluateInTab<string>(electronApp, '/ashby/', `document.querySelector(${JSON.stringify(selector)}).value`)
+  evaluateInTab<string | null>(electronApp, '/ashby/', `document.querySelector(${JSON.stringify(selector)})?.value ?? null`)
 
-async function uploads(submissionFile: string): Promise<AshbyUpload[]> {
-  return JSON.parse(await readFile(ashbyUploadsFile(submissionFile), 'utf8').catch(() => '[]'))
+/** What the mock Ashby received (the mock ATS's `uploads.json`, reset for every test). */
+async function uploads(uploadsFile: string): Promise<AshbyUpload[]> {
+  const all: Array<{ site: string }> = JSON.parse(await readFile(uploadsFile, 'utf8').catch(() => '[]'))
+  return all.filter((u): u is AshbyUpload => u.site === 'ashby')
 }
 
 /** Ashby's file widget: the listed file name, whether it has its delete button, and the dropzone button text. */
@@ -76,11 +79,20 @@ async function screenshots(app: { electronApp: ElectronApplication; window: Page
   await testInfo.attach(`${name}-app`, { path: window, contentType: 'image/png' })
 }
 
-test.describe('apply on Ashby', () => {
-  test.beforeEach(async ({ mock }) => {
-    await rm(ashbyUploadsFile(mock.submissionFile), { force: true })
-  })
+/** A field's row in the Apply panel, by its label (required ones show "Label *"). */
+const panelRow = (page: Page, label: string) =>
+  page.getByText(new RegExp(`^${label}( \\*)?$`)).locator('..').locator('..')
 
+/** Starts Apply from the Dashboard row of `company` and waits for the Browser page. */
+async function applyFromDashboard(page: Page, company: string): Promise<BrowserPage> {
+  const shell = new Shell(page)
+  await shell.expectActive('dashboard')
+  await page.getByRole('row').filter({ hasText: company }).getByRole('button', { name: 'Apply', exact: true }).click()
+  await shell.expectActive('browser')
+  return new BrowserPage(page)
+}
+
+test.describe('apply on Ashby', () => {
   test('a generated resume: Tailor run → Apply → the late Ashby form gets resume.pdf and the contact fields', async ({
     app,
     mock
@@ -103,6 +115,7 @@ test.describe('apply on Ashby', () => {
     await expect(tailor.outputLine(folder)).toContainText('resume.pdf')
     const resume = join(app.workspace!, folder, 'resume.pdf')
     const resumeBytes = (await stat(resume)).size
+    const resumeSha = createHash('sha256').update(await readFile(resume)).digest('hex')
     await tailor.outputButton('Apply').click()
 
     await new Shell(app.window).expectActive('browser')
@@ -127,16 +140,13 @@ test.describe('apply on Ashby', () => {
     // Attached to #_systemfield_resume: Ashby's widget lists it with "Replace", and the mock received this run's file.
     await expect(app.window.getByText('resume.pdf', { exact: true }).locator('..')).toContainText('Attached')
     await expect.poll(() => resumeWidget(app.electronApp)).toEqual({ name: 'resume.pdf', done: true, button: 'Replace' })
-    expect(await uploads(mock.submissionFile)).toEqual([
-      expect.objectContaining({ kind: 'upload', file: 'resume.pdf', type: 'application/pdf', bytes: resumeBytes })
+    expect(await uploads(mock.uploadsFile)).toEqual([
+      expect.objectContaining({ kind: 'upload', file: 'resume.pdf', type: 'application/pdf', bytes: resumeBytes, sha256: resumeSha })
     ])
     // Never the "Autofill from resume" input (it would parse the file and overwrite the form).
     expect(
       await evaluateInTab<number>(app.electronApp, '/ashby/', `document.querySelector('.ashby-application-form-autofill-uploader input[type="file"]').files.length`)
     ).toBe(0)
-    // Still there a moment later (the mock never clears a value; the engine's own re-verify comes with #63).
-    await app.window.waitForTimeout(1500)
-    expect(await value(app.electronApp, '#_systemfield_name')).toBe(PROFILE.name)
     expect(await exists(mock.submissionFile)).toBe(false)
     await screenshots(app, testInfo, 'ashby-filled')
 
@@ -170,7 +180,72 @@ test.describe('apply on Ashby', () => {
     expect(await value(app.electronApp, `[id="${PHONE}"]`)).toBe(PROFILE.phone)
     expect(await value(app.electronApp, `[id="${LINKEDIN}"]`)).toBe(PROFILE.linkedin)
     await expect.poll(() => resumeWidget(app.electronApp)).toEqual({ name: 'resume.pdf', done: true, button: 'Replace' })
-    expect((await uploads(mock.submissionFile)).map((u) => u.kind)).toEqual(['upload'])
+    expect((await uploads(mock.uploadsFile)).map((u) => u.kind)).toEqual(['upload'])
     await screenshots(app, testInfo, 'ashby-kept')
+  })
+  test('a form that renders after the last fixed re-detect, questions after the resume field, is still filled; a wiped value is restored', async ({
+    app,
+    mock
+  }) => {
+    // renderMs=5000: later than the service's fixed re-detects (load+1 s, +4 s), so only the page's late-form watch
+    // finds it. staggerMs=4000: the resume question renders first and the rest 4 s later (within the 6 s readiness wait), so a fill that skips
+    // the adapter's `ready` (a system field is rendered) misses the contact fields. clearPhone=once: the page wipes
+    // the phone 100 ms after it is filled, so a fill without the settle-and-verify leaves it empty.
+    const browser = await applyFromDashboard(app.window, 'Ashby Late Mock')
+    await expect(browser.address).toHaveValue(/\/ashby\/\?renderMs=5000/)
+    await browser.apply.expectStatus('Ready to fill')
+    await expect(browser.apply.status('Filled: review and submit')).toBeVisible({ timeout: 25_000 })
+
+    expect(await value(app.electronApp, '#_systemfield_name')).toBe(PROFILE.name)
+    expect(await value(app.electronApp, '#_systemfield_email')).toBe(PROFILE.email)
+    expect(await value(app.electronApp, `[id="${PHONE}"]`)).toBe(PROFILE.phone)
+    expect(await value(app.electronApp, `[id="${LINKEDIN}"]`)).toBe(PROFILE.linkedin)
+    for (const shown of [PROFILE.name, PROFILE.email, PROFILE.phone, PROFILE.linkedin]) {
+      await expect(app.window.getByText(shown, { exact: true }).locator('..')).toContainText('Filled')
+    }
+    await expect(app.window.getByText('resume.pdf', { exact: true }).locator('..')).toContainText('Attached')
+    expect(await resumeWidget(app.electronApp)).toEqual({ name: 'resume.pdf', done: true, button: 'Replace' })
+    expect((await uploads(mock.uploadsFile)).map((u) => u.kind)).toEqual(['upload'])
+  })
+
+  test('a value the page keeps wiping is reported Rejected, not Filled', async ({ app }) => {
+    const browser = await applyFromDashboard(app.window, 'Ashby Wipe Mock')
+    await browser.apply.expectStatus('Filled: review and submit')
+    expect(await value(app.electronApp, `[id="${PHONE}"]`)).toBe('')
+    await expect(panelRow(app.window, 'Phone Number')).toContainText('Rejected')
+    await expect(app.window.getByText('The page cleared it after filling; fill it in.')).toBeVisible()
+    // The others hold.
+    expect(await value(app.electronApp, '#_systemfield_name')).toBe(PROFILE.name)
+    await expect(app.window.getByText(PROFILE.name, { exact: true }).locator('..')).toContainText('Filled')
+  })
+
+  test('an upload Ashby rejects is never reported Attached', async ({ app, mock }) => {
+    const browser = await applyFromDashboard(app.window, 'Ashby Reject Mock')
+    // The widget never lists the file: the service waits for it (twice), then gives up.
+    await expect(browser.apply.status('Filled: review and submit')).toBeVisible({ timeout: 45_000 })
+    await expect(app.window.getByText('An upload failed; attach the file yourself.', { exact: false })).toBeVisible()
+    await expect(panelRow(app.window, 'Resume')).toContainText('Attach yourself')
+    await expect(app.window.getByText('Attached', { exact: true })).toHaveCount(0)
+    expect(await resumeWidget(app.electronApp)).toEqual({ name: null, done: false, button: 'Upload File' })
+    expect(await evaluateInTab<string>(app.electronApp, '/ashby/', `document.querySelector('.mock-toast').textContent`)).toBe(
+      'resume.pdf failed to upload'
+    )
+    const received = await uploads(mock.uploadsFile)
+    expect(received.length).toBeGreaterThanOrEqual(1)
+    expect(received.every((u) => u.kind === 'upload' && u.fail === '1')).toBe(true)
+    // The text fields are still filled once the upload has failed.
+    expect(await value(app.electronApp, '#_systemfield_email')).toBe(PROFILE.email)
+  })
+
+  test('an Ashby job embedded on a company page is opened on its /application page and filled there', async ({ app, mock }) => {
+    const browser = await applyFromDashboard(app.window, 'Ashby Embed Mock')
+    // The company page injects Ashby's iframe 800 ms after load; main opens the job's own form page.
+    const form = `${mock.origin}/ashby/${ASHBY_JOB_ID}/application`
+    await expect(browser.address).toHaveValue(form, { timeout: 15_000 })
+    await browser.apply.expectStatus('Filled: review and submit')
+    await expect(app.window.getByText('Ashby', { exact: true })).toBeVisible()
+    expect(await value(app.electronApp, '#_systemfield_name')).toBe(PROFILE.name)
+    await expect.poll(() => resumeWidget(app.electronApp)).toEqual({ name: 'resume.pdf', done: true, button: 'Replace' })
+    expect((await uploads(mock.uploadsFile)).map((u) => u.kind)).toEqual(['upload'])
   })
 })
