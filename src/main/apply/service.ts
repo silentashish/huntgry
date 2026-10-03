@@ -1,7 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
-import type { AdapterStep, ApplyAts, ApplySession, FieldReport, FillReport, FillValues, PageScan, UploadState } from '@shared/apply-types'
-import { embedRuleFor } from '@shared/apply-embeds'
+import {
+  ATS_LABEL,
+  type AdapterStep,
+  type ApplyAts,
+  type ApplySession,
+  type FieldReport,
+  type FillReport,
+  type FillValues,
+  type PageScan,
+  type UploadState
+} from '@shared/apply-types'
+import { embedPageFor } from '@shared/apply-embeds'
 import { applyUrlFor, isTrustedApplyPage } from '@shared/apply-url'
 import { AUTOFILL_CHANNELS, UPLOAD_ATTR } from '@shared/autofill-channels'
 import { resolveApplicationFile, resolveApplicationFolder } from '../applications/safe-path'
@@ -333,7 +343,7 @@ export class ApplyService {
       this.update({ status: 'submitted-detected', message: CONFIRMED })
       return
     }
-    // Only the posting's own site (and where its redirects landed) or a Greenhouse / Lever host is filled (or
+    // Only the posting's own site (and where its redirects landed) or an auto-trusted ATS host (AUTO_TRUSTED_ATS) is filled (or
     // followed into an embedded form) without asking: markup alone (scan.ats, a resume upload, an iframe) is not
     // proof, since any page can look like an ATS form.
     const trusted = isTrustedApplyPage(scan.url, [...ctx.trusted])
@@ -355,17 +365,18 @@ export class ApplyService {
     // instead of its drop zone): what was filled still stands.
     if (!scan.formFound && scan.stepTitle && ctx.handled.has(stepKey(scan.url, scan.stepTitle))) return
     if (!scan.formFound) {
-      const embed = scan.embedUrl
-      if (trusted && embed && embedRuleFor(embed, { allowLoopback: this.deps.allowLocalEmbeds === true })) {
+      // The page's claim is checked against the embed rules and turned into the form's own page here, in main.
+      const embed = scan.embedUrl ? embedPageFor(scan.embedUrl, { allowLoopback: this.deps.allowLocalEmbeds === true }) : null
+      if (trusted && embed) {
         if (ctx.embedFollows >= MAX_EMBED_FOLLOWS) {
           this.update({ status: 'ready', message: 'The embedded application form keeps failing to load. Open it in the page, then press Fill form.' })
           return
         }
         ctx.embedFollows++
         ctx.embedHost = scan.url
-        ctx.trusted.add(originOf(embed))
-        this.update({ status: 'opened', message: 'This page embeds the application form; opening it directly.' })
-        await this.deps.navigate(ctx.tabId, embed).catch((err: unknown) => {
+        ctx.trusted.add(originOf(embed.url))
+        this.update({ status: 'opened', message: `This page embeds the ${ATS_LABEL[embed.ats]} application form; opening it directly.` })
+        await this.deps.navigate(ctx.tabId, embed.url).catch((err: unknown) => {
           this.update({ status: 'error', message: errorMessage(err) })
         })
         return

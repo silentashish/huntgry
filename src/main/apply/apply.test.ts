@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { JSDOM } from 'jsdom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApplySession, FillReport, FillValues } from '@shared/apply-types'
-import { AUTOFILL_CHANNELS } from '@shared/autofill-channels'
+import { AUTOFILL_CHANNELS, UPLOAD_ATTR } from '@shared/autofill-channels'
 import { detectConfirmation, fillPage, scanPage, uploadStateOf, verifyFill, type UploadKey } from '@shared/autofill/engine'
 import { refusalFor } from '../browser/url'
 import { isLoopbackUrl, localUrlsAllowed } from '../cli/dev-urls'
@@ -565,7 +565,7 @@ describe('ApplyService', () => {
     tab.load(fixture('greenhouse-embed-host.html').replace('token=1000001', 'validityToken=abc'), careers)
     await vi.waitFor(() => expect(navigated).toHaveLength(1))
     expect(navigated[0]).toMatch(/^https:\/\/job-boards\.greenhouse\.io\/embed\/job_app\?for=acme&validityToken=abc/)
-    expect(service.current()!.message).toMatch(/embeds the application form/)
+    expect(service.current()!.message).toMatch(/embeds the Greenhouse application form/)
 
     // The token expired: Greenhouse shows its error board; the company page is loaded again for a fresh one.
     tab.load('<h1>Sorry</h1>', 'https://job-boards.greenhouse.io/embed/job_board?for=acme&error=true')
@@ -668,6 +668,61 @@ describe('ApplyService', () => {
     expect(service.current()!.message).toMatch(/Sign in or create your account in the page yourself/)
     expect(service.current()!.step).toEqual({ kind: 'account-wall', title: null })
     expect(tab.sent).toEqual([AUTOFILL_CHANNELS.detect])
+  })
+
+  it('opens an Ashby posting on /application, waits for the late form and attaches to #_systemfield_resume', async () => {
+    const posting = 'https://jobs.ashbyhq.com/acme/0f3c1f5a-1111-4222-8333-944445555666'
+    await application({ 'job-description.md': `Engineer\n${posting}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', `${posting}/application`)
+    const { service, opened, dbg } = setup(tab, new FakeDebugger(), { retryDelaysMs: [50] })
+    await service.start(ID)
+    expect(opened).toEqual([`${posting}/application`])
+    // Client-rendered: at load the page is an empty shell. Recognised by host, nothing to fill yet.
+    tab.load('<!DOCTYPE html><title>Software Engineer @ Acme</title><div id="root"></div>', `${posting}/application`)
+    await until(service, 'ready')
+    expect(service.current()!.ats).toBe('ashby')
+    // React renders the form into the same document: no new load event, as on the real SPA. Only the service's
+    // re-detect can pick it up.
+    const rendered = new JSDOM(fixture('ashby-form.html')).window.document.getElementById('root')!.innerHTML
+    tab.dom.window.document.getElementById('root')!.innerHTML = rendered
+    await until(service, 'filled')
+    const doc = tab.dom.window.document
+    expect((doc.getElementById('_systemfield_name') as HTMLInputElement).value).toBe('Ada Lovelace')
+    expect(doc.getElementById('_systemfield_resume')!.getAttribute(UPLOAD_ATTR)).toBe('resume')
+    // The "Autofill from resume" input is never marked.
+    expect(doc.querySelector(`.ashby-application-form-autofill-uploader input[${UPLOAD_ATTR}]`)).toBeNull()
+    expect(service.current()!.report?.fields.find((f) => f.key === 'resume')).toMatchObject({ outcome: 'uploaded' })
+    expect(dbg.log).toContain('DOM.setFileInputFiles')
+  })
+
+  it('opens an embedded Ashby form on its /application page and fills it there', async () => {
+    const careers = 'https://acme.example/careers/engineer'
+    await application({ 'job-description.md': `Engineer\n${careers}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', careers)
+    const { service, navigated } = setup(tab)
+    await service.start(ID)
+    tab.load(fixture('ashby-embed-host.html'), careers)
+    await vi.waitFor(() => expect(navigated).toHaveLength(1))
+    const form = 'https://jobs.ashbyhq.com/acme/0f3c1f5a-1111-4222-8333-944445555666/application'
+    expect(navigated[0]).toBe(form)
+    expect(service.current()!.message).toBe('This page embeds the Ashby application form; opening it directly.')
+    // jobs.ashbyhq.com is not the posting's origin, but a verified ATS host: filled without asking.
+    tab.load(fixture('ashby-form.html'), form)
+    await until(service, 'filled')
+    expect((tab.dom.window.document.getElementById('_systemfield_email') as HTMLInputElement).value).toBe('ada@example.com')
+  })
+
+  it('does not follow an Ashby iframe that is not a job, or one on an untrusted page', async () => {
+    const careers = 'https://acme.example/careers'
+    await application({ 'job-description.md': `Engineer\n${careers}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', careers)
+    const { service, navigated } = setup(tab)
+    await service.start(ID)
+    tab.load('<h1>Careers</h1><iframe id="ashby_embed_iframe" src="https://jobs.ashbyhq.com/acme?embed=js"></iframe>', careers)
+    await until(service, 'ready')
+    tab.load(fixture('ashby-embed-host.html'), 'https://evil.example/careers')
+    await until(service, 'ready')
+    expect(navigated).toEqual([])
   })
 
   it('reports a bot wall as blocked, and a page without a form as ready', async () => {

@@ -7,7 +7,7 @@
  *   HUNTGRY_ALLOW_LOCAL_URLS=1 npm run dev
  *
  * Serves the committed form fixtures (src/shared/autofill/fixtures) at
- * /greenhouse/, /lever/ and /generic/. Pressing the page's own Submit button
+ * /greenhouse/, /lever/, /ashby/ and /generic/. Pressing the page's own Submit button
  * posts to the mock, which records what it received to
  * <tmp>/huntgry-mock-ats/last-submission.json and shows the ATS's
  * confirmation page. Listens on 127.0.0.1 only. The routes live in

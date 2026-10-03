@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { embedRuleFor } from './apply-embeds'
+import { embedPageFor, embedRuleFor } from './apply-embeds'
 import { applyUrlFor, atsForHost, isGreenhouseEmbedUrl, isTrustedApplyPage } from './apply-url'
 import { asUrl, currentCompany, fillValuesFrom, splitName } from './apply-values'
 import { emptyContact, type ExperienceEntry, type MasterProfile } from './master-profile'
@@ -49,11 +49,14 @@ describe('applyUrlFor', () => {
     expect(atsForHost('myworkdayjobs.com.evil.example')).toBe('generic')
   })
 
-  it('trusts the posting origin and https Greenhouse / Lever hosts only', () => {
+  it('trusts the posting origin and https Greenhouse / Lever / Ashby hosts only', () => {
     const apply = 'https://careers.example.com/jobs/42'
     expect(isTrustedApplyPage('https://careers.example.com/apply/42?step=2', apply)).toBe(true)
     expect(isTrustedApplyPage('https://job-boards.greenhouse.io/embed/job_app?for=x', apply)).toBe(true)
     expect(isTrustedApplyPage('https://jobs.lever.co/acme/1/apply', apply)).toBe(true)
+    expect(isTrustedApplyPage('https://jobs.ashbyhq.com/acme/1/application', apply)).toBe(true)
+    expect(isTrustedApplyPage('http://jobs.ashbyhq.com/acme/1/application', apply)).toBe(false)
+    expect(isTrustedApplyPage('https://jobs.ashbyhq.com.evil.example/acme/1/application', apply)).toBe(false)
     expect(isTrustedApplyPage('http://jobs.lever.co/acme/1/apply', apply)).toBe(false)
     expect(isTrustedApplyPage('https://careers.example.com.evil.example/apply', apply)).toBe(false)
     expect(isTrustedApplyPage('https://greenhouse.io.evil.example/x', apply)).toBe(false)
@@ -83,6 +86,28 @@ describe('applyUrlFor', () => {
     expect(embedRuleFor(local, { allowLoopback: true })?.ats).toBe('greenhouse')
     expect(embedRuleFor('http://10.0.0.1/embed/job_app', { allowLoopback: true })).toBeNull()
     expect(embedRuleFor('http://127.0.0.1:4173/embed/other', { allowLoopback: true })).toBeNull()
+  })
+
+  it('opens an embedded Ashby job on its /application page', () => {
+    const job = 'https://jobs.ashbyhq.com/acme/0f3c1f5a-1111-4222-8333-944445555666'
+    expect(embedPageFor(`${job}?embed=js&utm_source=careers`)).toEqual({ ats: 'ashby', url: `${job}/application` })
+    expect(embedPageFor(`${job}/application?embed=js&displayMode=application-form-only`)).toEqual({
+      ats: 'ashby',
+      url: `${job}/application`
+    })
+    expect(embedPageFor(`${job}/`)?.url).toBe(`${job}/application`)
+    // Greenhouse embeds open as they are (the token is in the query).
+    expect(embedPageFor('https://job-boards.greenhouse.io/embed/job_app?for=acme&validityToken=x')).toEqual({
+      ats: 'greenhouse',
+      url: 'https://job-boards.greenhouse.io/embed/job_app?for=acme&validityToken=x'
+    })
+    // Not a job: the board-only embed, another path, plain http, another host.
+    expect(embedPageFor('https://jobs.ashbyhq.com/acme?embed=js')).toBeNull()
+    expect(embedPageFor('https://jobs.ashbyhq.com/acme/embed?version=2')).toBeNull()
+    expect(embedPageFor(`${job}/application/extra`)).toBeNull()
+    expect(embedPageFor(job.replace('https:', 'http:'))).toBeNull()
+    expect(embedPageFor(job.replace('jobs.ashbyhq.com', 'jobs.ashbyhq.com.evil.example'))).toBeNull()
+    expect(embedPageFor(job.replace('jobs.ashbyhq.com', 'app.ashbyhq.com'))).toBeNull()
   })
 })
 

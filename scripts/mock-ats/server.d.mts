@@ -5,6 +5,19 @@ export interface MockAtsSite {
   form(): string
   thanks: string
   thanksPage(): string
+  /** The site's own endpoints (`/<site>/<action>`); returns `false` for an action it does not know. */
+  routes?(
+    action: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+    ctx: {
+      uploadsFile: string
+      recordUpload: typeof recordUpload
+      sendJson: typeof sendJson
+      sendHtml: typeof sendHtml
+      log: (line: string) => void
+    }
+  ): boolean
 }
 
 export interface MockAtsOptions {
@@ -42,7 +55,8 @@ export interface StartedMockAts {
 }
 
 export function defaultSubmissionFile(): string
-export function mockAtsSites(read: (name: string) => string): Record<'greenhouse' | 'lever' | 'generic', MockAtsSite>
+export function mockAtsSites(read: (name: string) => string): Record<'greenhouse' | 'lever' | 'ashby' | 'generic', MockAtsSite>
+export function sendJson(res: ServerResponse, status: number, body: unknown): void
 export function sendHtml(res: ServerResponse, status: number, body: string, headers?: Record<string, string>): void
 export function recordSubmission(site: string, req: IncomingMessage, file: string): Promise<Record<string, unknown>>
 export function recordUpload(site: string, req: IncomingMessage, file: string): Promise<Record<string, unknown>>
