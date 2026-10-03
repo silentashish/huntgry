@@ -113,6 +113,8 @@ export interface FillReport {
   fields: FieldReport[]
   /** The form has a submit button (for the user; Huntgry never presses it). */
   hasSubmitButton: boolean
+  /** The adapter's upload order: `files-first` reports file fields only, and main fills text after the upload (default `text-first`). */
+  uploadOrder?: 'text-first' | 'files-first'
 }
 
 /** What the guest page reports on each load. */

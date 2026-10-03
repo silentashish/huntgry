@@ -1,6 +1,10 @@
 import { atsForHost } from '../../apply-url'
+import { defaultUploadAttached } from '../upload-state'
 import { headingText, SUBMITTED } from './text'
 import type { Adapter } from './types'
+
+/** The upload widget ids Greenhouse labels each file field with. */
+const GROUP_LABEL = { resume: 'upload-label-resume', coverLetter: 'upload-label-cover_letter' } as const
 
 /** Greenhouse job boards (verified live 2026-09-29) and the older boards.greenhouse.io form. */
 export const greenhouse: Adapter = {
@@ -25,5 +29,17 @@ export const greenhouse: Adapter = {
   isConfirmation: (url, doc) =>
     doc.getElementById('application_confirmation') !== null ||
     /\/confirmation\/?$/.test(url.pathname) ||
-    (doc.querySelector('#application-form, #application_form') === null && SUBMITTED.test(headingText(doc)))
+    (doc.querySelector('#application-form, #application_form') === null && SUBMITTED.test(headingText(doc))),
+  // "Location (City)" is a react-select that only takes one of its suggestions (captured 2026-10-03).
+  choices: ['#candidate-location'],
+  // On `change` the board uploads the file to S3 and replaces the <input> with a progress bar, then the file name
+  // (captured 2026-10-03). The widget is found by its label id too, in case the re-render replaced it.
+  uploadAttached: (probe) =>
+    defaultUploadAttached({
+      ...probe,
+      group:
+        probe.group?.isConnected === true
+          ? probe.group
+          : probe.doc.querySelector(`[role="group"][aria-labelledby="${GROUP_LABEL[probe.kind]}"]`)
+    })
 }

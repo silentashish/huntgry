@@ -1,7 +1,7 @@
-import type { FieldKey, FieldReport, FillReport, FillValues, PageScan } from '../apply-types'
-import { EMBED_RULES, embedRuleFor } from '../apply-embeds'
-import { adapterFor, type Adapter } from './adapters'
-import { UPLOAD_ATTR } from '../autofill-channels'
+import type { FieldKey, FieldReport, FillReport, FillValues, PageScan, UploadState } from '../apply-types'
+import { EMBED_RULES, embedPathMatches } from '../apply-embeds'
+import { adapterFor, type Adapter, type UploadProbe } from './adapters'
+import { UPLOAD_ATTR, UPLOAD_GROUP_ATTR } from '../autofill-channels'
 import {
   highlight,
   isControl,
@@ -14,6 +14,7 @@ import {
   type FormControl
 } from './dom'
 import { matchFileField, matchTextField, type Match } from './match'
+import { defaultUploadAttached } from './upload-state'
 
 /**
  * The autofill engine: pure DOM code, run by the browser tab's preload and by
@@ -25,6 +26,7 @@ import { matchFileField, matchTextField, type Match } from './match'
 
 /** Upload marker values: `data-huntgry-upload="resume" | "cover"`. */
 export const UPLOAD_KIND = { resume: 'resume', coverLetter: 'cover' } as const
+export type UploadKey = keyof typeof UPLOAD_KIND
 
 interface Planned {
   el: FormControl
@@ -67,11 +69,16 @@ function plan(adapter: Adapter, root: Element): Planned[] {
     if (el && isControl(el) && isRelevant(el) && !known.has(el)) known.set(el, key)
   }
   const claimedByAdapter = new Set(known.values())
+  const choices = new Set<Element>()
+  for (const selector of adapter.choices ?? []) for (const el of Array.from(root.querySelectorAll(selector))) choices.add(el)
 
   const planned: Planned[] = controls.map((el) => {
     const adapterKey = known.get(el)
     if (adapterKey) return { el, key: adapterKey, score: 10 }
     const kind = kindOf(el)
+    if (choices.has(el)) {
+      return { el, key: null, score: 0, outcome: 'skipped-unsupported', reason: "Pick it from the site's suggestions." }
+    }
     if (kind === 'select' || kind === 'combobox' || kind === 'checkbox' || kind === 'radio') {
       return { el, key: null, score: 0, outcome: 'skipped-unsupported', reason: 'A choice; pick it yourself.' }
     }
@@ -135,15 +142,19 @@ export function scanPage(doc: Document): PageScan {
   }
 }
 
-/** The first iframe on the page that holds an ATS's embedded form (see apply-embeds.ts). */
+/**
+ * The first iframe on the page that holds an ATS's embedded form (see
+ * apply-embeds.ts), matched by path here; main checks its host before
+ * opening it (and only allows a loopback mock in dev builds).
+ */
 function embedUrlOf(doc: Document, base: URL): string | null {
   for (const rule of EMBED_RULES) {
     for (const iframe of Array.from(doc.querySelectorAll(rule.iframe))) {
       const src = iframe.getAttribute('src')
       if (!src) continue
       try {
-        const absolute = new URL(src, base).href
-        if (embedRuleFor(absolute) === rule) return absolute
+        const absolute = new URL(src, base)
+        if (/^https?:$/.test(absolute.protocol) && embedPathMatches(rule, absolute)) return absolute.href
       } catch {
         // Not a URL; try the next iframe.
       }
@@ -158,19 +169,52 @@ export function detectConfirmation(doc: Document): boolean {
   return adapterFor(url, doc).isConfirmation(url, doc)
 }
 
+export interface FillOptions {
+  /**
+   * `false` marks the file inputs only and leaves text alone (the first pass
+   * of a `files-first` adapter). Default: fill text unless the adapter
+   * attaches files first, in which case the report says `uploadOrder:
+   * 'files-first'` and main asks again with `text: true` after the upload.
+   */
+  text?: boolean
+}
+
+/** The upload widget around a file input (see `Adapter.uploadGroup`). */
+function defaultUploadGroup(input: HTMLInputElement): Element | null {
+  return (
+    input.closest('[role="group"], fieldset, .file-upload, .application-question, .application-field, label') ??
+    input.parentElement
+  )
+}
+
+function markUpload(adapter: Adapter, el: FormControl, key: UploadKey): void {
+  const kind = UPLOAD_KIND[key]
+  el.setAttribute(UPLOAD_ATTR, kind)
+  const group = (adapter.uploadGroup ?? defaultUploadGroup)(el as HTMLInputElement)
+  group?.setAttribute(UPLOAD_GROUP_ATTR, kind)
+}
+
 /**
  * Fills the form's text fields that are empty (a value the user typed is
- * kept), reads each one back, marks the file inputs for upload and outlines
- * what it did. Returns one report line per field.
+ * kept), reads each one back, marks the file inputs (and their upload
+ * widgets) for upload and outlines what it did. Returns one report line per
+ * field. A page the adapter says is not a form step (a sign-in wall, a
+ * posting) is not touched at all.
  */
-export function fillPage(doc: Document, values: FillValues): FillReport {
+export function fillPage(doc: Document, values: FillValues, options: FillOptions = {}): FillReport {
   const url = pageUrl(doc)
   const adapter = adapterFor(url, doc)
+  const uploadOrder = adapter.uploadOrder ?? 'text-first'
+  const report: FillReport = { ats: adapter.ats, url: url.href, fields: [], hasSubmitButton: false, uploadOrder }
+  if ((adapter.step?.(doc) ?? 'form') !== 'form') return report
   const root = adapter.formRoot(doc)
-  const report: FillReport = { ats: adapter.ats, url: url.href, fields: [], hasSubmitButton: false }
   if (!root) return report
+  const writeText = options.text ?? uploadOrder === 'text-first'
   report.hasSubmitButton = hasSubmitButton(root)
-  for (const old of Array.from(doc.querySelectorAll(`[${UPLOAD_ATTR}]`))) old.removeAttribute(UPLOAD_ATTR)
+  for (const attr of [UPLOAD_ATTR, UPLOAD_GROUP_ATTR]) {
+    for (const old of Array.from(doc.querySelectorAll(`[${attr}]`))) old.removeAttribute(attr)
+  }
+  let first: Element | null = null
 
   for (const p of plan(adapter, root)) {
     const kind = kindOf(p.el)
@@ -181,18 +225,23 @@ export function fillPage(doc: Document, values: FillValues): FillReport {
       required: isRequired(p.el),
       outcome: 'unmatched'
     }
-    report.fields.push(line)
     if (p.outcome) {
       line.outcome = p.outcome
       line.reason = p.reason
       if (p.outcome !== 'skipped-unsupported') highlight(p.el, 'attention')
+      report.fields.push(line)
       continue
     }
     if (p.key === 'resume' || p.key === 'coverLetter') {
-      p.el.setAttribute(UPLOAD_ATTR, UPLOAD_KIND[p.key])
+      markUpload(adapter, p.el, p.key)
       line.outcome = 'to-upload'
+      first ??= p.el
+      report.fields.push(line)
       continue
     }
+    // Text left for the second pass of a files-first adapter is not reported yet.
+    if (!writeText) continue
+    report.fields.push(line)
     if (!p.key || (kind !== 'text' && kind !== 'textarea')) continue
     const value = values[p.key]
     const el = p.el as HTMLInputElement | HTMLTextAreaElement
@@ -214,11 +263,81 @@ export function fillPage(doc: Document, values: FillValues): FillReport {
     if (ok) {
       line.outcome = 'filled'
       highlight(el, 'done')
+      first ??= el
     } else {
       line.outcome = 'rejected'
       line.reason = el.value ? `The site changed it to "${el.value.slice(0, 80)}".` : 'The site cleared it.'
       highlight(el, 'attention')
     }
   }
+  // Greenhouse shows the form below a long description: bring it into view so the user sees what was filled.
+  ;(first as HTMLElement | null)?.scrollIntoView?.({ block: 'center' })
   return report
+}
+
+/**
+ * Checks, a moment after a fill, that every field reported `filled` still
+ * holds its value. A late re-render (React hydration) or a resume parser can
+ * wipe or replace them: each such value is written once more, and a field
+ * that still does not hold it becomes `rejected`. File inputs that lost their
+ * upload marker (a re-render replaced them) are marked again. Mutates and
+ * returns `report`.
+ */
+export function verifyFill(doc: Document, values: FillValues, report: FillReport): FillReport {
+  const url = pageUrl(doc)
+  if (url.href !== report.url) return report
+  const adapter = adapterFor(url, doc)
+  const root = adapter.formRoot(doc)
+  if (!root) return report
+  const byKey = new Map<FieldKey, FormControl>()
+  for (const p of plan(adapter, root)) if (p.key && !p.outcome && !byKey.has(p.key)) byKey.set(p.key, p.el)
+
+  for (const line of report.fields) {
+    if (!line.key) continue
+    if (line.outcome === 'to-upload' && (line.key === 'resume' || line.key === 'coverLetter')) {
+      const el = byKey.get(line.key)
+      if (el && !el.hasAttribute(UPLOAD_ATTR)) markUpload(adapter, el, line.key)
+      continue
+    }
+    if (line.outcome !== 'filled' || line.key === 'resume' || line.key === 'coverLetter') continue
+    const value = values[line.key]
+    const el = byKey.get(line.key) as HTMLInputElement | HTMLTextAreaElement | undefined
+    if (!value) continue
+    if (!el) {
+      line.outcome = 'rejected'
+      line.reason = 'The field disappeared after it was filled.'
+      continue
+    }
+    const phone = line.key === 'phone'
+    if (valueMatches(el, value, phone)) continue
+    if (setNativeValue(el, value, phone)) {
+      highlight(el, 'done')
+      continue
+    }
+    line.outcome = 'rejected'
+    line.reason = el.value
+      ? `The site changed it to "${el.value.slice(0, 80)}".`
+      : 'The page cleared it after filling; fill it in.'
+    highlight(el, 'attention')
+  }
+  return report
+}
+
+/** What the site's upload widget shows for `key` after main attached `fileName`. */
+export function uploadStateOf(doc: Document, key: UploadKey, fileName: string): UploadState {
+  const kind = UPLOAD_KIND[key]
+  const adapter = adapterFor(pageUrl(doc), doc)
+  const probe: UploadProbe = {
+    doc,
+    kind: key,
+    input: doc.querySelector<HTMLInputElement>(`input[${UPLOAD_ATTR}="${kind}"]`),
+    group: doc.querySelector(`[${UPLOAD_GROUP_ATTR}="${kind}"]`),
+    fileName
+  }
+  return (adapter.uploadAttached ?? defaultUploadAttached)(probe)
+}
+
+/** The adapter for the page as it is now (for the preload's waits). */
+export function currentAdapter(doc: Document): Adapter {
+  return adapterFor(pageUrl(doc), doc)
 }

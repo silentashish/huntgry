@@ -1,68 +1,14 @@
-<!-- Lever application form (jobs.lever.co/<company>/<posting-id>/apply). Built 2026-09-30 from Lever's documented
-     server-rendered markup (field names name, email, phone, org, urls[...], resume, comments, cards[...], eeo[...]);
-     employer text and posting ids are placeholders. Not captured live: re-check against a real page in the in-app
-     browser (fill only, never submit) before relying on a new field. -->
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>Acme - Software Engineer</title></head><body>
+<!-- Lever application form (jobs.lever.co/<company>/<posting-id>/apply). The first two sections (resume upload with
+     the resume parser's working / success / failure labels, contact fields, the location autocomplete, links) are
+     as captured live on 2026-10-03 (.solve-ticket captures); the questions below them are placeholders in Lever's
+     markup. Employer text and ids are anonymized. Like the live page, the form has no action: Lever posts it with
+     JavaScript. The mock server adds that and the parser (scripts/mock-ats/lever.js). -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>Acme - Software Engineer</title>
+<style>.resume-upload-working,.resume-upload-success,.resume-upload-failure,.resume-upload-oversize,.dropdown-container{display:none}.invisible-resume-upload{position:absolute;opacity:0;width:1px;height:1px}</style></head><body>
 <div class="content-wrapper application-page">
 <div class="section-wrapper page-full-width">
 <h2 class="posting-headline">Software Engineer</h2>
-<form id="application-form" method="POST" enctype="multipart/form-data" action="/acme/00000000-0000-4000-8000-000000000001/apply">
-  <input type="hidden" name="accountId" value="00000000-0000-4000-8000-00000000000a">
-  <input type="hidden" name="origin" value="">
-  <div class="section application-form">
-    <h4>Submit your application</h4>
-    <ul>
-      <li class="application-question resume">
-        <label>
-          <div class="application-label">Resume/CV<span class="required">✱</span></div>
-          <div class="application-field">
-            <a class="visible-resume-upload"><span class="default-label">ATTACH RESUME/CV</span><input type="file" class="application-file-input" id="resume-upload-input" name="resume" data-qa="input-resume"></a>
-            <span class="filename"></span>
-          </div>
-        </label>
-      </li>
-      <li class="application-question">
-        <label>
-          <div class="application-label">Full name<span class="required">✱</span></div>
-          <div class="application-field"><input type="text" name="name" required data-qa="name-input"></div>
-        </label>
-      </li>
-      <li class="application-question">
-        <label>
-          <div class="application-label">Email<span class="required">✱</span></div>
-          <div class="application-field"><input type="email" name="email" required data-qa="email-input"></div>
-        </label>
-      </li>
-      <li class="application-question">
-        <label>
-          <div class="application-label">Phone</div>
-          <div class="application-field"><input type="text" name="phone" data-qa="phone-input"></div>
-        </label>
-      </li>
-      <li class="application-question">
-        <label>
-          <div class="application-label">Current location</div>
-          <div class="application-field"><input type="text" name="location" id="location-input" data-qa="location-input" autocomplete="off"></div>
-        </label>
-      </li>
-      <li class="application-question">
-        <label>
-          <div class="application-label">Current company</div>
-          <div class="application-field"><input type="text" name="org" data-qa="org-input"></div>
-        </label>
-      </li>
-    </ul>
-  </div>
-  <div class="section application-form">
-    <h4>Links</h4>
-    <ul>
-      <li class="application-question"><label><div class="application-label">LinkedIn URL</div><div class="application-field"><input type="text" name="urls[LinkedIn]"></div></label></li>
-      <li class="application-question"><label><div class="application-label">Twitter URL</div><div class="application-field"><input type="text" name="urls[Twitter]"></div></label></li>
-      <li class="application-question"><label><div class="application-label">GitHub URL</div><div class="application-field"><input type="text" name="urls[GitHub]"></div></label></li>
-      <li class="application-question"><label><div class="application-label">Portfolio URL</div><div class="application-field"><input type="text" name="urls[Portfolio]"></div></label></li>
-      <li class="application-question"><label><div class="application-label">Other website</div><div class="application-field"><input type="text" name="urls[Other]"></div></label></li>
-    </ul>
-  </div>
+<form id="application-form" enctype="multipart/form-data" method="POST"><div class="section page-centered application-form"><h4>Submit your application</h4><ul><li class="application-question resume"><label><div class="application-label">Resume/CV <span class="required">✱</span></div><div class="application-field"><a href="#" class="postings-btn template-btn-utility visible-resume-upload"><span class="filename"></span><span class="default-label">ATTACH RESUME/CV</span><input class="application-file-input invisible-resume-upload" data-qa="input-resume" id="resume-upload-input" name="resume" tabindex="-1" type="file"></a><span class="resume-upload-failure"><div class="resume-upload-label">Couldn't auto-read resume.</div></span><span class="resume-upload-working"><div class="loading-indicator"></div><div class="resume-upload-label">Analyzing resume...</div></span><span class="resume-upload-success"><div class="loading-indicator completed"></div><div class="resume-upload-label">Success!</div></span></div></label><span class="resume-upload-oversize"><p class="error-message">File exceeds the maximum upload size of <b>100MB</b>. Please try a smaller size.</p></span></li><li class="application-question"><label><div class="application-label">Full name<span class="required">✱</span></div><div class="application-field"><input type="text" data-qa="name-input" name="name" required=""></div></label></li><li class="application-question"><label><div class="application-label">Email<span class="required">✱</span></div><div class="application-field"><input name="email" data-qa="email-input" type="email" pattern="[a-zA-Z0-9.#$%&amp;'*+\/=?^_`{|}~][a-zA-Z0-9.!#$%&amp;'*+\/=?^_`{|}~-]*@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*" required=""></div></label></li><li class="application-question"><label><div class="application-label">Phone </div><div class="application-field"><input type="text" data-qa="phone-input" name="phone"></div></label></li><li class="application-question" data-qa="structured-contact-location-question"><label><div class="application-label">Current location <span class="required" data-qa="SCL-question-required-asterisk">✱</span></div><div class="application-field"><input class="location-input" data-qa="location-input" id="location-input" type="text" maxlength="100" name="location" required=""><input id="selected-location" type="hidden" name="selectedLocation"><div class="momentum-body flex flex-column items-start width-full height-auto bg-gray-800 text-gray-200 rounded dropdown-container"><div class="dropdown-results width-full cursor-pointer"></div><div class="dropdown-no-results width-full break-word py1 px2 pointer-events-none">No location found. Try entering a different location</div><div class="dropdown-loading-results width-full break-word height-full py1 px2 pointer-events-none"><div class="theme-inverse items-center"><span>Loading</span></div></div></div></div></label></li><li class="application-question"><label><div class="application-label">Current company </div><div class="application-field"><input type="text" data-qa="org-input" name="org"></div></label></li></ul></div><div class="section page-centered application-form"><h4>Links</h4><ul><li class="application-question"><label><div class="application-label">LinkedIn URL</div><div class="application-field"><input type="text" name="urls[LinkedIn]"></div></label></li><li class="application-question"><label><div class="application-label">Twitter URL</div><div class="application-field"><input type="text" name="urls[Twitter]"></div></label></li><li class="application-question"><label><div class="application-label">GitHub URL</div><div class="application-field"><input type="text" name="urls[GitHub]"></div></label></li><li class="application-question"><label><div class="application-label">Portfolio URL</div><div class="application-field"><input type="text" name="urls[Portfolio]"></div></label></li><li class="application-question"><label><div class="application-label">Other website</div><div class="application-field"><input type="text" name="urls[Other]"></div></label></li></ul></div>
   <div class="section application-form">
     <h4>Additional questions</h4>
     <ul>

@@ -71,16 +71,18 @@ export interface Adapter {
    */
   uploadAttached?(probe: UploadProbe): UploadState
   /**
-   * A parser or upload the site runs after a file is attached: wait for this
-   * selector (up to `timeoutMs`), then re-verify the text fields Huntgry
-   * filled and restore any the parser changed.
+   * A parser or upload the site runs after a file is attached: wait until an
+   * element matching `waitFor` is shown (not `display: none` / hidden, up to
+   * `timeoutMs`), then re-verify the text fields Huntgry filled and restore
+   * any the parser changed.
    */
   afterUpload?: { waitFor: string; timeoutMs: number }
 }
 
-
 export interface UploadProbe {
   doc: Document
+  /** Which upload this is. */
+  kind: 'resume' | 'coverLetter'
   /** The marked file input, or null once the site has removed it. */
   input: HTMLInputElement | null
   /** The upload widget remembered before the upload (see `uploadGroup`). */
