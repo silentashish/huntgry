@@ -3,7 +3,7 @@ import { Alert, Badge, Box, Button, CloseButton, Divider, Group, Loader, ScrollA
 import { IconCheck, IconInfoCircle, IconRefresh, IconSend } from '@tabler/icons-react'
 import { ATS_LABEL, type ApplySession } from '@shared/apply-types'
 import { api, errorText } from '../../api'
-import { groupReport, OUTCOME_META, STATUS_META } from './apply-report'
+import { groupReport, OUTCOME_META, STATUS_META, stepLabel } from './apply-report'
 
 /**
  * Auto-apply beside the page: what was detected, filled and uploaded, what is
@@ -53,6 +53,7 @@ export function ApplyPanel({ activeTabId }: { activeTabId: string | null }) {
   const submitted = s.status === 'submitted-detected'
   const stale = submitted || s.status === 'closed'
   const groups = stale ? [] : groupReport(s.report)
+  const step = stepLabel(s.step)
   const canFill = s.status !== 'closed' && s.status !== 'filling' && s.status !== 'opened'
 
   return (
@@ -95,6 +96,11 @@ export function ApplyPanel({ activeTabId }: { activeTabId: string | null }) {
               </Badge>
             )}
           </Group>
+          {step && !stale && (
+            <Text size="xs" fw={500}>
+              {step}
+            </Text>
+          )}
 
           <Alert color="blue" variant="light" icon={<IconInfoCircle size={16} />} p="xs">
             <Text size="xs">

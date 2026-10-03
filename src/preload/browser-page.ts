@@ -1,7 +1,7 @@
 import { ipcRenderer } from 'electron'
 import type { FillValues } from '@shared/apply-types'
 import { AUTOFILL_CHANNELS } from '@shared/autofill-channels'
-import { detectConfirmation } from '@shared/autofill/engine'
+import { detectConfirmation, pageStep } from '@shared/autofill/engine'
 import { PageSession, watchForForm } from '@shared/autofill/session'
 
 /**
@@ -14,7 +14,9 @@ import { PageSession, watchForForm } from '@shared/autofill/session'
  * - `uploadState` waits for the site's upload widget to show a file main attached;
  * - `afterUpload` waits for the site's resume parser, then verifies again.
  * After a detect it watches the page for the site's "application submitted"
- * view and, while no form is found, for a form or embedded form that renders late.
+ * view and, while no form is found, for a form or embedded form that renders
+ * late, and reports a multi-step site's step changing in place (Workday keeps
+ * its URL from the sign-in wall on).
  */
 
 interface Request {
@@ -62,6 +64,35 @@ function watchForLateForm(): void {
   })
 }
 
+let watchingSteps = false
+
+/** The step, the profile fields it shows (late-rendered ones count) and whether the site is busy. */
+const keyOf = (s: { ats: string; step: string; stepTitle: string | null; stepFields: string | null; ready: boolean }) =>
+  [s.ats, s.step, s.stepTitle ?? '', s.stepFields ?? '', s.ready].join('|')
+
+/**
+ * Reports each change of the page's step to main, which detects (and fills)
+ * again. It compares with the step it saw itself, never with a detect's:
+ * main drops detects that a newer load overtook, so a step one of those saw
+ * may never have reached main.
+ */
+function watchForSteps(initial: string): void {
+  if (watchingSteps) return
+  watchingSteps = true
+  let stepKey = initial
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const check = () => {
+    timer = undefined
+    const key = keyOf(pageStep(document))
+    if (key === stepKey) return
+    stepKey = key
+    ipcRenderer.send(AUTOFILL_CHANNELS.step, { url: location.href })
+  }
+  new MutationObserver(() => {
+    timer ??= setTimeout(check, 400)
+  }).observe(document.documentElement, { childList: true, subtree: true })
+}
+
 function reply(requestId: string, run: () => Promise<unknown>): void {
   run().then(
     (result) => ipcRenderer.send(AUTOFILL_CHANNELS.result, { requestId, ok: true, result }),
@@ -77,6 +108,7 @@ ipcRenderer.on(AUTOFILL_CHANNELS.detect, (_e, req: Request) => {
     const scan = await page.detect()
     if (!scan.confirmation) watchForConfirmation()
     if (!scan.formFound) watchForLateForm()
+    watchForSteps(keyOf(scan))
     return scan
   })
 })
