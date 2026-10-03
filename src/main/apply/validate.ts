@@ -60,9 +60,24 @@ export function parsePageScan(input: unknown): PageScan {
     hasResumeInput: o.hasResumeInput === true,
     embedUrl: embed || null,
     step: oneOf(o.step, ADAPTER_STEPS, 'form'),
-    stepTitle: typeof o.stepTitle === 'string' && o.stepTitle.trim() ? o.stepTitle.trim().slice(0, 120) : null
+    stepTitle: stepTitleOf(o.stepTitle),
+    stepFields: stepFieldsOf(o.stepFields),
+    ready: o.ready !== false
   }
 }
+
+const stepTitleOf = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 120) : null)
+
+/** Known field keys only, sorted, or null. */
+const stepFieldsOf = (v: unknown): string | null =>
+  typeof v === 'string'
+    ? v
+        .slice(0, 300)
+        .split(',')
+        .filter((k): k is FieldKey => KEYS.includes(k as FieldKey))
+        .sort()
+        .join(',')
+    : null
 
 function parseField(input: unknown): FieldReport {
   const o = obj(input)
@@ -91,7 +106,10 @@ export function parseFillReport(input: unknown): FillReport {
     url: httpUrl(o.url),
     fields,
     hasSubmitButton: o.hasSubmitButton === true,
-    uploadOrder: o.uploadOrder === 'files-first' ? 'files-first' : 'text-first'
+    uploadOrder: o.uploadOrder === 'files-first' ? 'files-first' : 'text-first',
+    step: oneOf(o.step, ADAPTER_STEPS, 'form'),
+    stepTitle: stepTitleOf(o.stepTitle),
+    stepFields: stepFieldsOf(o.stepFields)
   }
 }
 

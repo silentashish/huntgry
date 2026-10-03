@@ -186,6 +186,21 @@ describe('Lever', () => {
 describe('generic heuristic', () => {
   const URL = 'https://careers.example.com/jobs/42/apply'
 
+  it('never fills or reports a honeypot field, however it is labelled', () => {
+    const dom = new JSDOM(
+      `<form><label>Email <input name="email"></label><label>Email <input name="email_honeypot"></label>
+      <input data-automation-id="beecatcher" type="text"><input class="bot-trap" name="website_url">
+      <input type="file" name="resume"></form>`,
+      { url: URL }
+    )
+    const report = fillPage(dom.window.document, VALUES)
+    expect(report.fields.map((f) => f.key)).toEqual(['email', 'resume'])
+    for (const sel of ['[name="email_honeypot"]', '[data-automation-id="beecatcher"]', '.bot-trap']) {
+      expect(input(dom, sel).value, sel).toBe('')
+      expect(input(dom, sel).getAttribute('style'), sel).toBeNull()
+    }
+  })
+
   it('matches by autocomplete, name and label, and never guesses', () => {
     const dom = page('generic-form.html', URL)
     const check = forbidSubmit(dom)

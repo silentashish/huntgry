@@ -20,10 +20,15 @@ export function isControl(el: Element): el is FormControl {
   return t === 'input' || t === 'textarea' || t === 'select'
 }
 
-/** Controls worth reporting: not hidden plumbing, not disabled, not a password. */
+/** Bot traps: fields people never see, which only scripts fill (Workday's `beecatcher`). */
+const HONEYPOT = /honey ?pot|beecatcher|bot[-_ ]?(trap|catcher)/i
+
+/** Controls worth reporting: not hidden plumbing, not disabled, not a password, not a honeypot. */
 export function isRelevant(el: FormControl): boolean {
   if (el.disabled) return false
   if (tag(el) === 'input' && IGNORED_TYPES.has((el as HTMLInputElement).type)) return false
+  const names = [el.getAttribute('name'), el.id, el.getAttribute('data-automation-id'), el.getAttribute('class')]
+  if (names.some((n) => n && HONEYPOT.test(n))) return false
   // react-select keeps an invisible `required` mirror input next to its combobox.
   if (el.getAttribute('aria-hidden') === 'true' && el.getAttribute('tabindex') === '-1') return false
   return true

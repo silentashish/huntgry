@@ -115,6 +115,12 @@ export interface FillReport {
   hasSubmitButton: boolean
   /** The adapter's upload order: `files-first` reports file fields only, and main fills text after the upload (default `text-first`). */
   uploadOrder?: 'text-first' | 'files-first'
+  /** The step the page was on; anything but `form` is never filled (the report is then empty). */
+  step?: AdapterStep
+  /** The step's title on multi-step forms ("My Information"), or null. */
+  stepTitle?: string | null
+  /** Multi-step forms: the profile fields the step showed, comma-separated (see `PageScan.stepFields`). */
+  stepFields?: string | null
 }
 
 /** What the guest page reports on each load. */
@@ -136,6 +142,13 @@ export interface PageScan {
   step: AdapterStep
   /** The step's title on multi-step forms, or null. */
   stepTitle: string | null
+  /**
+   * Multi-step forms: the profile fields the step shows now (sorted, comma-separated, e.g. `email,firstName`),
+   * so a field rendered after the first fill is filled too. Null for single-page adapters.
+   */
+  stepFields: string | null
+  /** The adapter's readiness (Workday: no spinner, e.g. while it parses the resume); a form step that is not ready waits. */
+  ready: boolean
 }
 
 export type ApplyStatus =
@@ -143,6 +156,8 @@ export type ApplyStatus =
   | 'opened'
   /** Page loaded; no form filled automatically (press Fill form). */
   | 'ready'
+  /** A step of the site's flow that is the user's: press its Apply, choose how to apply, sign in (see `step`). */
+  | 'waiting'
   | 'filling'
   | 'filled'
   /** The site's confirmation page is showing; offer Mark as applied. */
@@ -166,6 +181,8 @@ export interface ApplySession {
   /** Whether the application has a cover.pdf to attach. */
   hasCover: boolean
   message: string | null
+  /** Where the page is in the site's apply flow, when the adapter knows (multi-step sites such as Workday). */
+  step?: { kind: AdapterStep; title: string | null } | null
 }
 
 export interface ApplyApi {
