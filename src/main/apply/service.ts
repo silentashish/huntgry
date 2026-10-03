@@ -30,6 +30,8 @@ export interface ApplyPage {
   onLoad(listener: (fullLoad: boolean) => void): () => void
   /** The main frame committed a navigation to `url` (after any server redirects). */
   onNavigate(listener: (url: string) => void): () => void
+  /** The main frame started a navigation to another document (the current one is about to go). */
+  onNavigationStart?(listener: () => void): () => void
   onClosed(listener: () => void): () => void
 }
 
@@ -200,12 +202,24 @@ export class ApplyService {
         if (this.ctx === ctx && ctx.fillingSeq === null) void this.detect(ctx, ctx.loadSeq, Number.POSITIVE_INFINITY)
       }),
       page.onNavigate((url) => {
-        if (this.ctx !== ctx || ctx.landed) return
+        if (this.ctx !== ctx) return
+        // Another document is active from here on: drop every fill, upload and status still running for the last
+        // one, without waiting for the new page's did-finish-load (#63 review).
+        ctx.loadSeq++
+        if (ctx.landed) return
         // Where the posting URL's own redirects land is the posting's site (Greenhouse boards → company careers).
         ctx.landed = true
         const origin = originOf(url)
         if (origin) ctx.trusted.add(origin)
       }),
+      ...(page.onNavigationStart
+        ? [
+            page.onNavigationStart(() => {
+              // The person (or the page) is leaving this document: nothing more is written to it.
+              if (this.ctx === ctx) ctx.loadSeq++
+            })
+          ]
+        : []),
       page.onLoad((fullLoad) => {
         if (this.ctx !== ctx) return
         const seq = ++ctx.loadSeq
@@ -366,7 +380,7 @@ export class ApplyService {
       // A `files-first` adapter reported its file fields only; its text is filled after the upload.
       for (const field of uploads) {
         if (!current()) return
-        await this.upload(ctx, field, current)
+        await this.upload(ctx, field, current, report.url)
       }
       if (!current()) return
       if (uploads.some((f) => f.outcome === 'uploaded')) {
@@ -394,7 +408,7 @@ export class ApplyService {
    * upload missed it) is marked again and tried once more. Only a widget that
    * shows the file counts as `uploaded`.
    */
-  private async upload(ctx: Context, field: FieldReport, current: () => boolean): Promise<void> {
+  private async upload(ctx: Context, field: FieldReport, current: () => boolean, documentUrl: string): Promise<void> {
     const cover = field.key === 'coverLetter'
     const path = cover ? ctx.coverPath : ctx.resumePath
     if (!path) {
@@ -415,7 +429,10 @@ export class ApplyService {
         await this.request(ctx, AUTOFILL_CHANNELS.fill, { values: ctx.values, text: false }).catch(() => null)
       }
       try {
-        await uploadFile(() => this.deps.attachDebugger(ctx.tabId), selector, [path], { shouldContinue: current })
+        await uploadFile(() => this.deps.attachDebugger(ctx.tabId), selector, [path], {
+          shouldContinue: current,
+          documentUrl
+        })
         error = ''
       } catch (err) {
         error = errorMessage(err)

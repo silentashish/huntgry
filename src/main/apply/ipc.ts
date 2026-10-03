@@ -41,6 +41,15 @@ function pageOf(wc: WebContents): ApplyPage {
         if (!wc.isDestroyed()) wc.removeListener('did-navigate', navigated)
       }
     },
+    onNavigationStart: (listener) => {
+      const started = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+        if (details.isMainFrame && !details.isSameDocument) listener()
+      }
+      wc.on('did-start-navigation', started)
+      return () => {
+        if (!wc.isDestroyed()) wc.removeListener('did-start-navigation', started)
+      }
+    },
     onClosed: (listener) => {
       wc.once('destroyed', listener)
       return () => {

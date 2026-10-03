@@ -32,14 +32,22 @@ export interface UploadOptions {
   timeoutMs?: number
   /** Checked before every command; `false` (the page changed) cancels the upload before it touches the page. */
   shouldContinue?: () => boolean
+  /**
+   * The page the file is meant for. The upload is refused when the tab's
+   * document is another URL by the time CDP reads it, so a navigation that
+   * raced the upload can never receive the file.
+   */
+  documentUrl?: string
 }
+
+const withoutHash = (url: string) => url.replace(/#.*$/, '')
 
 /** Attaches `files` to the element matching `selector` in the top frame. */
 export async function uploadFile(
   attach: () => Cdp,
   selector: string,
   files: string[],
-  { timeoutMs = UPLOAD_TIMEOUT_MS, shouldContinue = () => true }: UploadOptions = {}
+  { timeoutMs = UPLOAD_TIMEOUT_MS, shouldContinue = () => true, documentUrl }: UploadOptions = {}
 ): Promise<void> {
   const check = () => {
     if (!shouldContinue()) throw new Error('The page changed; the upload was cancelled.')
@@ -47,8 +55,13 @@ export async function uploadFile(
   check()
   const dbg = attach()
   try {
-    const root = nodeIdOf(await withTimeout(dbg.sendCommand('DOM.getDocument', { depth: 0 }), timeoutMs), 'root')
+    const doc = await withTimeout(dbg.sendCommand('DOM.getDocument', { depth: 0 }), timeoutMs)
+    const root = nodeIdOf(doc, 'root')
     if (!root) throw new Error('Could not read the page.')
+    const actual = (doc as { root?: { documentURL?: unknown } } | null)?.root?.documentURL
+    if (documentUrl && typeof actual === 'string' && withoutHash(actual) !== withoutHash(documentUrl)) {
+      throw new Error('The page changed; the upload was cancelled.')
+    }
     check()
     const nodeId = nodeIdOf(
       await withTimeout(dbg.sendCommand('DOM.querySelector', { nodeId: root, selector }), timeoutMs),

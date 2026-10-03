@@ -34,6 +34,7 @@ const VALUES: FillValues = {
  * answering asynchronously like the IPC round trip does.
  */
 class FakeTab implements ApplyPage {
+  onNavigationStart?: ApplyPage['onNavigationStart']
   dom: JSDOM
   listeners = new Map<string, Set<(payload: unknown) => void>>()
   loads = new Set<(full: boolean) => void>()
@@ -57,16 +58,25 @@ class FakeTab implements ApplyPage {
   }
 
   load(html: string, url: string) {
+    this.commit(html, url)
+    this.finishLoad()
+  }
+
+  /** A main-frame navigation commits: the new document is active, its load has not finished yet. */
+  commit(html: string, url: string) {
     this.dom = new JSDOM(html, { url })
     for (const l of this.navigations) l(url)
+  }
+
+  finishLoad() {
     for (const l of this.loads) l(true)
   }
 
-  /** The preload's fill: fill, then the verify pass (without its delay). */
-  private fill(values: FillValues, text?: boolean): FillReport {
+  /** The preload's fill: fill, then the verify pass (without its delays). A marker-only pass keeps the text report. */
+  private async fill(values: FillValues, text?: boolean): Promise<FillReport> {
     const doc = this.dom.window.document
-    const report = verifyFill(doc, values, fillPage(doc, values, { text }))
-    this.lastReport = report
+    const report = await verifyFill(doc, values, fillPage(doc, values, { text }), { settleMs: 0 })
+    if (text !== false) this.lastReport = report
     return report
   }
 
@@ -83,21 +93,22 @@ class FakeTab implements ApplyPage {
     const { requestId, values, text } = payload as { requestId: string; values?: FillValues; text?: boolean }
     const doc = this.dom.window.document
     if (channel === AUTOFILL_CHANNELS.fill && this.heldFills) {
-      this.heldFills.push(() =>
-        this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result: this.fill(values as FillValues, text) })
-      )
+      // The page did the fill already; only its answer is late.
+      const result = this.fill(values as FillValues, text)
+      this.heldFills.push(() => void result.then((r) => this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result: r })))
       return
     }
-    queueMicrotask(() => {
+    void (async () => {
+      await Promise.resolve()
       let result: unknown
       if (channel === AUTOFILL_CHANNELS.detect) result = scanPage(doc)
-      else if (channel === AUTOFILL_CHANNELS.fill) result = this.fill(values as FillValues, text)
+      else if (channel === AUTOFILL_CHANNELS.fill) result = await this.fill(values as FillValues, text)
       else if (channel === AUTOFILL_CHANNELS.uploadState) result = this.uploadAnswer
       else if (channel === AUTOFILL_CHANNELS.afterUpload)
-        result = this.lastReport && verifyFill(doc, values as FillValues, this.lastReport)
+        result = this.lastReport && (await verifyFill(doc, values as FillValues, this.lastReport, { settleMs: 0 }))
       else return
       this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result })
-    })
+    })()
   }
 
   onMessage(channel: string, listener: (payload: unknown) => void) {
@@ -128,6 +139,8 @@ class FakeDebugger implements Cdp {
   attached = false
   failOn: string | null = null
   files: string[] = []
+  /** What `DOM.getDocument` says the tab's document is (undefined: not reported). */
+  documentURL: string | undefined = undefined
   /** When set, this command waits for `open()` (a slow CDP round trip). */
   gate: { method: string; open(): void; wait: Promise<void> } | null = null
 
@@ -142,7 +155,7 @@ class FakeDebugger implements Cdp {
     if (this.gate?.method === method) await this.gate.wait
     if (method === this.failOn) return Promise.reject(new Error(`${method} failed`))
     const p = (params ?? {}) as Record<string, unknown>
-    if (method === 'DOM.getDocument') return Promise.resolve({ root: { nodeId: 1 } })
+    if (method === 'DOM.getDocument') return Promise.resolve({ root: { nodeId: 1, documentURL: this.documentURL } })
     if (method === 'DOM.querySelector') {
       this.log.push(`selector ${String(p.selector)}`)
       return Promise.resolve({ nodeId: 7 })
@@ -318,6 +331,67 @@ describe('ApplyService', () => {
     await new Promise((r) => setTimeout(r, 30))
     expect(service.current()).toMatchObject({ status: 'submitted-detected', report: null })
     expect(dbg.log).toEqual([])
+  })
+
+  it('drops a pending fill as soon as another document commits, before its load finishes (#63 review)', async () => {
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', GH_URL)
+    const { service, dbg } = setup(tab)
+    await service.start(ID)
+    tab.heldFills = []
+    tab.load(fixture('greenhouse-form.html'), GH_URL)
+    await until(service, 'filling')
+    // The user follows a link: the untrusted page is active, but did-finish-load has not fired yet.
+    tab.commit(fixture('greenhouse-form.html'), 'https://untrusted.example/application')
+    tab.releaseFills()
+    await new Promise((r) => setTimeout(r, 30))
+    // Nothing reached the debugger, so the new page never received the previous page's resume.
+    expect(dbg.log).toEqual([])
+    expect(service.current()!.status).toBe('filling')
+    tab.finishLoad()
+    await until(service, 'ready')
+    expect(service.current()!.message).toMatch(/untrusted\.example/)
+    expect(dbg.log).toEqual([])
+  })
+
+  it('drops a pending fill when a navigation starts', async () => {
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', GH_URL)
+    const starts = new Set<() => void>()
+    tab.onNavigationStart = (listener: () => void) => {
+      starts.add(listener)
+      return () => starts.delete(listener)
+    }
+    const { service, dbg } = setup(tab)
+    await service.start(ID)
+    tab.heldFills = []
+    tab.load(fixture('greenhouse-form.html'), GH_URL)
+    await until(service, 'filling')
+    for (const l of starts) l()
+    tab.releaseFills()
+    await new Promise((r) => setTimeout(r, 30))
+    expect(dbg.log).toEqual([])
+  })
+
+  it('refuses an upload when CDP finds another document than the one filled', async () => {
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', GH_URL)
+    const dbg = new FakeDebugger()
+    dbg.documentURL = 'https://untrusted.example/application'
+    const { service } = setup(tab, dbg)
+    await service.start(ID)
+    tab.load(fixture('greenhouse-form.html'), GH_URL)
+    await until(service, 'filled')
+    expect(dbg.log).not.toContain('DOM.setFileInputFiles')
+    expect(service.current()!.report?.fields.find((f) => f.key === 'resume')).toMatchObject({
+      outcome: 'upload-failed',
+      reason: 'The page changed; the upload was cancelled.'
+    })
+    // The same document (fragment aside) is fine.
+    const ok = new FakeDebugger()
+    ok.documentURL = `${GH_URL}#app`
+    await uploadFile(() => ok, '[x]', ['/tmp/a.pdf'], { documentUrl: GH_URL })
+    expect(ok.log).toContain('DOM.setFileInputFiles')
   })
 
   it('cancels an upload in flight when the page confirms submission', async () => {
