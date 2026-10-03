@@ -4,7 +4,7 @@
  * (`e2e/fixtures/servers/`), so both serve exactly the same forms.
  *
  * Serves the committed form fixtures (src/shared/autofill/fixtures) at
- * /greenhouse/, /lever/ and /generic/. Greenhouse and Lever behave like the
+ * /greenhouse/, /lever/, /ashby/ and /generic/. Greenhouse and Lever behave like the
  * live sites (scripts/mock-ats/sites/*.js, captured 2026-10-03): Greenhouse
  * hydrates after `load` (resetting anything filled earlier) and uploads a
  * chosen file at once to a presigned "S3" (/greenhouse/s3), swapping the input
@@ -24,6 +24,10 @@
  * /workday/ is a client-rendered multi-step Workday flow (see workday.mjs)
  * whose resume uploads are recorded to `uploadsFile` too.
  *
+ * Ashby (./ashby.mjs) is client-rendered: an empty #root, the form rendered
+ * after `load`, Ashby's resume widget (/ashby/upload, recorded to
+ * `uploadsFile`) and its "Autofill from resume" parser (/ashby/parse).
+ *
  * Pressing a page's own Submit button posts to the mock, which records what
  * it received (field names, text values, attached file names and sizes; not
  * the file bytes) to `submissionFile` (default
@@ -41,6 +45,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { createWorkdayMock, WORKDAY_POSTING } from './workday.mjs'
+import { ashbySite } from './ashby.mjs'
 
 /** Where the CLI records submissions: `<tmp>/huntgry-mock-ats/last-submission.json`. */
 export function defaultSubmissionFile() {
@@ -79,12 +84,18 @@ export function mockAtsSites(read) {
       thanks: '/lever/thanks',
       thanksPage: () => read('lever-thanks.html')
     },
+    ashby: ashbySite(read),
     generic: {
       form: () => read('generic-form.html'),
       thanks: '/generic/thanks',
       thanksPage: () => read('generic-thanks.html')
     }
   }
+}
+
+export function sendJson(res, status, body) {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  res.end(JSON.stringify(body))
 }
 
 export function sendHtml(res, status, body, headers = {}) {
@@ -148,7 +159,7 @@ const TOKEN_TTL_MS = 30_000
  * routes and returns `true`, or returns `false` for a path it does not know,
  * so a bigger server can mount other pages beside it.
  *
- * @param {{ fixturesDir: string, sitesDir?: string, submissionFile?: string, uploadsFile?: string, otherOrigin?: () => string, extraSites?: Record<string, {form(): string, thanks: string, thanksPage(): string}>, log?: (line: string) => void }} options
+ * @param {{ fixturesDir: string, sitesDir?: string, submissionFile?: string, uploadsFile?: string, otherOrigin?: () => string, extraSites?: Record<string, {form(): string, thanks: string, thanksPage(): string, routes?: Function}>, log?: (line: string) => void }} options
  */
 export function createMockAts(options) {
   const { fixturesDir } = options
@@ -253,6 +264,8 @@ export function createMockAts(options) {
       const [site, action] = url.pathname.split('/').filter(Boolean)
       const mock = sites[site]
       if (!mock) return false
+      // A site's own endpoints (the mock Ashby's upload and parser).
+      if (action && mock.routes?.(action, req, res, { submissionFile, sendJson, log })) return true
       if (req.method === 'POST' && action === 'submit') {
         recordSubmission(site, req, submissionFile)
           .then((fields) => {

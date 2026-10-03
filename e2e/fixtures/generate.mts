@@ -192,7 +192,9 @@ for (const [folder, company] of [
   ['popup-mock/pp-1', 'Acme'],
   ['link-mock/ln-1', 'Acme'],
   // #65: a Workday posting (an older tenant's markup).
-  ['workday-mock/wd-1', 'Acme']
+  ['workday-mock/wd-1', 'Acme'],
+  // #64: an Ashby posting whose form Ashby's own autofill already filled.
+  ['ashby-mock/as-1', 'Acme']
 ]) {
   await write(join(here, `workspaces/mocks/software-engineer/${folder}/resume.pdf`), applicationPdf('Software Engineer', company))
 }
