@@ -134,7 +134,7 @@ test.describe('apply on Ashby', () => {
     expect(
       await evaluateInTab<number>(app.electronApp, '/ashby/', `document.querySelector('.ashby-application-form-autofill-uploader input[type="file"]').files.length`)
     ).toBe(0)
-    // Values verified after a settle: still there a moment later.
+    // Still there a moment later (the mock never clears a value; the engine's own re-verify comes with #63).
     await app.window.waitForTimeout(1500)
     expect(await value(app.electronApp, '#_systemfield_name')).toBe(PROFILE.name)
     expect(await exists(mock.submissionFile)).toBe(false)

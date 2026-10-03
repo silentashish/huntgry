@@ -14,6 +14,9 @@
  * - The "Autofill from resume" pane parses its file (POST /ashby/parse,
  *   recorded) and fills the *empty* name and email with parser values.
  *   `?parsed=1` renders the form as if the candidate had already used it.
+ * - `?failUpload=1` makes /ashby/upload fail (recorded with `failed: true`):
+ *   the widget then shows the "failed to upload" toast and lists no file, as
+ *   on the live page when Ashby rejects a file.
  * - There is no `<form>`: Submit (`.ashby-application-form-submit-button`)
  *   posts the answers and the uploaded file to /ashby/submit and swaps the
  *   form for Ashby's success panel in place, without a navigation.
@@ -87,7 +90,7 @@ const APP = String.raw`
     showFile(file.name, true)
     const body = new FormData()
     body.append('file', file)
-    const res = await send('/ashby/upload', body).catch(() => null)
+    const res = await send(params.get('failUpload') === '1' ? '/ashby/upload?fail=1' : '/ashby/upload', body).catch(() => null)
     if (!res || !res.ok) {
       showFile(null)
       toast(file.name + ' failed to upload')
@@ -226,7 +229,9 @@ export function ashbySite(read) {
       readFiles(req)
         .then((upload) => {
           if (!upload) return sendJson(res, 400, { error: 'No file.' })
-          record(ashbyUploadsFile(submissionFile), { kind: action, ...upload })
+          const failed = action === 'upload' && new URL(req.url ?? '/', 'http://localhost').searchParams.get('fail') === '1'
+          record(ashbyUploadsFile(submissionFile), { kind: action, ...upload, ...(failed ? { failed: true } : {}) })
+          if (failed) return sendJson(res, 500, { error: 'Upload failed.' })
           if (action === 'upload') return sendJson(res, 200, { handle: `mock-handle-${Date.now()}` })
           // The parser's guesses: they land only in fields that are still empty.
           return sendJson(res, 200, PARSED)

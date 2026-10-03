@@ -43,7 +43,7 @@ when it was reached from a company page.
 | Embeds | `src/shared/apply-embeds.ts` | An Ashby `EmbedRule`: https `jobs.ashbyhq.com` only, a `/<org>/<job-uuid>[/application]` path only. A new optional `EmbedRule.page(url)` turns the iframe URL into the page to open: for Ashby, the job's `/application` without the embed parameters. `embedPageFor(value)` checks a URL against the rules and returns `{ ats, url }`. |
 | Service | `src/main/apply/service.ts` | Follows any embed rule (it was Greenhouse only), opening `embedPageFor(scan.embedUrl).url`, so main both validates and builds the URL. The panel message names the ATS. |
 | Trust | `src/shared/apply-url.ts` | `AUTO_TRUSTED_ATS` gains `ashby`, so the followed `jobs.ashbyhq.com` form fills without **Fill form**, like Greenhouse and Lever. https only, exact host suffix. |
-| Mock | `scripts/mock-ats/ashby.mjs` (+ `.d.mts`), `scripts/mock-ats/server.mjs` | `/ashby/` serves an empty `#root` and renders the captured form `renderMs` after `load` (default 500 ms). The resume widget behaves like Ashby's: spinner, then the item with delete and "Replace", and a toast on failure. It uploads to `/ashby/upload` (recorded in `ashby-uploads.json`). The parser pane posts to `/ashby/parse` (recorded) and fills only empty fields; `?parsed=1` renders as if it had been used. Submit posts the answers plus the uploaded file to `/ashby/submit` and swaps in the success panel. `server.mjs` gains an optional per-site `routes()` hook and `sendJson`. |
+| Mock | `scripts/mock-ats/ashby.mjs` (+ `.d.mts`), `scripts/mock-ats/server.mjs` | `/ashby/` serves an empty `#root` and renders the captured form `renderMs` after `load` (default 500 ms). The resume widget behaves like Ashby's: spinner, then the item with delete and "Replace", and a toast on failure. It uploads to `/ashby/upload` (recorded in `ashby-uploads.json`). The parser pane posts to `/ashby/parse` (recorded) and fills only empty fields; `?parsed=1` renders as if it had been used, and `?failUpload=1` makes the upload fail. Submit posts the answers plus the uploaded file to `/ashby/submit` and swaps in the success panel. `server.mjs` gains an optional per-site `routes()` hook and `sendJson`. |
 | Fixtures | `src/shared/autofill/fixtures/ashby-form.html`, `ashby-embed-host.html`, `e2e/fixtures/workspaces/mocks/software-engineer/ashby-mock/as-1` | The live form, anonymised (Acme, fake UUIDs), plus a LinkedIn custom question. A careers page with Ashby's embed iframe. A `mocks` application whose posting is `/ashby/?parsed=1`. |
 | Tests | `adapters/ashby.test.ts`, `src/shared/apply.test.ts`, `src/main/apply/apply.test.ts`, `e2e/tests/apply-ashby.spec.ts` | See below. |
 
@@ -100,9 +100,14 @@ flowchart TD
   `app.ashbyhq.com` is not an embed host.
 - **The location combobox is left to the user**, as the AC asks. `choices` names it, and today the engine already
   reports `role=combobox` as *Your choice*.
-- **No new readiness or verify code here.** The settle and the re-verify belong to #63's engine. Ashby provides `ready`,
-  and the current service already catches the late form with its 1 s re-detect, which the e2e exercises with a 500 ms
-  render.
+- **No new readiness or verify code here.** The settle and the re-verify belong to #63's engine, and the Ashby hooks
+  (`ready`, `uploadAttached`, `afterUpload`) have no runtime consumer until #63 lands (PR review). Until then:
+  - The service's fixed re-detects (load+1 s, then load+4 s) catch a form that renders within about 4 s, so a slower
+    Ashby API leaves the page on *Ready to fill*.
+  - An upload Ashby rejects is still reported *Attached*, because the service marks it right after the CDP call.
+  - A value the page clears after the fill is still reported *Filled*.
+
+  This PR is rebased onto #63 and re-verified with e2e cases for each of these before it merges.
 
 ## How to test
 
@@ -132,8 +137,10 @@ Screenshots: `docs/changes/assets/64-ashby-filled-page.png`, `64-ashby-filled-pa
 
 ## Follow-ups
 
-- Once #63 lands, check that the engine reads `ready`, `uploadOrder`, `uploadAttached` and `afterUpload` for Ashby, and
-  add an e2e case for an upload the mock fails (a toast → `upload-failed`).
+- Once #63 lands (required before merge): check that the engine reads `ready`, `uploadOrder`, `uploadAttached` and
+  `afterUpload` for Ashby. Add e2e cases for a render later than the last fixed retry (`?renderMs=`), an upload the
+  mock fails (`?failUpload=1`: a toast, so `upload-failed` and never *Attached*), and a value cleared after the fill
+  (re-applied once, else `rejected`).
 - An Ashby embed on a company domain cannot be exercised end-to-end: the embed rule requires https on
   `jobs.ashbyhq.com`. It is covered by unit and service tests. A loopback override for embed hosts in dev (as #63 plans
   for Greenhouse) would allow an e2e.

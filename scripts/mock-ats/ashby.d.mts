@@ -9,6 +9,8 @@ export interface AshbyUpload {
   file: string
   type: string
   bytes: number
+  /** Set when `?failUpload=1` made the upload fail. */
+  failed?: true
   at: string
 }
 
