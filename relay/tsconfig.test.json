@@ -1,0 +1,18 @@
+{
+  // The tests run in Node (vitest) and drive the bundled Worker through Miniflare.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "noEmit": true
+  },
+  "include": ["test/**/*.ts", "vitest.config.ts", "src/push.ts"]
+}

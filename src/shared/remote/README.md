@@ -47,6 +47,12 @@ try {
 }
 ```
 
+**Acknowledging without sending.** A `RelayFrame` always carries a box (`nonce`, `ct`), so a
+receiver that has nothing to send back acknowledges with the clear client frame
+`{ ack: ref }` (`RelayClientFrame`): the relay deletes that frame from the receiver's inbox
+exactly as it does for `RelayFrame.ack`. The phone acks results and events this way; the
+desktop acks a command in the same frame as its result (`ack: env.id`).
+
 `errorOf` forwards the message of a `ProtocolError` only; any other exception (filesystem,
 network, process errors, which may quote workspace paths) becomes `failed` with
 `GENERIC_FAILURE_MESSAGE`. The gateway logs the original itself.

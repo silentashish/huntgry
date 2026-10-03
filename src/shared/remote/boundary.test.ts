@@ -65,7 +65,8 @@ describe('import boundary', () => {
     const root = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
     expect(root.workspaces).toEqual(['src/shared/remote', 'relay', 'mobile'])
     const pnpm = readFileSync(join(ROOT, 'pnpm-workspace.yaml'), 'utf8')
-    const packages = [...pnpm.matchAll(/^\s+-\s+(\S+)\s*$/gm)].map((m) => m[1])
+    const packageSection = pnpm.match(/^packages:\n((?:  - [^\n]+\n)*)/m)?.[1] ?? ''
+    const packages = [...packageSection.matchAll(/^  - (\S+)$/gm)].map((m) => m[1])
     expect(packages).toEqual(root.workspaces)
     expect(root.dependencies.tweetnacl).toBe(JSON.parse(readFileSync(join(DIR, 'package.json'), 'utf8')).dependencies.tweetnacl)
   })

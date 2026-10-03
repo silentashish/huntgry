@@ -3,6 +3,20 @@ packages:
   - relay
   - mobile
 
+# Resolve @huntgry/* from the workspace (npm does this by default; pnpm ≥ 9 needs it switched on).
+linkWorkspacePackages: true
+
 allowBuilds:
   electron-winstaller: false
   esbuild: true
+
+minimumReleaseAgeExclude:
+  - '@cloudflare/workerd-darwin-64@1.20260930.2'
+  - '@cloudflare/workerd-darwin-arm64@1.20260930.2'
+  - '@cloudflare/workerd-linux-64@1.20260930.2'
+  - '@cloudflare/workerd-linux-arm64@1.20260930.2'
+  - '@cloudflare/workerd-windows-64@1.20260930.2'
+  - '@cloudflare/workers-types@5.20260930.2'
+  - miniflare@5.20260930.0-alpha
+  - workerd@1.20260930.2
+  - wrangler@4.145.0

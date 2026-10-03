@@ -1,0 +1,24 @@
+# Huntgry relay (ADR-0001, E2). Deploy into your own Cloudflare account with scripts/deploy.sh.
+name = "huntgry-relay"
+main = "src/worker.ts"
+compatibility_date = "2025-06-01"
+
+# One SQLite-backed Durable Object per room. SQLite-backed classes are the ones the Workers
+# Free plan offers, and the WebSocket Hibernation API keeps an idle room at zero duration.
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+
+# Tunables (the ADR defaults). Tests override them; the secret ADMIN_TOKEN is set by the deploy script.
+[vars]
+HEARTBEAT_SECONDS = "30"
+AUTH_TIMEOUT_MS = "5000"
+PUSH_COALESCE_SECONDS = "300"
+
+# No logs: the Worker must not log frame bodies, and Workers Logs is opt-in anyway.
+[observability]
+enabled = false
