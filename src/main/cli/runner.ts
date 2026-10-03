@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { AGENT_LABEL, DEFAULT_AGENT, type AgentId, type RunSummary, type StartRunParams } from '@shared/runner-types'
 import { LineBuffer, parseEventLine, type HuntgryEvent } from '@shared/transcript'
 import { buildFirstPrompt, runTitle, type SandboxPaths } from './command'
@@ -369,7 +369,8 @@ export class RunManager {
           claimedJobIds: others.map((e) => e.run.params.jobId).filter((id): id is string => !!id)
         }).catch(() => null)
         if (out) {
-          r.outputFolder = out.folder
+          // An application id uses `/` on every platform (`relative()` gives `\` on Windows).
+          r.outputFolder = out.folder.split(sep).join('/')
           r.outputFiles = out.files
           // Let the Dashboard link the application back to its posting and board.
           const { jobUrl, source } = r.params
