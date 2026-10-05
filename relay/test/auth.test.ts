@@ -45,6 +45,8 @@ describe('first-frame auth', () => {
     expect((await relay.connectAs(f.roomId, { room: f.roomId, pairing: 'unregistered' }).then((c) => c.closed)).code).toBe(4002)
     // Another room's id in the auth frame does not match the socket's room.
     const otherRoom = await relay.createRoom('other')
+    expect((await relay.connectAs(f.roomId, { room: otherRoom, owner: f.ownerSecret }, { direct: true }).then((c) => c.closed)).code).toBe(4002)
+    // Through /ws the frame picks the other room, whose owner secret this is not.
     expect((await relay.connectAs(f.roomId, { room: otherRoom, owner: f.ownerSecret }).then((c) => c.closed)).code).toBe(4002)
 
     // A pairing works until its expiry.

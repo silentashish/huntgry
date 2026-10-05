@@ -4,7 +4,7 @@
  * token. The relay stores and compares SHA-256 hex digests only; a plaintext credential is
  * hashed on arrival and dropped.
  */
-import { equalBytes } from '@huntgry/remote-protocol'
+import { BEARER, equalBytes } from '@huntgry/remote-protocol'
 
 const encoder = new TextEncoder()
 
@@ -12,8 +12,6 @@ export async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', encoder.encode(text))
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
 }
-
-export const isSha256Hex = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v)
 
 /** Constant-time equality of two strings of the same length (hex digests, tokens). */
 export function equalStrings(a: string, b: string): boolean {
@@ -26,9 +24,10 @@ export async function matchesHash(presented: string, expectedHash: string | unde
   return equalStrings(await sha256Hex(presented), expectedHash)
 }
 
+const BEARER_HEADER = new RegExp(`^${BEARER}\\s+(\\S+)$`, 'i')
+
 /** The bearer credential of a request, or `undefined`. Never logged. */
 export function bearerOf(request: Request): string | undefined {
   const header = request.headers.get('authorization') ?? ''
-  const m = /^Bearer\s+(\S+)$/i.exec(header)
-  return m?.[1]
+  return BEARER_HEADER.exec(header)?.[1]
 }

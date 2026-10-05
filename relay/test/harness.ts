@@ -8,7 +8,16 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { Miniflare, Response as MfResponse, type Request as MfRequest, type WebSocket as MfWebSocket } from 'miniflare'
-import type { RelayClientFrame, RelayFrame } from '@huntgry/remote-protocol'
+import {
+  BEARER,
+  RELAY_PATHS,
+  requireCreateRoomResponse,
+  type CreateRoomRequest,
+  type RegisterDeviceRequest,
+  type RegisterPairingRequest,
+  type RelayClientFrame,
+  type RelayFrame
+} from '@huntgry/remote-protocol'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -167,37 +176,51 @@ export class Relay {
     return { status: res.status, json, headers: res.headers as unknown as Headers }
   }
 
+  /** `Authorization` for a bearer credential, as the desktop sends it. */
+  static bearer(token: string): Record<string, string> {
+    return { authorization: `${BEARER} ${token}` }
+  }
+
   async createRoom(ownerSecret: string, adminToken = ADMIN_TOKEN): Promise<string> {
-    const res = await this.fetch('/rooms', { method: 'POST', headers: { authorization: `Bearer ${adminToken}` }, body: { ownerSecretHash: sha256(ownerSecret) } })
+    const body: CreateRoomRequest = { ownerSecretHash: sha256(ownerSecret) }
+    const res = await this.fetch(RELAY_PATHS.rooms, { method: 'POST', headers: Relay.bearer(adminToken), body })
     if (res.status !== 201) throw new Error(`createRoom: ${res.status} ${JSON.stringify(res.json)}`)
-    return (res.json as { roomId: string }).roomId
+    return requireCreateRoomResponse(res.json).roomId
   }
 
   async registerDevice(roomId: string, ownerSecret: string, deviceId: string, relayToken: string): Promise<number> {
-    const res = await this.fetch(`/rooms/${roomId}/devices`, { method: 'POST', headers: { authorization: `Bearer ${ownerSecret}` }, body: { deviceId, tokenHash: sha256(relayToken) } })
-    return res.status
+    const body: RegisterDeviceRequest = { deviceId, tokenHash: sha256(relayToken) }
+    return (await this.fetch(RELAY_PATHS.devices(roomId), { method: 'POST', headers: Relay.bearer(ownerSecret), body })).status
   }
 
   async registerPairing(roomId: string, ownerSecret: string, pairingId: string, expMs = 120_000): Promise<number> {
-    const res = await this.fetch(`/rooms/${roomId}/pairings`, { method: 'POST', headers: { authorization: `Bearer ${ownerSecret}` }, body: { pairingId, exp: new Date(Date.now() + expMs).toISOString() } })
-    return res.status
+    const body: RegisterPairingRequest = { pairingId, exp: new Date(Date.now() + expMs).toISOString() }
+    return (await this.fetch(RELAY_PATHS.pairings(roomId), { method: 'POST', headers: Relay.bearer(ownerSecret), body })).status
   }
 
   async revokeDevice(roomId: string, ownerSecret: string, deviceId: string): Promise<number> {
-    const res = await this.fetch(`/rooms/${roomId}/devices/${deviceId}`, { method: 'DELETE', headers: { authorization: `Bearer ${ownerSecret}` } })
-    return res.status
+    return (await this.fetch(RELAY_PATHS.device(roomId, deviceId), { method: 'DELETE', headers: Relay.bearer(ownerSecret) })).status
   }
 
-  /** Opens a WebSocket to the room; the caller sends the `auth` frame. */
-  async connect(roomId: string, init: { path?: string; headers?: Record<string, string>; origin?: string } = {}): Promise<Client> {
-    const res = await this.mf.dispatchFetch(`${init.origin ?? ORIGIN}${init.path ?? `/rooms/${roomId}/ws`}`, { headers: { upgrade: 'websocket', ...init.headers } })
+  async deleteRoom(roomId: string, ownerSecret: string): Promise<number> {
+    return (await this.fetch(RELAY_PATHS.room(roomId), { method: 'DELETE', headers: Relay.bearer(ownerSecret) })).status
+  }
+
+  /**
+   * Opens a WebSocket; the caller sends the `auth` frame. By default it goes to
+   * `RELAY_PATHS.socket` (`/ws`, the room is named only in the auth frame), as the desktop and
+   * the phone connect; `{ direct: true }` uses the room-scoped `/rooms/:room/ws` instead.
+   */
+  async connect(roomId: string, init: { path?: string; direct?: boolean; headers?: Record<string, string>; origin?: string } = {}): Promise<Client> {
+    const path = init.path ?? (init.direct ? directSocketPath(roomId) : RELAY_PATHS.socket)
+    const res = await this.mf.dispatchFetch(`${init.origin ?? ORIGIN}${path}`, { headers: { upgrade: 'websocket', ...init.headers } })
     if (!res.webSocket) throw new Error(`connect: ${res.status} ${await res.text()}`)
     return new Client(res.webSocket)
   }
 
   /** Opens and authenticates in one go; the returned client has not consumed any message yet. */
-  async connectAs(roomId: string, auth: Extract<RelayClientFrame, { auth: unknown }>['auth']): Promise<Client> {
-    const client = await this.connect(roomId)
+  async connectAs(roomId: string, auth: Extract<RelayClientFrame, { auth: unknown }>['auth'], init: { direct?: boolean } = {}): Promise<Client> {
+    const client = await this.connect(roomId, init)
     client.send({ auth })
     return client
   }
@@ -239,5 +262,8 @@ export async function fixture(relay: Relay): Promise<Fixture> {
 export function frame(to: string, ref: string, extra: Partial<RelayFrame> = {}): RelayFrame {
   return { to, ref, nonce: nonce(), ct: ciphertext(), ...extra }
 }
+
+/** The room-scoped socket route, which the shared contract does not name (see relay/README.md). */
+export const directSocketPath = (roomId: string): string => `${RELAY_PATHS.room(roomId)}/ws`
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))

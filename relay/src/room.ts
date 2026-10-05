@@ -22,6 +22,9 @@ import {
   COMMAND_TTL_SECONDS,
   LIMITS,
   ProtocolError,
+  requireCreateRoomRequest,
+  requireRegisterDeviceRequest,
+  requireRegisterPairingRequest,
   requireRelayClientFrame,
   requireRelayFrame,
   utf8Bytes,
@@ -30,7 +33,7 @@ import {
   type RelayFrame,
   type RelayNotice
 } from '@huntgry/remote-protocol'
-import { bearerOf, isSha256Hex, matchesHash, sha256Hex } from './auth'
+import { bearerOf, matchesHash } from './auth'
 import { configOf, type Config, type Env } from './env'
 import { EXPO_PUSH_TOKEN, pushMessage, sendExpoPush } from './push'
 
@@ -107,8 +110,8 @@ export class Room extends DurableObject<Env> {
 
     if (request.method === 'POST' && path === '/init') {
       if (this.meta('ownerHash')) return json({ error: 'room exists' }, 409)
-      const body = await readJson(request)
-      if (!body || !isSha256Hex(body.ownerSecretHash)) return json({ error: 'ownerSecretHash must be a hex SHA-256' }, 400)
+      const body = await readBody(request, requireCreateRoomRequest)
+      if ('error' in body) return body.error
       this.setMeta('ownerHash', body.ownerSecretHash)
       this.setMeta('createdAt', String(now))
       this.setMeta('desktopSince', new Date(now).toISOString())
@@ -133,10 +136,10 @@ export class Room extends DurableObject<Env> {
     if (!secret || !(await matchesHash(secret, this.meta('ownerHash')))) return json({ error: 'unauthorized' }, 401)
 
     if (request.method === 'POST' && path === '/pairings') {
-      const body = await readJson(request)
-      const pairingId = idOf(body?.pairingId)
-      const exp = typeof body?.exp === 'string' ? Date.parse(body.exp) : NaN
-      if (!pairingId || !Number.isFinite(exp)) return json({ error: 'pairingId and exp (ISO) required' }, 400)
+      const body = await readBody(request, requireRegisterPairingRequest)
+      if ('error' in body) return body.error
+      const { pairingId } = body
+      const exp = Date.parse(body.exp)
       if (exp <= now || exp > now + MAX_PAIRING_SECONDS * 1000) return json({ error: `exp must be within the next ${MAX_PAIRING_SECONDS} s` }, 400)
       this.sql('DELETE FROM pairings WHERE exp <= ?', now)
       this.sql('INSERT OR REPLACE INTO pairings (id, exp) VALUES (?, ?)', pairingId, exp)
@@ -144,9 +147,10 @@ export class Room extends DurableObject<Env> {
     }
 
     if (request.method === 'POST' && path === '/devices') {
-      const body = await readJson(request)
-      const deviceId = idOf(body?.deviceId)
-      if (!deviceId || deviceId === DESKTOP || !isSha256Hex(body?.tokenHash)) return json({ error: 'deviceId and tokenHash (hex SHA-256) required' }, 400)
+      const body = await readBody(request, requireRegisterDeviceRequest)
+      if ('error' in body) return body.error
+      const { deviceId } = body
+      if (deviceId === DESKTOP) return json({ error: `deviceId "${DESKTOP}" is reserved` }, 400)
       this.sql('INSERT INTO devices (id, token_hash, registered_at) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET token_hash = excluded.token_hash', deviceId, body.tokenHash, now)
       // A new token invalidates the socket that authenticated with the old one.
       for (const ws of this.socketsOf('device', deviceId)) ws.close(CLOSE.revoked, 'token replaced')
@@ -516,19 +520,19 @@ function isClientFrame(value: unknown): boolean {
   return typeof value === 'object' && value !== null && ('auth' in value || 'pushToken' in value || ('ack' in value && !('ct' in value)))
 }
 
-function idOf(v: unknown): string | null {
-  return typeof v === 'string' && v.length > 0 && v.length <= LIMITS.idChars ? v : null
-}
-
-async function readJson(request: Request): Promise<Record<string, unknown> | null> {
+/** A JSON body of at most 4 KiB checked by the shared contract's guard, or the `400` to answer. */
+async function readBody<T>(request: Request, guard: (v: unknown) => T): Promise<T | { error: Response }> {
+  let value: unknown
   try {
     const text = await request.text()
-    if (text.length > 4096) return null
-    const value: unknown = JSON.parse(text)
-    return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+    if (text.length > 4096) return { error: json({ error: 'body too large' }, 400) }
+    value = JSON.parse(text)
   } catch {
-    return null
+    return { error: json({ error: 'JSON body required' }, 400) }
+  }
+  try {
+    return guard(value)
+  } catch (e) {
+    return { error: json({ error: e instanceof ProtocolError ? e.message : 'invalid body' }, 400) }
   }
 }
-
-export { sha256Hex }
