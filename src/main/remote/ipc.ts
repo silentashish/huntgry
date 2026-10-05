@@ -193,8 +193,25 @@ const api: RemoteApi = {
   }
 }
 
-/** Creates the stores, the gateway and the session, subscribes to events and connects when enabled. */
-export async function startRemote(): Promise<void> {
+let starting: Promise<void> | null = null
+
+/**
+ * Creates the stores, the gateway and the session, subscribes to events and connects when
+ * enabled. Never rejects: a failure is logged and Settings reports it on its next call.
+ */
+export function startRemote(): Promise<void> {
+  starting ??= init().catch((err: unknown) => console.error('[remote] could not start the remote session:', err))
+  return starting
+}
+
+/** Settings may call before `startRemote` finished (or after it failed). */
+async function started(): Promise<RemoteApi> {
+  await startRemote()
+  if (!session) throw new Error('Remote control could not start. Restart Huntgry and check the logs.')
+  return api
+}
+
+async function init(): Promise<void> {
   devices = new DeviceStore(remoteDir(), cipher)
   credentials = new CredentialStore(remoteDir(), cipher)
   await devices.load()
@@ -221,7 +238,7 @@ export async function startRemote(): Promise<void> {
     workspace: () => services.workspace().catch(() => null),
     status,
     notificationDetails: () => detailsOn,
-    onState: () => void publish()
+    onState: () => void publish().catch((err: unknown) => console.error('[remote] publishing the state failed:', err))
   })
   onEvent((channel, payload) => {
     if (!session.isOnline()) return
@@ -258,19 +275,19 @@ export async function stopRemote(): Promise<void> {
 }
 
 export function registerRemoteIpc(): void {
-  ipcMain.handle(REMOTE_CHANNELS.state, () => api.state())
-  ipcMain.handle(REMOTE_CHANNELS.setEnabled, (_e, enabled: unknown) => api.setEnabled(enabled as boolean))
-  ipcMain.handle(REMOTE_CHANNELS.configure, (_e, input: unknown) => api.configure(input as { relayUrl: string; adminToken: string }))
+  ipcMain.handle(REMOTE_CHANNELS.state, async () => (await started()).state())
+  ipcMain.handle(REMOTE_CHANNELS.setEnabled, async (_e, enabled: unknown) => (await started()).setEnabled(enabled as boolean))
+  ipcMain.handle(REMOTE_CHANNELS.configure, async (_e, input: unknown) => (await started()).configure(input as { relayUrl: string; adminToken: string }))
   ipcMain.handle(REMOTE_CHANNELS.setNotificationDetails, async (_e, on: unknown) => {
-    const state = await api.setNotificationDetails(on === true)
+    const state = await (await started()).setNotificationDetails(on === true)
     await refreshToggles()
     return state
   })
   ipcMain.handle(REMOTE_CHANNELS.setTranscripts, async (_e, on: unknown) => {
-    const state = await api.setTranscripts(on !== false)
+    const state = await (await started()).setTranscripts(on !== false)
     await refreshToggles()
     return state
   })
-  ipcMain.handle(REMOTE_CHANNELS.revoke, (_e, id: unknown) => api.revoke(id as string))
-  ipcMain.handle(REMOTE_CHANNELS.unpairAll, () => api.unpairAll())
+  ipcMain.handle(REMOTE_CHANNELS.revoke, async (_e, id: unknown) => (await started()).revoke(id as string))
+  ipcMain.handle(REMOTE_CHANNELS.unpairAll, async () => (await started()).unpairAll())
 }
