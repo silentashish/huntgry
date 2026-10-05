@@ -55,14 +55,31 @@ frame `{ auth: { room, owner } }` on its WebSocket.
 
 ## Routes
 
+The paths and bodies are the shared contract in `@huntgry/remote-protocol`
+(`src/shared/remote/relay-http.ts`: `RELAY_PATHS`, `CreateRoomRequest`, `RegisterDeviceRequest`,
+`RegisterPairingRequest` and their guards), which the desktop builds its requests from; the
+relay validates every body with the same guards, so an unknown field is a `400`.
+
 | Route | Auth | Body / notes |
 | --- | --- | --- |
 | `POST /rooms` | `Bearer <ADMIN_TOKEN>` | `{ ownerSecretHash }` → `{ roomId }` |
-| `POST /rooms/:room/pairings` | `Bearer <ownerSecret>` | `{ pairingId, exp }` (ISO, ≤ 10 min ahead) |
+| `POST /rooms/:room/pairings` | `Bearer <ownerSecret>` | `{ pairingId, exp }` (ISO, ≤ 10 min ahead); the pairing socket is closed at `exp` (`4006`) |
 | `POST /rooms/:room/devices` | `Bearer <ownerSecret>` | `{ deviceId, tokenHash }` (`sha256(relayToken)`); replaces an existing token and closes its socket |
 | `DELETE /rooms/:room/devices/:device` | `Bearer <ownerSecret>` | Revocation: token hash, push token, inbox and socket go |
 | `DELETE /rooms/:room` | `Bearer <ownerSecret>` | Wipes the room (**Rotate relay credentials**) |
-| `GET /rooms/:room/ws` | first frame | WebSocket; no query string, no `Authorization` / `Cookie` / `Sec-WebSocket-Protocol` |
+| `GET /ws` | first frame | WebSocket (`RELAY_PATHS.socket`); the room is named only in the auth frame. No query string, no `Authorization` / `Cookie` / `Sec-WebSocket-Protocol` |
+| `GET /rooms/:room/ws` | first frame | The same socket routed by path; not in the shared contract (see below) |
+
+`/ws` has no room in its URL, so the Worker accepts the socket, reads the `{ auth }` frame,
+opens a socket to that room's Durable Object, hands it the frame unchanged and then forwards
+both ways without reading anything; the room checks the credential exactly as on a direct
+socket, and its close codes reach the client unchanged. The cost is that the Worker stays in
+the path for the socket's life and spends a little CPU on every frame it forwards.
+`/rooms/:room/ws` connects the client to the Durable Object directly, with no Worker in the
+path; the room id is not a credential (ADR-0001 lists it among what the relay learns). It is
+kept as the fallback if the forwarding Worker turns out to hit the Free plan's per-request CPU
+limit on long sessions; switching the clients to it is a one-line change to
+`RELAY_PATHS.socket`.
 
 Everything is `https://` / `wss://` only; a plain `http://` request gets `400`.
 
@@ -71,7 +88,9 @@ Everything is `https://` / `wss://` only; a plain `http://` request gets `400`.
 The first frame is a `RelayClientFrame.auth` (`{ room, owner }` for the desktop,
 `{ room, pairing }` during pairing, `{ room, device, token }` afterwards). A socket that has not
 authenticated within 5 s is closed (`4003`); a wrong credential closes with `4002`; a new
-socket for the same identity replaces the old one (`4000`). After auth:
+socket for the same identity replaces the old one (`4000`); a revoked or replaced device token
+closes with `4001`, a deleted room with `4004`, a missed desktop heartbeat with `4005` and an
+expired pairing with `4006`. After auth:
 
 - `RelayFrame` (`to`, `ref`, `nonce`, `ct`, `ttl?`, `ack?`, `pushHint?`, `pushText?`): queued in
   the recipient's inbox with a `deliverySeq`, forwarded as `{ to, ref, nonce, ct, ttl }` when the
@@ -85,7 +104,9 @@ socket for the same identity replaces the old one (`4000`). After auth:
   `ttl` passed, live or on the sender's next connection), `{ tooLarge: true, ref, bytes }`.
 - On reconnect every unacked frame is redelivered in `deliverySeq` order before live frames.
   A phone's inbox holds at most 50 frames: the oldest *events* are dropped, results never (a
-  desktop frame whose `ref` answers a command that phone sent).
+  desktop frame whose `ref` answers a command that phone sent). The other direction is capped
+  too: at most 50 frames from one phone wait for an offline desktop; the oldest go first and
+  the phone gets `{ expired: true, ref }` for each.
 - The desktop counts as offline after two missed heartbeats (any frame counts; 30 s period).
 - 60 frames per minute per connection; over it the socket closes (`1008`).
 
@@ -109,9 +130,10 @@ duration a day and 5 GB of storage. Three things keep a room inside that:
 - **Hibernation.** Sockets use the WebSocket Hibernation API, so a room with idle sockets is
   evicted from memory and bills no duration; it wakes for a frame, a close or its alarm. One
   WebSocket message costs 1/20 of a request on the DO side.
-- **One alarm.** Auth deadlines, the heartbeat check and the next frame expiry share one alarm;
+- **One alarm.** Auth deadlines, pairing expiry, the heartbeat check and the next frame expiry share one alarm;
   a room with no sockets and nothing queued schedules none.
-- **Small rows.** A frame is at most 64 KiB and a phone's inbox holds at most 50 of them.
+- **Small rows.** A frame is at most 64 KiB and each direction of a phone's queue holds at most
+  50 of them.
 
 In practice a desktop heartbeat every 30 s is ~2 900 messages a day, well under the daily
 request allowance even with a few phones. The dashboard should show close to zero duration
@@ -129,6 +151,6 @@ the tunables lowered where a test needs them (`AUTH_TIMEOUT_MS`, `HEARTBEAT_SECO
 `PUSH_COALESCE_SECONDS`) and captures the Worker's outbound Expo requests. No real Cloudflare
 account or network is involved.
 
-Manual check after deploying: open two `wscat -c wss://…/rooms/<room>/ws` clients, send a
+Manual check after deploying: open two `wscat -c wss://…/ws` clients, send a
 hand-built `{ auth }` frame first on each, exchange frames, kill one client before it acks and
 watch the frame come back on reconnect.
