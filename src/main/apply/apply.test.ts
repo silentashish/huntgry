@@ -297,6 +297,16 @@ describe('ApplyService', () => {
     await expect(service.start(ID)).resolves.toMatchObject({ status: 'opened' })
   })
 
+  it('fails closed: review notes without a review state, or a malformed one, block Apply (#31 gate)', async () => {
+    const jd = { 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' }
+    await application({ ...jd, 'review-notes.md': '# Review notes\n' }, 'a/b/stopped-run')
+    const { service } = setup(new FakeTab('', GH_URL))
+    await expect(service.start('a/b/stopped-run')).rejects.toThrow(/Unreviewed.*Review page/)
+    await application({ ...jd, 'huntgry.json': JSON.stringify({ status: 'generated', review: { state: 'aproved' } }) }, 'a/b/broken')
+    await expect(service.start('a/b/broken')).rejects.toThrow(/needs attention/)
+    expect(service.current()).toBeNull()
+  })
+
   it('refuses a symlinked resume.pdf and ids outside the workspace', async () => {
     const outside = join(ws, 'secret.pdf')
     await writeFile(outside, '%PDF secret')

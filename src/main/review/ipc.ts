@@ -3,7 +3,7 @@ import { REVIEW_CHANNELS } from '@shared/review-types'
 import { contextForRun, manager } from '../cli/start'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
-import { replyThroughQueue } from '../queue/ipc'
+import { queue, replyThroughQueue } from '../queue/ipc'
 import { requireApprovalId } from './approvals'
 import {
   approveReview,
@@ -32,7 +32,10 @@ export const reviewDeps: ReviewDeps = {
     const viaQueue = await replyThroughQueue(runId, text)
     return viaQueue ?? manager.reply(runId, text, () => contextForRun(runId, ws))
   },
-  changed: () => emit('applications:changed', null)
+  changed: () => emit('applications:changed', null),
+  busy: (runId) =>
+    manager.liveRun(runId)?.status === 'running' ||
+    queue.state().items.some((i) => i.runId === runId && (i.status === 'queued' || i.status === 'preparing' || i.status === 'running'))
 }
 
 /** Review of unattended results: list, detail, approve / re-run / discard bound to a revision, standing approvals. */

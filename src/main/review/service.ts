@@ -41,6 +41,8 @@ export interface ReviewDeps {
   reply(runId: string, text: string, workspace: string): Promise<RunSummary | 'held'>
   /** Tracking changed on disk (the desktop re-lists). */
   changed?(): void
+  /** The run is working on this result right now (a turn running, or a reply waiting for a slot). */
+  busy?(runId: string): boolean
   now?(): Date
 }
 
@@ -151,8 +153,17 @@ export async function reviewDetail(workspace: string, applicationId: string): Pr
     )
   ).filter((a): a is { file: string; bytes: number; sha256: string } => a !== null)
   const ids = parsed.proposed.map((p) => p.id)
+  // The review state is part of the revision: a decision made on what was shown before a re-run,
+  // an approval or a new run is stale even when the files did not change (yet).
   const revision = sha256(
-    JSON.stringify([notesText ?? '', parsed.openGaps, ids, report, artifacts.map((a) => [a.file, a.sha256])])
+    JSON.stringify([
+      [review.state, review.runId, review.at],
+      notesText ?? '',
+      parsed.openGaps,
+      ids,
+      report,
+      artifacts.map((a) => [a.file, a.sha256])
+    ])
   )
   return {
     applicationId,
@@ -180,13 +191,19 @@ async function audit(workspace: string, entry: Record<string, unknown>): Promise
   await appendFile(join(workspace, HUNTGRY_DIR, REVIEW_AUDIT_FILE), `${JSON.stringify(entry)}\n`, 'utf8')
 }
 
+const BUSY = 'This result is still being tailored. Decide once the run has finished.'
+
 /** The current detail when its revision is the one the caller saw, else a `stale` outcome. */
 async function pinned(
+  deps: ReviewDeps,
   workspace: string,
   applicationId: string,
-  revision: string
+  revision: string,
+  idle = true
 ): Promise<{ detail: ReviewDetail } | { outcome: ReviewOutcome }> {
   const detail = await reviewDetail(workspace, applicationId)
+  // Approving or re-running a result its run is still rewriting would act on files about to change.
+  if (idle && deps.busy?.(detail.runId)) throw new Error(BUSY)
   if (detail.revision !== revision)
     return { outcome: { ok: false, error: 'stale', message: 'This result changed since it was shown. Reload it and decide again.' } }
   return { detail }
@@ -224,7 +241,7 @@ function entriesFor(
 
 export async function approveReview(deps: ReviewDeps, input: ApproveReviewInput, via: ReviewVia): Promise<ReviewOutcome> {
   const workspace = await deps.workspace()
-  const p = await pinned(workspace, input.applicationId, input.revision)
+  const p = await pinned(deps, workspace, input.applicationId, input.revision)
   if ('outcome' in p) return p.outcome
   const { detail } = p
   const ids = input.approvedReframingIds ?? []
@@ -255,7 +272,7 @@ export function rerunMessage(answers: string, approved: { sourceFact: string; wo
 
 export async function rerunReview(deps: ReviewDeps, input: RerunReviewInput, via: ReviewVia): Promise<ReviewOutcome> {
   const workspace = await deps.workspace()
-  const p = await pinned(workspace, input.applicationId, input.revision)
+  const p = await pinned(deps, workspace, input.applicationId, input.revision)
   if ('outcome' in p) return p.outcome
   const { detail } = p
   const ids = input.approvedReframingIds ?? []
@@ -277,7 +294,8 @@ export async function rerunReview(deps: ReviewDeps, input: RerunReviewInput, via
 
 export async function discardReview(deps: ReviewDeps, input: DiscardReviewInput, via: ReviewVia): Promise<ReviewOutcome> {
   const workspace = await deps.workspace()
-  const p = await pinned(workspace, input.applicationId, input.revision)
+  // Discarding is allowed while the run works: it only archives the result and blocks Apply.
+  const p = await pinned(deps, workspace, input.applicationId, input.revision, false)
   if ('outcome' in p) return p.outcome
   const now = deps.now?.() ?? new Date()
   const folder = await resolveApplicationFolder(workspace, input.applicationId)

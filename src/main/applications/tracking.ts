@@ -36,12 +36,19 @@ export function normalizeTracking(input: unknown): ApplicationTracking {
 
 const REVIEW_STATES = ['unreviewed', 'needs-attention', 'approved', 'discarded'] as const
 
-/** `review` as written by the pipeline and the Review page; anything malformed is dropped. */
+export const UNREADABLE_REVIEW = 'The review state in huntgry.json is unreadable: check this result on the Review page.'
+
+/**
+ * `review` as written by the pipeline and the Review page. A malformed one fails closed: it
+ * reads as Needs attention, so a damaged file never lets an unattended result reach Apply.
+ */
 export function normalizeReview(input: unknown): ReviewTracking | undefined {
-  if (typeof input !== 'object' || input === null) return undefined
+  if (input === undefined || input === null) return undefined
+  const unreadable: ReviewTracking = { state: 'needs-attention', runId: '', at: '', reason: UNREADABLE_REVIEW }
+  if (typeof input !== 'object') return unreadable
   const r = input as Record<string, unknown>
-  if (!(REVIEW_STATES as readonly unknown[]).includes(r.state)) return undefined
-  if (typeof r.runId !== 'string' || typeof r.at !== 'string') return undefined
+  if (!(REVIEW_STATES as readonly unknown[]).includes(r.state)) return unreadable
+  if (typeof r.runId !== 'string' || typeof r.at !== 'string') return unreadable
   const out: ReviewTracking = { state: r.state as ReviewTracking['state'], runId: r.runId, at: r.at }
   if (typeof r.reason === 'string' && r.reason) out.reason = r.reason.slice(0, 2000)
   if (typeof r.reviewedAt === 'string') out.reviewedAt = r.reviewedAt

@@ -87,7 +87,8 @@ describe('review service', () => {
     await application('a/b/1', { review: { state: 'unreviewed', runId: RUN, at: '2026-09-30T01:00:00.000Z' } })
     await application('a/b/2', { review: { state: 'needs-attention', runId: RUN, at: '2026-09-30T03:00:00.000Z', reason: 'page_count' } })
     await application('a/b/3', { review: { state: 'approved', runId: RUN, at: '2026-09-30T04:00:00.000Z' } })
-    await application('a/b/4', { review: null })
+    // An attended result (no review notes, no review state) is not listed.
+    await application('a/b/4', { review: null, notes: null })
     const list = await listReviews(ws)
     expect(list.map((r) => [r.applicationId, r.state])).toEqual([
       ['a/b/2', 'needs-attention'],
@@ -124,7 +125,7 @@ describe('review service', () => {
     expect(d.proposedReframings).toEqual([])
     expect(d.parseWarning).toMatch(/format/)
     await expect(reviewDetail(ws, '../x')).rejects.toThrow()
-    await application('a/b/y', { review: null })
+    await application('a/b/y', { review: null, notes: null })
     await expect(reviewDetail(ws, 'a/b/y')).rejects.toThrow(/no unattended result/)
   })
 
@@ -182,6 +183,47 @@ describe('review service', () => {
     expect(replies).toEqual([])
     await expect(discardReview(deps, { applicationId: ID, revision: 'b'.repeat(64) }, 'desktop')).resolves.toMatchObject({ ok: false, error: 'stale' })
     await expect(rerunReview(deps, { applicationId: ID, revision: 'b'.repeat(64), answers: 'x' }, 'desktop')).resolves.toMatchObject({ ok: false, error: 'stale' })
+  })
+
+  it('a revision shown before a re-run is stale afterwards, even before any file changes', async () => {
+    await application()
+    const before = await reviewDetail(ws, ID)
+    expect((await rerunReview(deps, { applicationId: ID, revision: before.revision, answers: 'Drop R2.' }, 'desktop')).ok).toBe(true)
+    const late = await approveReview(deps, { applicationId: ID, revision: before.revision, approvedReframingIds: [] }, 'desktop')
+    expect(late).toMatchObject({ ok: false, error: 'stale' })
+    expect((await readTracking(join(ws, ID))).review?.state).toBe('unreviewed')
+  })
+
+  it('refuses approve and re-run while the run is still working on the result; discard still works', async () => {
+    const dir = await application()
+    const busy: ReviewDeps = { ...deps, busy: (runId) => runId === RUN }
+    const d = await reviewDetail(ws, ID)
+    await expect(approveReview(busy, { applicationId: ID, revision: d.revision, approvedReframingIds: [] }, 'desktop')).rejects.toThrow(
+      /still being tailored/
+    )
+    await expect(rerunReview(busy, { applicationId: ID, revision: d.revision, answers: 'x' }, 'desktop')).rejects.toThrow(/still being tailored/)
+    expect(replies).toEqual([])
+    expect((await readTracking(dir)).review?.state).toBe('unreviewed')
+    expect((await discardReview(busy, { applicationId: ID, revision: d.revision }, 'desktop')).ok).toBe(true)
+  })
+
+  it('notes without a review state (a stopped or crashed run) read as Unreviewed and can be approved', async () => {
+    const dir = await application(ID, { review: null })
+    const [item] = await listReviews(ws)
+    expect(item).toMatchObject({ applicationId: ID, state: 'unreviewed', reason: expect.stringContaining('never checked') })
+    const d = await reviewDetail(ws, ID)
+    expect(d.state).toBe('unreviewed')
+    await expect(rerunReview(deps, { applicationId: ID, revision: d.revision, answers: 'x' }, 'desktop')).rejects.toThrow(/no run to continue/)
+    expect((await approveReview(deps, { applicationId: ID, revision: d.revision, approvedReframingIds: [] }, 'desktop')).ok).toBe(true)
+    expect((await readTracking(dir)).review?.state).toBe('approved')
+  })
+
+  it('a malformed review state in huntgry.json fails closed (Needs attention), never open', async () => {
+    const dir = await application(ID, { review: { state: 'approvedish', runId: RUN, at: 'x' } })
+    expect((await readTracking(dir)).review).toMatchObject({ state: 'needs-attention', reason: expect.stringContaining('unreadable') })
+    await application('other/co/7', { review: { state: 'approved' } })
+    expect((await readTracking(join(ws, 'other/co/7'))).review?.state).toBe('needs-attention')
+    expect((await listReviews(ws)).map((r) => r.applicationId).sort()).toEqual(['other/co/7', ID].sort())
   })
 
   it('re-run sends the decisions and the ticked reframings to the run and makes the result unreviewed again', async () => {

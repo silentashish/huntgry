@@ -6,8 +6,11 @@ import {
   type ApplicationsList,
   type BuildSummary
 } from '@shared/applications-types'
+import { REVIEW_NOTES_FILE } from '@shared/review-types'
 import { APPLICATION_DEPTH, APPLICATION_MARKERS, IGNORED_ENTRIES, MAX_SCAN_ENTRIES } from '../workspace/constants'
 import { readTracking, TRACKING_FILE } from './tracking'
+
+export const UNCHECKED_REASON = 'Unattended result that was never checked (review-notes.md without a review state).'
 
 /**
  * Finds every `<role>/<company>/<job-id>/` application folder in a workspace
@@ -114,6 +117,13 @@ export async function readApplication(workspace: string, folder: string): Promis
       .filter((m): m is RegExpExecArray => m !== null && m[1] === kind)
       .sort((a, b) => Number(a[2]) - Number(b[2]))
       .map((m) => m[0])
+
+  // An unattended run writes review-notes.md before it builds (#31). A folder that has the notes but
+  // no review state (the run was stopped, crashed or is still in its turn) reads as Unreviewed, so
+  // Apply never sees an unattended result nobody checked. Not persisted: the Review page decides.
+  if (!tracking.review && names.includes(REVIEW_NOTES_FILE)) {
+    tracking.review = { state: 'unreviewed', runId: '', at: new Date(updated || created || 0).toISOString(), reason: UNCHECKED_REASON }
+  }
 
   return {
     id,
