@@ -99,6 +99,24 @@ describe('project.ts', () => {
     expect(q.more).toBe(30)
   })
 
+  it('bounds a queue state by serialised bytes too: 20 CJK titles with JSON-escaped errors still fit one envelope', () => {
+    const base = queueState().items[0]
+    const items = Array.from({ length: 20 }, (_, i) => ({
+      ...base,
+      id: `q-20260930-010203-${i.toString(16).padStart(6, '0')}`,
+      title: '職'.repeat(400),
+      status: 'failed' as const,
+      error: '\u0001'.repeat(4000)
+    }))
+    const q = projectQueue({ items, concurrency: 2, paused: false })
+    expect(q.items.length).toBeGreaterThan(0)
+    expect(q.items.length + (q.more ?? 0)).toBe(20)
+    expect(q.more).toBeGreaterThan(0)
+    // The whole event envelope stays under the plaintext budget, so queue.changed is never dropped.
+    expect(jsonBytes(envelope(q))).toBeLessThanOrEqual(LIMITS.plaintextBytes)
+    expect(() => requireEvent('queue.changed', q)).not.toThrow()
+  })
+
   it('pages jobs and runs by cursor, skipping dismissed jobs and applying the filter', () => {
     const jobs = Array.from({ length: 120 }, (_, i) => job(`url:${i.toString(16).padStart(6, '0')}`, { dismissed: i % 10 === 0, title: i % 2 ? 'Backend' : 'Frontend' }))
     const p1 = projectJobsPage(jobs)

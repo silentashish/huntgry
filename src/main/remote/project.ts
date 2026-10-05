@@ -84,12 +84,25 @@ export function projectQueueItem(item: QueueItem): RemoteQueueItem {
   return out
 }
 
-/** Active items first (queued, preparing, running, needs-reply), at most `LIMITS.queueItems`; `more` counts the rest. */
-export function projectQueue(state: QueueState): RemoteQueueState {
+/**
+ * Active items first (queued, preparing, running, needs-reply), at most `LIMITS.queueItems`
+ * **and** at most `budget` serialised bytes (multibyte titles and JSON-escaped errors count at
+ * their wire size); `more` counts the rest. `queue.enqueue` passes a smaller budget because its
+ * reply also carries the skipped list.
+ */
+export function projectQueue(state: QueueState, budget = PAGE_BUDGET): RemoteQueueState {
   const active = state.items.filter((i) => ACTIVE_STATUSES.includes(i.status))
   const rest = state.items.filter((i) => !ACTIVE_STATUSES.includes(i.status))
   const ordered = [...active, ...rest]
-  const items = ordered.slice(0, LIMITS.queueItems).map(projectQueueItem)
+  const items: RemoteQueueItem[] = []
+  let bytes = 0
+  for (const item of ordered.slice(0, LIMITS.queueItems)) {
+    const projected = projectQueueItem(item)
+    const size = jsonBytes(projected) + 1
+    if (bytes + size > budget) break
+    items.push(projected)
+    bytes += size
+  }
   const out: RemoteQueueState = { items, concurrency: state.concurrency, paused: state.paused }
   if (ordered.length > items.length) out.more = ordered.length - items.length
   return requireQueueState(out)
