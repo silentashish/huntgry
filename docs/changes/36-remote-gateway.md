@@ -109,11 +109,43 @@ sequenceDiagram
   so the phone never loses a result whose command was acked). It is the relay frame's `ref`,
   which the relay deletes by, not the envelope id (equal for a well-formed phone). Frames
   with nothing to send back (phone results, events, pongs) get `{ ack: ref }` alone once
-  `lastSeen` is saved. Frames no paired key opens are not acked: they expire at the relay.
+  their checkpoint is saved. Frames no paired key opens are not acked: they expire at the
+  relay. **A failed audit or checkpoint write is never acked.** It rejects as
+  `DurabilityError`, so the relay redelivers once storage works again.
+- **Only an exact redelivery is answered from the log.** Audit entries keep the device, the
+  `seq` and a SHA-256 of every sealed envelope field, and the index is keyed by
+  (device, id). A redelivery is the same ciphertext, so it matches. An id reused with
+  another seq, body, workspace or name is refused (`invalid`) and never runs. Another device
+  using the same id gets its own command, not the first phone's stored result.
+- **Every frame from a phone is admitted, not only commands.** `hello`, `ping`, results,
+  events and pongs go through `Gateway.admit` on the same per-device chain. Each must come
+  from a current pairing that is not marked for re-pair, be fresh, and carry the next `seq`.
+  The `seq` is checkpointed before the answer, with the frame's id and digest kept (last 32
+  per device) so an exact redelivery is answered again without renaming the device. An
+  expired or replayed `hello` is refused. A rewound counter marks the device.
+- **The device is re-read at dispatch.** A frame that waited behind another one is checked
+  against the store's current record (same sid and key), again after the fsyncs. A revoke,
+  unpair or re-pair in between denies it.
+- **The workspace is re-checked right before execution.** The owner can switch workspace
+  during the audit fsync. A command bound to workspace A then fails with "The workspace open
+  on the Mac changed" instead of running on B. The queue and run services still resolve the
+  current workspace themselves, inside their own call. Passing the checked workspace into
+  them changes files #58 owns, so it is a follow-up (see below).
+- **Durable writes.** `devices.json` (the outgoing `seq` reservation), the desktop key,
+  `relay.json` and `remote.json` are written with `writeDurable`: the temp file is fsynced,
+  renamed, then the directory is fsynced. A failed reservation rejects, so nothing is sent
+  under an unsaved `seq`. The audit log cuts a torn last record on load, before it appends
+  again, and indexes an entry only after its fsync.
+- **Revocation works during a relay outage.** `revoke.ts` removes the device on the Mac
+  first. Then it sends `device.revoked`, boxed with the captured record's key, and deletes
+  the relay token, each with a 10 s deadline. If the relay does not confirm, Settings says
+  so; the phone is refused by the Mac either way. Every relay `fetch` has a timeout.
+- **Backoff survives a relay that opens and then refuses.** The retry counter resets only
+  after a session outlives the 5 s auth grace, so repeated refusals back off to 60 s.
 - **A redelivered read runs again.** Reads keep no result in the log, and the relay redelivers
   a read exactly when its result frame was lost. Treating that as a replay marked the phone
-  for re-pair after a network blip; a finished read id now runs the read again under its old
-  `seq`, and a mutating command reusing a read's id is refused.
+  for re-pair after a network blip. An exact redelivery of a finished read now runs the read
+  again under its old `seq`, with no new checkpoint.
 - **Per-device serialisation in the gateway.** Two frames with the same `seq` arriving
   together could both pass `requireNextSeq` before either is recorded. Handling one device's
   frames in order closes that.
@@ -127,6 +159,13 @@ sequenceDiagram
 - **Events are dropped while offline** instead of being queued on the Mac. The relay is the
   queue, and the next `status` heartbeat or `hello` carries the current state. This keeps the
   queue and runs independent of the socket: a relay outage never blocks them.
+- **Queue states are bounded by bytes as well as count.** Twenty items with 200-character CJK
+  titles and JSON-escaped control characters in errors exceeded 40 KiB, so `queue.changed`
+  was dropped. `projectQueue` now stops at the budget and counts the rest in `more`. The
+  `queue.enqueue` reply keeps at most half the budget for its skipped list.
+- **`file.get` is bounded.** It stats the file first: over 32 MiB is refused, and an
+  out-of-range chunk is refused before any read. It reads only the requested 24 KiB, and the
+  whole-file SHA-256 is streamed once per file version (path, size, mtime, inode).
 - **`runs.list` and `jobs.list` pages are bounded by bytes as well as count.** Fifty runs with
   1 KiB errors are ≈ 78 KB of plaintext; a page now stops at the budget and sets
   `nextCursor`. The package's `requireRunsPage` still caps the count at 50.
@@ -150,7 +189,11 @@ Unit tests (`src/main/remote/`):
   a 3-hour-old enqueue with a 7-day `ttl` → `expired`; `lastSeq` derived from the log after a
   "restart" with a stale checkpoint; the commit order line by line; redelivery of a finished
   id returns the stored result without re-running; a redelivered read answers again without
-  marking the phone for re-pair, and a mutating command cannot reuse a read's id; **a simulated crash at each step**
+  marking the phone for re-pair; a reused id with another seq, body or workspace is refused
+  and does not run; another device's id is its own command; a removed, revoked-while-queued
+  or re-paired device is denied; an audit, checkpoint or outcome write failure rejects
+  (no ack) and the redelivery runs once or answers interrupted; a workspace switch during
+  the fsync does not redirect the command; a file over 32 MiB is refused; **a simulated crash at each step**
   (before the entry, after it, after execution, after the outcome) never runs a command
   twice and never loses one; a service error is `failed` with the generic message;
   `queue.enqueue` and `run.reply` through the real `TailorQueue` and `RunManager` with
@@ -159,6 +202,17 @@ Unit tests (`src/main/remote/`):
   `LIMITS.textBytes` refused; unknown agent and extra `model` argument refused;
   `jobs.addUrl` refuses names resolving to loopback or private addresses before any fetch;
   `file.get` chunks reassemble with the whole-file SHA-256.
+- `session.test.ts`, admission and backoff: an expired or rewound `hello` and an expired
+  `ping` are refused with no rename or pong, a rewound one marks the phone; an exact `hello`
+  redelivery is answered again without renaming; frames from a phone marked for re-pair are
+  ignored; open-then-refused cycles back off (the fourth wait is more than twice the first).
+- `revoke.test.ts`: with a relay `DELETE` that never answers, the phone is already removed
+  and its queued command denied; the call is aborted at the deadline.
+- `durable.test.ts`, `devices.test.ts`, `workspace.test.ts`, `audit.test.ts`: the temp file
+  and the directory are fsynced and a failed sync keeps the old file; an outgoing `seq`
+  reservation is fsynced and fails closed; eight concurrent first uses get one key and one
+  workspace id; rotation during first use ends on the rotated key; a torn audit tail is cut
+  so the next entry survives a restart; a failed audit write leaves no index entry.
 - `session.test.ts` (fake relay): wss only, owner secret in the first frame; a command
   acked in its result frame only once the audit outcome and the `lastSeq` checkpoint are on
   disk, with the relay frame's `ref`; phone results and pongs acked alone with `{ ack }` after
@@ -198,6 +252,9 @@ sleep / wake on a real Mac. Both need the relay and pairing (#35, #37).
 - **#35** rebases onto `relay-http.ts` and implements those routes. The `{ ack }` client frame
   (#35's commit, cherry-picked here) is already sent by the desktop. A clear `from` device id
   on phone frames would let the session skip trial decryption.
+- **Workspace lease for remote commands** (#69): pass the workspace the
+  gateway checked into `queueForRemote` / `runsForRemote` after #58 merges, so the service
+  call itself cannot pick up a workspace switched in the last instant.
 - **#37** pairing: `pair.hello` / `pair.ok` over secretbox, approve dialog, device
   registration (`RegisterDeviceRequest`), the "credentials unreadable" recovery, TTL settings,
   and showing the last audit entries in Settings.
