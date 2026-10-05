@@ -56,7 +56,8 @@ export const CLOSE = {
   unauthorized: 4002,
   authTimeout: 4003,
   roomDeleted: 4004,
-  heartbeat: 4005
+  heartbeat: 4005,
+  pairingExpired: 4006
 } as const
 
 export const DESKTOP = 'desktop'
@@ -140,9 +141,11 @@ export class Room extends DurableObject<Env> {
       if ('error' in body) return body.error
       const { pairingId } = body
       const exp = Date.parse(body.exp)
+      if (pairingId === DESKTOP) return json({ error: `pairingId "${DESKTOP}" is reserved` }, 400)
       if (exp <= now || exp > now + MAX_PAIRING_SECONDS * 1000) return json({ error: `exp must be within the next ${MAX_PAIRING_SECONDS} s` }, 400)
       this.sql('DELETE FROM pairings WHERE exp <= ?', now)
       this.sql('INSERT OR REPLACE INTO pairings (id, exp) VALUES (?, ?)', pairingId, exp)
+      await this.scheduleAlarm()
       return json({ ok: true }, 201)
     }
 
@@ -242,6 +245,11 @@ export class Room extends DurableObject<Env> {
     }
 
     this.expireFrames(now)
+    // RegisterPairingRequest.exp: the relay closes pairing sockets after it.
+    for (const ws of this.ctx.getWebSockets()) {
+      const attachment = ws.deserializeAttachment() as Attachment | null
+      if (attachment && !attachment.pending && attachment.kind === 'pairing' && this.pairingExp(attachment.id) <= now) ws.close(CLOSE.pairingExpired, 'pairing expired')
+    }
     this.sql('DELETE FROM pairings WHERE exp <= ?', now)
     await this.scheduleAlarm()
   }
@@ -333,6 +341,7 @@ export class Room extends DurableObject<Env> {
     const expires = now + (frame.ttl ?? DEFAULT_TTL_SECONDS) * 1000
     this.sql('INSERT INTO inbox (owner, sender, ref, frame, expires, result) VALUES (?, ?, ?, ?, ?, ?)', frame.to, sender, frame.ref, JSON.stringify(forwarded), expires, isResult ? 1 : 0)
     if (frame.to !== DESKTOP) this.capInbox(frame.to)
+    else this.capCommands(ws, sender)
 
     const recipientKind = frame.to === DESKTOP ? 'desktop' : this.sql<{ id: string }>('SELECT id FROM devices WHERE id = ?', frame.to).length > 0 ? 'device' : 'pairing'
     const recipient = this.socketsOf(recipientKind, frame.to)[0]
@@ -358,6 +367,22 @@ export class Room extends DurableObject<Env> {
     const excess = total - MAX_UNACKED_PER_PHONE
     if (excess <= 0) return
     this.sql('DELETE FROM inbox WHERE seq IN (SELECT seq FROM inbox WHERE owner = ? AND result = 0 ORDER BY seq ASC LIMIT ?)', owner, excess)
+  }
+
+  /**
+   * Keeps one phone's frames waiting for the desktop at `MAX_UNACKED_PER_PHONE` while the Mac
+   * sleeps, so a phone cannot fill the room's storage by reconnecting past the rate limit. The
+   * oldest go, and the phone is told `{ expired, ref }` as if their ttl had passed.
+   */
+  private capCommands(ws: WebSocket, sender: string): void {
+    const total = this.sql<{ n: number }>('SELECT COUNT(*) AS n FROM inbox WHERE owner = ? AND sender = ?', DESKTOP, sender)[0]?.n ?? 0
+    const excess = total - MAX_UNACKED_PER_PHONE
+    if (excess <= 0) return
+    const dropped = this.sql<{ seq: number; ref: string }>('SELECT seq, ref FROM inbox WHERE owner = ? AND sender = ? ORDER BY seq ASC LIMIT ?', DESKTOP, sender, excess)
+    for (const row of dropped) {
+      this.sql('DELETE FROM inbox WHERE seq = ?', row.seq)
+      this.notify(ws, { expired: true, ref: row.ref })
+    }
   }
 
   /** Sends every unacked frame for `owner` in deliverySeq order. Live frames that arrive later are appended behind them. */
@@ -449,6 +474,11 @@ export class Room extends DurableObject<Env> {
     return this.ctx.id.toString()
   }
 
+  /** When a pairing stops being valid; `0` once it is gone (expired and deleted, or never registered). */
+  private pairingExp(id: string): number {
+    return this.sql<{ exp: number }>('SELECT exp FROM pairings WHERE id = ?', id)[0]?.exp ?? 0
+  }
+
   private sql<T extends Record<string, SqlStorageValue>>(query: string, ...params: SqlStorageValue[]): T[] {
     return this.ctx.storage.sql.exec<T>(query, ...params).toArray()
   }
@@ -491,18 +521,21 @@ export class Room extends DurableObject<Env> {
   }
 
   /**
-   * One alarm for everything time-based: auth deadlines, the desktop heartbeat check and the
-   * next frame expiry. No sockets and nothing queued means no alarm, so an idle room never wakes.
+   * One alarm for everything time-based: auth deadlines, pairing expiry, the desktop heartbeat
+   * check and the next frame expiry. No sockets and nothing queued means no alarm, so an idle room never wakes.
    */
   private async scheduleAlarm(): Promise<void> {
     let next = Infinity
     let desktopConnected = false
+    const pairingSockets: string[] = []
     for (const ws of this.ctx.getWebSockets()) {
       const attachment = ws.deserializeAttachment() as Attachment | null
       if (!attachment) continue
       if (attachment.pending) next = Math.min(next, attachment.deadline)
       else if (attachment.kind === 'desktop') desktopConnected = true
+      else if (attachment.kind === 'pairing') pairingSockets.push(attachment.id)
     }
+    for (const id of pairingSockets) next = Math.min(next, this.pairingExp(id))
     if (desktopConnected) next = Math.min(next, Number(this.meta('desktopLastSeen') ?? Date.now()) + 2 * this.config.heartbeatMs)
     const soonest = this.sql<{ t: number | null }>('SELECT MIN(expires) AS t FROM inbox')[0]?.t
     if (soonest !== null && soonest !== undefined) next = Math.min(next, soonest)

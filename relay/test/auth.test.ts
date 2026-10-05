@@ -76,6 +76,17 @@ describe('first-frame auth', () => {
     expect((await relay.connectAs(f.roomId, { room: f.roomId, pairing: pairingId }).then((c) => c.closed)).code).toBe(4002)
   })
 
+  it('closes a pairing socket when its pairing expires, and refuses the reserved id', async () => {
+    const f = await fixture(relay)
+    const pairingId = randomId('pairing')
+    expect(await relay.registerPairing(f.roomId, f.ownerSecret, pairingId, 700)).toBe(201)
+    const pairing = await relay.connectAs(f.roomId, { room: f.roomId, pairing: pairingId })
+    await pairing.next() // presence
+    const closed = await pairing.closed
+    expect(closed).toMatchObject({ code: 4006, reason: 'pairing expired' })
+    expect(await relay.registerPairing(f.roomId, f.ownerSecret, 'desktop')).toBe(400)
+  })
+
   it('keeps one socket per identity: a reconnect replaces the previous one', async () => {
     const f = await fixture(relay)
     const first = await f.phone()

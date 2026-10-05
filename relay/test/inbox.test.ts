@@ -197,6 +197,27 @@ describe('inbox', () => {
     await phone2.close()
   })
 
+  it('holds at most 50 frames from one phone while the desktop is away, telling the phone which went', async () => {
+    const f = await fixture(relay)
+    const phone = await f.phone()
+    await phone.next() // presence: offline
+    for (let i = 0; i < 52; i++) phone.send(frame('desktop', `cmd-${i}`))
+    const notices: unknown[] = []
+    for (let i = 0; i < 54; i++) notices.push(await phone.next())
+    expect(notices.filter((n) => (n as { expired?: boolean }).expired)).toEqual([
+      { expired: true, ref: 'cmd-0' },
+      { expired: true, ref: 'cmd-1' }
+    ])
+    await phone.close()
+
+    const desktop = await f.desktop()
+    const refs: string[] = []
+    for (let i = 0; i < 50; i++) refs.push((await desktop.next<RelayFrame>()).ref)
+    await desktop.expectNone()
+    expect(refs).toEqual(Array.from({ length: 50 }, (_, i) => `cmd-${i + 2}`))
+    await desktop.close()
+  })
+
   it('closes a connection that sends more than 60 frames a minute', async () => {
     const f = await fixture(relay)
     const desktop = await f.desktop()
