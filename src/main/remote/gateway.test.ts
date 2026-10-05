@@ -270,6 +270,29 @@ describe('Gateway: commit order and idempotency', () => {
     expect((await auditLines()).filter((l) => l.id === env.id)).toHaveLength(2)
   })
 
+  it('redelivery of a read answers it again without tripping the replay check or marking the phone for re-pair', async () => {
+    const env = command(phone, 'queue.get', undefined, identity.id, { ts: new Date(now).toISOString() })
+    const first = await gateway.handle(devices.get(phone.id)!, env)
+    expect(first.result.ok).toBe(true)
+    // The result frame (carrying the ack) was lost to a disconnect, so the relay delivers the same frame again.
+    const again = await gateway.handle(devices.get(phone.id)!, env)
+    expect(again.result).toMatchObject({ re: env.id, ok: true })
+    expect(devices.get(phone.id)!.needsRepair).toBeFalsy()
+    expect(devices.get(phone.id)!.lastSeq).toBe(env.seq)
+    // The next command still runs.
+    const next = await gateway.handle(devices.get(phone.id)!, command(phone, 'queue.get', undefined, identity.id, { ts: new Date(now).toISOString() }))
+    expect(next.result.ok).toBe(true)
+  })
+
+  it('a reused read id cannot carry a mutating command past the replay check', async () => {
+    const read = command(phone, 'queue.get', undefined, identity.id, { ts: new Date(now).toISOString() })
+    await gateway.handle(devices.get(phone.id)!, read)
+    const forged = command(phone, 'queue.setPaused', pause(), identity.id, { ts: new Date(now).toISOString(), id: read.id, seq: read.seq })
+    const reply = await gateway.handle(devices.get(phone.id)!, forged)
+    expect(reply.result.ok).toBe(false)
+    expect(queue.state().paused).toBe(false)
+  })
+
   it('a crash before the write-ahead entry leaves nothing; redelivery executes once', async () => {
     crashAt = (step) => {
       if (step === 'before-start') throw new SimulatedCrash(step)

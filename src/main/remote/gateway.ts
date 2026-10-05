@@ -189,12 +189,17 @@ export class Gateway {
       if (device.needsRepair) throw new ProtocolError('denied', 'This phone must be paired again.')
       // A redelivery carries a seq the log already accepted: answer from the log, never as a replay.
       const known = audit.lookup(envelope.id)
-      if (known && !(known.state === 'finished' && known.read)) return this.answerKnown(known, envelope, ack)
-      try {
-        seq = requireNextSeq(envelope.seq, device.lastSeq)
-      } catch (err) {
-        if (err instanceof ProtocolError && err.code === 'denied') await this.devices.markNeedsRepair(device.id)
-        throw err
+      // A finished read stores no result: its redelivery (the result frame was lost) runs the read
+      // again under the seq it already used, so it is not a replay and nothing is checkpointed.
+      const rerunRead = known?.state === 'finished' && known.read === true
+      if (known && !rerunRead) return this.answerKnown(known, envelope, ack)
+      if (!rerunRead) {
+        try {
+          seq = requireNextSeq(envelope.seq, device.lastSeq)
+        } catch (err) {
+          if (err instanceof ProtocolError && err.code === 'denied') await this.devices.markNeedsRepair(device.id)
+          throw err
+        }
       }
       // Not checkpointed yet: the audit entry is the commit. A crash before it persists nothing, so
       // the relay's redelivery runs the command exactly once (ADR "Commit order on the desktop").
@@ -204,9 +209,14 @@ export class Gateway {
       if ((NOT_YET as readonly string[]).includes(command.name)) {
         throw new ProtocolError('unsupported', 'Pipelines and reviews are not available on this Mac yet. Update Huntgry.')
       }
+      if (rerunRead && !isReadCommand(command.name)) throw new ProtocolError('denied', 'This command id was already used.')
       this.checkTtl(envelope, command.name)
       this.checkRate(device.id, command)
 
+      if (rerunRead || seq === undefined) {
+        const body = await this.execute(device, command, workspace)
+        return { result: { kind: 'result', re: envelope.id, ok: true, body, ttl: envelope.ttl }, ack }
+      }
       if (isReadCommand(command.name)) {
         const body = await this.execute(device, command, workspace)
         await audit.finish({ id: envelope.id, deviceId: device.id, seq, name: command.name, ok: true, read: true, ts: at })
