@@ -25,8 +25,8 @@ against an in-process fake relay and fake phones holding real keys.
 | Workspace binding | `src/main/remote/workspace.ts` | A random 128-bit `workspaceId` in `<workspace>/.huntgry/remote.json`, minted on first remote use, plus the folder's name. Never the path. |
 | Projections | `src/main/remote/project.ts` | The one place desktop types become DTOs: `RemoteRun`, `RemoteQueueState` (20 items, active first, `more`), `RemoteTranscriptItem` (8 KiB per item, `truncated`), `RemoteJob`, `RunPage`, `StatusSummary`. Each projector truncates to the package `LIMITS` and runs the package's own `dto.ts` guard on its output. Transcript pages and cursor pages stop at their item count **or** at the plaintext budget. |
 | Gateway | `src/main/remote/gateway.ts` | The commit order from the ADR, the allow-list dispatch, the `ws` check on every workspace-scoped command (reads included), rate limits, the desktop's own TTL check, chunked `file.get`. Details below. |
-| Session | `src/main/remote/session.ts` | One **outbound** `wss` socket (no listening port), the owner secret in the first frame, `nacl.box` per device with a fresh 24-byte nonce, `hello` / `ping` answers, a 30 s `status` heartbeat to phones active in the last 5 minutes, push hints, and backoff reconnect (1 s doubling to 60 s, with jitter). The socket is injected, so tests use a fake relay. |
-| App wiring | `src/main/remote/ipc.ts`, `src/main/index.ts`, `src/main/ipc.ts` | `safeStorage` as the cipher, `userData/remote/` for the files, the services from `queue/ipc.ts`, `cli/ipc.ts`, `jobs/service.ts` and `applications/safe-path.ts`. `onEvent` feeds `queue.changed`, `run.changed`, `status` and `applications.changed` to phones. `powerMonitor` `resume` and `unlock-screen` reconnect at once. `before-quit` stops the queue, then the runs, then the session. The session is off until enabled. |
+| Session | `src/main/remote/session.ts` | One **outbound** `wss` socket (no listening port), the owner secret in the first frame, `nacl.box` per device with a fresh 24-byte nonce, `hello` / `ping` answers, a 30 s `status` heartbeat to phones active in the last 5 minutes, push hints, and backoff reconnect (1 s doubling to 60 s, with jitter). Every frame it durably handled is acked: inside the reply frame when there is one, else with the clear `{ ack: ref }` client frame from #35 (phone results, events and pongs, or a reply that cannot be boxed). The socket is injected, so tests use a fake relay. |
+| App wiring | `src/main/remote/ipc.ts`, `src/main/index.ts`, `src/main/ipc.ts` | `safeStorage` as the cipher, `userData/remote/` for the files, the services from `queue/ipc.ts`, `cli/ipc.ts`, `jobs/service.ts` and `applications/safe-path.ts`. `onEvent` feeds `queue.changed`, `run.changed`, `status` and `applications.changed` to phones. `powerMonitor` `resume` and `unlock-screen` reconnect at once. `before-quit` stops the queue, then the runs, then the session. The session is off until enabled. Settings calls wait for the session to start; a failed start is logged and reported to Settings instead of rejecting. |
 | Shared hooks | `src/main/events.ts`, `src/main/cli/runs.ts`, `src/main/cli/ipc.ts`, `src/main/queue/ipc.ts`, `src/main/applications/scan.ts` | `onEvent(listener)` next to `emit`. `requireRunId` moved next to `RUN_ID_PATTERN` so `cli/ipc.ts` and the gateway use the same function. `runsForRemote` and `queueForRemote` expose the same instances and helpers the handlers use, without open or reveal. `review-notes.md` is now a known application file, so the phone can fetch it through the same safe-path checks. |
 | Settings API | `src/shared/remote-types.ts`, `src/preload/remote.ts`, `src/shared/api.ts`, `src/shared/events.ts` | `window.huntgry.remote` (`state`, `setEnabled`, `configure`, `setNotificationDetails`, `setTranscripts`, `revoke`, `unpairAll`) and the `remote:state` event. |
 | Settings UI | `src/renderer/src/pages/settings/RemoteCard.tsx` | A collapsed "Remote control (preview)" card at the bottom of Settings: state badge, enable switch, relay URL and admin token, the two toggles, paired phones with Revoke, Unpair everything. |
@@ -67,7 +67,7 @@ sequenceDiagram
         G-->>S: result
     end
     S->>S: reserve + persist outgoing seq, box with a fresh nonce
-    S->>R: RelayFrame { ref, ct, ack: id }
+    S->>R: RelayFrame { ref, ct, ack: ref of the command frame }
     R->>R: delete the command from the desktop's inbox
     R->>P: result
 ```
@@ -103,6 +103,17 @@ sequenceDiagram
   between it and the audit entry would make the relay's redelivery look like a replay
   (`denied`) and lose the command. Now a crash before the entry persists nothing and the
   redelivery runs once. Reads and rejected frames checkpoint after their outcome line.
+- **When the desktop acks.** A command is acked only after `handle()` resolves, that is after
+  the audit outcome and the `lastSeq` checkpoint are on disk; a crash before that leaves the
+  frame at the relay for redelivery. The ack rides in the result frame (one relay operation,
+  so the phone never loses a result whose command was acked). It is the relay frame's `ref`,
+  which the relay deletes by, not the envelope id (equal for a well-formed phone). Frames
+  with nothing to send back (phone results, events, pongs) get `{ ack: ref }` alone once
+  `lastSeen` is saved. Frames no paired key opens are not acked: they expire at the relay.
+- **A redelivered read runs again.** Reads keep no result in the log, and the relay redelivers
+  a read exactly when its result frame was lost. Treating that as a replay marked the phone
+  for re-pair after a network blip; a finished read id now runs the read again under its old
+  `seq`, and a mutating command reusing a read's id is refused.
 - **Per-device serialisation in the gateway.** Two frames with the same `seq` arriving
   together could both pass `requireNextSeq` before either is recorded. Handling one device's
   frames in order closes that.
@@ -138,7 +149,8 @@ Unit tests (`src/main/remote/`):
   30/min; rewound `seq` → `denied`, device marked, nothing runs afterwards; expired frames and
   a 3-hour-old enqueue with a 7-day `ttl` → `expired`; `lastSeq` derived from the log after a
   "restart" with a stale checkpoint; the commit order line by line; redelivery of a finished
-  id returns the stored result without re-running; **a simulated crash at each step**
+  id returns the stored result without re-running; a redelivered read answers again without
+  marking the phone for re-pair, and a mutating command cannot reuse a read's id; **a simulated crash at each step**
   (before the entry, after it, after execution, after the outcome) never runs a command
   twice and never loses one; a service error is `failed` with the generic message;
   `queue.enqueue` and `run.reply` through the real `TailorQueue` and `RunManager` with
@@ -148,6 +160,10 @@ Unit tests (`src/main/remote/`):
   `jobs.addUrl` refuses names resolving to loopback or private addresses before any fetch;
   `file.get` chunks reassemble with the whole-file SHA-256.
 - `session.test.ts` (fake relay): wss only, owner secret in the first frame; a command
+  acked in its result frame only once the audit outcome and the `lastSeq` checkpoint are on
+  disk, with the relay frame's `ref`; phone results and pongs acked alone with `{ ack }` after
+  `lastSeen` is saved; no ack after a crash mid-command, for an unopenable frame or while
+  offline (the redelivery is answered from the log); a command
   answered with `ack`, boxed for the phone with a new nonce each time and an increasing
   `seq`; a frame no device can open is dropped; another `sid` is `denied`; `hello` returns
   the workspace name and id and a `status`; `pong`; push hints only for the device's
@@ -179,7 +195,8 @@ sleep / wake on a real Mac. Both need the relay and pairing (#35, #37).
 
 ## Follow-ups
 
-- **#35** rebases onto `relay-http.ts` and implements those routes. A clear `from` device id
+- **#35** rebases onto `relay-http.ts` and implements those routes. The `{ ack }` client frame
+  (#35's commit, cherry-picked here) is already sent by the desktop. A clear `from` device id
   on phone frames would let the session skip trial decryption.
 - **#37** pairing: `pair.hello` / `pair.ok` over secretbox, approve dialog, device
   registration (`RegisterDeviceRequest`), the "credentials unreadable" recovery, TTL settings,
