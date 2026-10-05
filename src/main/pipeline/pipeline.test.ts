@@ -11,7 +11,7 @@ import { RunManager, type RunContext } from '../cli/runner'
 import { readEvents, readRun, saveRun } from '../cli/runs'
 import { queueFile, TailorQueue, type QueueDeps } from '../queue/queue'
 import { LIMIT_MARGIN_MS } from './failures'
-import { NUDGE_TEXT, Pipeline, summaryFile, type PipelineDeps } from './pipeline'
+import { IN_PROGRESS_REASON, NUDGE_TEXT, Pipeline, summaryFile, type PipelineDeps } from './pipeline'
 import { requirePipelineStartInput } from './service'
 
 const FAKE_CLAUDE = join(__dirname, '../cli/fixtures/fake-claude.mjs')
@@ -90,6 +90,7 @@ function queueDeps(over: Partial<QueueDeps> = {}): QueueDeps {
       return manager.start(params, ctx(agent))
     },
     stopRun: (id, workspace) => manager.stopAny(workspace, id),
+    releaseRun: (id) => manager.release(id),
     finishRun: (id, workspace) => {
       if (manager.isLive(id)) manager.finish(id)
       else void manager.endIdle(workspace, id, 'finished')
@@ -218,7 +219,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
       peak = Math.max(peak, queue.state().items.filter((i) => i.status === 'running' || i.status === 'preparing').length)
       await new Promise((r) => setTimeout(r, 5))
     }
-    const done = await until((p) => p?.status === 'finished')
+    const done = await until((p) => p?.status === 'finished' && finished.length > 0)
     expect(peak).toBe(2)
     expect(done!.counts).toMatchObject({ unreviewed: 6, needsAttention: 0, failed: 0, queued: 0, running: 0 })
     const items = queue.state().items
@@ -248,23 +249,27 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     jobs.set('url:nonotes', job('url:nonotes'))
     jobs.set('url:ask', job('url:ask'))
     await pipeline.start(input(['url:fail'], { options: { ...options, notes: 'VERIFY_FAIL' }, concurrency: 1 }))
-    await until((p) => p?.status === 'finished')
+    await until((p) => p?.status === 'finished' && finished.length > 0)
     const fail = queue.state().items[0]
     expect(fail).toMatchObject({ status: 'done', outcome: 'needs-attention' })
     expect(fail.error).toMatch(/Failed checks: page_count/)
     expect((await readTracking(join(ws, fail.applicationId!))).review).toMatchObject({ state: 'needs-attention', reason: expect.stringContaining('page_count') })
 
     await pipeline.start(input(['url:nonotes'], { options: { ...options, notes: 'NO_NOTES' }, concurrency: 1 }))
-    await until((p) => p?.status === 'finished' && p.counts.needsAttention === 1)
+    await until((p) => p?.status === 'finished' && p.counts.needsAttention === 1 && finished.length === 2)
     const nonotes = queue.state().items[1]
     expect(nonotes).toMatchObject({ status: 'done', outcome: 'needs-attention' })
     expect(nonotes.error).toMatch(/No review notes/)
 
     await pipeline.start(input(['url:ask'], { options: { ...options, notes: 'ASK' }, concurrency: 1 }))
-    const p = await until((p) => p?.status === 'finished' && p.counts.needsReply === 1)
+    const p = await until((p) => p?.status === 'finished' && p.counts.needsReply === 1 && finished.length === 3)
     const ask = queue.state().items[2]
     expect(ask).toMatchObject({ status: 'needs-reply', nudged: true })
     expect(ask.error).toMatch(/Stopped with a question/)
+    // No idle agent process waits for the user: the run is released, still waiting and resumable.
+    await until(() => !manager.isLive(ask.runId!))
+    await manager.flush(ask.runId!)
+    expect((await readRun(ws, ask.runId!)).status).toBe('waiting')
     expect(p!.counts).toMatchObject({ needsReply: 1, unreviewed: 0 })
     // Exactly one nudge was sent, with the unattended rule, and the session is kept for the user.
     await manager.flush(ask.runId!)
@@ -273,6 +278,41 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(nudges).toHaveLength(1)
     expect((await readRun(ws, ask.runId!)).sessionId).toBe('sess-fake-1')
     expect(finished.at(-1)!.items[0].outcome).toBe('needs-reply')
+    // ASK writes nothing, so there is no folder to mark; a run that built still gets the verify gate.
+    expect(ask.applicationId).toBeUndefined()
+  })
+
+  it('marks an unattended run\'s folder Unreviewed as soon as the run records it, before the verify gate', async () => {
+    await queue.sync()
+    const folder = 'software-engineer/acme/job-7'
+    await mkdir(join(ws, folder), { recursive: true })
+    await writeFile(join(ws, folder, 'resume.pdf'), '%PDF-1.4 fake')
+    const run: RunSummary = {
+      id: '20261005-100000-aaaaaa',
+      title: 'x',
+      params: { jobDescription: 'x', coverLetter: false, dateStyle: 'right', unattended: true, jobId: 'job-7' },
+      agent: 'claude',
+      status: 'running',
+      sessionId: 's',
+      createdAt: '2026-10-05T10:00:00.000Z',
+      updatedAt: '2026-10-05T10:00:00.000Z',
+      outputFolder: folder,
+      outputFiles: ['resume.pdf'],
+      costUsd: 0,
+      live: true,
+      unattended: true
+    }
+    pipeline.onRun(run)
+    const read = () => readTracking(join(ws, folder))
+    for (let i = 0; i < 100 && !(await read()).review; i++) await new Promise((r) => setTimeout(r, 10))
+    expect((await read()).review).toMatchObject({ state: 'unreviewed', runId: run.id, reason: IN_PROGRESS_REASON })
+    // Another job's folder (a different job id) and an attended run are never marked.
+    const other = 'software-engineer/acme/job-8'
+    await mkdir(join(ws, other), { recursive: true })
+    pipeline.onRun({ ...run, id: '20261005-100000-bbbbbb', outputFolder: other })
+    pipeline.onRun({ ...run, id: '20261005-100000-cccccc', params: { ...run.params, jobId: 'job-8' }, outputFolder: other, unattended: undefined })
+    await new Promise((r) => setTimeout(r, 50))
+    expect((await readTracking(join(ws, other))).review).toBeUndefined()
   })
 
   it('pauses on a usage limit until the parsed reset + 2 min, consumes no retry, holds launches, then resumes by itself', async () => {
@@ -301,7 +341,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     for (const id of ['url:a', 'url:b']) jobs.set(id, job(id, { description: 'WRITE_NOTES' }))
     offset += 60_000 + LIMIT_MARGIN_MS + 1000
     pipeline.wake()
-    const done = await until((p) => p?.status === 'finished')
+    const done = await until((p) => p?.status === 'finished' && finished.length > 0)
     expect(done!.counts).toMatchObject({ unreviewed: 3, failed: 0 })
     expect(queue.state().items.every((i) => i.retries === 0)).toBe(true)
   })
@@ -321,7 +361,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     )
     pipeline = new Pipeline(pipelineDeps())
     await pipeline.start(input(['url:a', 'url:b', 'url:c'], { concurrency: 1, fallbackAgent: 'codex' }))
-    const done = await until((p) => p?.status === 'finished')
+    const done = await until((p) => p?.status === 'finished' && finished.length > 0)
     expect(states.every((s) => s?.status !== 'waiting-limit')).toBe(true)
     expect(started.map((s) => s.agent)).toEqual(['claude', 'codex', 'codex', 'codex'])
     expect(queue.state().items.map((i) => [i.agent, i.status, i.retries])).toEqual([
@@ -352,7 +392,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(item().error).toMatch(/retrying in 120 s \(2 of 2\)/)
     offset += 121_000
     pipeline.wake()
-    const done = await until((p) => p?.status === 'finished')
+    const done = await until((p) => p?.status === 'finished' && finished.length > 0)
     expect(item().status).toBe('failed')
     expect(item().error).toMatch(/Failed 3 times; last error: .*boom: simulated failure/)
     expect(started).toHaveLength(3)
@@ -387,8 +427,25 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(notifications.map((n) => n.category)).toEqual(['budget'])
     expect(awake.at(-1)).toBe(false)
     await pipeline.resume({ budget: { maxJobs: 4 } })
-    const done = await until((p) => p?.status === 'finished')
+    const done = await until((p) => p?.status === 'finished' && finished.length > 0)
     expect(done!.counts.unreviewed).toBe(4)
+  })
+
+  it('the job cap does not hold the retry of a job that already started', async () => {
+    jobs.set('url:a', job('url:a', { description: 'CRASH' }))
+    jobs.set('url:b', job('url:b', { description: 'WRITE_NOTES' }))
+    await pipeline.start(input(['url:a', 'url:b'], { concurrency: 1, budget: { maxJobs: 1 } }))
+    await until((_p, q) => q.items[0]?.status === 'queued' && q.items[0].retries === 1)
+    offset += 31_000
+    pipeline.wake()
+    await until((_p, q) => q.items[0]?.status === 'queued' && q.items[0].retries === 2)
+    offset += 121_000
+    pipeline.wake()
+    const stopped = await until((p, q) => p?.status === 'stopped-budget' && q.items[0]?.status === 'failed')
+    // Job a ran three times (two retries), job b never started.
+    expect(started.map((s) => s.params.jobId)).toEqual([started[0].params.jobId, started[0].params.jobId, started[0].params.jobId])
+    expect(statuses(queue.state())).toEqual(['failed', 'queued'])
+    expect(stopped!.startedJobs).toBe(1)
   })
 
   it('stops on the Claude cost cap (the fake charges $0.01 per turn)', async () => {
@@ -415,7 +472,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(awake.at(-1)).toBe(true)
     const stopping = await pipeline.stop()
     expect(['stopping', 'finished']).toContain(stopping.status)
-    const done = await until((p) => p?.status === 'finished')
+    const done = await until((p) => p?.status === 'finished' && finished.length > 0)
     await manager.whenIdle()
     expect(statuses(queue.state())).toEqual(['done', 'cancelled', 'cancelled', 'cancelled'])
     expect(done!.stopReason).toBe('Stopped by you.')
@@ -435,7 +492,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
       peak = Math.max(peak, queue.state().items.filter((i) => i.status === 'running' || i.status === 'preparing').length)
       await new Promise((r) => setTimeout(r, 5))
     }
-    const done = await until((p) => p?.status === 'finished')
+    const done = await until((p) => p?.status === 'finished' && finished.length > 0)
     expect(peak).toBe(1)
     expect(statuses(queue.state())).toEqual(['needs-reply', 'done', 'done'])
     // The pipeline counts only its own items.
@@ -466,7 +523,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(state.interrupted).toBe(true)
     expect(state.warnings.some((w) => /interrupted jobs were queued again/.test(w))).toBe(true)
     expect(queue.state().paused).toBe(false)
-    const done = await until((p) => p?.status === 'finished')
+    const done = await until((p) => p?.status === 'finished' && finished.length > 0)
     expect(done!.counts.unreviewed).toBe(2)
     expect(queue.state().items.every((i) => i.interruptedOnce && i.status === 'done')).toBe(true)
 
@@ -506,7 +563,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     await new Promise((r) => setTimeout(r, 100))
     expect(started).toHaveLength(1)
     await pipeline.resume()
-    const done = await until((p) => p?.status === 'finished')
+    const done = await until((p) => p?.status === 'finished' && finished.length > 0)
     expect(done!.counts.unreviewed).toBe(1)
     expect(started).toHaveLength(2)
   })
@@ -532,7 +589,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     signedIn = true
     await queue.retry(queue.state().items[0].id)
     await pipeline.resume()
-    const done = await until((p) => p?.status === 'finished')
+    const done = await until((p) => p?.status === 'finished' && finished.length > 0)
     expect(done!.counts.unreviewed).toBe(2)
 
     // Re-run with my answers: the done item goes back to running on its own session and settles again.
@@ -585,7 +642,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
   it('records the summary and hides the utilisation until Claude warns; dismiss clears a finished pipeline', async () => {
     jobs.set('url:a', job('url:a', { description: 'RATE_WARN WRITE_NOTES' }))
     await pipeline.start(input(['url:a'], { concurrency: 1 }))
-    const done = await until((p) => p?.status === 'finished')
+    const done = await until((p) => p?.status === 'finished' && finished.length > 0)
     expect(done!.utilization).toBe(0.96)
     expect(done!.costUsd).toBeCloseTo(0.01)
     await pipeline.dismiss()
@@ -606,7 +663,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     // A run that crashed after building: the verify gate, not a retry.
     jobs.set('url:b', job('url:b', { description: 'WRITE_NOTES' }))
     await pipeline.start(input(['url:b'], { concurrency: 1 }))
-    await until((p) => p?.status === 'finished')
+    await until((p) => p?.status === 'finished' && finished.length > 0)
     const item = queue.state().items[1]
     const run = await readRun(ws, item.runId!)
     await saveRun(ws, { ...run, status: 'failed', error: 'boom' })

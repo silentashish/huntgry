@@ -48,6 +48,8 @@ export interface QueueDeps {
   stopRun(runId: string, workspace: string): void
   /** Ends an unattended run whose result is settled: closes stdin, or marks an idle run finished. */
   finishRun?(runId: string, workspace: string): void
+  /** Ends the idle process of an unattended run that waits for the user; the run stays resumable. */
+  releaseRun?(runId: string, workspace: string): void
   /** Sends the user's reply to a run (resuming its session if the process is gone). */
   reply(runId: string, text: string, workspace: string): Promise<RunSummary>
   onChange(state: QueueState): void
@@ -642,6 +644,7 @@ export class TailorQueue {
         item.status = 'needs-reply'
         item.error = s.error
         this.answered.add(item.id)
+        this.deps.releaseRun?.(run.id, this.ws!)
         break
     }
     item.updatedAt = new Date(this.now()).toISOString()
@@ -660,6 +663,7 @@ export class TailorQueue {
         item.status = 'needs-reply'
         item.error = `Stopped without building and could not be continued: ${message(err)}`
         this.answered.add(item.id)
+        this.deps.releaseRun?.(item.runId!, this.ws!)
         this.changed()
       }
     }

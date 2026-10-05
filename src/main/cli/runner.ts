@@ -61,6 +61,8 @@ interface Live {
   stopping: boolean
   /** Set by `abort()`: the run fails with this reason when the process exits. */
   aborted?: string
+  /** Set by `release()`: the process ends but the run keeps waiting for its reply. */
+  releasing?: boolean
   finishing: boolean
   turnStartedAt: number
 }
@@ -160,6 +162,18 @@ export class RunManager {
     const entry = this.live.get(id)
     if (!entry) return
     entry.aborted = reason
+    this.kill(entry)
+  }
+
+  /**
+   * Ends the process of a run that waits for a reply and keeps the run `waiting`: the reply
+   * resumes its session in a new process. An unattended run that needs the user holds no
+   * idle agent process (#31).
+   */
+  release(id: string): void {
+    const entry = this.live.get(id)
+    if (!entry || entry.run.status !== 'waiting') return
+    entry.releasing = true
     this.kill(entry)
   }
 
@@ -303,6 +317,8 @@ export class RunManager {
       const exec = adapter.turnMode === 'exec'
       if (entry.stopping) {
         r.status = 'stopped'
+      } else if (entry.releasing && r.status === 'waiting') {
+        // Released between turns: still waiting, resumable.
       } else if (entry.aborted) {
         r.status = 'failed'
         r.error = entry.aborted
@@ -345,6 +361,8 @@ export class RunManager {
     entry.turnStartedAt = Date.now()
     entry.turnContent = 0
     entry.turnEnded = false
+    // A new turn starts now: the stall watchdog counts from here, not from before a long wait.
+    entry.run.lastOutputAt = new Date().toISOString()
     const event: HuntgryEvent = { type: 'huntgry', subtype: 'user_message', text, ts: new Date().toISOString() }
     this.record(entry, event)
     this.touch(entry)

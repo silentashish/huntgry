@@ -21,7 +21,7 @@ import type { QueueItem } from '@shared/queue-types'
 import { REVIEW_NOTES_FILE, type ReviewTracking } from '@shared/review-types'
 import { AGENT_LABEL, type AgentId, type RunSummary } from '@shared/runner-types'
 import { summarizeBuild } from '../applications/scan'
-import { updateTracking } from '../applications/tracking'
+import { readTracking, updateTracking } from '../applications/tracking'
 import { folderSlug, newRunId } from '../cli/runs'
 import { PASTE_HINT, type FailureDecision, type Settlement, type TailorQueue } from '../queue/queue'
 import { HUNTGRY_DIR } from '../workspace/constants'
@@ -94,6 +94,18 @@ const STALL_TEXT = (minutes: number) => `${STALL_PREFIX} ${minutes} minutes.`
 /** A rejected rate-limit event holds new launches this long while the failure itself is classified. */
 const REJECTED_HOLD_MS = 10 * 60_000
 const ACTIVE = new Set<QueueItem['status']>(['queued', 'preparing', 'running'])
+export const IN_PROGRESS_REASON = 'Still being tailored unattended; not checked yet.'
+
+/**
+ * The run's output folder when it is this job's: `<role>/<company>/<job-id>` with the job id the
+ * agent was told to use. (A folder another run wrote seconds earlier is never taken for this one.)
+ */
+function ownFolder(run: RunSummary): string | null {
+  const folder = run.outputFolder
+  if (!folder) return null
+  const wanted = run.params.jobId ? folderSlug(run.params.jobId) : null
+  return !wanted || folderSlug(folder.split('/')[2] ?? '') === wanted ? folder : null
+}
 
 export const summaryFile = (workspace: string): string => join(workspace, HUNTGRY_DIR, SUMMARY_FILE)
 
@@ -111,6 +123,8 @@ export class Pipeline {
   private lastSaved = ''
   private notifiedLimit: string | null = null
   private stopped = false
+  /** Runs whose output folder was marked Unreviewed while they work, and the pending writes. */
+  private marking = new Map<string, Promise<void>>()
 
   constructor(private deps: PipelineDeps) {
     deps.queue.setUnattendedHooks({
@@ -153,6 +167,7 @@ export class Pipeline {
     this.notifiedLimit = null
     this.lastEmitted = ''
     this.lastSaved = record ? JSON.stringify(record) : ''
+    this.marking.clear()
     this.ensureTimer()
     this.changed()
   }
@@ -183,6 +198,7 @@ export class Pipeline {
 
   /** Every run summary (the app wires `onRunChange` here): cost, proactive rate-limit hold, utilisation. */
   onRun(run: RunSummary): void {
+    this.markInProgress(run)
     const r = this.record
     if (!r) return
     const item = this.deps.queue.itemsOf(r.id).find((i) => i.runId === run.id)
@@ -461,16 +477,18 @@ export class Pipeline {
     const r = this.record
     if (!r || item.pipelineId !== r.id) return 'go'
     if (r.status === 'paused' || r.status === 'stopping' || r.status === 'finished') return 'hold'
-    if (r.status === 'stopped-budget') return 'hold'
-    if (this.budgetReached(r)) {
-      r.status = 'stopped-budget'
-      r.stopReason = this.budgetReason(r)
-      this.persist()
-      this.deps.notify('budget', 'Huntgry pipeline stopped', r.stopReason)
-      this.updateAwake()
-      this.changed()
+    if (this.budgetReached(r, item)) {
+      if (r.status !== 'stopped-budget') {
+        r.status = 'stopped-budget'
+        r.stopReason = this.budgetReason(r)
+        this.persist()
+        this.deps.notify('budget', 'Huntgry pipeline stopped', r.stopReason)
+        this.updateAwake()
+        this.changed()
+      }
       return 'hold'
     }
+    // Stopped on the budget, this launch still fits it: the retry of a job that already started.
     const now = this.now()
     const limit = r.limits[item.agent]
     if (limit && Date.parse(limit.until) > now) return 'hold'
@@ -478,17 +496,43 @@ export class Pipeline {
     return 'go'
   }
 
+  /**
+   * Marks an unattended run's folder Unreviewed as soon as the run records it: the resume may be
+   * built minutes before the turn ends, and a stop, a crash or a failed retry may come first.
+   * Apply must never see an unattended result without a review state. A folder already marked
+   * for this run (a re-run from the Review page, or the settled result) is left as it is.
+   */
+  private markInProgress(run: RunSummary): void {
+    if (!run.unattended || this.marking.has(run.id)) return
+    const folder = ownFolder(run)
+    const ws = this.deps.queue.workspace()
+    if (!folder || !ws) return
+    const at = new Date(this.now()).toISOString()
+    const dir = join(ws, folder)
+    this.marking.set(
+      run.id,
+      (async () => {
+        if ((await readTracking(dir)).review?.runId === run.id) return
+        await updateTracking(dir, { review: { state: 'unreviewed', runId: run.id, at, reason: IN_PROGRESS_REASON } })
+      })().catch((err) => console.error('Marking the unattended result Unreviewed failed:', err))
+    )
+  }
+
   /** The verify gate: what an ended unattended turn means. */
   private async settle(item: QueueItem, run: RunSummary, ws: string): Promise<Settlement> {
-    const folder = run.outputFolder
-    // The folder must be this job's: `<role>/<company>/<job-id>` with the job id the agent was told to use.
-    // (A folder another run wrote seconds earlier is never taken for this one.)
-    const wanted = run.params.jobId ? folderSlug(run.params.jobId) : null
-    const own = folder !== null && (!wanted || folderSlug(folder.split('/')[2] ?? '') === wanted)
-    const built = folder !== null && own && run.outputFiles.includes('resume.pdf')
+    const folder = ownFolder(run)
+    const built = folder !== null && run.outputFiles.includes('resume.pdf')
     if (!built) {
       if (!item.nudged) return { kind: 'nudge', text: NUDGE_TEXT }
-      return { kind: 'needs-reply', error: 'Stopped with a question instead of building. Answer it on the Tailor page.' }
+      const error = 'Stopped with a question instead of building. Answer it on the Tailor page.'
+      // Whatever it left in its folder (notes, a draft) needs a look, not Apply.
+      if (folder) {
+        await this.marking.get(run.id)
+        await updateTracking(join(ws, folder), {
+          review: { state: 'needs-attention', runId: run.id, at: new Date(this.now()).toISOString(), reason: error }
+        })
+      }
+      return { kind: 'needs-reply', error }
     }
     const dir = join(ws, folder)
     let files: string[] = []
@@ -514,6 +558,8 @@ export class Pipeline {
     const reason = reasons.join(' ') || undefined
     const review: ReviewTracking = { state: outcome, runId: run.id, at: new Date(this.now()).toISOString() }
     if (reason) review.reason = reason
+    // After the in-progress mark, never before it (it would overwrite the settled state).
+    await this.marking.get(run.id)
     await updateTracking(dir, { review })
     return { kind: 'done', outcome, applicationId: folder, reason }
   }
@@ -683,11 +729,19 @@ export class Pipeline {
     return Math.round(Object.values(r.runCosts).reduce((a, b) => a + b, 0) * 100) / 100
   }
 
-  private budgetReached(r: PipelineRecord): boolean {
+  /**
+   * Whether launching `item` would exceed the budget. The job cap counts jobs, so a retry of a
+   * job that already started (backoff, a limit, a restart) is not a new job; the cost cap holds
+   * every launch, since a retry costs money too.
+   */
+  private budgetReached(r: PipelineRecord, item: QueueItem): boolean {
     const b = r.options.budget
     if (!b) return false
     const started = this.deps.queue.itemsOf(r.id).filter((i) => i.startedAt).length
-    return (b.maxJobs !== undefined && started >= b.maxJobs) || (b.maxCostUsd !== undefined && this.costUsd(r) >= b.maxCostUsd)
+    return (
+      (b.maxJobs !== undefined && !item.startedAt && started >= b.maxJobs) ||
+      (b.maxCostUsd !== undefined && this.costUsd(r) >= b.maxCostUsd)
+    )
   }
 
   private budgetReason(r: PipelineRecord): string {
@@ -793,7 +847,9 @@ export class Pipeline {
     let on = false
     if (r) {
       const limit = this.blockingLimit(r, this.deps.queue.itemsOf(r.id))
+      const working = this.deps.queue.itemsOf(r.id).some((i) => i.status === 'preparing' || i.status === 'running')
       on =
+        (r.status !== 'finished' && working) ||
         r.status === 'running' ||
         r.status === 'stopping' ||
         (r.status === 'waiting-limit' && (!limit || Date.parse(limit.until) - this.now() < KEEP_AWAKE_MAX_WAIT_MS))

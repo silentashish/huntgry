@@ -261,6 +261,28 @@ describe('RunManager against a fake claude', () => {
     expect(t[t.length - 1]).toMatchObject({ kind: 'notice', level: 'error', text: expect.stringContaining('No output for 20 minutes') })
   })
 
+  it('release ends the idle process of a waiting run and keeps it waiting; a reply resumes it', async () => {
+    const { id } = await manager.start(params, ctx())
+    await until(id, (r) => r.status === 'waiting')
+    manager.release(id)
+    const released = await until(id, (r) => r.status === 'waiting' && !r.live)
+    expect(released.error).toBeUndefined()
+    expect(manager.isLive(id)).toBe(false)
+    await manager.reply(id, 'go on', async () => ctx())
+    expect(manager.isLive(id)).toBe(true)
+    await until(id, (r) => r.status === 'waiting' && r.live)
+  })
+
+  it('a reply restarts the stall clock (lastOutputAt), even after a long wait', async () => {
+    const { id } = await manager.start(params, ctx())
+    const waiting = await until(id, (r) => r.status === 'waiting')
+    await new Promise((r) => setTimeout(r, 30))
+    const before = Date.now()
+    const sent = await manager.reply(id, 'next', async () => ctx())
+    expect(Date.parse(sent.lastOutputAt!)).toBeGreaterThanOrEqual(before)
+    expect(Date.parse(sent.lastOutputAt!)).toBeGreaterThan(Date.parse(waiting.lastOutputAt!))
+  })
+
   it('records an unattended run as such, so a resume keeps the variant', async () => {
     const { id, unattended } = await manager.start({ ...params, unattended: true, notes: 'WRITE_NOTES' }, ctx())
     expect(unattended).toBe(true)

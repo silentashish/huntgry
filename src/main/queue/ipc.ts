@@ -21,6 +21,7 @@ export const queue = new TailorQueue({
     if (manager.isLive(runId)) manager.finish(runId)
     else manager.endIdle(workspace, runId, 'finished').catch((err) => console.error('Finishing the run failed:', err))
   },
+  releaseRun: (runId) => manager.release(runId),
   reply: (runId, text, workspace) => manager.reply(runId, text, () => contextForRun(runId, workspace)),
   onChange: (state) => emit('queue:changed', state)
 })
