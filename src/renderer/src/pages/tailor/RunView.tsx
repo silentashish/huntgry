@@ -17,7 +17,6 @@ import {
   Tooltip
 } from '@mantine/core'
 import { IconFileTypePdf, IconFolder, IconPlayerStop, IconSend } from '@tabler/icons-react'
-import type { ApplicationRecord } from '@shared/applications-types'
 import { AGENT_LABEL, type RunSummary } from '@shared/runner-types'
 import { buildTranscript } from '@shared/transcript'
 import { api, errorText } from '../../api'
@@ -49,11 +48,15 @@ export function RunView({ run, events, heldReply = false }: Props) {
   // Apply's own errors are shown next to its button, not at the end of the transcript (#63).
   const [applyError, setApplyError] = useState<string | null>(null)
   const applier = useApply(setApplyError)
-  const [application, setApplication] = useState<Pick<ApplicationRecord, 'files' | 'jobUrl'> | null>(null)
+  const [application, setApplication] = useState<Parameters<typeof applyBlocker>[0] | null>(null)
   const filesKey = run.outputFiles.join('\n')
+  // Bumped when an application changes on disk or on the Review page, so an approval enables Apply here (#31).
+  const [appsVersion, setAppsVersion] = useState(0)
+  useEffect(() => api.on('applications:changed', () => setAppsVersion((v) => v + 1)), [])
 
-  // The application record says whether Apply can work (resume.pdf on disk, a posting URL), the same check as
-  // the Dashboard's; re-read when the run's files or status change, since the resume may be rebuilt later.
+  // The application record says whether Apply can work (Review state, resume.pdf on disk, a posting URL), the
+  // same check as the Dashboard's; re-read when the run's files or status change, since the resume may be
+  // rebuilt later, and when the application changes (an approval on the Review page).
   useEffect(() => {
     const folder = run.outputFolder
     setApplication(null)
@@ -61,12 +64,15 @@ export function RunView({ run, events, heldReply = false }: Props) {
     let alive = true
     api.applications
       .get(folder)
-      .then((record) => alive && setApplication({ files: record.files, jobUrl: record.jobUrl }))
+      .then(
+        (record) =>
+          alive && setApplication({ files: record.files, jobUrl: record.jobUrl, tracking: { review: record.tracking.review } })
+      )
       .catch(() => alive && setApplication({ files: run.outputFiles, jobUrl: null }))
     return () => {
       alive = false
     }
-  }, [run.outputFolder, filesKey, run.status]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [run.outputFolder, filesKey, run.status, appsVersion]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Block body: Chromium's scrollIntoView returns a Promise, which React would take for a cleanup function.
   useEffect(() => {
