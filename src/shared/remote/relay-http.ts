@@ -17,16 +17,25 @@
 
 import { invalid, requireId, requireRecord, rejectUnknownKeys } from './check'
 
+/**
+ * One path segment for an id. `encodeURIComponent` leaves `.` and `..` as they are, and a URL
+ * parser resolves them as dot segments (`/rooms/r/devices/..` becomes `/rooms/r/`, the room
+ * itself), so ids that are exactly `.` or `..` are refused here and by the body guards.
+ */
+function segment(id: string, what: string): string {
+  return encodeURIComponent(requirePathId(id, what))
+}
+
 export const RELAY_PATHS = {
   /** `POST` (admin token): create a room. */
   rooms: '/rooms',
   /** `DELETE` (owner secret): delete the room and everything in it. */
-  room: (roomId: string): string => `/rooms/${encodeURIComponent(roomId)}`,
+  room: (roomId: string): string => `/rooms/${segment(roomId, 'roomId')}`,
   /** `POST` (owner secret): register a device's token hash; `DELETE …/{deviceId}`: revoke it. */
-  devices: (roomId: string): string => `/rooms/${encodeURIComponent(roomId)}/devices`,
-  device: (roomId: string, deviceId: string): string => `/rooms/${encodeURIComponent(roomId)}/devices/${encodeURIComponent(deviceId)}`,
+  devices: (roomId: string): string => `/rooms/${segment(roomId, 'roomId')}/devices`,
+  device: (roomId: string, deviceId: string): string => `/rooms/${segment(roomId, 'roomId')}/devices/${segment(deviceId, 'deviceId')}`,
   /** `POST` (owner secret): announce a pairing id the phone may authenticate with until `exp`. */
-  pairings: (roomId: string): string => `/rooms/${encodeURIComponent(roomId)}/pairings`,
+  pairings: (roomId: string): string => `/rooms/${segment(roomId, 'roomId')}/pairings`,
   /** WebSocket upgrade; the first frame is `RelayClientFrame.auth`. */
   socket: '/ws'
 } as const
@@ -57,6 +66,13 @@ export interface RegisterPairingRequest {
   exp: string
 }
 
+/** `requireId`, minus the dot segments `.` and `..`, for ids that become a URL path segment. */
+export function requirePathId(v: unknown, what: string): string {
+  const id = requireId(v, what)
+  if (id === '.' || id === '..') invalid(`${what} must not be "." or "..".`)
+  return id
+}
+
 const SHA256_HEX = /^[0-9a-f]{64}$/
 
 export function requireSha256Hex(v: unknown, what: string): string {
@@ -73,13 +89,13 @@ export function requireCreateRoomRequest(v: unknown): CreateRoomRequest {
 export function requireCreateRoomResponse(v: unknown): CreateRoomResponse {
   const r = requireRecord(v, 'CreateRoomResponse')
   rejectUnknownKeys(r, ['roomId'], 'CreateRoomResponse')
-  return { roomId: requireId(r.roomId, 'roomId') }
+  return { roomId: requirePathId(r.roomId, 'roomId') }
 }
 
 export function requireRegisterDeviceRequest(v: unknown): RegisterDeviceRequest {
   const r = requireRecord(v, 'RegisterDeviceRequest')
   rejectUnknownKeys(r, ['deviceId', 'tokenHash'], 'RegisterDeviceRequest')
-  return { deviceId: requireId(r.deviceId, 'deviceId'), tokenHash: requireSha256Hex(r.tokenHash, 'tokenHash') }
+  return { deviceId: requirePathId(r.deviceId, 'deviceId'), tokenHash: requireSha256Hex(r.tokenHash, 'tokenHash') }
 }
 
 export function requireRegisterPairingRequest(v: unknown): RegisterPairingRequest {

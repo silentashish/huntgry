@@ -5,6 +5,7 @@ import {
   requireCreateRoomResponse,
   requireRegisterDeviceRequest,
   requireRegisterPairingRequest,
+  requirePathId,
   requireSha256Hex
 } from './index'
 
@@ -31,5 +32,20 @@ describe('relay HTTP contract', () => {
     expect(requireRegisterPairingRequest({ pairingId: 'p', exp: '2026-09-30T00:02:00.000Z' })).toMatchObject({ pairingId: 'p' })
     expect(() => requireRegisterPairingRequest({ pairingId: 'p', exp: 'tomorrow' })).toThrow(/ISO/)
     expect(() => requireSha256Hex('x', 'h')).toThrow()
+  })
+
+  it('refuses the dot segments "." and "..", which a URL parser would resolve to the room route', () => {
+    for (const dots of ['.', '..']) {
+      expect(() => requireRegisterDeviceRequest({ deviceId: dots, tokenHash: HASH })).toThrow(/must not be/)
+      expect(() => requireCreateRoomResponse({ roomId: dots })).toThrow(/must not be/)
+      expect(() => RELAY_PATHS.device('r', dots)).toThrow(/must not be/)
+      expect(() => RELAY_PATHS.room(dots)).toThrow(/must not be/)
+      expect(() => RELAY_PATHS.devices(dots)).toThrow(/must not be/)
+      expect(() => RELAY_PATHS.pairings(dots)).toThrow(/must not be/)
+    }
+    // Only exact dot segments: dots inside an id stay legal and survive URL parsing.
+    expect(requirePathId('...', 'id')).toBe('...')
+    expect(new URL(`https://relay.test${RELAY_PATHS.device('r', 'a..b')}`).pathname).toBe('/rooms/r/devices/a..b')
+    expect(new URL(`https://relay.test${RELAY_PATHS.device('r', '...')}`).pathname).toBe('/rooms/r/devices/...')
   })
 })
