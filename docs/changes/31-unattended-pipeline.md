@@ -113,6 +113,11 @@ sequenceDiagram
 - **Re-run → Unreviewed again** with a new revision (open question 4); the user glances and approves.
 - **Notifications are pipeline-level** (finished, limit, budget, cannot continue); the dock badge counts unreviewed + needs attention. Nothing per item.
 
+- **The Apply gate fails closed** (added when rebasing on the auto-fill epic #62): a folder with `review-notes.md` but no review state (a run stopped, crashed or still in its turn) reads as Unreviewed; a malformed `review` in `huntgry.json` reads as Needs attention; an unattended run's folder is marked Unreviewed ("still being tailored") as soon as the run records it, before the verify gate; and a run that stops with a question after the nudge marks whatever it left as Needs attention. The Tailor run's Apply button (#63) now reads the review state too and refreshes on `applications:changed`, so all three entry points (run, Dashboard row, drawer) show the same reason as `ApplyService.open()`.
+- **Revisions include the review state** (`state`, `runId`, `at`): a decision made on what was shown before a re-run or an approval is stale even before any file changes. Approve and re-run are refused while the run is still working on the result (discard is allowed).
+- **No idle agent process for needs-reply**: the run's process is released (`RunManager.release`), the run stays `waiting` and the user's answer resumes the session. A reply restarts the stall clock (`lastOutputAt`), so a long wait is never read as a stall.
+- **The job cap counts jobs, not launches**: a retry of a job that already started (backoff, a limit, a restart) is not held by `maxJobs`; the cost cap still holds every launch.
+
 The 12 open questions of the brief were taken with their recommended defaults (no proactive pause on `allowed_warning`, keep-awake under 6 h, skip tailored-before with a checkbox, Unreviewed after a re-run, one nudge, 150 / 32 KB cap, USD budget counts Claude only, fallback on limits only, shared queue, discard keeps files, 20 min stall editable 5–60, no per-item notifications).
 
 ### Alternatives considered
@@ -139,7 +144,8 @@ Automated (`npm test`, fake agents only):
 - `review/notes.test.ts`, `approvals.test.ts`, `service.test.ts`: format and tolerance, stable ids, cap; add/dedupe/remove/atomic/broken file; detail + revision, approve writes only ticked on-disk pairs, forged / cross-application / stale / regenerated-PDF refused without a write, re-run on the real fake session, discard, audit, validators.
 - `pipeline/failures.test.ts`: every classification row for the three agents, reset-time parsing, backoff and unparsed waits.
 - `pipeline/pipeline.test.ts` (real queue + `RunManager` + fakes, fake clock): concurrency cap with 6 jobs, all Unreviewed with `review-notes.md`; needs attention on a failed check / missing notes; one nudge then needs-reply with the session kept; usage limit → `waiting-limit` with `until` = reset + 2 min, no retry, launches held, resumes after the clock passes; fallback agent switch; crash retried at +30 s / +120 s then failed; stall watchdog; job cap and Claude cost cap with resume; pause / resume / stop; shared concurrency with an attended item; restart recovery (once, then failed; paused with a notice when off); start error pauses with the reason; re-run of a done item; plan skips and blockers; summary, utilisation, dismiss; old queue files; input validation.
-- `apply/apply.test.ts`, `components/apply/blocker.test.ts`: the gate for unreviewed / needs-attention / discarded, approved passes.
+- `apply/apply.test.ts`, `components/apply/blocker.test.ts`: the gate for unreviewed / needs-attention / discarded, approved passes; notes without a review state and a malformed state are refused.
+- `e2e/tests/review-gate.spec.ts` (Playwright, fake agents): an Unreviewed result disables Apply with the reason on the Tailor run, the Dashboard row and the drawer; approval enables it again.
 - `pages/jobs/pipeline-plan.test.ts`: durations, reset times, plan summary, status line, progress.
 
 Manual (done against a seeded demo workspace, the app launched with `--user-data-dir` pointing at a scratch folder; see the screenshots):
