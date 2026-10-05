@@ -192,7 +192,8 @@ export class RemoteSession {
     })
     socket.on('message', (text) => {
       if (!live()) return
-      void this.receive(text)
+      // A failure here leaves the frame unacked at the relay, which redelivers it.
+      this.receive(text).catch((err) => console.error('[remote] frame not processed; left for redelivery:', err))
     })
     socket.on('error', (err) => {
       if (!live()) return
@@ -269,8 +270,11 @@ export class RemoteSession {
     await this.deps.devices.update(device.id, { lastSeen: new Date(this.now()).toISOString() })
     switch (envelope.kind) {
       case 'cmd': {
+        // handle() resolves after the audit entry and the lastSeq checkpoint are on disk; a crash
+        // before that rejects or never resolves, so the frame stays at the relay for redelivery.
         const reply = await this.deps.gateway.handle(device, envelope)
-        await this.send(device, { ...reply.result, ack: reply.ack })
+        // The relay deletes by the frame's ref (= Envelope.id for a well-formed phone).
+        await this.send(device, { ...reply.result, ack: frame.ref })
         return
       }
       case 'hello':
@@ -280,7 +284,9 @@ export class RemoteSession {
         await this.send(device, { kind: 'pong', body: null, ttl: 60, ack: frame.ref })
         return
       default:
-        // Results, events and pongs from a phone: nothing to do (the desktop sends no commands).
+        // Results, events and pongs from a phone: nothing to do (the desktop sends no commands),
+        // nothing to reply with, so the ack goes alone once lastSeen is on disk.
+        await this.sendAck(frame.ref)
         return
     }
   }
@@ -362,13 +368,39 @@ export class RemoteSession {
     await this.sendEventTo(deviceId, 'device.revoked', { reason: reason.slice(0, LIMITS.shortStringChars) })
   }
 
-  /** Reserves the next `seq` (persisted first), boxes the envelope and sends the relay frame; in order per session. */
+  /**
+   * `{ ack: ref }` for a frame durably processed with nothing to send back (`RelayClientFrame`),
+   * queued behind earlier sends. Dropped while offline: the relay redelivers and the gateway
+   * answers the redelivery from its audit log.
+   */
+  private sendAck(ref: string): Promise<void> {
+    const task = async () => {
+      const socket = this.socket
+      if (socket && this.isOnline()) this.writeAck(socket, ref)
+    }
+    this.sending = this.sending.then(task, task).catch((err) => console.error('[remote] ack failed:', err))
+    return this.sending
+  }
+
+  private writeAck(socket: SocketLike, ref: string): void {
+    if (this.socket !== socket) return
+    socket.send(JSON.stringify(requireRelayClientFrame({ ack: ref })))
+  }
+
+  /**
+   * Reserves the next `seq` (persisted first), boxes the envelope and sends the relay frame; in
+   * order per session. When the frame carries an `ack` but cannot be sent (no session key, over
+   * the budget), the ack still goes alone so the processed frame does not come back.
+   */
   private send(device: DeviceRecord, out: Outgoing): Promise<void> {
     const task = async () => {
       const socket = this.socket
       if (!socket || !this.isOnline()) return
+      const ackAlone = () => {
+        if (out.ack !== undefined) this.writeAck(socket, out.ack)
+      }
       const key = await this.deps.devices.sessionKey(device.id)
-      if (!key) return
+      if (!key) return ackAlone()
       const { seq, persisted } = this.deps.devices.nextOutSeq()
       await persisted
       const envelope: Envelope = {
@@ -391,7 +423,7 @@ export class RemoteSession {
       } catch (err) {
         if (out.kind !== 'result') {
           console.error(`[remote] ${out.kind} ${out.name ?? ''} exceeds the frame budget; not sent`)
-          return
+          return ackAlone()
         }
         // A result too large for one frame: the phone gets a failure instead of nothing.
         envelope.ok = false
@@ -402,7 +434,12 @@ export class RemoteSession {
       if (out.ack !== undefined) frame.ack = out.ack
       if (out.pushHint !== undefined) frame.pushHint = out.pushHint
       if (out.pushText !== undefined) frame.pushText = out.pushText
-      requireRelayFrame(frame)
+      try {
+        requireRelayFrame(frame)
+      } catch (err) {
+        console.error(`[remote] ${out.kind} ${out.name ?? ''} is not a valid relay frame; not sent:`, (err as Error).message)
+        return ackAlone()
+      }
       if (this.socket !== socket) return
       socket.send(JSON.stringify(frame))
     }

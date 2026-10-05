@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -5,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   openEnvelope,
   requireEnvelope,
+  requireRelayClientFrame,
   requireRelayFrame,
   sealEnvelope,
   ttlFor,
@@ -14,7 +16,8 @@ import {
   type StatusSummary
 } from '@shared/remote'
 import { DeviceStore } from './devices'
-import { Gateway, type GatewayServices } from './gateway'
+import { auditFile } from './audit'
+import { Gateway, SimulatedCrash, type GatewayServices } from './gateway'
 import { projectStatus } from './project'
 import { RemoteSession, type SocketLike } from './session'
 import { command, fakeCipher, fakePhone, queueState, type FakePhone } from './test-helpers'
@@ -27,6 +30,10 @@ import type { WorkspaceIdentity } from './workspace'
 class FakeRelay {
   sockets: FakeSocket[] = []
   sent: RelayFrame[] = []
+  /** Refs from ack-only client frames (`{ ack }`). */
+  acks: string[] = []
+  /** Called with every post-auth frame as it arrives, before it is recorded. */
+  onFrame?: (raw: { ack?: string }) => void
   auths: unknown[] = []
   connects = 0
   /** When set, the next connection fails right away (relay down). */
@@ -83,6 +90,11 @@ class FakeSocket implements SocketLike {
       this.authed = true
       return
     }
+    this.relay.onFrame?.(raw)
+    if (!('ct' in raw)) {
+      this.relay.acks.push((requireRelayClientFrame(raw) as { ack: string }).ack)
+      return
+    }
     this.relay.sent.push(requireRelayFrame(raw))
   }
   close(): void {
@@ -120,6 +132,7 @@ let identity: WorkspaceIdentity
 let states: string[]
 let details = false
 let paused = false
+let crash: GatewayServices['crashAt']
 const creds = { relayUrl: 'https://relay.example.com', adminToken: 'admin', roomId: 'room-1', ownerSecret: 'owner-secret-base64' }
 
 function status(): StatusSummary {
@@ -148,7 +161,8 @@ function services(): GatewayServices {
     runs: { list: async () => [], get: async () => ({ run: {} as never, items: [] }), reply: async () => ({}) as never, stop: async () => ({}) as never, finish: async () => ({}) as never },
     jobs: { list: async () => [], addUrl: async () => ({}) as never },
     files: { resolve: async () => '' },
-    transcripts: () => true
+    transcripts: () => true,
+    crashAt: (step, name) => crash?.(step, name)
   }
 }
 
@@ -182,6 +196,7 @@ beforeEach(async () => {
   states = []
   details = false
   paused = false
+  crash = undefined
   gateway = new Gateway(services(), devices)
   session = new RemoteSession({
     connect: relay.connect,
@@ -364,9 +379,9 @@ describe('RemoteSession', () => {
     }
     await session.notifyRevoked(phone.id, 'Removed in Settings.')
     await session.flush()
-    const last = open(relay.framesTo(phone.id).at(-1)!)
-    expect(last.name).toBe('device.revoked')
-    expect(last.body).toEqual({ reason: 'Removed in Settings.' })
+    // A heartbeat already waiting on status() may land after it, so look for the frame rather than the last one.
+    const revoked = relay.framesTo(phone.id).map(open).find((e) => e.name === 'device.revoked')
+    expect(revoked?.body).toEqual({ reason: 'Removed in Settings.' })
     expect(ttlFor('queue.get')).toBe(24 * 3600)
   })
 
@@ -376,5 +391,103 @@ describe('RemoteSession', () => {
     await session.broadcast('run.transcript', { runId: 'r', items: Array.from({ length: 20 }, (_, i) => ({ kind: 'user' as const, id: `i${i}`, text: 'x'.repeat(8 * 1024) })), seq: 0 })
     await session.flush()
     expect(relay.sent).toHaveLength(0)
+  })
+})
+
+describe('RemoteSession: acknowledging delivered frames', () => {
+  const onDisk = () => JSON.parse(readFileSync(join(dir, 'devices.json'), 'utf8')) as { devices: { id: string; lastSeq: number; lastSeen?: string }[] }
+  const auditOnDisk = () => (existsSync(auditFile(ws)) ? readFileSync(auditFile(ws), 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [])
+
+  it('acks a command in its result frame only after the audit outcome and the lastSeq checkpoint are on disk', async () => {
+    session.start(creds)
+    await online()
+    const cmd = command(phone, 'queue.setPaused', { paused: true }, identity.id)
+    let seenAtAck: { audit: { id: string; ok?: boolean }[]; lastSeq: number } | null = null
+    relay.onFrame = (raw) => {
+      if (raw.ack === cmd.id) seenAtAck = { audit: auditOnDisk(), lastSeq: onDisk().devices.find((d) => d.id === phone.id)!.lastSeq }
+    }
+    relay.deliver(fromPhone(cmd))
+    await waitFor(() => seenAtAck !== null)
+    await session.flush()
+    expect(seenAtAck!.lastSeq).toBe(cmd.seq)
+    expect(seenAtAck!.audit.filter((e) => e.id === cmd.id).map((e) => ('started' in e ? 'start' : e.ok))).toEqual(['start', true])
+    // The ack rides on the result; no separate ack-only frame for it.
+    expect(relay.acks).toEqual([])
+  })
+
+  it('acks the relay frame ref, which the relay deletes by, even when it differs from the envelope id', async () => {
+    session.start(creds)
+    await online()
+    const cmd = command(phone, 'queue.get', undefined, identity.id)
+    relay.deliver({ ...fromPhone(cmd), ref: 'relay-ref-1' })
+    await waitFor(() => relay.framesTo(phone.id).some((f) => f.ack !== undefined))
+    await session.flush()
+    expect(relay.framesTo(phone.id).find((f) => f.ack !== undefined)!.ack).toBe('relay-ref-1')
+  })
+
+  it('acks a phone result, event or pong alone with { ack } once lastSeen is on disk', async () => {
+    session.start(creds)
+    await online()
+    const base = { v: 1 as const, sid: phone.sid, from: 'phone' as const, ts: new Date().toISOString(), ttl: 60, body: null }
+    const lastSeenAtAck: (string | undefined)[] = []
+    relay.onFrame = (raw) => {
+      if (raw.ack !== undefined && !('ct' in raw)) lastSeenAtAck.push(onDisk().devices.find((d) => d.id === phone.id)!.lastSeen)
+    }
+    relay.deliver(fromPhone({ ...base, seq: ++phone.seq, kind: 'pong', id: 'pong-1' }))
+    relay.deliver(fromPhone({ ...base, seq: ++phone.seq, kind: 'result', id: 'res-1', re: 'x', ok: true }))
+    await waitFor(() => relay.acks.length >= 2)
+    await session.flush()
+    expect(relay.acks).toEqual(['pong-1', 'res-1'])
+    expect(lastSeenAtAck.every((t) => typeof t === 'string')).toBe(true)
+    // Nothing boxed goes back for them.
+    expect(relay.framesTo(phone.id)).toHaveLength(0)
+  })
+
+  it('never acks a command whose handling crashed between the write-ahead entry and the outcome', async () => {
+    session.start(creds)
+    await online()
+    crash = (step) => {
+      if (step === 'after-start') throw new SimulatedCrash(step)
+    }
+    const cmd = command(phone, 'queue.setPaused', { paused: true }, identity.id)
+    relay.deliver(fromPhone(cmd))
+    await waitFor(() => auditOnDisk().some((e) => e.id === cmd.id))
+    await tick(50)
+    await session.flush()
+    expect(relay.acks).toEqual([])
+    expect(relay.framesTo(phone.id).filter((f) => f.ack !== undefined)).toHaveLength(0)
+  })
+
+  it('does not ack a frame no paired device can open', async () => {
+    session.start(creds)
+    await online()
+    const stranger = fakePhone((await devices.keyPair())!, 'Stranger')
+    const cmd = command(stranger, 'queue.get', undefined, identity.id)
+    relay.deliver({ to: 'desktop', ref: cmd.id!, ...sealEnvelope(cmd, stranger.sessionKey), ttl: 60 })
+    await tick(30)
+    await session.flush()
+    expect(relay.acks).toEqual([])
+  })
+
+  it('sends no ack while offline: the relay redelivers and the gateway answers from its log', async () => {
+    session.start(creds)
+    await online()
+    const cmd = command(phone, 'queue.setPaused', { paused: true }, identity.id)
+    const frame = fromPhone(cmd)
+    // The socket drops while the command is being handled.
+    crash = (step) => {
+      if (step === 'after-finish') relay.drop('blip')
+    }
+    relay.deliver(frame)
+    await waitFor(() => !session.isOnline())
+    await session.flush()
+    expect(relay.sent.filter((f) => f.ack !== undefined)).toHaveLength(0)
+    crash = undefined
+    await online()
+    relay.deliver(frame)
+    await waitFor(() => relay.framesTo(phone.id).some((f) => f.ack === cmd.id))
+    await session.flush()
+    expect(open(relay.framesTo(phone.id).find((f) => f.ack === cmd.id)!)).toMatchObject({ re: cmd.id, ok: true })
+    expect(auditOnDisk().filter((e) => e.id === cmd.id && 'started' in e)).toHaveLength(1)
   })
 })
