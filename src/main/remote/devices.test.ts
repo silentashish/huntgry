@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, open, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deriveSessionKey, toBase64 } from '@shared/remote'
 import { DeviceStore } from './devices'
 import { fakeCipher, fakePhone } from './test-helpers'
@@ -69,5 +69,60 @@ describe('DeviceStore', () => {
     await again.load()
     expect(again.list()).toEqual([])
     expect(toBase64((await again.keyPair())!.publicKey)).toBe(toBase64(rotated.publicKey))
+  })
+
+  it('concurrent first calls get one desktop keypair, the one on disk', async () => {
+    const store = new DeviceStore(dir, fakeCipher())
+    await store.load()
+    const pairs = await Promise.all(Array.from({ length: 8 }, () => store.keyPair()))
+    expect(new Set(pairs.map((p) => toBase64(p!.publicKey))).size).toBe(1)
+    const reloaded = new DeviceStore(dir, fakeCipher())
+    await reloaded.load()
+    expect(toBase64((await reloaded.keyPair())!.publicKey)).toBe(toBase64(pairs[0]!.publicKey))
+  })
+
+  it('a rotation and a first-use generation in flight together end on the rotated key, on disk too', async () => {
+    const store = new DeviceStore(dir, fakeCipher())
+    await store.load()
+    const first = store.keyPair()
+    const rotated = store.rotateKeyPair()
+    const after = store.keyPair()
+    const [a, r, b] = await Promise.all([first, rotated, after])
+    expect(toBase64(r.publicKey)).not.toBe(toBase64(a!.publicKey))
+    expect(toBase64(b!.publicKey)).toBe(toBase64(r.publicKey))
+    const reloaded = new DeviceStore(dir, fakeCipher())
+    await reloaded.load()
+    expect(toBase64((await reloaded.keyPair())!.publicKey)).toBe(toBase64(r.publicKey))
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('fails closed: an outgoing seq whose checkpoint cannot be written rejects', async () => {
+    const store = new DeviceStore(dir, fakeCipher())
+    await store.load()
+    await store.keyPair()
+    await chmod(dir, 0o500)
+    try {
+      await expect(store.nextOutSeq().persisted).rejects.toThrow()
+    } finally {
+      await chmod(dir, 0o700)
+    }
+    // The chain recovers once the disk is writable again.
+    await expect(store.nextOutSeq().persisted).resolves.toBeUndefined()
+    expect(JSON.parse(await readFile(join(dir, 'devices.json'), 'utf8')).outSeq).toBe(2)
+  })
+
+  it('an outgoing seq reservation is fsynced (file and directory) before it resolves', async () => {
+    const store = new DeviceStore(dir, fakeCipher())
+    await store.load()
+    await store.keyPair()
+    const probe = await open(join(dir, 'probe'), 'w')
+    const proto = Object.getPrototypeOf(probe) as { sync: () => Promise<void> }
+    await probe.close()
+    const sync = vi.spyOn(proto, 'sync')
+    try {
+      await store.nextOutSeq().persisted
+      expect(sync.mock.calls.length).toBeGreaterThanOrEqual(process.platform === 'win32' ? 1 : 2)
+    } finally {
+      sync.mockRestore()
+    }
   })
 })

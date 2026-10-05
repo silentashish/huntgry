@@ -27,4 +27,10 @@ describe('workspaceIdentity', () => {
     await writeFile(remoteFile(ws), '{"workspaceId":"../../etc"}')
     expect((await workspaceIdentity(ws)).id).toMatch(/^[0-9a-f]{32}$/)
   })
+
+  it('concurrent first uses share one id, the one written to remote.json', async () => {
+    const ids = await Promise.all(Array.from({ length: 8 }, () => workspaceIdentity(ws)))
+    expect(new Set(ids.map((i) => i.id)).size).toBe(1)
+    expect(JSON.parse(await readFile(remoteFile(ws), 'utf8')).workspaceId).toBe(ids[0].id)
+  })
 })

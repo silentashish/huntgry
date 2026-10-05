@@ -1,5 +1,4 @@
-import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   deriveSessionKey,
@@ -12,13 +11,15 @@ import {
   type NotificationCategory
 } from '@shared/remote'
 import type { Cipher } from './credentials'
+import { writeDurable } from './durable'
 
 /**
  * Paired devices and the desktop identity (ADR-0001, "Keys and storage", "Replay and
  * ordering"). `userData/remote/devices.json` holds the device records (id, name, public key,
  * relay-token hash, pairing time, last seen, notification categories, `needsRepair`) and the
  * replay checkpoint: each device's `lastSeq` and the desktop's outgoing `seq`. It is written
- * atomically (temp file + rename) after every accepted or sent frame, and only ever read as
+ * atomically and durably (fsynced temp file, rename, directory fsync) after every accepted
+ * frame and before every sent one, and only ever read as
  * a checkpoint: on start the gateway raises `lastSeq` to what the audit log proves.
  * The desktop's X25519 secret key is in `desktop-key.json`, encrypted by the `Cipher`
  * (`safeStorage` in the app).
@@ -46,7 +47,17 @@ interface DevicesFile {
   version: 1
   outSeq: number
   devices: DeviceRecord[]
+  /** Per device, the last admitted non-command frames (id + digest), to tell a redelivery from a replay. */
+  recent?: Record<string, AdmittedFrame[]>
 }
+
+export interface AdmittedFrame {
+  id: string
+  digest: string
+}
+
+/** How many admitted non-command frames per device are remembered for redelivery checks. */
+export const RECENT_FRAMES = 32
 
 export const DEVICES_FILE = 'devices.json'
 export const DESKTOP_KEY_FILE = 'desktop-key.json'
@@ -86,18 +97,15 @@ function sanitizeDevice(v: unknown): DeviceRecord | null {
   return out
 }
 
-async function writeAtomic(file: string, text: string): Promise<void> {
-  const tmp = `${file}.${randomBytes(4).toString('hex')}.tmp`
-  await writeFile(tmp, text, { encoding: 'utf8', mode: 0o600 })
-  await rename(tmp, file)
-}
-
 export class DeviceStore {
   private devices = new Map<string, DeviceRecord>()
   private outSeq = 0
   private keys: KeyPair | null = null
   private sessionKeys = new Map<string, Uint8Array>()
+  private recent = new Map<string, AdmittedFrame[]>()
   private saving: Promise<void> = Promise.resolve()
+  /** The write not started yet, which callers that collapse into it wait on (and see fail). */
+  private queued: Promise<void> = Promise.resolve()
   /** The `outSeq` value the pending write (if any) will persist. */
   private queuedSeq = -1
   private loaded = false
@@ -120,6 +128,7 @@ export class DeviceStore {
     await mkdir(this.dir, { recursive: true })
     this.devices.clear()
     this.sessionKeys.clear()
+    this.recent.clear()
     this.outSeq = 0
     try {
       const raw = JSON.parse(await readFile(this.file, 'utf8')) as Partial<DevicesFile>
@@ -127,6 +136,13 @@ export class DeviceStore {
       for (const d of Array.isArray(raw.devices) ? raw.devices : []) {
         const record = sanitizeDevice(d)
         if (record) this.devices.set(record.id, record)
+      }
+      if (raw.recent && typeof raw.recent === 'object') {
+        for (const [id, frames] of Object.entries(raw.recent)) {
+          if (!this.devices.has(id) || !Array.isArray(frames)) continue
+          const ok = frames.filter((f): f is AdmittedFrame => typeof f?.id === 'string' && f.id.length <= 128 && typeof f?.digest === 'string' && /^[0-9a-f]{64}$/.test(f.digest))
+          this.recent.set(id, ok.slice(-RECENT_FRAMES))
+        }
       }
     } catch {
       // Missing or broken checkpoint: the audit log raises lastSeq again on start.
@@ -148,31 +164,49 @@ export class DeviceStore {
     return null
   }
 
-  /** The desktop keypair, generated and stored on first use. `null` when nothing can be encrypted. */
-  async keyPair(): Promise<KeyPair | null> {
-    if (this.keys) return this.keys
-    if (!this.cipher.available()) return null
-    const pair = generateKeyPair()
-    await this.writeKey(pair)
-    this.keys = pair
-    return pair
+  /**
+   * The desktop keypair, generated and stored on first use. `null` when nothing can be
+   * encrypted. Concurrent first calls share one generation, and generation and rotation run
+   * one at a time, so every caller gets the pair that is on disk.
+   */
+  keyPair(): Promise<KeyPair | null> {
+    if (this.keys) return Promise.resolve(this.keys)
+    return this.keyTask(async () => {
+      if (this.keys) return this.keys
+      if (!this.cipher.available()) return null
+      const pair = generateKeyPair()
+      await this.writeKey(pair)
+      this.keys = pair
+      return pair
+    })
+  }
+
+  private keyChain: Promise<unknown> = Promise.resolve()
+
+  private keyTask<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.keyChain.then(task, task)
+    this.keyChain = next.catch(() => undefined)
+    return next
   }
 
   private async writeKey(pair: KeyPair): Promise<void> {
     await mkdir(this.dir, { recursive: true })
     const blob = this.cipher.encrypt(toBase64(pair.secretKey)).toString('base64')
-    await writeAtomic(this.keyFile, `${JSON.stringify({ version: 1, publicKey: toBase64(pair.publicKey), blob }, null, 2)}\n`)
+    await writeDurable(this.keyFile, `${JSON.stringify({ version: 1, publicKey: toBase64(pair.publicKey), blob }, null, 2)}\n`)
   }
 
   /** New desktop identity; every paired device is dropped (they pair again). */
-  async rotateKeyPair(): Promise<KeyPair> {
-    const pair = generateKeyPair()
-    await this.writeKey(pair)
-    this.keys = pair
-    this.devices.clear()
-    this.sessionKeys.clear()
-    await this.save()
-    return pair
+  rotateKeyPair(): Promise<KeyPair> {
+    return this.keyTask(async () => {
+      const pair = generateKeyPair()
+      await this.writeKey(pair)
+      this.keys = pair
+      this.devices.clear()
+      this.sessionKeys.clear()
+      this.recent.clear()
+      await this.save()
+      return pair
+    })
   }
 
   list(): DeviceRecord[] {
@@ -192,12 +226,14 @@ export class DeviceStore {
   async add(record: DeviceRecord): Promise<void> {
     this.devices.set(record.id, { ...record, categories: [...record.categories] })
     this.sessionKeys.delete(record.id)
+    this.recent.delete(record.id)
     await this.save()
   }
 
   async remove(id: string): Promise<boolean> {
     const had = this.devices.delete(id)
     this.sessionKeys.delete(id)
+    this.recent.delete(id)
     if (had) await this.save()
     return had
   }
@@ -222,6 +258,13 @@ export class DeviceStore {
     return key
   }
 
+  /** The session key for a record that may already be removed from the store (revocation notice). */
+  async sessionKeyFor(record: DeviceRecord): Promise<Uint8Array | null> {
+    const keys = await this.keyPair()
+    if (!keys) return null
+    return deriveSessionKey(fromBase64(record.publicKey), keys.secretKey)
+  }
+
   /** Raises a device's `lastSeq` (never lowers it), e.g. from the audit log on start. */
   raiseLastSeq(id: string, seq: number): void {
     const d = this.devices.get(id)
@@ -235,6 +278,32 @@ export class DeviceStore {
     if (seq > d.lastSeq) d.lastSeq = seq
     d.lastSeen = at
     await this.save()
+  }
+
+  /** Records an admitted non-command frame: `lastSeq`, `lastSeen` and its id + digest; resolves once on disk. */
+  async acceptFrame(id: string, seq: number, at: string, frame: AdmittedFrame): Promise<void> {
+    const d = this.devices.get(id)
+    if (!d) return
+    const before = { lastSeq: d.lastSeq, lastSeen: d.lastSeen, recent: this.recent.get(id) }
+    if (seq > d.lastSeq) d.lastSeq = seq
+    d.lastSeen = at
+    this.recent.set(id, [...(before.recent ?? []), frame].slice(-RECENT_FRAMES))
+    try {
+      await this.save()
+    } catch (err) {
+      // Nothing else proves this frame was admitted: undo, so its redelivery is admitted afresh.
+      d.lastSeq = before.lastSeq
+      if (before.lastSeen === undefined) delete d.lastSeen
+      else d.lastSeen = before.lastSeen
+      if (before.recent) this.recent.set(id, before.recent)
+      else this.recent.delete(id)
+      throw err
+    }
+  }
+
+  /** Whether this exact non-command frame (id and digest) was admitted from the device recently. */
+  admitted(id: string, frameId: string, digest: string): boolean {
+    return (this.recent.get(id) ?? []).some((f) => f.id === frameId && f.digest === digest)
   }
 
   /** Marks a device as needing re-pair (rewound counter); nothing runs from it until then. */
@@ -261,16 +330,20 @@ export class DeviceStore {
   /** Serialised atomic write; writes queued while one is in flight collapse into a single later write. */
   private save(): Promise<void> {
     if (!this.loaded) return Promise.resolve()
-    if (this.queuedSeq >= this.outSeq && this.queuedSeq !== -1) return this.saving
+    // A write that has not started yet snapshots the store when it runs, so it covers this change too.
+    if (this.queuedSeq >= this.outSeq && this.queuedSeq !== -1) return this.queued
     this.queuedSeq = this.outSeq
     const run = async () => {
       this.queuedSeq = -1
-      const body: DevicesFile = { version: 1, outSeq: this.outSeq, devices: this.list() }
+      const body: DevicesFile = { version: 1, outSeq: this.outSeq, devices: this.list(), recent: Object.fromEntries(this.recent) }
       await mkdir(this.dir, { recursive: true })
-      await writeAtomic(this.file, `${JSON.stringify(body, null, 2)}\n`)
+      await writeDurable(this.file, `${JSON.stringify(body, null, 2)}\n`)
     }
-    this.saving = this.saving.then(run, run)
-    return this.saving
+    // Callers see their write's failure (the gateway then leaves the frame unacked); the chain goes on.
+    const next = this.saving.then(run, run)
+    this.queued = next
+    this.saving = next.catch(() => undefined)
+    return next
   }
 
   /** Resolves once every queued write is on disk (shutdown, tests). */

@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { HUNTGRY_DIR } from '../workspace/constants'
+import { writeDurable } from './durable'
 
 /**
  * What a phone may know about the open workspace (ADR-0001, "Workspace binding"): a random
@@ -19,7 +20,19 @@ export const REMOTE_FILE = 'remote.json'
 
 export const remoteFile = (workspace: string): string => join(workspace, HUNTGRY_DIR, REMOTE_FILE)
 
-export async function workspaceIdentity(workspace: string): Promise<WorkspaceIdentity> {
+/** One read-or-mint per workspace at a time: concurrent first uses must not mint two ids. */
+const pending = new Map<string, Promise<WorkspaceIdentity>>()
+
+export function workspaceIdentity(workspace: string): Promise<WorkspaceIdentity> {
+  let p = pending.get(workspace)
+  if (!p) {
+    p = readOrMint(workspace).finally(() => pending.delete(workspace))
+    pending.set(workspace, p)
+  }
+  return p
+}
+
+async function readOrMint(workspace: string): Promise<WorkspaceIdentity> {
   const file = remoteFile(workspace)
   const name = basename(workspace) || 'Workspace'
   try {
@@ -32,8 +45,6 @@ export async function workspaceIdentity(workspace: string): Promise<WorkspaceIde
   }
   const id = randomBytes(16).toString('hex')
   await mkdir(join(workspace, HUNTGRY_DIR), { recursive: true })
-  const tmp = `${file}.${randomBytes(4).toString('hex')}.tmp`
-  await writeFile(tmp, `${JSON.stringify({ version: 1, workspaceId: id }, null, 2)}\n`, 'utf8')
-  await rename(tmp, file)
+  await writeDurable(file, `${JSON.stringify({ version: 1, workspaceId: id }, null, 2)}\n`, 0o644)
   return { path: workspace, id, name }
 }

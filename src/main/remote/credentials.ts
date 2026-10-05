@@ -1,7 +1,8 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomBytes as nodeRandomBytes } from 'node:crypto'
 import { BEARER } from '@shared/remote'
+import { writeDurable } from './durable'
 
 /**
  * The relay credentials (ADR-0001, "Credential storage and lifecycle"): relay URL, admin
@@ -118,13 +119,11 @@ export class CredentialStore {
     }
   }
 
-  /** Encrypts and writes the blob atomically (temp file + rename, like `settings.ts`). */
+  /** Encrypts and writes the blob atomically and durably (fsynced temp file + rename + directory fsync). */
   async write(credentials: RelayCredentials): Promise<void> {
     if (!this.cipher.available()) throw new Error('Encrypted storage is not available on this machine; relay credentials cannot be saved.')
     const blob = this.cipher.encrypt(JSON.stringify({ ...credentials, relayUrl: normalizeRelayUrl(credentials.relayUrl) })).toString('base64')
     await mkdir(dirname(this.file), { recursive: true })
-    const tmp = `${this.file}.${process.pid}.${Date.now()}.tmp`
-    await writeFile(tmp, `${JSON.stringify({ version: 1, blob }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-    await rename(tmp, this.file)
+    await writeDurable(this.file, `${JSON.stringify({ version: 1, blob }, null, 2)}\n`)
   }
 }
