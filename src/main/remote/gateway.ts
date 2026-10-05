@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
+import { open } from 'node:fs/promises'
 import type { Job } from '@shared/jobs-types'
 import type { EnqueueResult, QueueState } from '@shared/queue-types'
 import type { AgentStatus, RunSummary, TranscriptItem } from '@shared/runner-types'
@@ -14,6 +15,7 @@ import {
   requireFresh,
   requireNextSeq,
   requireWorkspace,
+  jsonBytes,
   toBase64,
   ttlFor,
   type Envelope,
@@ -93,6 +95,13 @@ export interface GatewayReply {
   ack: string
 }
 
+/** Largest application file a phone may fetch (generated PDFs and notes are far smaller). */
+export const MAX_REMOTE_FILE_BYTES = 32 * 1024 * 1024
+const HASH_CACHE_SIZE = 32
+
+/** Plaintext left for a queue projection inside a result envelope (envelope fields take the rest). */
+const QUEUE_BUDGET = LIMITS.plaintextBytes - 4 * 1024
+
 const RATE = {
   /** `queue.enqueue` / `pipeline.start`: once per 10 s per device. */
   costlyMs: 10_000,
@@ -104,6 +113,35 @@ const RATE = {
 
 /** Commands that touch the review queue or the pipeline (#31): not on this desktop yet. */
 const NOT_YET: readonly RemoteCommandName[] = ['pipeline.start', 'pipeline.pause', 'pipeline.resume', 'pipeline.stop', 'review.list', 'review.get', 'review.approve', 'review.rerun', 'review.discard']
+
+/** Outcome of `Gateway.admit` for a non-command envelope. */
+export type Admission = { status: 'new' | 'redelivered'; device: DeviceRecord } | { status: 'rejected'; error: EnvelopeError }
+
+/** An audit or checkpoint write failed: the frame must stay unacked so the relay redelivers it. */
+export class DurabilityError extends Error {
+  constructor(readonly cause: unknown) {
+    super(`remote state could not be saved: ${(cause as Error)?.message ?? String(cause)}`)
+    this.name = 'DurabilityError'
+  }
+}
+
+async function durable<T>(write: Promise<T>): Promise<T> {
+  try {
+    return await write
+  } catch (err) {
+    throw err instanceof DurabilityError ? err : new DurabilityError(err)
+  }
+}
+
+/**
+ * What identifies one delivered envelope: a SHA-256 over every field the phone sealed. The
+ * relay redelivers the same ciphertext, so an exact redelivery has the same digest; a reused
+ * id with another seq, device session, workspace, name or body does not.
+ */
+export function envelopeDigest(e: Envelope): string {
+  const fields = [e.v, e.sid, e.from, e.seq, e.ts, e.ttl, e.kind, e.id ?? null, e.re ?? null, e.ws ?? null, e.name ?? null, e.ok ?? null, e.error ?? null, e.body ?? null]
+  return createHash('sha256').update(JSON.stringify(fields)).digest('hex')
+}
 
 /** Thrown by the `crashAt` test hook: stands for the process dying, so nothing below it runs or is recorded. */
 export class SimulatedCrash extends Error {
@@ -172,10 +210,30 @@ export class Gateway {
     return next
   }
 
+  /**
+   * The device as the store has it now. A record removed (revoked, unpaired, rotated) or
+   * replaced by a new pairing under the same id while this frame waited is `denied`: the
+   * caller's copy is never trusted on its own.
+   */
+  private current(given: DeviceRecord): DeviceRecord {
+    const device = this.devices.get(given.id)
+    if (!device || device.sid !== given.sid || device.publicKey !== given.publicKey) throw new ProtocolError('denied', 'This phone is no longer paired with this Mac.')
+    return device
+  }
+
+  /** The command must still be for the workspace it was checked against (the owner may switch during the audit fsync). */
+  private async requireSameWorkspace(workspace: WorkspaceIdentity): Promise<void> {
+    const now = await this.services.workspace().catch(() => null)
+    if (!now || now.path !== workspace.path || now.id !== workspace.id) {
+      throw new ProtocolError('invalid', 'The workspace open on the Mac changed; this command was not run.')
+    }
+  }
+
   private async handleNow(given: DeviceRecord, envelope: Envelope): Promise<GatewayReply> {
     const id = envelope.id ?? envelope.re ?? 'unknown'
     const ack = id
     const at = new Date(this.now()).toISOString()
+    const digest = envelopeDigest(envelope)
     let seq: number | undefined
     let name = typeof envelope.name === 'string' ? envelope.name.slice(0, 64) : 'unknown'
     let audit: AuditLog | null = null
@@ -183,84 +241,138 @@ export class Gateway {
       if (envelope.kind !== 'cmd' || envelope.id === undefined) throw new ProtocolError('invalid', 'Not a command.')
       requireFresh(envelope, this.now())
       const workspace = await this.services.workspace()
-      audit = await this.auditFor(workspace.path)
-      // The store's record, read after the log raised `lastSeq`; the caller's copy may predate that.
-      const device = this.devices.get(given.id) ?? given
+      // An unreadable log is a storage failure: no answer and no ack, never a guess.
+      audit = await durable(this.auditFor(workspace.path))
+      // The store's record, read after the log raised `lastSeq`; the caller's copy may predate that or a revoke.
+      const device = this.current(given)
       if (device.needsRepair) throw new ProtocolError('denied', 'This phone must be paired again.')
-      // A redelivery carries a seq the log already accepted: answer from the log, never as a replay.
-      const known = audit.lookup(envelope.id)
-      // A finished read stores no result: its redelivery (the result frame was lost) runs the read
-      // again under the seq it already used, so it is not a replay and nothing is checkpointed.
-      const rerunRead = known?.state === 'finished' && known.read === true
+      requireWorkspace(envelope, workspace.id)
+      const command = requireCommandEnvelope(envelope)
+      name = command.name
+      // A redelivery is the same frame again: same device, seq and content (digest). Only that is
+      // answered from the log; an id reused with anything else is refused and never executes.
+      const known = audit.lookup(device.id, envelope.id)
+      if (known && (known.seq !== envelope.seq || known.digest !== digest)) {
+        throw new ProtocolError('invalid', 'This command id was already used for another command.')
+      }
+      // A finished read stores no result: its exact redelivery (the result frame was lost) runs the
+      // read again under the seq it already used, so it is not a replay and nothing is checkpointed.
+      const rerunRead = known?.state === 'finished' && known.read === true && isReadCommand(command.name)
       if (known && !rerunRead) return this.answerKnown(known, envelope, ack)
       if (!rerunRead) {
         try {
           seq = requireNextSeq(envelope.seq, device.lastSeq)
         } catch (err) {
-          if (err instanceof ProtocolError && err.code === 'denied') await this.devices.markNeedsRepair(device.id)
+          if (err instanceof ProtocolError && err.code === 'denied') await durable(this.devices.markNeedsRepair(device.id))
           throw err
         }
       }
       // Not checkpointed yet: the audit entry is the commit. A crash before it persists nothing, so
       // the relay's redelivery runs the command exactly once (ADR "Commit order on the desktop").
-      requireWorkspace(envelope, workspace.id)
-      const command = requireCommandEnvelope(envelope)
-      name = command.name
       if ((NOT_YET as readonly string[]).includes(command.name)) {
         throw new ProtocolError('unsupported', 'Pipelines and reviews are not available on this Mac yet. Update Huntgry.')
       }
-      if (rerunRead && !isReadCommand(command.name)) throw new ProtocolError('denied', 'This command id was already used.')
       this.checkTtl(envelope, command.name)
       this.checkRate(device.id, command)
 
       if (rerunRead || seq === undefined) {
+        await this.requireSameWorkspace(workspace)
         const body = await this.execute(device, command, workspace)
         return { result: { kind: 'result', re: envelope.id, ok: true, body, ttl: envelope.ttl }, ack }
       }
       if (isReadCommand(command.name)) {
+        await this.requireSameWorkspace(workspace)
         const body = await this.execute(device, command, workspace)
-        await audit.finish({ id: envelope.id, deviceId: device.id, seq, name: command.name, ok: true, read: true, ts: at })
-        await this.devices.accept(device.id, seq, at)
+        await durable(audit.finish({ id: envelope.id, deviceId: device.id, seq, name: command.name, ok: true, read: true, digest, ts: at }))
+        await durable(this.devices.accept(device.id, seq, at))
         return { result: { kind: 'result', re: envelope.id, ok: true, body, ttl: envelope.ttl }, ack }
       }
 
       this.services.crashAt?.('before-start', command.name)
-      await audit.start({ id: envelope.id, deviceId: device.id, seq, name: command.name, ts: at })
-      await this.devices.accept(device.id, seq, at)
+      await durable(audit.start({ id: envelope.id, deviceId: device.id, seq, name: command.name, digest, ts: at }))
+      await durable(this.devices.accept(device.id, seq, at))
       this.services.crashAt?.('after-start', command.name)
       let body: unknown
       try {
+        // Checked again after the fsyncs: a workspace switch during them must not redirect the command.
+        await this.requireSameWorkspace(workspace)
+        this.current(given)
         body = await this.execute(device, command, workspace)
       } catch (err) {
+        if (err instanceof SimulatedCrash) throw err
         const error = errorOf(err)
-        console.error(`[remote] ${command.name} from ${device.name} failed:`, err)
-        await audit.finish({ id: envelope.id, deviceId: device.id, seq, name: command.name, ok: false, error })
+        if (!(err instanceof ProtocolError)) console.error(`[remote] ${command.name} from ${device.name} failed:`, err)
+        await durable(audit.finish({ id: envelope.id, deviceId: device.id, seq, name: command.name, ok: false, error, digest }))
         return { result: { kind: 'result', re: envelope.id, ok: false, error, body: null, ttl: envelope.ttl }, ack }
       }
       this.services.crashAt?.('after-execute', command.name)
-      await audit.finish({ id: envelope.id, deviceId: device.id, seq, name: command.name, ok: true, result: body })
+      await durable(audit.finish({ id: envelope.id, deviceId: device.id, seq, name: command.name, ok: true, result: body, digest }))
       this.services.crashAt?.('after-finish', command.name)
       return { result: { kind: 'result', re: envelope.id, ok: true, body, ttl: envelope.ttl }, ack }
     } catch (err) {
-      if (err instanceof SimulatedCrash) throw err
+      // A crash or a failed audit / checkpoint write: nothing is answered, so the session sends no
+      // ack and the relay redelivers the frame once storage works again.
+      if (err instanceof SimulatedCrash || err instanceof DurabilityError) throw err
       const error = errorOf(err)
       if (!(err instanceof ProtocolError)) console.error(`[remote] ${name} from ${given.name} failed:`, err)
       // Rejected frames are audited too (device, name, outcome); without a seq when it was never accepted.
       const entry = { id, deviceId: given.id, name, ok: false as const, error, ts: at }
-      await audit?.finish(seq === undefined ? entry : { ...entry, seq }).catch((e) => console.error('[remote] audit write failed:', e))
-      if (seq !== undefined) await this.devices.accept(given.id, seq, at).catch(() => undefined)
+      if (audit) await durable(audit.finish(seq === undefined ? entry : { ...entry, seq, digest }))
+      if (seq !== undefined) await durable(this.devices.accept(given.id, seq, at))
       return { result: { kind: 'result', re: id, ok: false, error, body: null, ttl: envelope.ttl }, ack }
     }
   }
 
-  /** A frame that failed before it was an envelope (bad session, malformed): audited with its ref, never executed. */
-  async recordRejected(device: DeviceRecord, ref: string, error: EnvelopeError): Promise<void> {
+  /**
+   * A non-command envelope from a phone (`hello`, `ping`, `result`, `event`, `pong`) gets the
+   * same admission as a command, on the same per-device chain: a current pairing, not marked
+   * for re-pair, fresh, and the next `seq`, checkpointed (with its id and digest) before this
+   * resolves. An exact redelivery of an admitted frame is recognised; a rewound counter marks
+   * the device. Storage failures reject, so the frame is not acked.
+   */
+  admit(device: DeviceRecord, envelope: Envelope): Promise<Admission> {
+    const previous = this.chains.get(device.id) ?? Promise.resolve()
+    const next = previous.then(
+      () => this.admitNow(device, envelope),
+      () => this.admitNow(device, envelope)
+    )
+    this.chains.set(device.id, next.catch(() => undefined))
+    return next
+  }
+
+  private async admitNow(given: DeviceRecord, envelope: Envelope): Promise<Admission> {
     try {
-      const audit = await this.auditFor((await this.services.workspace()).path)
-      await audit.finish({ id: ref, deviceId: device.id, name: 'unknown', ok: false, error, ts: new Date(this.now()).toISOString() })
-    } catch (e) {
-      console.error('[remote] audit write failed:', e)
+      const device = this.current(given)
+      if (device.needsRepair) throw new ProtocolError('denied', 'This phone must be paired again.')
+      requireFresh(envelope, this.now())
+      const frameId = envelope.id ?? ''
+      const digest = envelopeDigest(envelope)
+      if (envelope.seq <= device.lastSeq && this.devices.admitted(device.id, frameId, digest)) return { status: 'redelivered', device }
+      let seq: number
+      try {
+        seq = requireNextSeq(envelope.seq, device.lastSeq)
+      } catch (err) {
+        if (err instanceof ProtocolError && err.code === 'denied') await durable(this.devices.markNeedsRepair(device.id))
+        throw err
+      }
+      await durable(this.devices.acceptFrame(device.id, seq, new Date(this.now()).toISOString(), { id: frameId, digest }))
+      return { status: 'new', device: this.devices.get(device.id) ?? device }
+    } catch (err) {
+      if (err instanceof DurabilityError) throw err
+      return { status: 'rejected', error: errorOf(err) }
     }
+  }
+
+  /**
+   * A frame that failed before it was an envelope (bad session, malformed): audited with its
+   * ref, never executed. No open workspace means there is no log to write to; a failed write
+   * rejects (no ack).
+   */
+  async recordRejected(device: DeviceRecord, ref: string, error: EnvelopeError): Promise<void> {
+    const workspace = await this.services.workspace().catch(() => null)
+    if (!workspace) return
+    const audit = await durable(this.auditFor(workspace.path))
+    await durable(audit.finish({ id: ref, deviceId: device.id, name: 'unknown', ok: false, error, ts: new Date(this.now()).toISOString() }))
   }
 
   /** A redelivered id: finished → the stored result, started → interrupted. */
@@ -323,7 +435,17 @@ export class Gateway {
         if (command.args.options.notes !== undefined && command.args.options.notes.length > MAX_TEXT) throw new ProtocolError('invalid', 'The notes are too long.')
         const input = requireEnqueueInput(command.args, await s.defaultAgent())
         const result = await s.queue.enqueue(input)
-        return { added: result.added, skipped: result.skipped.map((x) => ({ jobId: x.jobId, reason: x.reason.slice(0, LIMITS.shortStringChars) })), queue: projectQueue(result.state) }
+        // At most half the budget for the skipped list (100 jobs × long reasons would not fit); the queue gets the rest.
+        const skipped: { jobId: string; reason: string }[] = []
+        let skippedBytes = 0
+        for (const x of result.skipped) {
+          const entry = { jobId: x.jobId, reason: x.reason.slice(0, LIMITS.titleChars) }
+          const size = jsonBytes(entry) + 1
+          if (skippedBytes + size > QUEUE_BUDGET / 2) break
+          skipped.push(entry)
+          skippedBytes += size
+        }
+        return { added: result.added, skipped, queue: projectQueue(result.state, QUEUE_BUDGET - skippedBytes) }
       }
       case 'jobs.list':
         return projectJobsPage(await s.jobs.list(workspace.path), command.args.cursor, command.args.filter)
@@ -372,23 +494,62 @@ export class Gateway {
     }
   }
 
-  /** One `LIMITS.fileChunkBytes` piece of an application file, with the whole file's SHA-256 on every chunk. */
+  /** Whole-file SHA-256 per file identity (path, size, mtime, inode), so chunks 2…n do not hash the file again. */
+  private hashes = new Map<string, Promise<string>>()
+
+  /**
+   * One `LIMITS.fileChunkBytes` piece of an application file, with the whole file's SHA-256 on
+   * every chunk. The size is checked (and the chunk index refused) before anything is read; only
+   * the requested range is read; the hash is streamed once per file version.
+   */
   private async fileChunk(workspace: string, args: { applicationId: string; file: string; chunk: number }): Promise<FileChunk> {
     const path = await this.services.files.resolve(workspace, args.applicationId, args.file)
-    const data = await readFile(path)
-    const size = LIMITS.fileChunkBytes
-    const of = Math.max(1, Math.ceil(data.length / size))
-    if (args.chunk >= of) throw new ProtocolError('invalid', `This file has ${of} chunks.`)
-    const piece = data.subarray(args.chunk * size, (args.chunk + 1) * size)
-    return requireFileChunk({
-      applicationId: args.applicationId,
-      file: args.file,
-      chunk: args.chunk,
-      of,
-      bytes: data.length,
-      sha256: createHash('sha256').update(data).digest('hex'),
-      data: toBase64(new Uint8Array(piece))
+    const handle = await open(path, 'r')
+    try {
+      const info = await handle.stat()
+      if (!info.isFile()) throw new ProtocolError('invalid', 'This file cannot be sent.')
+      if (info.size > MAX_REMOTE_FILE_BYTES) throw new ProtocolError('invalid', `This file is larger than ${MAX_REMOTE_FILE_BYTES / (1024 * 1024)} MB and cannot be sent to the phone.`)
+      const size = LIMITS.fileChunkBytes
+      const of = Math.max(1, Math.ceil(info.size / size))
+      if (args.chunk >= of) throw new ProtocolError('invalid', `This file has ${of} chunks.`)
+      const start = args.chunk * size
+      const length = Math.min(size, info.size - start)
+      const piece = Buffer.alloc(Math.max(0, length))
+      let read = 0
+      while (read < piece.length) {
+        const { bytesRead } = await handle.read(piece, read, piece.length - read, start + read)
+        if (bytesRead === 0) break
+        read += bytesRead
+      }
+      const sha256 = await this.fileHash(path, `${path}\u0000${info.size}\u0000${info.mtimeMs}\u0000${info.ino}`)
+      return requireFileChunk({
+        applicationId: args.applicationId,
+        file: args.file,
+        chunk: args.chunk,
+        of,
+        bytes: info.size,
+        sha256,
+        data: toBase64(new Uint8Array(piece.subarray(0, read)))
+      })
+    } finally {
+      await handle.close()
+    }
+  }
+
+  private fileHash(path: string, identity: string): Promise<string> {
+    const cached = this.hashes.get(identity)
+    if (cached) return cached
+    const pending = new Promise<string>((resolve, reject) => {
+      const hash = createHash('sha256')
+      createReadStream(path)
+        .on('data', (chunk) => hash.update(chunk))
+        .on('error', reject)
+        .on('end', () => resolve(hash.digest('hex')))
     })
+    this.hashes.set(identity, pending)
+    pending.catch(() => this.hashes.delete(identity))
+    if (this.hashes.size > HASH_CACHE_SIZE) this.hashes.delete(this.hashes.keys().next().value!)
+    return pending
   }
 }
 

@@ -1,7 +1,8 @@
-import { mkdir, open, readFile } from 'node:fs/promises'
+import { mkdir, open, readFile, truncate } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { EnvelopeError } from '@shared/remote'
 import { HUNTGRY_DIR } from '../workspace/constants'
+import { syncDir } from './durable'
 
 /**
  * The remote audit log, `<workspace>/.huntgry/remote-audit.jsonl` (ADR-0001, "Delivery,
@@ -11,8 +12,11 @@ import { HUNTGRY_DIR } from '../workspace/constants'
  *   command executes; `{ id, deviceId, seq, name, ok, result | error }` after it. Reads and
  *   rejected frames get only the second kind.
  * - `lastSeq` per device is derived from it on start (`devices.json` is a checkpoint).
- * - An index of the last `INDEX_SIZE` command ids answers redeliveries: a finished id
- *   returns its stored result, a started one is `interrupted`, an unknown one executes.
+ * - An index of the last `INDEX_SIZE` (device, command id) pairs answers redeliveries: a
+ *   finished id returns its stored result, a started one is `interrupted`, an unknown one
+ *   executes. Each entry keeps the original `seq` and a digest of the envelope, so only an
+ *   exact redelivery is answered from the log; a reused id with other content is refused.
+ * - A torn last record (crash mid-append) is cut off on load, before anything is appended.
  */
 
 export const AUDIT_FILE = 'remote-audit.jsonl'
@@ -26,6 +30,8 @@ export interface AuditStart {
   deviceId: string
   seq: number
   name: string
+  /** `envelopeDigest` of the command, so a redelivery can be told from a reused id. */
+  digest?: string
   started: true
 }
 
@@ -42,11 +48,15 @@ export interface AuditFinish {
   error?: EnvelopeError
   /** A read: no write-ahead entry, may run again on redelivery. */
   read?: true
+  digest?: string
 }
 
 export type AuditEntry = AuditStart | AuditFinish
 
-export type Known = { state: 'started' } | { state: 'finished'; ok: boolean; result?: unknown; error?: EnvelopeError; read?: true }
+/** What the log knows about one (device, id): the outcome plus the identity it was accepted under. */
+export type Known = ({ state: 'started' } | { state: 'finished'; ok: boolean; result?: unknown; error?: EnvelopeError; read?: true }) & { seq?: number; digest?: string }
+
+const key = (deviceId: string, id: string): string => `${deviceId}\u0000${id}`
 
 const INTERRUPTED: EnvelopeError = {
   code: 'failed',
@@ -80,6 +90,19 @@ export class AuditLog {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
       throw err
     }
+    if (text.length > 0 && !text.endsWith('\n')) {
+      // A crash mid-append left an unterminated record. Appending after it would glue the next
+      // (fsynced) entry onto the torn bytes and make it unreadable, so cut back to the last newline.
+      const keep = text.lastIndexOf('\n') + 1
+      await truncate(this.file, Buffer.byteLength(text.slice(0, keep), 'utf8'))
+      const handle = await open(this.file, 'r+')
+      try {
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      text = text.slice(0, keep)
+    }
     for (const line of text.split('\n')) {
       if (!line.trim()) continue
       let entry: AuditEntry
@@ -98,8 +121,15 @@ export class AuditLog {
       const prev = this.lastSeq.get(entry.deviceId) ?? 0
       if (entry.seq > prev) this.lastSeq.set(entry.deviceId, entry.seq)
     }
+    const k = key(entry.deviceId, entry.id)
+    const identity = (known: Known): Known => {
+      if (typeof entry.seq === 'number') known.seq = entry.seq
+      if (typeof entry.digest === 'string') known.digest = entry.digest
+      return known
+    }
     if ('started' in entry && entry.started) {
-      this.index.set(entry.id, { state: 'started' })
+      this.index.delete(k)
+      this.index.set(k, identity({ state: 'started' }))
     } else {
       const f = entry as AuditFinish
       // Rejected frames (no seq accepted) are not commands the phone can redeliver under the same id with success; keep them out of the index.
@@ -108,7 +138,8 @@ export class AuditLog {
       if (f.result !== undefined) known.result = f.result
       if (f.error !== undefined) known.error = f.error
       if (f.read) known.read = true
-      this.index.set(entry.id, known)
+      this.index.delete(k)
+      this.index.set(k, identity(known))
     }
     if (this.index.size > this.indexSize) {
       const oldest = this.index.keys().next().value
@@ -116,9 +147,9 @@ export class AuditLog {
     }
   }
 
-  /** What the log knows about a command id, or `null`. */
-  lookup(id: string): Known | null {
-    return this.index.get(id) ?? null
+  /** What the log knows about a device's command id, or `null`. */
+  lookup(deviceId: string, id: string): Known | null {
+    return this.index.get(key(deviceId, id)) ?? null
   }
 
   /** Highest `seq` the log proves accepted for a device (0 when none). */
@@ -138,12 +169,15 @@ export class AuditLog {
     return this.append(full)
   }
 
+  /**
+   * Appends one record and fsyncs, then indexes it: a lookup never answers from an entry that
+   * is not on disk. A failed write rejects (the gateway then leaves the frame unacked).
+   */
   private append(entry: AuditEntry): Promise<void> {
-    // Index first, so a lookup that races the write already sees the command as started.
-    this.remember(entry)
     const line = `${JSON.stringify(entry)}\n`
     const run = async () => {
-      await mkdir(join(this.file, '..'), { recursive: true })
+      const dir = join(this.file, '..')
+      await mkdir(dir, { recursive: true })
       const handle = await open(this.file, 'a')
       try {
         await handle.appendFile(line, 'utf8')
@@ -151,10 +185,19 @@ export class AuditLog {
       } finally {
         await handle.close()
       }
+      if (!this.created) {
+        await syncDir(dir)
+        this.created = true
+      }
+      this.remember(entry)
     }
-    this.writing = this.writing.then(run, run)
-    return this.writing
+    const next = this.writing.then(run, run)
+    this.writing = next.catch(() => undefined)
+    return next
   }
+
+  /** Whether the file's directory entry was fsynced once in this process. */
+  private created = false
 
   /** Every entry, oldest first (Settings shows the last few). */
   async entries(limit = 200): Promise<AuditEntry[]> {

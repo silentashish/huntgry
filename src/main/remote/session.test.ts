@@ -287,7 +287,10 @@ describe('RemoteSession', () => {
     relay.deliver(fromPhone(hello))
     await waitFor(() => relay.framesTo(phone.id).length >= 2)
     await session.flush()
-    const [h, s] = relay.framesTo(phone.id).map(open)
+    // A heartbeat may go out first now that the phone was seen, so pick the frames by kind.
+    const sent = relay.framesTo(phone.id).map(open)
+    const h = sent.find((e) => e.kind === 'hello')!
+    const s = sent.find((e) => e.kind === 'event' && e.name === 'status')!
     expect(h.kind).toBe('hello')
     expect(h.body).toEqual({ protocol: { min: 1, max: 1 }, name: 'Mac', appVersion: '0.1.0', workspace: { id: identity.id, name: 'cv' } })
     expect(s.kind).toBe('event')
@@ -377,7 +380,7 @@ describe('RemoteSession', () => {
       expect(e.name).toBe('status')
       expect(e.ttl).toBe(60)
     }
-    await session.notifyRevoked(phone.id, 'Removed in Settings.')
+    await session.notifyRevoked(devices.get(phone.id)!, 'Removed in Settings.')
     await session.flush()
     // A heartbeat already waiting on status() may land after it, so look for the frame rather than the last one.
     const revoked = relay.framesTo(phone.id).map(open).find((e) => e.name === 'device.revoked')
@@ -439,8 +442,8 @@ describe('RemoteSession: acknowledging delivered frames', () => {
     await session.flush()
     expect(relay.acks).toEqual(['pong-1', 'res-1'])
     expect(lastSeenAtAck.every((t) => typeof t === 'string')).toBe(true)
-    // Nothing boxed goes back for them.
-    expect(relay.framesTo(phone.id)).toHaveLength(0)
+    // Nothing boxed goes back for them (a heartbeat status may, now that the phone was seen).
+    expect(relay.framesTo(phone.id).map(open).filter((e) => e.name !== 'status')).toHaveLength(0)
   })
 
   it('never acks a command whose handling crashed between the write-ahead entry and the outcome', async () => {
@@ -476,18 +479,121 @@ describe('RemoteSession: acknowledging delivered frames', () => {
     const frame = fromPhone(cmd)
     // The socket drops while the command is being handled.
     crash = (step) => {
-      if (step === 'after-finish') relay.drop('blip')
+      if (step !== 'after-finish') return
+      relay.refuse = true // stays down until the test lets it back
+      relay.drop('blip')
     }
     relay.deliver(frame)
     await waitFor(() => !session.isOnline())
     await session.flush()
     expect(relay.sent.filter((f) => f.ack !== undefined)).toHaveLength(0)
+    expect(relay.acks).toEqual([])
     crash = undefined
+    relay.refuse = false
+    session.reconnectNow()
     await online()
     relay.deliver(frame)
     await waitFor(() => relay.framesTo(phone.id).some((f) => f.ack === cmd.id))
     await session.flush()
     expect(open(relay.framesTo(phone.id).find((f) => f.ack === cmd.id)!)).toMatchObject({ re: cmd.id, ok: true })
     expect(auditOnDisk().filter((e) => e.id === cmd.id && 'started' in e)).toHaveLength(1)
+  })
+})
+
+describe('RemoteSession: non-command frames are admitted like commands', () => {
+  const helloEnv = (over: Partial<Envelope> = {}): Envelope => ({ v: 1, sid: phone.sid, from: 'phone', seq: ++phone.seq, ts: new Date().toISOString(), ttl: 60, kind: 'hello', id: `hello-${phone.seq}`, body: { protocol: { min: 1, max: 1 }, name: 'Replayed name', appVersion: '1.0.0' } satisfies HelloBody, ...over })
+
+  it('refuses a hello older than its ttl: no rename, no status, no seq accepted', async () => {
+    session.start(creds)
+    await online()
+    const old = helloEnv({ ts: '2020-01-01T00:00:00.000Z' })
+    relay.deliver(fromPhone(old))
+    await waitFor(() => relay.framesTo(phone.id).some((f) => f.ack === old.id))
+    await session.flush()
+    const sent = relay.framesTo(phone.id).map(open)
+    expect(sent.find((e) => e.kind === 'result')).toMatchObject({ ok: false, error: { code: 'expired' } })
+    expect(sent.some((e) => e.kind === 'hello')).toBe(false)
+    expect(devices.get(phone.id)!.name).toBe('Test iPhone')
+    expect(devices.get(phone.id)!.lastSeq).toBe(0)
+  })
+
+  it('a hello with a rewound seq is denied and marks the phone for re-pair', async () => {
+    session.start(creds)
+    await online()
+    const first = helloEnv({ body: { protocol: { min: 1, max: 1 }, name: 'First', appVersion: '1.0.0' } })
+    phone.seq += 5
+    const later = helloEnv({ body: { protocol: { min: 1, max: 1 }, name: 'Later', appVersion: '1.0.0' } })
+    relay.deliver(fromPhone(later))
+    await waitFor(() => devices.get(phone.id)!.lastSeq === later.seq)
+    relay.deliver(fromPhone(first)) // a lower seq that was never admitted: a rewound counter
+    await waitFor(() => relay.framesTo(phone.id).some((f) => f.ack === first.id))
+    await session.flush()
+    expect(devices.get(phone.id)!.needsRepair).toBe(true)
+    expect(devices.get(phone.id)!.name).toBe('Later')
+    expect(open(relay.framesTo(phone.id).find((f) => f.ack === first.id)!)).toMatchObject({ kind: 'result', ok: false, error: { code: 'denied' } })
+  })
+
+  it('answers an exact redelivery of a hello again without re-applying it or tripping the replay check', async () => {
+    session.start(creds)
+    await online()
+    const hello = helloEnv({ body: { protocol: { min: 1, max: 1 }, name: 'Renamed once', appVersion: '1.0.0' } })
+    const frame = fromPhone(hello)
+    relay.deliver(frame)
+    await waitFor(() => devices.get(phone.id)!.name === 'Renamed once')
+    await devices.update(phone.id, { name: 'Renamed on the Mac' })
+    const before = relay.framesTo(phone.id).filter((f) => f.ack === hello.id).length
+    relay.deliver(frame) // the relay redelivers (the first answer's ack was lost)
+    await waitFor(() => relay.framesTo(phone.id).filter((f) => f.ack === hello.id).length > before)
+    await session.flush()
+    expect(devices.get(phone.id)!.name).toBe('Renamed on the Mac')
+    expect(devices.get(phone.id)!.needsRepair).toBe(false)
+    expect(open(relay.framesTo(phone.id).filter((f) => f.ack === hello.id).at(-1)!).kind).toBe('hello')
+  })
+
+  it('refuses an expired ping (no pong) and ignores frames from a phone marked for re-pair', async () => {
+    session.start(creds)
+    await online()
+    const ping: Envelope = { v: 1, sid: phone.sid, from: 'phone', seq: ++phone.seq, ts: '2020-01-01T00:00:00.000Z', ttl: 60, kind: 'ping', id: 'ping-old', body: null }
+    relay.deliver(fromPhone(ping))
+    await waitFor(() => relay.framesTo(phone.id).some((f) => f.ack === 'ping-old'))
+    await session.flush()
+    expect(relay.framesTo(phone.id).map(open).some((e) => e.kind === 'pong')).toBe(false)
+
+    await devices.markNeedsRepair(phone.id)
+    const event: Envelope = { v: 1, sid: phone.sid, from: 'phone', seq: ++phone.seq, ts: new Date().toISOString(), ttl: 60, kind: 'event', id: 'evt-1', name: 'status', body: null }
+    relay.deliver(fromPhone(event))
+    await waitFor(() => relay.acks.includes('evt-1'))
+    expect(devices.get(phone.id)!.lastSeq).toBe(0)
+  })
+})
+
+describe('RemoteSession: backoff', () => {
+  it('keeps backing off across open-then-refused cycles instead of retrying at the minimum delay', async () => {
+    const delays: number[] = []
+    const s = new RemoteSession({
+      connect: relay.connect,
+      devices,
+      gateway,
+      desktopName: 'Mac',
+      appVersion: '0.1.0',
+      workspace: async () => identity,
+      status: async () => status(),
+      notificationDetails: () => false,
+      onState: (st) => {
+        if (st.connection === 'offline' && st.nextAttemptAt) delays.push(Date.parse(st.nextAttemptAt) - Date.now())
+      },
+      backoffMinMs: 10,
+      backoffMaxMs: 10_000
+    })
+    relay.owner = 'someone-else' // every socket opens, then the relay refuses the owner secret
+    s.start(creds)
+    try {
+      await waitFor(() => delays.length >= 4)
+    } finally {
+      s.stop()
+    }
+    // 10, 20, 40, 80 ms ± 20 % jitter: the fourth wait is well above the first.
+    expect(delays[3]).toBeGreaterThan(delays[0] * 2)
+    expect(relay.connects).toBeGreaterThanOrEqual(4)
   })
 })

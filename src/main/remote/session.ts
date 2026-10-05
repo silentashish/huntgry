@@ -185,7 +185,7 @@ export class RemoteSession {
       // Credentials go in the first frame, never in the URL (ADR "Relay authentication").
       const auth = requireRelayClientFrame({ auth: { room: roomId, owner: ownerSecret } })
       socket.send(JSON.stringify(auth))
-      this.attempt = 0
+      // `attempt` is not reset here: a relay that opens and then refuses the owner keeps backing off.
       this.setState({ connection: 'online', onlineSince: new Date(this.now()).toISOString() })
       this.heartbeatTimer = setInterval(() => void this.heartbeat(), this.deps.heartbeatMs ?? 30_000)
       this.heartbeatTimer.unref?.()
@@ -205,6 +205,8 @@ export class RemoteSession {
       if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
       this.heartbeatTimer = null
       const refused = this.state.connection === 'online' && this.now() - this.openedAt < AUTH_GRACE_MS
+      // Only a session that stayed up past the auth grace counts as a success that restarts the backoff.
+      if (this.state.connection === 'online' && !refused) this.attempt = 0
       this.scheduleReconnect(refused ? `The relay closed the session right after authentication${reason ? ` (${reason})` : ''}; check the credentials.` : (reason ?? this.state.error ?? 'The relay connection closed.'))
     })
   }
@@ -267,7 +269,10 @@ export class RemoteSession {
       await this.send(device, { kind: 'result', re: frame.ref, ok: false, error, body: null, ttl: this.deps.eventTtl ?? 24 * 60 * 60, ack: frame.ref })
       return
     }
-    await this.deps.devices.update(device.id, { lastSeen: new Date(this.now()).toISOString() })
+    if (envelope.kind !== 'cmd') {
+      await this.admitted(device, envelope, frame.ref)
+      return
+    }
     switch (envelope.kind) {
       case 'cmd': {
         // handle() resolves after the audit entry and the lastSeq checkpoint are on disk; a crash
@@ -277,17 +282,36 @@ export class RemoteSession {
         await this.send(device, { ...reply.result, ack: frame.ref })
         return
       }
+    }
+  }
+
+  /**
+   * hello / ping / result / event / pong: admitted by the gateway first (pairing, freshness,
+   * `seq`, checkpoint), so an old or replayed frame cannot rename the device or draw a status.
+   * An exact redelivery is answered again without its side effects.
+   */
+  private async admitted(device: DeviceRecord, envelope: Envelope, ref: string): Promise<void> {
+    const admission = await this.deps.gateway.admit(device, envelope)
+    if (admission.status === 'rejected') {
+      if (envelope.kind === 'hello' || envelope.kind === 'ping') {
+        await this.send(device, { kind: 'result', re: ref, ok: false, error: admission.error, body: null, ttl: 60, ack: ref })
+      } else {
+        await this.sendAck(ref)
+      }
+      return
+    }
+    const fresh = admission.status === 'new'
+    switch (envelope.kind) {
       case 'hello':
-        await this.answerHello(device, envelope, frame.ref)
+        await this.answerHello(admission.device, envelope, ref, fresh)
         return
       case 'ping':
-        await this.send(device, { kind: 'pong', body: null, ttl: 60, ack: frame.ref })
+        await this.send(admission.device, { kind: 'pong', body: null, ttl: 60, ack: ref })
         return
       default:
         // Results, events and pongs from a phone: nothing to do (the desktop sends no commands),
-        // nothing to reply with, so the ack goes alone once lastSeen is on disk.
-        await this.sendAck(frame.ref)
-        return
+        // nothing to reply with, so the ack goes alone once the checkpoint is on disk.
+        await this.sendAck(ref)
     }
   }
 
@@ -301,7 +325,7 @@ export class RemoteSession {
     return null
   }
 
-  private async answerHello(device: DeviceRecord, envelope: Envelope, ref: string): Promise<void> {
+  private async answerHello(device: DeviceRecord, envelope: Envelope, ref: string, fresh: boolean): Promise<void> {
     let hello: HelloBody
     try {
       hello = requireHelloBody(envelope.body)
@@ -311,7 +335,7 @@ export class RemoteSession {
       await this.send(device, { kind: 'result', re: ref, ok: false, error, body: null, ttl: 60, ack: ref })
       return
     }
-    if (hello.name !== device.name) await this.deps.devices.update(device.id, { name: hello.name.slice(0, 200) })
+    if (fresh && hello.name !== device.name) await this.deps.devices.update(device.id, { name: hello.name.slice(0, 200) })
     const workspace = await this.deps.workspace().catch(() => null)
     const body: HelloBody = { protocol: { ...PROTOCOL }, name: this.deps.desktopName, appVersion: this.deps.appVersion }
     if (workspace) body.workspace = { id: workspace.id, name: workspace.name }
@@ -345,6 +369,10 @@ export class RemoteSession {
   async sendEventTo<N extends RemoteEventName>(deviceId: string, name: N, body: RemoteEventBody<N>, pushText?: string): Promise<void> {
     const device = this.deps.devices.get(deviceId)
     if (!device || device.needsRepair) return
+    await this.sendEvent(device, name, body, pushText)
+  }
+
+  private async sendEvent<N extends RemoteEventName>(device: DeviceRecord, name: N, body: RemoteEventBody<N>, pushText?: string, key?: Uint8Array): Promise<void> {
     let event
     try {
       event = requireEvent(name, body)
@@ -359,13 +387,18 @@ export class RemoteSession {
       out.pushHint = category
       if (pushText && this.deps.notificationDetails()) out.pushText = [...pushText].slice(0, LIMITS.pushTextChars).join('')
     }
-    await this.send(device, out)
+    await this.send(device, out, key)
   }
 
-  /** Tells a phone it was revoked (best effort; the caller deletes the device afterwards). */
-  async notifyRevoked(deviceId: string, reason: string): Promise<void> {
+  /**
+   * Tells a phone it was revoked (best effort). Takes the record the caller captured, because
+   * the caller removes the device from the store first; the session key is derived from it.
+   */
+  async notifyRevoked(device: DeviceRecord, reason: string): Promise<void> {
     if (!this.isOnline()) return
-    await this.sendEventTo(deviceId, 'device.revoked', { reason: reason.slice(0, LIMITS.shortStringChars) })
+    const key = await this.deps.devices.sessionKeyFor(device)
+    if (!key) return
+    await this.sendEvent(device, 'device.revoked', { reason: reason.slice(0, LIMITS.shortStringChars) }, undefined, key)
   }
 
   /**
@@ -392,14 +425,14 @@ export class RemoteSession {
    * order per session. When the frame carries an `ack` but cannot be sent (no session key, over
    * the budget), the ack still goes alone so the processed frame does not come back.
    */
-  private send(device: DeviceRecord, out: Outgoing): Promise<void> {
+  private send(device: DeviceRecord, out: Outgoing, givenKey?: Uint8Array): Promise<void> {
     const task = async () => {
       const socket = this.socket
       if (!socket || !this.isOnline()) return
       const ackAlone = () => {
         if (out.ack !== undefined) this.writeAck(socket, out.ack)
       }
-      const key = await this.deps.devices.sessionKey(device.id)
+      const key = givenKey ?? (await this.deps.devices.sessionKey(device.id))
       if (!key) return ackAlone()
       const { seq, persisted } = this.deps.devices.nextOutSeq()
       await persisted

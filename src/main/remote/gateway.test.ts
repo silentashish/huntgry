@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmodSync } from 'node:fs'
+import { chmod, mkdir, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -12,7 +13,7 @@ import { readEvents, readRun } from '../cli/runs'
 import { TailorQueue, type QueueDeps } from '../queue/queue'
 import { auditFile } from './audit'
 import { DeviceStore } from './devices'
-import { Gateway, SimulatedCrash, type GatewayServices } from './gateway'
+import { DurabilityError, Gateway, MAX_REMOTE_FILE_BYTES, SimulatedCrash, type GatewayServices } from './gateway'
 import { command, fakeCipher, fakePhone, job, type FakePhone } from './test-helpers'
 import { workspaceIdentity, type WorkspaceIdentity } from './workspace'
 
@@ -463,5 +464,188 @@ describe('Gateway: jobs.addUrl and file.get', () => {
     expect(Buffer.concat([Buffer.from(c0.data, 'base64'), Buffer.from(c1.data, 'base64')]).equals(data)).toBe(true)
     expect((await send('file.get', { applicationId: 'engineer/acme/42', file: 'resume.pdf', chunk: 2 })).result.error?.code).toBe('invalid')
     expect((await send('file.get', { applicationId: 'engineer/acme/42', file: '../master-profile.md', chunk: 0 })).result.error?.code).toBe('invalid')
+  })
+})
+
+describe('Gateway: redelivery identity, revocation, storage failures and workspace binding', () => {
+  const at = () => new Date(now).toISOString()
+  const handle = (env: Envelope, record = devices.get(phone.id)!) => gateway.handle(record, env)
+
+  it('answers only an exact redelivery from the log: a reused read id with another seq is refused', async () => {
+    const read = command(phone, 'queue.get', undefined, identity.id, { ts: at() })
+    expect((await handle(read)).result.ok).toBe(true)
+    const rewound = { ...read, seq: 0 }
+    const reply = await handle(rewound)
+    expect(reply.result).toMatchObject({ ok: false, error: { code: 'invalid' } })
+    // A reused id is refused as such; the device is not marked for a counter it never rewound.
+    expect(devices.get(phone.id)!.needsRepair).toBe(false)
+    expect((await handle(read)).result.ok).toBe(true) // the exact redelivery still answers
+  })
+
+  it('refuses a finished write id reused with another body or workspace, without running it', async () => {
+    await queue.setPaused(false)
+    const pause = command(phone, 'queue.setPaused', { paused: true }, identity.id, { ts: at() })
+    expect((await handle(pause)).result.ok).toBe(true)
+    await queue.setPaused(false)
+    const otherBody = { ...pause, body: { paused: false } }
+    expect((await handle(otherBody)).result).toMatchObject({ ok: false, error: { code: 'invalid' } })
+    const otherWs = { ...pause, ws: 'b'.repeat(32) }
+    expect((await handle(otherWs)).result).toMatchObject({ ok: false, error: { code: 'invalid' } })
+    expect(queue.state().paused).toBe(false)
+    const exact = await handle(pause)
+    expect(exact.result.ok).toBe(true)
+    expect(queue.state().paused).toBe(false) // answered from the log, not run again
+  })
+
+  it("does not answer one device's id from another device's log entry", async () => {
+    await queue.setPaused(false)
+    const pause = command(phone, 'queue.setPaused', { paused: true }, identity.id, { ts: at() })
+    await handle(pause)
+    const other = fakePhone((await devices.keyPair())!, 'Other')
+    await devices.add(other.record)
+    const theirs = command(other, 'queue.setPaused', { paused: false }, identity.id, { ts: at(), id: pause.id })
+    const reply = await gateway.handle(devices.get(other.id)!, theirs)
+    // Its own command under its own seq: it runs (unpause), it is not handed the first phone's stored result.
+    expect(reply.result.ok).toBe(true)
+    expect((reply.result.body as RemoteQueueState).paused).toBe(false)
+    expect(queue.state().paused).toBe(false)
+  })
+
+  it('denies a command from a device removed after the frame was queued (stale record)', async () => {
+    await queue.setPaused(false)
+    const stale = devices.get(phone.id)!
+    await devices.remove(phone.id)
+    const reply = await handle(command(phone, 'queue.setPaused', { paused: true }, identity.id, { ts: at() }), stale)
+    expect(reply.result).toMatchObject({ ok: false, error: { code: 'denied' } })
+    expect(queue.state().paused).toBe(false)
+  })
+
+  it('denies a command queued behind a slow one when the device is revoked meanwhile', async () => {
+    await queue.setPaused(false)
+    let release!: () => void
+    let reached!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const inside = new Promise<void>((r) => (reached = r))
+    const setPaused = services.queue.setPaused
+    services.queue.setPaused = async (p) => {
+      if (p) {
+        reached()
+        await gate
+      }
+      return setPaused(p)
+    }
+    const record = devices.get(phone.id)!
+    const first = handle(command(phone, 'queue.setPaused', { paused: true }, identity.id, { ts: at() }), record)
+    const second = handle(command(phone, 'queue.setPaused', { paused: false }, identity.id, { ts: at() }), record)
+    await inside
+    await devices.remove(phone.id) // Settings → Revoke while the first command runs
+    release()
+    expect((await first).result.ok).toBe(true)
+    expect((await second).result).toMatchObject({ ok: false, error: { code: 'denied' } })
+    expect(queue.state().paused).toBe(true) // the queued unpause never ran
+  })
+
+  it('a re-pair under the same id with a new key denies frames of the old pairing', async () => {
+    const stale = devices.get(phone.id)!
+    const repaired = fakePhone((await devices.keyPair())!, 'Same phone', phone.id)
+    await devices.add(repaired.record)
+    const reply = await handle(command(phone, 'queue.get', undefined, identity.id, { ts: at() }), stale)
+    expect(reply.result.error?.code).toBe('denied')
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('rejects (so the frame is not acked) when the write-ahead entry cannot be written, and runs once after', async () => {
+    await queue.setPaused(false)
+    const pause = command(phone, 'queue.setPaused', { paused: true }, identity.id, { ts: at() })
+    await chmod(join(ws, '.huntgry'), 0o500)
+    try {
+      await expect(handle(pause)).rejects.toBeInstanceOf(DurabilityError)
+    } finally {
+      await chmod(join(ws, '.huntgry'), 0o700)
+    }
+    expect(queue.state().paused).toBe(false)
+    expect(devices.get(phone.id)!.lastSeq).toBe(0)
+    const redelivered = await handle(pause)
+    expect(redelivered.result.ok).toBe(true)
+    expect(queue.state().paused).toBe(true)
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('rejects when the lastSeq checkpoint cannot be written; the redelivery is not run twice', async () => {
+    await queue.setPaused(false)
+    const pause = command(phone, 'queue.setPaused', { paused: true }, identity.id, { ts: at() })
+    await chmod(dir, 0o500)
+    try {
+      await expect(handle(pause)).rejects.toBeInstanceOf(DurabilityError)
+    } finally {
+      await chmod(dir, 0o700)
+    }
+    expect(queue.state().paused).toBe(false) // nothing ran after the failed checkpoint
+    const again = await handle(pause)
+    expect(again.result.error?.message).toMatch(/interrupted/i)
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('rejects when the outcome cannot be written after a real mutation; the redelivery answers interrupted', async () => {
+    await queue.setPaused(false)
+    crashAt = (step) => {
+      if (step === 'after-execute') return chmodSync(auditFile(ws), 0o400)
+    }
+    const pause = command(phone, 'queue.setPaused', { paused: true }, identity.id, { ts: at() })
+    try {
+      await expect(handle(pause)).rejects.toBeInstanceOf(DurabilityError)
+    } finally {
+      chmodSync(auditFile(ws), 0o600)
+      crashAt = undefined
+    }
+    expect(queue.state().paused).toBe(true)
+    await queue.setPaused(false)
+    const again = await handle(pause)
+    expect(again.result.error?.message).toMatch(/interrupted/i)
+    expect(queue.state().paused).toBe(false) // not run a second time
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('rejects a refused frame whose audit line cannot be written instead of acking it unrecorded', async () => {
+    await send('queue.get') // creates the log
+    chmodSync(auditFile(ws), 0o400)
+    try {
+      await expect(handle(command(phone, 'queue.get', undefined, 'b'.repeat(32), { ts: at() }))).rejects.toBeInstanceOf(DurabilityError)
+      await expect(gateway.recordRejected(devices.get(phone.id)!, 'ref-1', { code: 'denied', message: 'x' })).rejects.toBeInstanceOf(DurabilityError)
+    } finally {
+      chmodSync(auditFile(ws), 0o600)
+    }
+  })
+
+  it('does not run a command on a workspace the owner switched to during the audit fsync', async () => {
+    await queue.setPaused(false)
+    const other = await mkdtemp(join(tmpdir(), 'huntgry-gw-other-'))
+    const otherIdentity = await workspaceIdentity(other)
+    crashAt = (step) => {
+      if (step === 'after-start') identity = otherIdentity
+    }
+    try {
+      const reply = await send('queue.setPaused', { paused: true })
+      expect(reply.result).toMatchObject({ ok: false, error: { code: 'invalid' } })
+      expect(reply.result.error?.message).toMatch(/workspace/i)
+      expect(queue.state().paused).toBe(false)
+    } finally {
+      await rm(other, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a file over the size cap before reading it, and re-hashes a changed file', async () => {
+    const folder = join(ws, 'engineer', 'acme', '42')
+    await mkdir(folder, { recursive: true })
+    const big = join(folder, 'cover.pdf')
+    await writeFile(big, '')
+    await truncate(big, MAX_REMOTE_FILE_BYTES + 1) // sparse: no real 32 MB written
+    const refused = await send('file.get', { applicationId: 'engineer/acme/42', file: 'cover.pdf', chunk: 0 })
+    expect(refused.result).toMatchObject({ ok: false, error: { code: 'invalid' } })
+    expect(refused.result.error?.message).toMatch(/larger than/)
+    const small = join(folder, 'resume.pdf')
+    await writeFile(small, Buffer.alloc(100, 1))
+    const a = (await send('file.get', { applicationId: 'engineer/acme/42', file: 'resume.pdf', chunk: 0 })).result.body as FileChunk
+    await writeFile(small, Buffer.alloc(120, 2))
+    const b = (await send('file.get', { applicationId: 'engineer/acme/42', file: 'resume.pdf', chunk: 0 })).result.body as FileChunk
+    expect(a.sha256).not.toBe(b.sha256)
+    expect(b.bytes).toBe(120)
+    expect(Buffer.from(b.data, 'base64').equals(Buffer.alloc(120, 2))).toBe(true)
   })
 })
