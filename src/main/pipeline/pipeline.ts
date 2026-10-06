@@ -18,11 +18,11 @@ import {
   type PipelineState,
   type PipelineSummary
 } from '@shared/pipeline-types'
-import type { QueueItem } from '@shared/queue-types'
+import type { QueueItem, QueueItemOutcome } from '@shared/queue-types'
 import { REVIEW_NOTES_FILE } from '@shared/review-types'
 import { AGENT_LABEL, type AgentId, type RunSummary } from '@shared/runner-types'
 import { summarizeBuild } from '../applications/scan'
-import { updateReview, type RecordedReview } from '../review/authority'
+import { getReview, updateReview, type RecordedReview } from '../review/authority'
 import { folderSlug, newRunId } from '../cli/runs'
 import { PASTE_HINT, type FailureDecision, type Settlement, type TailorQueue } from '../queue/queue'
 import { HUNTGRY_DIR } from '../workspace/constants'
@@ -95,6 +95,8 @@ const STALL_TEXT = (minutes: number) => `${STALL_PREFIX} ${minutes} minutes.`
 /** A rejected rate-limit event holds new launches this long while the failure itself is classified. */
 const REJECTED_HOLD_MS = 10 * 60_000
 const ACTIVE = new Set<QueueItem['status']>(['queued', 'preparing', 'running'])
+/** Summary outcomes that are review states (the others are where the run ended). */
+const REVIEW_OUTCOMES = new Set<string>(['unreviewed', 'needs-attention', 'approved', 'discarded'])
 export const IN_PROGRESS_REASON = 'Still being tailored unattended; not checked yet.'
 
 /**
@@ -127,6 +129,11 @@ export class Pipeline {
   private starting = false
   /** Runs whose output folder was marked Unreviewed while they work, and the pending writes. */
   private marking = new Map<string, Promise<void>>()
+  /** What the dock badge shows (nothing when the app starts). */
+  private badge = 0
+  /** The running review sync and whether another one was asked for meanwhile. */
+  private syncing: Promise<void> | null = null
+  private syncAgain = false
 
   constructor(private deps: PipelineDeps) {
     deps.queue.setUnattendedHooks({
@@ -151,6 +158,8 @@ export class Pipeline {
    */
   async init(graceMs = 5000): Promise<void> {
     await this.deps.queue.sync()
+    // Items saved before #72 (or by a decision made while the app was closed) may carry an old state.
+    await this.syncReviews()
     const r = this.record
     if (!r) return
     if (r.status === 'running' || r.status === 'waiting-limit') {
@@ -471,13 +480,83 @@ export class Pipeline {
     }
   }
 
+  /**
+   * The last finished pipeline's summary, with each result's review state read live from the
+   * review store (#72): what was approved or discarded since it finished no longer counts as
+   * ready for review. The file itself is written once, when the pipeline finishes.
+   */
   async lastSummary(): Promise<PipelineSummary | null> {
     const ws = await this.deps.workspace()
+    let summary: PipelineSummary
     try {
-      return JSON.parse(await readFile(summaryFile(ws), 'utf8')) as PipelineSummary
+      summary = JSON.parse(await readFile(summaryFile(ws), 'utf8')) as PipelineSummary
     } catch {
       return null
     }
+    if (!Array.isArray(summary.items) || typeof summary.counts !== 'object' || summary.counts === null) return summary
+    const items = await Promise.all(
+      summary.items.map(async (i) => {
+        if (!i.applicationId || !REVIEW_OUTCOMES.has(i.outcome)) return i
+        const review = await getReview(ws, i.applicationId).catch(() => undefined)
+        return review ? { ...i, outcome: review.state } : i
+      })
+    )
+    const counts = { ...summary.counts, unreviewed: 0, needsAttention: 0, approved: 0, discarded: 0 }
+    for (const i of items) {
+      if (i.outcome === 'unreviewed') counts.unreviewed++
+      else if (i.outcome === 'needs-attention') counts.needsAttention++
+      else if (i.outcome === 'approved') counts.approved++
+      else if (i.outcome === 'discarded') counts.discarded++
+    }
+    return { ...summary, items, counts }
+  }
+
+  /**
+   * Brings the done unattended items of the whole queue (every pipeline's) in step with the
+   * review store after a decision (#72): Approve, Discard and Re-run write only the store, so the
+   * Tailor page, the counts and the dock badge would keep saying "Unreviewed". The queue
+   * broadcasts when an item changed, and the pipeline state follows. Calls made while one runs
+   * are folded into one more pass.
+   */
+  syncReviews(): Promise<void> {
+    if (this.syncing) {
+      this.syncAgain = true
+      return this.syncing
+    }
+    const run = async (): Promise<void> => {
+      do {
+        this.syncAgain = false
+        await this.syncOnce()
+      } while (this.syncAgain && !this.stopped)
+    }
+    this.syncing = run().finally(() => {
+      this.syncing = null
+    })
+    return this.syncing
+  }
+
+  private async syncOnce(): Promise<void> {
+    const ws = this.deps.queue.workspace()
+    if (!ws || this.stopped) return
+    const done = this.deps.queue.state().items.filter((i) => i.status === 'done' && i.unattended && i.applicationId && i.runId)
+    const reviews: { applicationId: string; runId: string; state: QueueItemOutcome }[] = []
+    for (const i of done) {
+      const review = await getReview(ws, i.applicationId!).catch(() => undefined)
+      if (review) reviews.push({ applicationId: i.applicationId!, runId: review.runId, state: review.state })
+    }
+    // The queue's runId check keeps an older run's decision off a newer result of the same folder.
+    this.deps.queue.setOutcomes(ws, reviews)
+    this.updateBadge()
+  }
+
+  /** The dock badge: done unattended results anywhere in the queue still waiting for review. */
+  private updateBadge(force = false): void {
+    const n = this.deps.queue
+      .state()
+      .items.filter((i) => i.status === 'done' && i.unattended && (i.outcome === undefined || i.outcome === 'unreviewed' || i.outcome === 'needs-attention')).length
+    if (n === this.badge && !force) return
+    this.badge = n
+    this.deps.setBadge(n)
   }
 
   async dismiss(): Promise<void> {
@@ -577,14 +656,15 @@ export class Pipeline {
     // Built, then the turn failed (an error result, a crash, the stall watchdog): what is on disk is
     // recorded, not rebuilt, but it needs a look.
     if (run.error) reasons.push(`The last turn ended with an error: ${run.error.split('\n')[0]}`)
-    const outcome = ok && reasons.length === 0 ? 'unreviewed' : 'needs-attention'
+    const state = ok && reasons.length === 0 ? 'unreviewed' : 'needs-attention'
     const reason = reasons.join(' ') || undefined
-    const review: RecordedReview = { state: outcome, runId: run.id, at: new Date(this.now()).toISOString() }
+    const review: RecordedReview = { state, runId: run.id, at: new Date(this.now()).toISOString() }
     if (reason) review.reason = reason
     if (verify) review.verify = verify
     // After the in-progress mark, never before it (it would overwrite the settled state).
     await this.marking.get(run.id)
-    await this.record_(ws, folder, review)
+    // What the store kept: a Discard made while the gate ran stays Discarded on the Tailor page too (#72).
+    const outcome = await this.record_(ws, folder, review)
     return { kind: 'done', outcome, applicationId: folder, reason }
   }
 
@@ -592,12 +672,13 @@ export class Pipeline {
    * Records a verify-gate result in main's review store. The user's Discard of this run's result
    * is terminal: the gate never turns it back into something that can be approved and applied.
    */
-  private async record_(ws: string, folder: string, review: RecordedReview): Promise<void> {
-    await updateReview(ws, folder, (current) => {
+  private async record_(ws: string, folder: string, review: RecordedReview): Promise<QueueItemOutcome> {
+    const { review: recorded } = await updateReview(ws, folder, (current) => {
       if (current?.state !== 'discarded' || current.runId !== review.runId) return review
       // Still discarded; only what verify.py said is added, for the record.
       return review.verify ? { ...current, verify: review.verify } : null
     })
+    return recorded?.state ?? review.state
   }
 
   private onFailure(item: QueueItem, run: RunSummary): FailureDecision {
@@ -795,6 +876,8 @@ export class Pipeline {
       needsReply: 0,
       unreviewed: 0,
       needsAttention: 0,
+      approved: 0,
+      discarded: 0,
       failed: 0,
       cancelled: 0,
       skipped: r.skipped.length,
@@ -806,6 +889,8 @@ export class Pipeline {
       else if (i.status === 'needs-reply') c.needsReply++
       else if (i.status === 'done') {
         if (i.outcome === 'needs-attention') c.needsAttention++
+        else if (i.outcome === 'approved') c.approved++
+        else if (i.outcome === 'discarded') c.discarded++
         else c.unreviewed++
       } else if (i.status === 'failed') c.failed++
       else if (i.status === 'cancelled') c.cancelled++
@@ -889,7 +974,7 @@ export class Pipeline {
       r.stopReason ? 'Huntgry pipeline stopped' : 'Huntgry pipeline finished',
       `${counts.unreviewed} ready for review · ${look} need a look · ${counts.cancelled} cancelled${summary.costUsd ? ` · $${summary.costUsd.toFixed(2)}` : ''}`
     )
-    this.deps.setBadge(counts.unreviewed + counts.needsAttention)
+    this.updateBadge(true)
     this.deps.emitFinished(summary)
     this.changed()
   }
