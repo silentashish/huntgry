@@ -96,3 +96,45 @@ test('a question answered once in the Apply panel fills itself on the next appli
   // Nothing was ever submitted.
   expect(await exists(mock.submissionFile)).toBe(false)
 })
+
+const genderPicked = (electronApp: ElectronApplication, urlPart: string) =>
+  evaluateInTab<string>(
+    electronApp,
+    urlPart,
+    `document.getElementById('question_gender').closest('.select__container').querySelector('.select__single-value')?.textContent ?? ''`
+  )
+
+test('a dropdown answered once is picked automatically on the next Greenhouse application', async ({ app, mock }) => {
+  const browser = await applyFromDashboard(app.window, 'Greenhouse Mock', `${mock.origin}/greenhouse/`)
+  await expectTabLoaded(app.electronApp, '/greenhouse/', 'Job Application for Software Engineer at Acme')
+  await browser.apply.expectStatus('Filled: review and submit')
+  // A react-select question (the mock's Gender): nothing saved yet, so it asks.
+  const gender = browser.apply.field('Gender')
+  await expect(gender).toContainText('Answer it once below; Huntgry remembers it.')
+  expect(await genderPicked(app.electronApp, '/greenhouse/')).toBe('')
+
+  // Answered once in the panel: Huntgry picks it in the page's dropdown (pointer events on its own option only).
+  await gender.getByRole('button', { name: 'Answer Gender' }).click()
+  await gender.getByLabel('Answer for Gender').fill('Female')
+  await gender.getByRole('button', { name: 'Use', exact: true }).click()
+  await expect(browser.apply.field('Gender')).toContainText('Filled')
+  await expect.poll(() => genderPicked(app.electronApp, '/greenhouse/')).toBe('Female')
+
+  // The next application picks it on its own.
+  await browser.apply.endButton.click()
+  await new Shell(app.window).goTo('dashboard')
+  const second = await applyFromDashboard(app.window, 'Greenhouse Second Mock', 'posting=2')
+  await expectTabLoaded(app.electronApp, 'posting=2', 'Job Application for Software Engineer at Acme')
+  await second.apply.expectStatus('Filled: review and submit')
+  await expect(second.apply.field('Gender')).toContainText('Filled')
+  await expect(second.apply.field('Gender')).toContainText('Female')
+  expect(await genderPicked(app.electronApp, 'posting=2')).toBe('Female')
+
+  // The switch is on by default in Settings.
+  await second.apply.endButton.click()
+  await new Shell(app.window).goTo('settings')
+  await expect(app.window.getByRole('switch', { name: 'Pick dropdown answers automatically' })).toBeChecked()
+
+  // Picking never submits: the mock recorded nothing.
+  expect(await exists(mock.submissionFile)).toBe(false)
+})
