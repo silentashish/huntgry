@@ -104,6 +104,7 @@ export function JobsPage() {
    * saved list. `auto`: the background refresh on open, which leaves the shown segment alone.
    */
   async function refresh(auto = false) {
+    if (refreshing || searching) return
     setRefreshing(true)
     setError(null)
     if (!auto) setReport(null)
@@ -138,6 +139,9 @@ export function JobsPage() {
   }, [jobs, prefs, signals])
 
   async function search(q?: JobQuery) {
+    // One board load at a time from this page: a search finishing before a refresh would have its
+    // report and "Last search" replaced by the refresh's (Recent links and Enter reach here too).
+    if (refreshing || searching) return
     const query: JobQuery = q ?? { keywords, location, remoteOnly, sources }
     if (q) {
       setKeywords(q.keywords)
@@ -312,7 +316,14 @@ export function JobsPage() {
                     Recent:
                   </Text>
                   {recent.slice(0, 4).map((r) => (
-                    <Anchor key={r.at} size="xs" component="button" type="button" onClick={() => void search(r.query)}>
+                    <Anchor
+                      key={r.at}
+                      size="xs"
+                      component="button"
+                      type="button"
+                      disabled={searching || refreshing}
+                      onClick={() => void search(r.query)}
+                    >
                       {r.query.keywords}
                       {r.query.remoteOnly ? ' (remote)' : r.query.location ? ` · ${r.query.location}` : ''}
                     </Anchor>
