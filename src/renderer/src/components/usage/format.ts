@@ -1,5 +1,6 @@
 import { totalTokens } from '@shared/pricing'
 import type { RunSummary, RunTotals, TokenUsage, TurnMetrics } from '@shared/runner-types'
+import { waitingMsOf } from '@shared/usage'
 
 /** How run time, tokens and estimated cost read everywhere in the app (#44), the same for every agent. */
 
@@ -28,11 +29,15 @@ export function formatCost(usd: number | null): string {
   return `$${usd.toFixed(2)}`
 }
 
-/** A run's or a total's estimated cost, saying when some turns could not be priced. */
-export function formatTotalCost(t: Pick<RunTotals, 'estimatedCostUsd' | 'unpricedTurns'> & { pricedTurns?: number }): string {
-  if (t.unpricedTurns === 0) return formatCost(t.estimatedCostUsd)
-  if (t.pricedTurns === 0 || t.estimatedCostUsd === 0) return 'not priced'
-  // Some turns are missing: the figure is a lower bound.
+/**
+ * A run's or a total's estimated cost, saying when it is a lower bound: some turns could not be
+ * priced, or never ended (their usage is what was reported until then).
+ */
+export function formatTotalCost(
+  t: Pick<RunTotals, 'estimatedCostUsd' | 'unpricedTurns'> & { pricedTurns?: number; incompleteTurns?: number }
+): string {
+  if (t.unpricedTurns > 0 && (t.pricedTurns === 0 || t.estimatedCostUsd === 0)) return 'not priced'
+  if (t.unpricedTurns === 0 && !t.incompleteTurns) return formatCost(t.estimatedCostUsd)
   return `≥ ${formatCost(t.estimatedCostUsd)}`
 }
 
@@ -54,12 +59,12 @@ export function runBadge(run: Pick<RunSummary, 'totals'>): string | null {
 
 /** The footer of one turn in the transcript. */
 export function turnFooter(m: TurnMetrics): string {
-  return [formatDuration(m.activeMs), formatUsageDetail(m.usage), formatCost(m.estimatedCostUsd)].join(' · ')
+  if (m.usageIncomplete && totalTokens(m.usage) === 0) return `${formatDuration(m.activeMs)} · usage unknown (the turn did not end)`
+  const cost = formatCost(m.estimatedCostUsd)
+  return [formatDuration(m.activeMs), formatUsageDetail(m.usage), m.usageIncomplete && m.estimatedCostUsd !== null ? `≥ ${cost}` : cost].join(' · ')
 }
 
-/** Wall time since the run started minus its active time: how long it waited for the user. */
-export function waitingMs(run: Pick<RunSummary, 'createdAt' | 'updatedAt' | 'status' | 'totals'>, now = Date.now()): number {
-  const end = run.status === 'running' || run.status === 'waiting' ? now : Date.parse(run.updatedAt)
-  const wall = end - Date.parse(run.createdAt)
-  return Number.isFinite(wall) ? Math.max(0, wall - (run.totals?.activeMs ?? 0)) : 0
+/** Wall time since the run started minus its active time: how long it waited for the user (frozen while a turn runs). */
+export function waitingMs(run: Pick<RunSummary, 'createdAt' | 'updatedAt' | 'status' | 'totals' | 'turnStartedAt'>, now = Date.now()): number {
+  return waitingMsOf(run, run.totals?.activeMs ?? 0, now)
 }

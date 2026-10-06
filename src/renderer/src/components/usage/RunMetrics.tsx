@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Anchor, Collapse, Group, Paper, SimpleGrid, Stack, Table, Text, Tooltip } from '@mantine/core'
 import { totalTokens } from '@shared/pricing'
 import type { RunSummary } from '@shared/runner-types'
@@ -6,6 +6,16 @@ import { formatCost, formatDuration, formatTokens, formatTotalCost, formatUsageD
 
 export const ESTIMATE_HINT =
   'What these tokens would cost at the model’s API rates. On a subscription (Claude Pro/Max, ChatGPT, Google AI) nothing is billed per token. Prices: Settings → Pricing.'
+
+/** The clock, re-read every `ms` (kept here: the queue's hook module needs the preload API). */
+function useNow(ms: number): number {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), ms)
+    return () => clearInterval(t)
+  }, [ms])
+  return now
+}
 
 function Stat({ label, value, hint, testId }: { label: string; value: string; hint?: string; testId: string }) {
   const body = (
@@ -30,6 +40,8 @@ function Stat({ label, value, hint, testId }: { label: string; value: string; hi
 /** Active time · waiting time · model · tokens · estimated API cost of one run, and per turn (#44). */
 export function RunMetrics({ run }: { run: RunSummary }) {
   const [open, setOpen] = useState(false)
+  // A run waiting for the reply has no events to re-render it: tick so the waiting time grows.
+  const now = useNow(run.status === 'waiting' ? 1000 : 60_000)
   const t = run.totals
   const metrics = run.metrics ?? []
   if (!t) return null
@@ -43,7 +55,7 @@ export function RunMetrics({ run }: { run: RunSummary }) {
           value={formatDuration(t.activeMs)}
           hint="Time the agent worked: from each message to the end of its turn."
         />
-        <Stat label="Waiting for you" testId="metric-waiting" value={formatDuration(waitingMs(run))} />
+        <Stat label="Waiting for you" testId="metric-waiting" value={formatDuration(waitingMs(run, now))} />
         <Stat label="Model" testId="metric-model" value={run.model ?? 'unknown'} />
         <Stat
           label="Tokens"

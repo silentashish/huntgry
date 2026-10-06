@@ -255,7 +255,7 @@ export function UsageCard({ onOpenRun }: { onOpenRun(runId: string): void }) {
             <Kpi
               label="Est. API cost"
               testId="usage-cost"
-              value={formatTotalCost({ estimatedCostUsd: t.estimatedCostUsd, unpricedTurns: t.unpricedTurns, pricedTurns: t.turns - t.unpricedTurns })}
+              value={formatTotalCost({ ...t, pricedTurns: t.turns - t.unpricedTurns })}
               sub={[
                 perRun !== null ? `${formatCost(perRun)}/run` : null,
                 perBuilt !== null ? `${formatCost(perBuilt)}/resume` : null,
@@ -271,6 +271,12 @@ export function UsageCard({ onOpenRun }: { onOpenRun(runId: string): void }) {
           <Text size="xs" c="orange">
             {t.unpricedTurns} turn{t.unpricedTurns === 1 ? '' : 's'} used a model with no price: not in the cost. Add it in
             Settings → Pricing.
+          </Text>
+        )}
+        {t && t.incompleteTurns > 0 && (
+          <Text size="xs" c="dimmed">
+            {t.incompleteTurns} turn{t.incompleteTurns === 1 ? '' : 's'} never ended (stopped or crashed): counted with what the
+            agent had reported until then, so the totals are a lower bound.
           </Text>
         )}
 
@@ -295,7 +301,7 @@ export function UsageCard({ onOpenRun }: { onOpenRun(runId: string): void }) {
                   <Table.Td ta="right">{formatDuration(g.activeMs)}</Table.Td>
                   <Table.Td ta="right">{formatTokens(totalTokens(g.usage))}</Table.Td>
                   <Table.Td ta="right">
-                    {formatTotalCost({ estimatedCostUsd: g.estimatedCostUsd, unpricedTurns: g.unpricedTurns, pricedTurns: g.turns - g.unpricedTurns })}
+                    {formatTotalCost({ ...g, pricedTurns: g.turns - g.unpricedTurns })}
                   </Table.Td>
                 </Table.Tr>
               ))}
@@ -324,7 +330,7 @@ export function UsageCard({ onOpenRun }: { onOpenRun(runId: string): void }) {
                     <Table.Td ta="right">{formatDuration(b.activeMs)}</Table.Td>
                     <Table.Td ta="right">{formatTokens(totalTokens(b.usage))} tok</Table.Td>
                     <Table.Td ta="right">
-                      {formatTotalCost({ estimatedCostUsd: b.estimatedCostUsd, unpricedTurns: b.unpricedTurns, pricedTurns: b.turns - b.unpricedTurns })}
+                      {formatTotalCost({ ...b, pricedTurns: b.turns - b.unpricedTurns })}
                     </Table.Td>
                     <Table.Td ta="right">
                       <Anchor component="button" size="xs" onClick={() => setFilter((f) => ({ ...f, batchId: b.batchId, range: 'all' }))}>

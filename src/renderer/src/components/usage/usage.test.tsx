@@ -64,6 +64,15 @@ describe('usage formatting (#44)', () => {
     expect(runBadge({ totals: undefined })).toBeNull()
     expect(turnFooter(turn({}))).toBe('2m 14s · 18 in · 33.0k cached · 10.8k cache write · 209 out (82 reasoning) · $0.03')
     expect(waitingMs(r)).toBe(3_600_000 - 135_000)
+    // A turn that never ended: a lower bound, or unknown when nothing was reported.
+    expect(turnFooter(turn({ ok: false, usageIncomplete: true, estimatedCostUsd: 0.02 }))).toMatch(/· ≥ \$0\.02$/)
+    expect(turnFooter(turn({ ok: false, usageIncomplete: true, usage: { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0 }, estimatedCostUsd: 0 }))).toBe(
+      '2m 14s · usage unknown (the turn did not end)'
+    )
+    expect(runBadge(run([turn({ usageIncomplete: true })]))).toMatch(/≥ \$0\.03$/)
+    // While a turn runs the waiting time stops at its start.
+    const busy = run([turn({})], { status: 'running', turnStartedAt: '2026-10-01T09:30:00.000Z' })
+    expect(waitingMs(busy, Date.parse('2026-10-01T09:45:00.000Z'))).toBe(30 * 60_000 - 134_000)
   })
 
   it('shows the metrics strip on the run page and the badge in the run list', () => {
