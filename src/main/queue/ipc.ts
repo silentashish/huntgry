@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { QUEUE_CHANNELS } from '@shared/queue-types'
 import type { RunSummary } from '@shared/runner-types'
+import { readRun } from '../cli/runs'
 import { contextForRun, defaultAgent, onRunChange, manager, startTailorRun } from '../cli/start'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
@@ -22,6 +23,9 @@ export const queue = new TailorQueue({
     else manager.endIdle(workspace, runId, 'finished').catch((err) => console.error('Finishing the run failed:', err))
   },
   releaseRun: (runId) => manager.release(runId),
+  readRun: (runId, workspace) => readRun(workspace, runId).catch(() => null),
+  liveRunIds: () => manager.liveIds(),
+  releaseIdle: () => manager.releaseIdle(),
   reply: (runId, text, workspace) => manager.reply(runId, text, () => contextForRun(runId, workspace)),
   onChange: (state) => emit('queue:changed', state)
 })

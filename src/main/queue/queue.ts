@@ -52,6 +52,15 @@ export interface QueueDeps {
   releaseRun?(runId: string, workspace: string): void
   /** Sends the user's reply to a run (resuming its session if the process is gone). */
   reply(runId: string, text: string, workspace: string): Promise<RunSummary>
+  /** A run from disk (to take an unattended run whose item was removed back into the queue), or `null`. */
+  readRun?(runId: string, workspace: string): Promise<RunSummary | null>
+  /**
+   * Ids of the runs that have an agent process right now (any run: queue items, Tailor-page runs,
+   * runs waiting for a reply, processes still exiting). The concurrency counts processes, not items.
+   */
+  liveRunIds?(): string[]
+  /** Ends the idle process of one run that waits for a reply (session kept); `false` when there is none. */
+  releaseIdle?(): boolean
   onChange(state: QueueState): void
   now?(): number
   /** Minimum time between two spawns. */
@@ -84,8 +93,11 @@ export type FailureDecision =
   | { action: 'fail'; error: string; kind: string }
 
 export interface UnattendedHooks {
-  /** May this unattended item start now? (limit, pause, budget, proactive rejection) */
-  beforeLaunch(item: QueueItem): 'go' | 'hold'
+  /**
+   * May this unattended item start (or continue) now? (limit, pause, budget, proactive rejection)
+   * `dryRun`: only answer; no state change, notification or reopening.
+   */
+  beforeLaunch(item: QueueItem, dryRun?: boolean): 'go' | 'hold'
   settle(item: QueueItem, run: RunSummary, workspace: string): Promise<Settlement>
   onFailure(item: QueueItem, run: RunSummary): FailureDecision
   /** The agent could not be started at all (signed out, missing, no skill): the queue paused. */
@@ -386,7 +398,8 @@ export class TailorQueue {
     let n = 0
     const at = new Date(this.now()).toISOString()
     for (const item of this.items) {
-      if (item.pipelineId !== pipelineId || item.status !== 'queued' || item.runId || item.agent !== from) continue
+      // Only jobs that never started: a started one keeps its agent, its session and its partial work.
+      if (item.pipelineId !== pipelineId || item.status !== 'queued' || item.startedAt || item.runId || item.agent !== from) continue
       item.agent = to
       item.updatedAt = at
       n++
@@ -469,23 +482,83 @@ export class TailorQueue {
     if (this.stopped) return null
     const ws = await this.deps.workspace().catch(() => null)
     if (!ws || ws !== this.ws) return null
-    const item = this.items.find(
+    let item = this.items.find(
       (i) => i.runId === runId && (i.status === 'needs-reply' || (i.status === 'done' && i.unattended))
     )
+    // An unattended run whose item was removed (Remove, Clear finished) still goes through the queue:
+    // its slot, the pipeline's policy and the verify gate apply to it like to any other.
+    if (!item && !this.items.some((i) => i.runId === runId)) item = await this.adopt(runId, ws)
     if (!item) return null
     if (item.status === 'done') {
       item.outcome = undefined
       item.applicationId = undefined
       item.nudged = undefined
     }
-    // Pausing stops new jobs from starting; it does not hold the user's answers.
-    if (this.items.filter(isWorking).length < this.concurrency) return this.sendReply(item, text)
+    // Pausing stops new jobs from starting; it does not hold the user's answers. An unattended
+    // continuation is new work under the pipeline's policy (cost cap, usage limit), and the
+    // process cap counts every agent process.
+    if (this.mayContinue(item) && this.hasSlotFor(item)) return this.sendReply(item, text)
     item.status = 'queued'
     item.pendingReply = text
     item.error = undefined
     item.updatedAt = new Date(this.now()).toISOString()
     this.changed()
     return 'held'
+  }
+
+  /** May a reply to this item be sent now (policy only; the slot is checked separately)? */
+  private mayContinue(item: QueueItem, dryRun = false): boolean {
+    return !item.unattended || !this.hooks || this.hooks.beforeLaunch(item, dryRun) === 'go'
+  }
+
+  /** The first held reply the policy lets through. */
+  private heldReply(dryRun = false): QueueItem | undefined {
+    return this.items.find((i) => i.status === 'queued' && i.pendingReply && i.runId && this.mayContinue(i, dryRun))
+  }
+
+  /**
+   * Agent processes in use: working items (a preparing item has none yet but will) plus every
+   * live process, including runs waiting for a reply, Tailor-page runs and processes still exiting.
+   */
+  private busySlots(): number {
+    const ids = new Set(this.items.filter(isWorking).map((i) => i.runId ?? i.id))
+    for (const id of this.deps.liveRunIds?.() ?? []) ids.add(id)
+    return ids.size
+  }
+
+  /** A reply to `item` fits the cap: a run whose process is still alive takes no new slot by being answered. */
+  private hasSlotFor(item: QueueItem): boolean {
+    const own = item.runId !== null && (this.deps.liveRunIds?.() ?? []).includes(item.runId) ? 1 : 0
+    return this.busySlots() - own < this.concurrency
+  }
+
+  /** A queue item for an unattended run that has none any more (removed), to continue it through the queue. */
+  private async adopt(runId: string, ws: string): Promise<QueueItem | undefined> {
+    const run = await this.deps.readRun?.(runId, ws).catch(() => null)
+    if (!run || !(run.unattended || run.params.unattended) || this.ws !== ws) return undefined
+    // Raced with another reply that adopted it meanwhile.
+    const existing = this.items.find((i) => i.runId === runId)
+    if (existing) return existing.status === 'needs-reply' || existing.status === 'done' ? existing : undefined
+    const at = new Date(this.now()).toISOString()
+    const item: QueueItem = {
+      id: `q-${newRunId(new Date(this.now()))}`,
+      // Not a saved job any more: a pasted-style id that never resolves, so a failed continuation is not relaunched from scratch.
+      jobId: `pasted:run-${runId}`,
+      title: run.title,
+      options: { coverLetter: run.params.coverLetter, dateStyle: run.params.dateStyle },
+      agent: run.agent,
+      status: 'needs-reply',
+      runId,
+      attempts: 1,
+      createdAt: at,
+      updatedAt: at,
+      unattended: true,
+      retries: 0,
+      startedAt: run.createdAt
+    }
+    this.items.push(item)
+    this.answered.add(item.id)
+    return item
   }
 
   /** Takes a slot for the item and sends the reply; on failure the item waits for the user again. */
@@ -529,9 +602,15 @@ export class TailorQueue {
     const item = this.items.find((i) => i.runId === run.id)
     if (!item) {
       if (this.items.some((i) => i.status === 'preparing')) this.early.set(run.id, run)
+      // Another run's process ended (a Tailor-page run, a released one): a slot may be free.
+      else if (!run.live && this.ws) void this.pump()
       return
     }
-    if (item.status === 'cancelled' || item.status === 'done' || item.status === 'failed') return
+    if (item.status === 'cancelled' || item.status === 'done' || item.status === 'failed') {
+      // Its process just exited (a cancelled job, a finished result): that frees a slot.
+      if (!run.live && this.ws) void this.pump()
+      return
+    }
     this.apply(item, run)
     this.changed()
   }
@@ -561,8 +640,10 @@ export class TailorQueue {
           this.answered.add(item.id)
         } else if (run.error) {
           // The turn ended with an error (usage limit, failed turn): the process is about to exit, or
-          // stays idle; either way the item is retried or failed now and the process stopped.
-          this.decide(item, run)
+          // stays idle. A run that already built goes to the verify gate (its result is recorded,
+          // not rebuilt); otherwise the item is retried or failed now and the process stopped.
+          if (run.outputFiles.includes('resume.pdf') && run.outputFolder) void this.settle(item, run)
+          else this.decide(item, run)
         } else if (item.status === 'running') {
           void this.settle(item, run)
         }
@@ -633,8 +714,10 @@ export class TailorQueue {
         item.outcome = s.outcome
         item.applicationId = s.applicationId
         item.error = s.reason
-        if (processGone) item.status = 'done'
-        else if (this.deps.finishRun) this.deps.finishRun(run.id, this.ws!)
+        // The process may have exited meanwhile (an error result after the build): done now, no
+        // "finished" summary will come. Otherwise the process is ended and its exit makes it done.
+        if (processGone || (this.deps.liveRunIds && !this.deps.liveRunIds().includes(run.id))) item.status = 'done'
+        if (this.deps.finishRun) this.deps.finishRun(run.id, this.ws!)
         else item.status = 'done'
         break
       case 'nudge':
@@ -726,14 +809,14 @@ export class TailorQueue {
       .catch((err) => console.error('Saving the tailoring queue failed:', err))
   }
 
-  private nextQueued(): QueueItem | undefined {
+  private nextQueued(dryRun = false): QueueItem | undefined {
     const now = this.now()
     return this.items.find(
       (i) =>
         i.status === 'queued' &&
         !i.pendingReply &&
         (!i.notBefore || Date.parse(i.notBefore) <= now) &&
-        (!i.unattended || !this.hooks || this.hooks.beforeLaunch(i) === 'go')
+        (!i.unattended || !this.hooks || this.hooks.beforeLaunch(i, dryRun) === 'go')
     )
   }
 
@@ -748,15 +831,29 @@ export class TailorQueue {
         this.pumpAgain = false
         for (;;) {
           if (this.stopped || !this.ws) break
-          if (this.items.filter(isWorking).length >= this.concurrency) break
-          // Answers to runs already under way go before new jobs, paused or not.
-          const held = this.items.find((i) => i.status === 'queued' && i.pendingReply && i.runId)
+          // Answers to runs already under way go before new jobs, paused or not (unattended ones
+          // only when the pipeline's policy lets them continue).
+          // A held reply to a run that still has its process needs no new slot.
+          const heldLive = this.items.find(
+            (i) => i.status === 'queued' && i.pendingReply && i.runId && (this.deps.liveRunIds?.() ?? []).includes(i.runId) && this.mayContinue(i)
+          )
+          if (heldLive) {
+            await this.sendHeld(heldLive)
+            continue
+          }
+          if (this.busySlots() >= this.concurrency) {
+            // Work is waiting and every slot holds a process: free one that only waits for a reply
+            // (its session is kept); its exit pumps again. (A dry run of the policy: no side effects.)
+            if (this.heldReply(true) || (!this.paused && this.nextQueued(true))) this.deps.releaseIdle?.()
+            break
+          }
+          const held = this.heldReply()
+          const next = held || this.paused ? undefined : this.nextQueued()
+          if (!held && !next) break
           if (held) {
             await this.sendHeld(held)
             continue
           }
-          if (this.paused) break
-          const next = this.nextQueued()
           if (!next) break
           const wait = this.lastSpawn + (this.deps.spawnGapMs ?? 2000) - this.now()
           if (wait > 0) {

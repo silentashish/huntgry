@@ -90,6 +90,22 @@ for await (const line of createInterface({ input: process.stdin })) {
     writeFileSync(`${dir}/build-report.json`, '{"ok": false, "verify": {"results": [{"check": "page_count", "passed": false, "hard": true}, {"check": "email", "passed": true, "hard": true}]}}')
     notes(dir)
   }
+  if (text.includes('NO_REPORT')) {
+    // Built without a build-report.json: the verify gate runs verify.py itself.
+    const dir = jobDir()
+    writeFileSync(`${dir}/resume.pdf`, '%PDF-1.4 fake')
+    notes(dir)
+  }
+  if (text.includes('BUILT_THEN_ERROR')) {
+    // Builds (with a failing check), then the turn ends with an error result and the process exits.
+    const dir = jobDir()
+    writeFileSync(`${dir}/resume.pdf`, '%PDF-1.4 fake')
+    writeFileSync(`${dir}/build-report.json`, '{"ok": false, "verify": {"results": [{"check": "page_count", "passed": false, "hard": true}]}}')
+    notes(dir)
+    out({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'API Error: 500 Internal server error', session_id: session, total_cost_usd: 0.01, duration_ms: 5, permission_denials: [] })
+    process.stderr.write('API Error: 500 Internal server error\n')
+    process.exit(1)
+  }
   if (text.includes('SLOW')) await new Promise((r) => setTimeout(r, 300))
   out({ type: 'assistant', message: { id: `m${turn}`, role: 'assistant', content: [{ type: 'tool_use', id: `t${turn}`, name: 'Read', input: { file_path: '/ws/master-profile.md' } }] } })
   out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${turn}`, content: 'profile text' }] } })

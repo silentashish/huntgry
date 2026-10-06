@@ -5,13 +5,16 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { Job } from '@shared/jobs-types'
 import type { PipelineBudget, PipelineState, PipelineSummary } from '@shared/pipeline-types'
 import type { QueueOptions, QueueState } from '@shared/queue-types'
+import { reviewBlocker } from '@shared/review-types'
 import type { AgentId, RunSummary, StartRunParams } from '@shared/runner-types'
-import { readTracking } from '../applications/tracking'
+import { readApplication } from '../applications/scan'
 import { RunManager, type RunContext } from '../cli/runner'
-import { readEvents, readRun, saveRun } from '../cli/runs'
+import { readEvents, readRun } from '../cli/runs'
 import { queueFile, TailorQueue, type QueueDeps } from '../queue/queue'
 import { LIMIT_MARGIN_MS } from './failures'
 import { IN_PROGRESS_REASON, NUDGE_TEXT, Pipeline, summaryFile, type PipelineDeps } from './pipeline'
+import { getReview, reopenForContinuation, setReviewAuthorityRoot } from '../review/authority'
+import { approvalDrift, approveReview, discardReview, reviewDetail } from '../review/service'
 import { requirePipelineStartInput } from './service'
 
 const FAKE_CLAUDE = join(__dirname, '../cli/fixtures/fake-claude.mjs')
@@ -91,6 +94,9 @@ function queueDeps(over: Partial<QueueDeps> = {}): QueueDeps {
     },
     stopRun: (id, workspace) => manager.stopAny(workspace, id),
     releaseRun: (id) => manager.release(id),
+    readRun: (id, workspace) => readRun(workspace, id).catch(() => null),
+    liveRunIds: () => manager.liveIds(),
+    releaseIdle: () => manager.releaseIdle(),
     finishRun: (id, workspace) => {
       if (manager.isLive(id)) manager.finish(id)
       else void manager.endIdle(workspace, id, 'finished')
@@ -173,6 +179,7 @@ const setJobs = (...ids: string[]) => ids.forEach((id) => jobs.set(id, job(id)))
 
 beforeEach(async () => {
   ws = await mkdtemp(join(tmpdir(), 'huntgry-pipeline-'))
+  setReviewAuthorityRoot(`${ws}-authority`)
   jobs = new Map()
   queueStates = []
   states = []
@@ -191,6 +198,10 @@ beforeEach(async () => {
     onRun: (r: RunSummary) => {
       queue.onRun(r)
       pipeline.onRun(r)
+    },
+    // As the app wires it (cli/start.ts): every continuation of an unattended result revokes its approval first.
+    beforeReply: async (r, workspace) => {
+      if ((r.unattended || r.params.unattended) && r.outputFolder) await reopenForContinuation(workspace, r.outputFolder, r.id, new Date(now()))
     }
   })
   queue = new TailorQueue(queueDeps())
@@ -203,6 +214,7 @@ afterEach(async () => {
   manager.stopAll()
   await manager.whenIdle()
   await rm(ws, { recursive: true, force: true })
+  await rm(`${ws}-authority`, { recursive: true, force: true })
 })
 
 describe('Pipeline', { timeout: 30_000 }, () => {
@@ -232,7 +244,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
       const run = await readRun(ws, i.runId!)
       expect(run.status).toBe('finished')
       expect(run.outputFiles).toContain('review-notes.md')
-      expect((await readTracking(join(ws, i.applicationId!))).review).toMatchObject({ state: 'unreviewed', runId: i.runId })
+      expect((await getReview(ws, i.applicationId!))).toMatchObject({ state: 'unreviewed', runId: i.runId })
     }
     expect(awake[awake.length - 1]).toBe(false)
     expect(finished).toHaveLength(1)
@@ -253,7 +265,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     const fail = queue.state().items[0]
     expect(fail).toMatchObject({ status: 'done', outcome: 'needs-attention' })
     expect(fail.error).toMatch(/Failed checks: page_count/)
-    expect((await readTracking(join(ws, fail.applicationId!))).review).toMatchObject({ state: 'needs-attention', reason: expect.stringContaining('page_count') })
+    expect((await getReview(ws, fail.applicationId!))).toMatchObject({ state: 'needs-attention', reason: expect.stringContaining('page_count') })
 
     await pipeline.start(input(['url:nonotes'], { options: { ...options, notes: 'NO_NOTES' }, concurrency: 1 }))
     await until((p) => p?.status === 'finished' && p.counts.needsAttention === 1 && finished.length === 2)
@@ -303,16 +315,16 @@ describe('Pipeline', { timeout: 30_000 }, () => {
       unattended: true
     }
     pipeline.onRun(run)
-    const read = () => readTracking(join(ws, folder))
-    for (let i = 0; i < 100 && !(await read()).review; i++) await new Promise((r) => setTimeout(r, 10))
-    expect((await read()).review).toMatchObject({ state: 'unreviewed', runId: run.id, reason: IN_PROGRESS_REASON })
+    const read = () => getReview(ws, folder)
+    for (let i = 0; i < 100 && !(await read()); i++) await new Promise((r) => setTimeout(r, 10))
+    expect(await read()).toMatchObject({ state: 'unreviewed', runId: run.id, reason: IN_PROGRESS_REASON })
     // Another job's folder (a different job id) and an attended run are never marked.
     const other = 'software-engineer/acme/job-8'
     await mkdir(join(ws, other), { recursive: true })
     pipeline.onRun({ ...run, id: '20261005-100000-bbbbbb', outputFolder: other })
     pipeline.onRun({ ...run, id: '20261005-100000-cccccc', params: { ...run.params, jobId: 'job-8' }, outputFolder: other, unattended: undefined })
     await new Promise((r) => setTimeout(r, 50))
-    expect((await readTracking(join(ws, other))).review).toBeUndefined()
+    expect((await getReview(ws, other))).toBeUndefined()
   })
 
   it('pauses on a usage limit until the parsed reset + 2 min, consumes no retry, holds launches, then resumes by itself', async () => {
@@ -346,9 +358,11 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(queue.state().items.every((i) => i.retries === 0)).toBe(true)
   })
 
-  it('switches the remaining jobs to the fallback agent on a usage limit instead of waiting', async () => {
-    jobs.set('url:a', job('url:a', { description: `USAGE_LIMIT:${Math.floor(now() / 1000) + 3600}` }))
-    jobs.set('url:b', job('url:b', { description: 'WRITE_OUTPUT' }))
+  it('switches only the jobs that have not started to the fallback agent; started ones keep their agent and wait', async () => {
+    // A short wait: the fake clock jump stays under the stall threshold of the relaunched runs.
+    const reset = Math.floor(now() / 1000) + 60
+    jobs.set('url:b', job('url:b', { description: 'CRASH' }))
+    jobs.set('url:a', job('url:a', { description: `USAGE_LIMIT:${reset}` }))
     jobs.set('url:c', job('url:c', { description: 'WRITE_OUTPUT' }))
     // Only Claude hits the wall: the fake Codex gets a description that builds.
     queue = new TailorQueue(
@@ -360,21 +374,32 @@ describe('Pipeline', { timeout: 30_000 }, () => {
       })
     )
     pipeline = new Pipeline(pipelineDeps())
-    await pipeline.start(input(['url:a', 'url:b', 'url:c'], { concurrency: 1, fallbackAgent: 'codex' }))
-    const done = await until((p) => p?.status === 'finished' && finished.length > 0)
-    expect(states.every((s) => s?.status !== 'waiting-limit')).toBe(true)
-    expect(started.map((s) => s.agent)).toEqual(['claude', 'codex', 'codex', 'codex'])
-    expect(queue.state().items.map((i) => [i.agent, i.status, i.retries])).toEqual([
-      ['codex', 'done', 0],
-      ['codex', 'done', 0],
-      ['codex', 'done', 0]
-    ])
-    // The fake Codex writes no review notes, so the results need attention; that is the verify gate, not the limit.
-    expect(done!.counts).toMatchObject({ needsAttention: 3, failed: 0 })
+    await pipeline.start(input(['url:b', 'url:a', 'url:c'], { concurrency: 1, fallbackAgent: 'codex' }))
+    // b crashed and waits for its backoff retry (started, queued); a hit the limit; c never started.
+    await until((_p, q) => q.items[2]?.status === 'done')
+    expect(started.map((s) => s.agent)).toEqual(['claude', 'claude', 'codex'])
+    const [b, a] = queue.state().items
+    // Started jobs keep Claude (their session, their partial work): a waits for the reset, b for its retry.
+    expect(b).toMatchObject({ agent: 'claude', status: 'queued', retries: 1, lastFailure: 'transient' })
+    expect(a).toMatchObject({ agent: 'claude', status: 'queued', retries: 0, lastFailure: 'usage-limit' })
+    expect(a.notBefore).toBe(new Date(reset * 1000 + LIMIT_MARGIN_MS).toISOString())
+    expect(a.error).toMatch(/1 other job moved to Codex/)
     expect(states.some((s) => s?.fallbackActive)).toBe(true)
-    // The limit message is gone once the job ran on Codex; the error now is the verify gate's reason.
-    expect(queue.state().items[0].error).toMatch(/No review notes/)
-    expect(queue.state().items[0].lastFailure).toBe('usage-limit')
+    // No "paused" notification: the pipeline went on with the fallback.
+    expect(notifications.filter((n) => n.category === 'usage-limit')).toEqual([])
+    // After the reset, a and b run again on Claude and the pipeline finishes.
+    for (const id of ['url:a', 'url:b']) jobs.set(id, job(id, { description: 'WRITE_NOTES' }))
+    offset += 60_000 + LIMIT_MARGIN_MS + 1000
+    pipeline.wake()
+    const done = await until((p) => p?.status === 'finished' && finished.length > 0)
+    expect(started.map((s) => s.agent)).toEqual(['claude', 'claude', 'codex', 'claude', 'claude'])
+    expect(queue.state().items.map((i) => [i.agent, i.status])).toEqual([
+      ['claude', 'done'],
+      ['claude', 'done'],
+      ['codex', 'done']
+    ])
+    // The fake Codex writes no review notes, so its result needs attention; that is the verify gate, not the limit.
+    expect(done!.counts).toMatchObject({ unreviewed: 2, needsAttention: 1, failed: 0 })
   })
 
   it('retries a crash at +30 s and +120 s, then fails with the last error', async () => {
@@ -484,17 +509,33 @@ describe('Pipeline', { timeout: 30_000 }, () => {
   it('shares the concurrency with attended queue items', async () => {
     setJobs('url:attended', 'url:a', 'url:b')
     await queue.enqueue({ jobIds: ['url:attended'], options: { ...options, notes: 'SLOW' }, concurrency: 1 })
+    // Answering a run whose own process is alive takes no new slot: sent at once, not held.
+    await until((_p, q) => q.items[0]?.status === 'needs-reply')
+    const attendedRun = queue.state().items[0].runId!
+    expect(manager.isLive(attendedRun)).toBe(true)
+    expect(await queue.reply(attendedRun, 'Not yet.')).not.toBe('held')
+    await until((_p, q) => q.items[0].status === 'needs-reply')
     for (const id of ['url:a', 'url:b']) jobs.set(id, job(id, { description: 'SLOW WRITE_NOTES' }))
     await pipeline.start(input(['url:a', 'url:b'], { concurrency: 1 }))
     let peak = 0
+    let peakLive = 0
     const t0 = Date.now()
     while (pipeline.state()?.status !== 'finished' && Date.now() - t0 < 8000) {
       peak = Math.max(peak, queue.state().items.filter((i) => i.status === 'running' || i.status === 'preparing').length)
+      // Real agent processes, waiting ones included: the attended run waiting at step 3 holds one.
+      peakLive = Math.max(peakLive, manager.liveIds().length)
       await new Promise((r) => setTimeout(r, 5))
     }
     const done = await until((p) => p?.status === 'finished' && finished.length > 0)
     expect(peak).toBe(1)
+    expect(peakLive).toBe(1)
     expect(statuses(queue.state())).toEqual(['needs-reply', 'done', 'done'])
+    // The attended run's idle process was released for the pipeline's jobs; it still waits, resumable.
+    const attended = queue.state().items[0]
+    expect(manager.isLive(attended.runId!)).toBe(false)
+    expect((await readRun(ws, attended.runId!)).status).toBe('waiting')
+    await queue.reply(attended.runId!, 'Approved')
+    await until((_p, q) => q.items[0].status === 'needs-reply' && manager.isLive(attended.runId!))
     // The pipeline counts only its own items.
     expect(done!.counts.total).toBe(2)
   })
@@ -653,22 +694,170 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     await expect(pipeline.pause()).rejects.toThrow(/No pipeline/)
   })
 
-  it('settles an unattended run that failed after building, and reads old queue files without pipeline fields', async () => {
+  it('reads old queue files without pipeline fields', async () => {
     await mkdir(join(ws, '.huntgry'), { recursive: true })
     const at = '2026-09-30T00:00:00.000Z'
     await writeFile(queueFile(ws), JSON.stringify({ version: 1, concurrency: 2, items: [{ id: 'q-20260930-010203-a1b2c3', jobId: 'url:a', title: 'x', options, status: 'queued', runId: null, attempts: 0, createdAt: at, updatedAt: at }] }))
     await pipeline.init(0)
     expect(pipeline.state()).toBeNull()
     expect(queue.state().items[0].unattended).toBeUndefined()
-    // A run that crashed after building: the verify gate, not a retry.
-    jobs.set('url:b', job('url:b', { description: 'WRITE_NOTES' }))
+  })
+
+  it('a run that built and then failed while still running goes to the verify gate, not a retry', async () => {
+    jobs.set('url:b', job('url:b', { description: 'BUILT_THEN_ERROR' }))
     await pipeline.start(input(['url:b'], { concurrency: 1 }))
+    const done = await until((p) => p?.status === 'finished' && finished.length > 0)
+    const item = queue.state().items[0]
+    // Recorded with the failed check of its build report; built once, never retried.
+    expect(item).toMatchObject({ status: 'done', outcome: 'needs-attention', retries: 0 })
+    expect(item.error).toMatch(/Failed checks: page_count/)
+    expect(started).toHaveLength(1)
+    expect(done!.counts).toMatchObject({ needsAttention: 1, failed: 0 })
+    expect(await getReview(ws, item.applicationId!)).toMatchObject({ state: 'needs-attention', runId: item.runId })
+  })
+
+  it('refuses a second start while the first is still starting: one pipeline, one id', async () => {
+    for (const id of ['url:a', 'url:b']) jobs.set(id, job(id, { description: 'WRITE_NOTES' }))
+    const results = await Promise.allSettled([pipeline.start(input(['url:a'])), pipeline.start(input(['url:b']))])
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected'])
+    expect((results.find((r) => r.status === 'rejected') as PromiseRejectedResult).reason.message).toMatch(/already starting/)
+    expect(queue.state().items).toHaveLength(1)
+    expect(queue.state().items[0].pipelineId).toBe(pipeline.state()!.id)
     await until((p) => p?.status === 'finished' && finished.length > 0)
-    const item = queue.state().items[1]
-    const run = await readRun(ws, item.runId!)
-    await saveRun(ws, { ...run, status: 'failed', error: 'boom' })
-    queue.onRun({ ...run, status: 'failed', error: 'boom', live: false })
-    expect(queue.state().items[1].status).toBe('done')
+  })
+
+  it('a finished pipeline is supervised again when its jobs get work: Retry is not stranded, a re-run is under the watchdog', async () => {
+    jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
+    jobs.set('url:b', job('url:b', { description: 'CRASH' }))
+    await pipeline.start(input(['url:a', 'url:b'], { concurrency: 1, stallMinutes: 5 }))
+    await until((_p, q) => q.items[1]?.retries === 1)
+    offset += 31_000
+    pipeline.wake()
+    await until((_p, q) => q.items[1]?.retries === 2)
+    offset += 121_000
+    pipeline.wake()
+    await until((p) => p?.status === 'finished' && finished.length === 1)
+    expect(statuses(queue.state())).toEqual(['done', 'failed'])
+    expect(awake.at(-1)).toBe(false)
+
+    // Retry after the pipeline finished: it runs (it was held forever before) and the pipeline finishes again.
+    jobs.set('url:b', job('url:b', { description: 'WRITE_NOTES' }))
+    await queue.retry(queue.state().items[1].id)
+    await until((p) => p?.status === 'finished' && finished.length === 2)
+    expect(statuses(queue.state())).toEqual(['done', 'done'])
+
+    // A re-run of a done result that hangs: the pipeline is running again, the Mac kept awake, the watchdog kills it.
+    const a = queue.state().items[0]
+    await queue.reply(a.runId!, 'Use the gap. SECOND:STALL')
+    const reopened = await until((p, q) => p?.status === 'running' && q.items[0].status === 'running')
+    expect(reopened!.keepAwake).toBe(true)
+    expect(aborted).toEqual([])
+    offset += 6 * 60_000
+    await until(() => aborted.includes(a.runId!))
+    // It had built before: the verify gate records what is on disk, as needing a look, with the stall.
+    await until((p, q) => q.items[0].status === 'done' && p?.status === 'finished')
+    expect(queue.state().items[0]).toMatchObject({ outcome: 'needs-attention', error: expect.stringMatching(/No output for 5 minutes/) })
+    expect(await getReview(ws, a.applicationId!)).toMatchObject({ state: 'needs-attention' })
+  })
+
+  it('a re-run of a done result obeys the cost cap: held without a process until the budget is raised', async () => {
+    jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
+    await pipeline.start(input(['url:a'], { concurrency: 1, budget: { maxCostUsd: 0.01 } as PipelineBudget }))
+    await until((p) => p?.status === 'finished' && finished.length > 0)
+    const runId = queue.state().items[0].runId!
+    await manager.whenIdle()
+    expect(await queue.reply(runId, 'Once more.')).toBe('held')
+    await new Promise((r) => setTimeout(r, 100))
+    expect(manager.isLive(runId)).toBe(false)
+    expect(queue.state().items[0]).toMatchObject({ status: 'queued', pendingReply: 'Once more.' })
+    expect(pipeline.state()).toMatchObject({ status: 'stopped-budget', stopReason: expect.stringMatching(/\$0\.01 of \$0\.01/) })
+    await pipeline.resume({ budget: { maxCostUsd: 1 } })
+    await until((_p, q) => q.items[0].status === 'done' && !q.items[0].pendingReply)
+    const events = await readEvents(ws, runId)
+    expect(events.some((e) => (e as { text?: string }).text === 'Once more.')).toBe(true)
+  })
+
+  it('takes a re-run of a result whose queue item was removed back into the queue: slot, policy and verify gate', async () => {
+    jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
+    await pipeline.start(input(['url:a'], { concurrency: 1 }))
+    await until((p) => p?.status === 'finished' && finished.length > 0)
+    const runId = queue.state().items[0].runId!
+    await manager.whenIdle()
+    await queue.clearFinished()
+    expect(queue.state().items).toHaveLength(0)
+    // An attended job takes the only slot.
+    setJobs('url:busy')
+    await queue.enqueue({ jobIds: ['url:busy'], options: { ...options, notes: 'STALL' }, concurrency: 1 })
+    await until((_p, q) => q.items[0]?.status === 'running')
+    expect(await queue.reply(runId, 'Once more.')).toBe('held')
+    expect(manager.isLive(runId)).toBe(false)
+    expect(queue.state().items.find((i) => i.runId === runId)).toMatchObject({ unattended: true, status: 'queued', pendingReply: 'Once more.' })
+    // The slot frees up: the held reply goes first, and the verify gate settles the result.
+    await queue.cancel(queue.state().items[0].id)
+    await until((_p, q) => q.items.find((i) => i.runId === runId)?.status === 'done')
+    expect(queue.state().items.find((i) => i.runId === runId)!.outcome).toBe('unreviewed')
+    await until(() => !manager.isLive(runId))
+    expect((await readRun(ws, runId)).status).toBe('finished')
+  })
+
+  it('revokes an approval before any continuation reaches the agent (a Tailor reply), so Apply is blocked during it', async () => {
+    jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
+    await pipeline.start(input(['url:a'], { concurrency: 1 }))
+    await until((p) => p?.status === 'finished' && finished.length > 0)
+    const item = queue.state().items[0]
+    const app = item.applicationId!
+    const reviewDeps = { workspace: async () => ws, reply: async () => 'held' as const }
+    const detail = await reviewDetail(ws, app)
+    expect((await approveReview(reviewDeps, { applicationId: app, revision: detail.revision }, 'desktop')).ok).toBe(true)
+    const gate = async () => reviewBlocker((await readApplication(ws, join(ws, app))).tracking.review)
+    expect(await gate()).toBeNull()
+    // The user answers on the Tailor page; the agent rewrites the result (here: it hangs mid-turn).
+    await queue.reply(item.runId!, 'Shorten it. SECOND:STALL')
+    await until((_p, q) => q.items[0].status === 'running')
+    expect(await getReview(ws, app)).toMatchObject({ state: 'unreviewed', reason: expect.stringMatching(/Continued after review/) })
+    expect(await gate()).toMatch(/Unreviewed/)
+    expect(await approvalDrift(ws, app)).toBeNull()
+  })
+
+  it('keeps a Discard made while the verify gate runs, and keeps verify.py\'s report for Review when there is no build report', async () => {
+    let release!: () => void
+    const verifying = new Promise<void>((r) => (release = r))
+    let calls = 0
+    pipeline = new Pipeline(
+      pipelineDeps({
+        verify: async () => {
+          calls++
+          if (calls === 1) await verifying
+          return calls === 1 ? { ok: true, report: 'page_count: pass' } : { ok: false, report: 'page_count: FAIL (3 pages)' }
+        }
+      })
+    )
+    jobs.set('url:a', job('url:a', { description: 'NO_REPORT' }))
+    await pipeline.start(input(['url:a'], { concurrency: 1 }))
+    await until(() => calls === 1)
+    const run = (await readRun(ws, queue.state().items[0].runId!))
+    const app = run.outputFolder!
+    const reviewDeps = { workspace: async () => ws, reply: async () => 'held' as const }
+    // Discard while verification is pending (allowed while the run works).
+    const shown = await reviewDetail(ws, app)
+    expect((await discardReview(reviewDeps, { applicationId: app, revision: shown.revision }, 'desktop')).ok).toBe(true)
+    release()
+    await until((p) => p?.status === 'finished' && finished.length > 0)
+    expect(await getReview(ws, app)).toMatchObject({ state: 'discarded', runId: run.id })
+    expect(reviewBlocker((await readApplication(ws, join(ws, app))).tracking.review)).toMatch(/discarded/)
+
+    // Report-less results keep verify.py's own report (pass and fail) for Review.
+    jobs.set('url:b', job('url:b', { description: 'NO_REPORT' }))
+    await pipeline.dismiss()
+    await pipeline.start(input(['url:b'], { concurrency: 1 }))
+    await until((p) => p?.status === 'finished' && finished.length > 1)
+    const b = queue.state().items.find((i) => i.jobId === 'url:b')!
+    expect(b.outcome).toBe('needs-attention')
+    const failed = await reviewDetail(ws, b.applicationId!)
+    expect(failed.verify).toEqual({ ok: false, report: 'page_count: FAIL (3 pages)' })
+    expect(failed.state).toBe('needs-attention')
+    // The passing one (discarded above) shows its passing report too.
+    expect((await reviewDetail(ws, app)).verify).toEqual({ ok: true, report: 'page_count: pass' })
   })
 
   it('validates the start input', () => {

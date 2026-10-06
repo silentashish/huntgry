@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { canFetchDetails, type Job } from '@shared/jobs-types'
 import {
   BATTERY_WARNING,
+  DEFAULT_STALL_MINUTES,
   FALLBACK_JOB_MINUTES,
   KEEP_AWAKE_MAX_WAIT_MS,
   MIN_FREE_DISK_BYTES,
@@ -18,10 +19,10 @@ import {
   type PipelineSummary
 } from '@shared/pipeline-types'
 import type { QueueItem } from '@shared/queue-types'
-import { REVIEW_NOTES_FILE, type ReviewTracking } from '@shared/review-types'
+import { REVIEW_NOTES_FILE } from '@shared/review-types'
 import { AGENT_LABEL, type AgentId, type RunSummary } from '@shared/runner-types'
 import { summarizeBuild } from '../applications/scan'
-import { readTracking, updateTracking } from '../applications/tracking'
+import { updateReview, type RecordedReview } from '../review/authority'
 import { folderSlug, newRunId } from '../cli/runs'
 import { PASTE_HINT, type FailureDecision, type Settlement, type TailorQueue } from '../queue/queue'
 import { HUNTGRY_DIR } from '../workspace/constants'
@@ -123,12 +124,13 @@ export class Pipeline {
   private lastSaved = ''
   private notifiedLimit: string | null = null
   private stopped = false
+  private starting = false
   /** Runs whose output folder was marked Unreviewed while they work, and the pending writes. */
   private marking = new Map<string, Promise<void>>()
 
   constructor(private deps: PipelineDeps) {
     deps.queue.setUnattendedHooks({
-      beforeLaunch: (item) => this.beforeLaunch(item),
+      beforeLaunch: (item, dryRun) => this.beforeLaunch(item, dryRun),
       settle: (item, run, ws) => this.settle(item, run, ws),
       onFailure: (item, run) => this.onFailure(item, run),
       onStartError: (item, error) => this.onStartError(item, error),
@@ -307,7 +309,22 @@ export class Pipeline {
     }
   }
 
+  /**
+   * One start at a time: the check that no pipeline is active and the record that makes one
+   * active are separated by awaits (plan, history), so a second start (a double click, the phone)
+   * is refused while the first is between them.
+   */
   async start(input: Parameters<Pipeline['plan']>[0]): Promise<PipelineState> {
+    if (this.starting) throw new Error('A pipeline is already starting.')
+    this.starting = true
+    try {
+      return await this.startNow(input)
+    } finally {
+      this.starting = false
+    }
+  }
+
+  private async startNow(input: Parameters<Pipeline['plan']>[0]): Promise<PipelineState> {
     const plan = await this.plan(input)
     if (plan.blockers.length > 0) throw new Error(plan.blockers[0])
     if (plan.ready.length === 0)
@@ -473,12 +490,14 @@ export class Pipeline {
 
   // ---------------------------------------------------------------- hooks (queue policy)
 
-  private beforeLaunch(item: QueueItem): 'go' | 'hold' {
+  private beforeLaunch(item: QueueItem, dryRun = false): 'go' | 'hold' {
     const r = this.record
     if (!r || item.pipelineId !== r.id) return 'go'
-    if (r.status === 'paused' || r.status === 'stopping' || r.status === 'finished') return 'hold'
+    // A finished pipeline whose job gets work again (Retry, a re-run, a Tailor reply) is supervised again.
+    if (r.status === 'finished' && !dryRun) this.reopen(r)
+    if (r.status === 'paused' || r.status === 'stopping') return 'hold'
     if (this.budgetReached(r, item)) {
-      if (r.status !== 'stopped-budget') {
+      if (r.status !== 'stopped-budget' && !dryRun) {
         r.status = 'stopped-budget'
         r.stopReason = this.budgetReason(r)
         this.persist()
@@ -508,13 +527,13 @@ export class Pipeline {
     const ws = this.deps.queue.workspace()
     if (!folder || !ws) return
     const at = new Date(this.now()).toISOString()
-    const dir = join(ws, folder)
     this.marking.set(
       run.id,
-      (async () => {
-        if ((await readTracking(dir)).review?.runId === run.id) return
-        await updateTracking(dir, { review: { state: 'unreviewed', runId: run.id, at, reason: IN_PROGRESS_REASON } })
-      })().catch((err) => console.error('Marking the unattended result Unreviewed failed:', err))
+      updateReview(ws, folder, (current) =>
+        current?.runId === run.id ? null : { state: 'unreviewed', runId: run.id, at, reason: IN_PROGRESS_REASON }
+      )
+        .then(() => undefined)
+        .catch((err) => console.error('Marking the unattended result Unreviewed failed:', err))
     )
   }
 
@@ -528,9 +547,7 @@ export class Pipeline {
       // Whatever it left in its folder (notes, a draft) needs a look, not Apply.
       if (folder) {
         await this.marking.get(run.id)
-        await updateTracking(join(ws, folder), {
-          review: { state: 'needs-attention', runId: run.id, at: new Date(this.now()).toISOString(), reason: error }
-        })
+        await this.record_(ws, folder, { state: 'needs-attention', runId: run.id, at: new Date(this.now()).toISOString(), reason: error })
       }
       return { kind: 'needs-reply', error }
     }
@@ -543,6 +560,7 @@ export class Pipeline {
     }
     const reasons: string[] = []
     let ok: boolean
+    let verify: RecordedReview['verify']
     if (files.includes('build-report.json')) {
       const report = summarizeBuild(await readFile(join(dir, 'build-report.json'), 'utf8').catch(() => null))
       ok = report.status === 'pass'
@@ -551,17 +569,35 @@ export class Pipeline {
     } else {
       const v = await this.deps.verify(ws, folder)
       ok = v.ok
+      // Kept with the review state (main-owned), so the Review page shows the checks verify.py ran.
+      verify = { ok: v.ok, report: v.report.slice(0, 8000) }
       if (!ok) reasons.push(`No build report and verify.py did not pass: ${v.report.split('\n')[0]}`)
     }
     if (!files.includes(REVIEW_NOTES_FILE)) reasons.push('No review notes (review-notes.md) were written.')
+    // Built, then the turn failed (an error result, a crash, the stall watchdog): what is on disk is
+    // recorded, not rebuilt, but it needs a look.
+    if (run.error) reasons.push(`The last turn ended with an error: ${run.error.split('\n')[0]}`)
     const outcome = ok && reasons.length === 0 ? 'unreviewed' : 'needs-attention'
     const reason = reasons.join(' ') || undefined
-    const review: ReviewTracking = { state: outcome, runId: run.id, at: new Date(this.now()).toISOString() }
+    const review: RecordedReview = { state: outcome, runId: run.id, at: new Date(this.now()).toISOString() }
     if (reason) review.reason = reason
+    if (verify) review.verify = verify
     // After the in-progress mark, never before it (it would overwrite the settled state).
     await this.marking.get(run.id)
-    await updateTracking(dir, { review })
+    await this.record_(ws, folder, review)
     return { kind: 'done', outcome, applicationId: folder, reason }
+  }
+
+  /**
+   * Records a verify-gate result in main's review store. The user's Discard of this run's result
+   * is terminal: the gate never turns it back into something that can be approved and applied.
+   */
+  private async record_(ws: string, folder: string, review: RecordedReview): Promise<void> {
+    await updateReview(ws, folder, (current) => {
+      if (current?.state !== 'discarded' || current.runId !== review.runId) return review
+      // Still discarded; only what verify.py said is added, for the record.
+      return review.verify ? { ...current, verify: review.verify } : null
+    })
   }
 
   private onFailure(item: QueueItem, run: RunSummary): FailureDecision {
@@ -628,20 +664,13 @@ export class Pipeline {
     r.limits[item.agent] = limit
     this.rejected = null
     const alt = r.options.fallbackAgent
-    if (alt && alt !== item.agent && !this.limitActive(r, alt, now)) {
-      this.deps.queue.switchAgent(r.id, item.agent, alt)
-      this.persist()
-      return {
-        action: 'requeue',
-        delayMs: 0,
-        countRetry: false,
-        error: `${label} hit its usage limit; continuing with ${AGENT_LABEL[alt]}. (${f.message})`,
-        kind: f.kind,
-        agent: alt
-      }
-    }
+    // The fallback takes the jobs that have not started; this one keeps its agent, session and
+    // partial work, and waits for the reset like without a fallback.
+    const fallback = !!alt && alt !== item.agent && !this.limitActive(r, alt, now)
+    const switched = fallback ? this.deps.queue.switchAgent(r.id, item.agent, alt) : 0
     this.persist()
-    if (this.notifiedLimit !== limit.until) {
+    // With a usable fallback the pipeline goes on: no "paused" notification.
+    if (!fallback && this.notifiedLimit !== limit.until) {
       this.notifiedLimit = limit.until
       this.deps.notify(
         'usage-limit',
@@ -655,7 +684,7 @@ export class Pipeline {
       delayMs: until - now,
       notBefore: limit.until,
       countRetry: false,
-      error: `Waiting for ${label}'s limit to reset; trying again at ${clockTime(until)}. (${f.message})`,
+      error: `Waiting for ${label}'s limit to reset; trying again at ${clockTime(until)}${switched ? ` (${switched} other job${switched === 1 ? '' : 's'} moved to ${AGENT_LABEL[alt!]})` : ''}. (${f.message})`,
       kind: f.kind
     }
   }
@@ -684,18 +713,26 @@ export class Pipeline {
     this.timer.unref?.()
   }
 
-  /** Watchdog, passed limits, keep-awake. */
+  /** Unattended items with an agent at work: this pipeline's and any other (an older pipeline's, a re-run). */
+  private workingUnattended(): QueueItem[] {
+    return this.deps.queue.state().items.filter((i) => i.unattended && (i.status === 'preparing' || i.status === 'running'))
+  }
+
+  /** Watchdog (every unattended run, pipeline finished or not), passed limits, keep-awake. */
   private tick(): void {
     const r = this.record
-    if (!r || r.status === 'finished') return
     const now = this.now()
-    const stallMs = r.options.stallMinutes * 60_000
-    for (const item of this.deps.queue.itemsOf(r.id)) {
+    const stallMinutes = r?.options.stallMinutes ?? DEFAULT_STALL_MINUTES
+    for (const item of this.workingUnattended()) {
       if (item.status !== 'running' || !item.runId) continue
       const live = this.deps.liveRun(item.runId)
-      if (live?.lastOutputAt && now - Date.parse(live.lastOutputAt) > stallMs) {
-        this.deps.abort(item.runId, STALL_TEXT(r.options.stallMinutes))
+      if (live?.lastOutputAt && now - Date.parse(live.lastOutputAt) > stallMinutes * 60_000) {
+        this.deps.abort(item.runId, STALL_TEXT(stallMinutes))
       }
+    }
+    if (!r || r.status === 'finished') {
+      this.updateAwake()
+      return
     }
     const before = JSON.stringify(r.limits)
     this.reconcile()
@@ -776,10 +813,25 @@ export class Pipeline {
     return c
   }
 
+  /** A finished pipeline gets work again: running, supervised (watchdog, keep-awake, recovery), summary again at the end. */
+  private reopen(r: PipelineRecord): void {
+    if (r.status !== 'finished') return
+    r.status = 'running'
+    r.finishedAt = undefined
+    r.stopReason = undefined
+    this.persist()
+    this.ensureTimer()
+    this.updateAwake()
+  }
+
   /** Clears passed limits, moves between running and waiting-limit, finishes when nothing is left. */
   private reconcile(): void {
     const r = this.record
-    if (!r || r.status === 'finished') return
+    if (r?.status === 'finished' && this.deps.queue.itemsOf(r.id).some((i) => ACTIVE.has(i.status))) this.reopen(r)
+    if (!r || r.status === 'finished') {
+      this.updateAwake()
+      return
+    }
     const now = this.now()
     for (const agent of Object.keys(r.limits) as AgentId[]) {
       const l = r.limits[agent]
@@ -844,8 +896,9 @@ export class Pipeline {
 
   private updateAwake(): void {
     const r = this.record
-    let on = false
-    if (r) {
+    // Any unattended run at work keeps the Mac awake, in a finished, stopped or dismissed pipeline too.
+    let on = this.workingUnattended().length > 0
+    if (r && !on) {
       const limit = this.blockingLimit(r, this.deps.queue.itemsOf(r.id))
       const working = this.deps.queue.itemsOf(r.id).some((i) => i.status === 'preparing' || i.status === 'running')
       on =
@@ -871,6 +924,7 @@ export class Pipeline {
   /** Recomputes and broadcasts the state when it changed. */
   private changed(): void {
     if (this.stopped) return
+    if (this.workingUnattended().length > 0) this.ensureTimer()
     this.reconcile()
     const state = this.state()
     const json = JSON.stringify(state)

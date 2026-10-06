@@ -37,9 +37,9 @@ interface Props {
 export function RunView({ run, events, heldReply = false }: Props) {
   const items = useMemo(() => buildTranscript(events, run.agent), [events, run.agent])
   const agent = AGENT_LABEL[run.agent]
-  // Codex runs one process per turn: between turns a waiting run has no process, and "End" just closes it.
-  const perTurn = run.agent === 'codex'
-  const canEnd = run.live || (perTurn && run.status === 'waiting')
+  // A waiting run may have no process (Codex between turns, or one released to free a slot for the
+  // queue; the reply resumes its session): "End" then just closes it.
+  const canEnd = run.live || run.status === 'waiting'
   const { navigate } = useNavigation()
   const [reply, setReply] = useState('')
   const [sending, setSending] = useState(false)
