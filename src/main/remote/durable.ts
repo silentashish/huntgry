@@ -18,8 +18,14 @@ export async function writeDurable(file: string, text: string, mode = 0o600): Pr
     await rm(tmp, { force: true })
     throw err
   }
-  await handle.close()
-  await rename(tmp, file)
+  try {
+    await handle.close()
+    await rename(tmp, file)
+  } catch (err) {
+    // The temp file holds the same content (for relay.json and desktop-key.json, the encrypted secret).
+    await rm(tmp, { force: true })
+    throw err
+  }
   await syncDir(dirname(file))
 }
 

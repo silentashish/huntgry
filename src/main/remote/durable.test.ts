@@ -1,4 +1,4 @@
-import { mkdtemp, open, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -34,6 +34,14 @@ describe('writeDurable', () => {
     vi.spyOn(proto, 'sync').mockRejectedValueOnce(Object.assign(new Error('EIO'), { code: 'EIO' }))
     await expect(writeDurable(join(dir, 'devices.json'), 'new\n')).rejects.toThrow('EIO')
     expect(await readFile(join(dir, 'devices.json'), 'utf8')).toBe('old\n')
+    expect((await readdir(dir)).filter((f) => f.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('removes the temp file when the rename fails (the temp holds the same secret blob)', async () => {
+    const target = join(dir, 'relay.json')
+    // A non-empty directory in the way: the rename fails after the data was written and synced.
+    await mkdir(join(target, 'occupied'), { recursive: true })
+    await expect(writeDurable(target, '{"blob":"secret"}\n')).rejects.toThrow()
     expect((await readdir(dir)).filter((f) => f.endsWith('.tmp'))).toEqual([])
   })
 })
