@@ -1,0 +1,40 @@
+{
+  "id": "20261001-090001-bbbbbb",
+  "title": "Engineer \u00b7 Acme (bbbbbb)",
+  "params": {
+    "jobDescription": "x",
+    "company": "Acme",
+    "role": "Engineer",
+    "coverLetter": false,
+    "dateStyle": "right",
+    "batchId": "b-20261001-085959-111111"
+  },
+  "agent": "codex",
+  "status": "failed",
+  "sessionId": "s",
+  "createdAt": "2026-10-01T09:00:01.000Z",
+  "updatedAt": "2026-10-01T09:05:01.000Z",
+  "outputFolder": null,
+  "outputFiles": [],
+  "costUsd": 0,
+  "live": false,
+  "model": "gpt-6.1-sol",
+  "metrics": [
+    {
+      "turn": 1,
+      "startedAt": "2026-10-01T09:00:01.000Z",
+      "endedAt": "2026-10-01T09:05:01Z",
+      "activeMs": 300000,
+      "model": "gpt-6.1-sol",
+      "usage": {
+        "inputTokens": 18095,
+        "cacheReadTokens": 71680,
+        "cacheWriteTokens": 0,
+        "outputTokens": 1641,
+        "reasoningTokens": 23
+      },
+      "estimatedCostUsd": null,
+      "ok": false
+    }
+  ]
+}

@@ -28,6 +28,8 @@ export interface PageParams {
         view?: 'queue'
         /** Preselect this agent instead of the default one. */
         agent?: AgentId
+        /** Open this run (from the Dashboard's usage figures). */
+        runId?: string
       }
     | undefined
   /** Unattended results to review (#31); opens on one application when given. */

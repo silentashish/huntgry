@@ -271,6 +271,9 @@ describe('command line and prompts', () => {
     expect(() => requireStartParams({ coverLetter: true })).toThrow(/job description/)
     expect(() => requireStartParams({ jobUrl: 'file:///etc/passwd' })).toThrow(/http/)
     expect(() => requireStartParams({ jobDescription: 5 })).toThrow(/Invalid job description/)
+    // A bulk request's batch id passes through; anything else is dropped (#44).
+    expect(requireStartParams({ jobDescription: 'x', batchId: 'b-20261006-120000-abcdef' }).batchId).toBe('b-20261006-120000-abcdef')
+    expect(requireStartParams({ jobDescription: 'x', batchId: '../etc' }).batchId).toBeUndefined()
     expect(requireStartParams({ jobDescription: 'x', source: 'indeed' }).source).toBe('indeed')
     expect(requireStartParams({ jobDescription: 'x', source: '../../etc' }).source).toBeUndefined()
     expect(requireStartParams({ jobDescription: 'x', dateStyle: 'weird', coverLetter: 'yes' })).toMatchObject({

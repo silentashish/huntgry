@@ -1,3 +1,5 @@
+import type { PricingState, UsageFilter, UsageSummary } from './usage-types'
+
 /**
  * Types for running the resume-tailor skill from the app through an agent CLI
  * (Claude Code, Codex, Antigravity): environment checks (Settings page) and
@@ -35,10 +37,98 @@ export interface AgentStatus {
   problems: string[]
 }
 
-/** How many tokens a run used (agents that do not report a price). */
-export interface TokenUsage {
+/** Input and output tokens only: the legacy `run.usage`, transcript footers and the remote protocol. */
+export interface TokenCount {
   inputTokens: number
   outputTokens: number
+}
+
+/**
+ * Tokens of one turn (or a sum of turns), normalized the same way for every agent (#44).
+ * The four billed buckets do not overlap: input + cache reads + cache writes + output is
+ * everything the model was charged for. Reasoning is a part of `outputTokens`.
+ */
+export interface TokenUsage extends TokenCount {
+  /** Uncached input (cache reads and writes are not in it). */
+  inputTokens: number
+  /** Input read from the prompt cache. */
+  cacheReadTokens: number
+  /** Input written to the prompt cache (Claude, Codex). */
+  cacheWriteTokens: number
+  /** The part of `cacheWriteTokens` written to Claude's 1-hour cache (priced higher than the 5-minute one). */
+  cacheWrite1hTokens?: number
+  /** Every billed output token, reasoning included. */
+  outputTokens: number
+  /** Thinking / reasoning tokens: already counted in `outputTokens`, shown on their own. */
+  reasoningTokens: number
+}
+
+/** One model's share of a turn (Claude reports it per model when sub-agents use another one). */
+export interface ModelTurnUsage {
+  model: string
+  usage: TokenUsage
+  /** What the CLI itself reported for this model (Claude `modelUsage[m].costUSD`). */
+  reportedCostUsd?: number
+}
+
+/** What one turn of a run took: Huntgry-measured time, the model, normalized tokens and the price (#44). */
+export interface TurnMetrics {
+  /** 1-based: the n-th message the user (or Huntgry) sent in this run. */
+  turn: number
+  startedAt: string
+  endedAt: string
+  /** From sending the message to the turn's end (or the process's exit): the time the agent worked. */
+  activeMs: number
+  /** Claude's `duration_api_ms` / the CLI's own duration, kept as detail. */
+  apiMs?: number
+  /** Resolved model id, `null` = unknown. */
+  model: string | null
+  usage: TokenUsage
+  /** Per model, when the CLI splits it (Claude with sub-agents on another model). */
+  models?: ModelTurnUsage[]
+  /** What the CLI itself reported for the turn (Claude). */
+  reportedCostUsd?: number
+  /** From the price table; `null` = a model of this turn is not priced (never 0 for "unknown"). */
+  estimatedCostUsd: number | null
+  /** The turn ended normally (not an error, a stop or a crash). */
+  ok: boolean
+  /**
+   * The turn never ended (stop, crash): `usage` is what the CLI had reported per request until then
+   * (Claude), a lower bound; with nothing reported it is zero and the cost unknown, not free.
+   */
+  usageIncomplete?: true
+}
+
+/** Sums over a run's `metrics`, recomputed whenever a turn is added or prices change. */
+export interface RunTotals {
+  turns: number
+  activeMs: number
+  usage: TokenUsage
+  /** Sum over the priced turns. */
+  estimatedCostUsd: number
+  pricedTurns: number
+  /** Turns whose model has no price: `estimatedCostUsd` leaves them out. */
+  unpricedTurns: number
+  /** Turns that never ended (stop, crash): their tokens and cost are a lower bound. */
+  incompleteTurns: number
+  /** Sum of what the CLI reported (Claude), when it reported anything. */
+  reportedCostUsd?: number
+}
+
+/**
+ * The CLI's last session-wide counters (Claude's `total_cost_usd` and `modelUsage`, Codex's
+ * `turn.completed.usage`): both CLIs report the session's running totals, so a turn's share is the
+ * difference with the previous turn. Stored in `run.json` so a resumed run continues from it.
+ */
+export interface CliCounters {
+  usage?: TokenUsage
+  costUsd?: number
+  models?: Record<string, { usage: TokenUsage; costUsd?: number }>
+  /**
+   * Tokens already given to an interrupted turn (per model, `''` = unknown), which the CLI's running
+   * totals may report again at the next turn's end: subtracted from that turn's share, then cleared.
+   */
+  interrupted?: Record<string, TokenUsage>
 }
 
 /** One dependency line from the skill's `scripts/preflight.py`, plus the app's own checks. */
@@ -128,6 +218,8 @@ export interface StartRunParams {
   agent?: AgentId
   /** Unattended run (#31): the unattended system prompt, auto-finished, result Unreviewed. */
   unattended?: true
+  /** The bulk request ("Tailor all", a pipeline) this run belongs to: its queue items share it (#44). */
+  batchId?: string
 }
 
 /** Recorded with the application in `huntgry.json`, so the Dashboard can show where a job came from. */
@@ -159,9 +251,20 @@ export interface RunSummary {
   outputFolder: string | null
   /** Files found in the output folder, e.g. `resume.pdf`. */
   outputFiles: string[]
+  /** What the CLI reported (Claude only): the sum of the per-turn `reportedCostUsd`. */
   costUsd: number
-  /** Tokens used so far, for agents that report tokens instead of a price (Codex, Antigravity). */
-  usage?: TokenUsage
+  /** Tokens used so far (legacy: input incl. cache, output), for agents that report tokens instead of a price. */
+  usage?: TokenCount
+  /** The model of the last turn (or the one Huntgry expects before the first turn ends), `null` = unknown (#44). */
+  model?: string | null
+  /** One entry per turn, in order (#44). Absent on runs recorded before metrics (until backfilled). */
+  metrics?: TurnMetrics[]
+  /** Sums of `metrics`. */
+  totals?: RunTotals
+  /** See `CliCounters`. */
+  cliCounters?: CliCounters
+  /** `metrics` were rebuilt from `events.jsonl` (active time is approximate). */
+  backfilled?: true
   /** The process is alive (a reply can be sent without resuming). */
   live: boolean
   error?: string
@@ -169,6 +272,8 @@ export interface RunSummary {
   unattended?: true
   /** Claude's latest `rate_limit_event` (absent for other agents and API-key sessions). */
   rateLimit?: RunRateLimit
+  /** ISO time the current turn was sent, while it runs (#44): the waiting time stops growing then. */
+  turnStartedAt?: string
   /** ISO time of the last stdout line of the current process; the pipeline's stall watchdog reads it. */
   lastOutputAt?: string
 }
@@ -197,7 +302,9 @@ export type TranscriptItem =
       durationMs: number
       denials: string[]
       /** Set for agents that report tokens instead of a price. */
-      usage?: TokenUsage
+      usage?: TokenCount
+      /** 1-based turn this result ends (the number of user messages before it): the key into `run.metrics`. */
+      turn?: number
     }
   | { kind: 'notice'; id: string; level: 'info' | 'error'; text: string }
 
@@ -234,6 +341,21 @@ export interface RunnerApi {
   /** Open a file of the run's output folder (`resume.pdf`, `cover.pdf`, …) with the OS. */
   openOutput(id: string, file: string): Promise<void>
   revealOutput(id: string): Promise<void>
+  /** Totals across the workspace's runs for the Dashboard (#44). */
+  usageSummary(filter?: UsageFilter): Promise<UsageSummary>
+  /** Saves the filtered per-run numbers as CSV (asks where); `null` when cancelled. */
+  exportUsage(filter?: UsageFilter): Promise<{ path: string } | null>
+  /** Settings → Pricing. */
+  prices(): Promise<PricingState>
+  /** Adds or replaces the price of one model (`ModelPrice` without `custom`). */
+  setPrice(price: unknown): Promise<PricingState>
+  /** Drops the user's price for a model (a bundled one goes back to its bundled price). */
+  removePrice(id: string): Promise<PricingState>
+  resetPrices(): Promise<PricingState>
+  /** Fetches current prices from a public list (LiteLLM, else OpenRouter); throws and keeps the prices on failure. */
+  syncPrices(): Promise<PricingState>
+  /** Forgets the synced prices. */
+  clearSyncedPrices(): Promise<PricingState>
 }
 
 export const RUNNER_CHANNELS = {
@@ -251,7 +373,15 @@ export const RUNNER_CHANNELS = {
   stop: 'runner:stop',
   finish: 'runner:finish',
   openOutput: 'runner:open-output',
-  revealOutput: 'runner:reveal-output'
+  revealOutput: 'runner:reveal-output',
+  usageSummary: 'runner:usage-summary',
+  exportUsage: 'runner:export-usage',
+  prices: 'runner:prices',
+  setPrice: 'runner:set-price',
+  removePrice: 'runner:remove-price',
+  resetPrices: 'runner:reset-prices',
+  syncPrices: 'runner:sync-prices',
+  clearSyncedPrices: 'runner:clear-synced-prices'
 } as const
 
 /** Payloads of the runner's main → renderer events. */
@@ -264,6 +394,8 @@ export interface RunnerEvents {
   'runner:event': { runId: string; seq: number; event: unknown }
   /** The run's summary changed (status, session id, output folder, cost). */
   'runner:run': RunSummary
+  /** Settings → Pricing changed: estimates shown anywhere are stale. */
+  'runner:prices': PricingState
   /** A line of installer output (Python dependencies, Claude Code, the skill). */
   'runner:install-log': string
 }

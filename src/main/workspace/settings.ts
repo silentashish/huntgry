@@ -1,4 +1,5 @@
 import { readFile, rename, writeFile } from 'node:fs/promises'
+import type { PricingOverrides } from '@shared/pricing'
 
 /**
  * App-level settings (which workspace is current), stored in a JSON file
@@ -15,6 +16,8 @@ export interface AppSettings {
   defaultAgent?: string
   /** Remote control (ADR-0001): the session is off unless enabled; the two toggles default to details off, transcripts on. */
   remote?: { enabled?: boolean; notificationDetails?: boolean; transcripts?: boolean }
+  /** Settings → Pricing (#44): prices the user changed or added; the bundled table fills in the rest. */
+  pricing?: PricingOverrides
   /** Apply (#71): pick remembered answers in dropdowns and button groups automatically; on unless set to false. */
   pickDropdowns?: boolean
 }

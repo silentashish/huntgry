@@ -1,10 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { join, sep } from 'node:path'
+import { MODEL_PRICES, runTotals, type ModelPrice } from '@shared/pricing'
 import { AGENT_LABEL, DEFAULT_AGENT, type AgentId, type RunSummary, type StartRunParams } from '@shared/runner-types'
 import { LineBuffer, parseEventLine, type HuntgryEvent } from '@shared/transcript'
 import { buildFirstPrompt, runTitle, type SandboxPaths } from './command'
 import { recordJobSource } from '../applications/tracking'
 import { adapterFor, type AgentAdapter } from './agents'
+import { reportsUsage, type PartialUsage } from './agents/types'
+import { backfillMetrics, legacyFields, partialShare, turnMetrics, turnModel, turnShare } from './metrics'
 import { appendEvent, findOutputFolder, newRunId, readEvents, readRun, saveRun } from './runs'
 
 /**
@@ -30,6 +33,11 @@ export interface RunContext {
   env: NodeJS.ProcessEnv
   systemPrompt: string
   model?: string
+  /**
+   * The model the run is expected to use, for its metrics (#44), when the CLI does not say:
+   * `model` when Huntgry passes one, else what the agent's own settings name (agy). `null` = unknown.
+   */
+  expectedModel?: string | null
   /** The agent CLI's version, `null` when unknown; used for the error message of a failed run. */
   claudeVersion?: string | null
   /** The CLI accepts `--permission-prompts none` (≥ 2.1.259). */
@@ -45,6 +53,8 @@ export interface RunnerHooks {
    * so its approval is revoked first (#31). A failure here fails the reply: nothing is sent.
    */
   beforeReply?(run: RunSummary, workspace: string): Promise<void>
+  /** The price table turn estimates use (Settings → Pricing); the bundled one when absent. */
+  prices?(): readonly ModelPrice[]
 }
 
 interface Live {
@@ -70,6 +80,14 @@ interface Live {
   releasing?: boolean
   finishing: boolean
   turnStartedAt: number
+  /** Number of the current (or last) turn: user messages sent in this run so far. */
+  turn: number
+  /** A turn was sent and has not ended yet: if the process exits now, its time is still recorded. */
+  turnOpen: boolean
+  /** The model the CLI said it runs (Claude's `init`), else the expected one. */
+  model: string | null
+  /** Per-request usage seen in the current turn, by request id: used only if the turn never ends. */
+  partials: Map<string, PartialUsage>
 }
 
 const STDERR_TAIL = 4000
@@ -135,11 +153,14 @@ export class RunManager {
       outputFolder: null,
       outputFiles: [],
       costUsd: 0,
+      model: ctx.expectedModel ?? ctx.model ?? null,
+      metrics: [],
+      totals: runTotals([]),
       live: true,
       ...(params.unattended ? { unattended: true as const } : {})
     }
     await saveRun(ctx.workspace, run)
-    this.spawnFor(run, ctx, null, 0)
+    this.spawnFor(run, ctx, null, 0, 0)
     const prompt = buildFirstPrompt(params)
     await this.send(run.id, prompt, adapterFor(run.agent).firstMessage(prompt, ctx.systemPrompt))
     return { ...run }
@@ -173,8 +194,12 @@ export class RunManager {
         if (!run.sessionId) throw new Error(`This run has no ${AGENT_LABEL[run.agent]} session to resume.`)
         await this.hooks.beforeReply?.(run, ctx.workspace)
         run.error = undefined
-        const existing = (await readEvents(ctx.workspace, id)).length
-        this.spawnFor(run, ctx, run.sessionId, existing)
+        const events = await readEvents(ctx.workspace, id)
+        // A run recorded before metrics (#44): rebuild them first, so this turn's share of the
+        // CLI's running totals is not counted with everything before it.
+        if (!run.metrics) Object.assign(run, this.backfilled(run, events, ctx))
+        const turns = events.filter(isUserMessage).length
+        this.spawnFor(run, ctx, run.sessionId, events.length, turns)
         entry = this.live.get(id)!
       }
       await this.send(id, text)
@@ -296,7 +321,17 @@ export class RunManager {
     await this.live.get(id)?.queue
   }
 
-  private spawnFor(run: RunSummary, ctx: RunContext, resumeSessionId: string | null, seq: number): void {
+  private prices(): readonly ModelPrice[] {
+    return this.hooks.prices?.() ?? MODEL_PRICES
+  }
+
+  /** `metrics` (and the fields that follow from them) rebuilt from a run's events (see `backfillMetrics`). */
+  private backfilled(run: RunSummary, events: readonly unknown[], ctx: RunContext): Partial<RunSummary> {
+    const { metrics, counters, model } = backfillMetrics(run, events, ctx.expectedModel ?? ctx.model ?? null, this.prices())
+    return { metrics, totals: runTotals(metrics), cliCounters: counters, model, backfilled: true, ...legacyFields(metrics, run.agent) }
+  }
+
+  private spawnFor(run: RunSummary, ctx: RunContext, resumeSessionId: string | null, seq: number, turns: number): void {
     const adapter = adapterFor(run.agent)
     const args = [
       ...(ctx.commandPrefixArgs ?? []),
@@ -323,7 +358,14 @@ export class RunManager {
       finishing: false,
       turnEnded: false,
       turnContent: 0,
-      turnStartedAt: Date.now()
+      turnStartedAt: Date.now(),
+      turn: turns,
+      turnOpen: false,
+      // This process's model: what Huntgry passes or the agent's settings name now (a resume may run
+      // another model than the last turn). Only Claude names its model itself (`init`), so only for
+      // Claude does the last turn's model stand in until then.
+      model: ctx.expectedModel ?? ctx.model ?? (adapter.id === 'claude' ? (run.model ?? null) : null),
+      partials: new Map()
     }
     entry.run.lastOutputAt = new Date().toISOString()
     this.live.set(run.id, entry)
@@ -345,6 +387,8 @@ export class RunManager {
     })
     child.on('close', (code, signal) => {
       for (const line of lines.flush()) this.handleLine(entry, line)
+      // A turn the process did not end (stopped, crashed, killed) still took time.
+      if (entry.turnOpen) this.endTurn(entry, null, false)
       this.live.delete(run.id)
       entry.run.live = false
       // The exit's verdict waits for the writes already queued, the ended turn's folder scan among
@@ -421,6 +465,11 @@ export class RunManager {
     if (!entry) throw new Error('This run is not active.')
     entry.run.status = 'running'
     entry.turnStartedAt = Date.now()
+    entry.turn++
+    entry.turnOpen = true
+    entry.partials = new Map()
+    // Lets the page freeze "waiting for you" while the agent works.
+    entry.run.turnStartedAt = new Date(entry.turnStartedAt).toISOString()
     entry.turnContent = 0
     entry.turnEnded = false
     // A new turn starts now: the stall watchdog counts from here, not from before a long wait.
@@ -453,17 +502,21 @@ export class RunManager {
     }
     this.record(entry, event)
     if (signal.type === 'keep' && signal.content) entry.turnContent++
+    if (signal.type === 'keep' && signal.partial) entry.partials.set(signal.partial.key, signal.partial)
     if (signal.type === 'init') {
       r.sessionId = signal.sessionId
+      if (signal.model) {
+        entry.model = signal.model
+        r.model = signal.model
+      }
       this.touch(entry)
     } else if (signal.type === 'turn-end') {
-      if (signal.costUsd !== undefined) r.costUsd += signal.costUsd
-      if (signal.usage) {
-        r.usage = {
-          inputTokens: (r.usage?.inputTokens ?? 0) + signal.usage.inputTokens,
-          outputTokens: (r.usage?.outputTokens ?? 0) + signal.usage.outputTokens
-        }
-      }
+      // The CLI's counters are the session's running totals: this turn's share is the difference.
+      const share = turnShare(signal, r.cliCounters, signal.model ?? entry.model)
+      r.cliCounters = share.counters
+      // A turn end that reports nothing (Codex `turn.failed`) is not a free turn: it counts as one that
+      // never ended (what was reported per request, else "usage unknown").
+      this.endTurn(entry, reportsUsage(signal) ? { ...share, apiMs: signal.apiMs, model: signal.model } : null, !signal.error)
       if (signal.sessionId) r.sessionId = signal.sessionId
       // A per-turn agent that exits after a turn with no output and nothing done would leave the
       // run waiting for a reply to nothing: fail it instead, so the user sees it and can retry.
@@ -471,7 +524,8 @@ export class RunManager {
         !signal.error &&
         entry.adapter.turnMode === 'exec' &&
         entry.turnContent === 0 &&
-        signal.usage?.outputTokens === 0
+        !!signal.usage &&
+        share.usage.outputTokens === 0
       entry.turnError = signal.error ?? (empty ? `${entry.adapter.label} ended the turn without any answer or action.` : undefined)
       r.error = entry.turnError
       entry.turnEnded = true
@@ -507,6 +561,55 @@ export class RunManager {
     }
   }
 
+  /**
+   * Records the current turn's metrics (#44): active time from `send` to now, the model, the
+   * turn's share of tokens (`null` when the CLI reported none: a stop or a crash) and its price.
+   */
+  private endTurn(
+    entry: Live,
+    share: (Omit<ReturnType<typeof turnShare>, 'counters'> & { apiMs?: number; model?: string }) | null,
+    ok: boolean
+  ): void {
+    const r = entry.run
+    const now = Date.now()
+    const incomplete = share === null
+    if (!share) {
+      // The turn never ended: keep what the CLI reported per request until then (a lower bound).
+      const p = partialShare(entry.partials.values(), entry.model)
+      if (p) {
+        share = p.share
+        r.cliCounters = { ...(r.cliCounters ?? {}), interrupted: p.interrupted }
+      }
+    }
+    entry.partials = new Map()
+    delete r.turnStartedAt
+    const model = share ? turnModel(share, share.model ?? entry.model) : entry.model
+    const turn = turnMetrics(
+      {
+        turn: Math.max(entry.turn, 1),
+        startedAt: new Date(entry.turnStartedAt).toISOString(),
+        endedAt: new Date(now).toISOString(),
+        // Time waiting for the user's reply is not in it: the clock starts at `send`.
+        activeMs: entry.turnOpen ? Math.max(0, now - entry.turnStartedAt) : 0,
+        ...(share?.apiMs !== undefined ? { apiMs: share.apiMs } : {}),
+        model,
+        ok,
+        ...(incomplete ? { usageIncomplete: true as const } : {})
+      },
+      share,
+      this.prices()
+    )
+    entry.turnOpen = false
+    if (model) {
+      entry.model = model
+      r.model = model
+    }
+    r.metrics = [...(r.metrics ?? []), turn]
+    r.totals = runTotals(r.metrics)
+    Object.assign(r, legacyFields(r.metrics, r.agent))
+    if (r.usage === undefined) delete r.usage
+  }
+
   /** Appends an event to `events.jsonl` (in order) and forwards it. */
   private record(entry: Live, event: unknown): void {
     const { workspace } = entry.ctx
@@ -532,6 +635,10 @@ export class RunManager {
 
 function stillWorking(entry: Live): Error {
   return new Error(`${entry.adapter.label} is still working on this turn; reply when it has answered.`)
+}
+
+function isUserMessage(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && (e as HuntgryEvent).type === 'huntgry' && (e as HuntgryEvent).subtype === 'user_message'
 }
 
 function notice(level: 'info' | 'error', text: string): HuntgryEvent {

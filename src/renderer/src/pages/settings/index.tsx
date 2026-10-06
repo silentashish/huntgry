@@ -27,6 +27,7 @@ import {
 } from '@shared/runner-types'
 import { api, errorText } from '../../api'
 import { RemoteCard } from './RemoteCard'
+import { PricingCard } from './PricingCard'
 import { SavedAnswersCard } from './SavedAnswersCard'
 import { StandingApprovalsCard } from './StandingApprovalsCard'
 
@@ -160,6 +161,8 @@ export function SettingsPage() {
           <StandingApprovalsCard />
 
           <SavedAnswersCard />
+
+          <PricingCard />
 
           <Card withBorder radius="md" padding="lg">
             <Title order={4} mb="sm">

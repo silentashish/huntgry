@@ -1,5 +1,7 @@
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { isObj, num, type AgentAdapter, type AgentInvocation } from './types'
+import type { TokenUsage } from '@shared/runner-types'
+import { isObj, num, usageOf, type AgentAdapter, type AgentInvocation, type Json } from './types'
 
 /**
  * Google Antigravity CLI: `agy` in print mode with stream-json in and out, one
@@ -43,6 +45,21 @@ export function buildAntigravityArgs(inv: AgentInvocation): string[] {
   ]
 }
 
+/**
+ * The model agy runs with: Huntgry passes no `--model`, so it is the one chosen in agy's own
+ * settings (`~/.gemini/antigravity-cli/settings.json` → `model`, a display name such as
+ * `Claude Opus 4.6 (Thinking)`). Only used to price the run (#44); `undefined` when unknown.
+ */
+export async function agyModel(home: string): Promise<string | undefined> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(join(home, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8'))
+    const model = isObj(parsed) ? parsed.model : undefined
+    return typeof model === 'string' && /^[\w .:/@()[\]-]{1,200}$/.test(model) ? model : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** `AGY_ERROR: {"short_error": …, "error_code": 429, …}` on stderr → a readable reason. */
 export function explainAgyError(stderr: string): string | null {
   const lines = stderr.split('\n').filter((l) => l.startsWith('AGY_ERROR:'))
@@ -63,6 +80,25 @@ export function explainAgyError(stderr: string): string | null {
   if (info.error_code === 429 || info.status === 'RESOURCE_EXHAUSTED')
     return `Antigravity's quota is used up: ${short} Try again later, or pick another agent.`
   return short
+}
+
+/**
+ * `result.usage` → `TokenUsage` (#44), read the way the Gemini API counts: `input_tokens`
+ * include `cache_read_tokens`, and `thinking_tokens` come on top of `output_tokens` (both billed
+ * as output). When the cache count is larger than the input, the two are taken as separate.
+ * The turn's own counts (one `result` per turn). Not confirmed on a cache hit yet: see
+ * docs/changes/44-run-observability.md.
+ */
+export function agyUsage(u: Json): TokenUsage {
+  const input = num(u.input_tokens)
+  const cached = num(u.cache_read_tokens)
+  const thinking = num(u.thinking_tokens)
+  return usageOf({
+    inputTokens: cached <= input ? input - cached : input,
+    cacheReadTokens: cached,
+    outputTokens: num(u.output_tokens) + thinking,
+    reasoningTokens: thinking
+  })
 }
 
 export const antigravity: AgentAdapter = {
@@ -86,7 +122,9 @@ export const antigravity: AgentAdapter = {
       return {
         type: 'turn-end',
         sessionId: typeof r.conversation_id === 'string' && r.conversation_id ? r.conversation_id : undefined,
-        usage: { inputTokens: num(u.input_tokens), outputTokens: num(u.output_tokens) },
+        usage: agyUsage(u),
+        usageScope: 'turn',
+        ...(num(r.duration_seconds) > 0 ? { durationMs: Math.round(num(r.duration_seconds) * 1000) } : {}),
         error: ok ? undefined : (typeof r.error === 'string' && r.error) || `Antigravity ended the turn: ${String(r.status)}`
       }
     }

@@ -12,6 +12,7 @@ import {
 import { MAX_BUDGET_USD, PIPELINE_STATUS_LABEL, type PipelineState } from '@shared/pipeline-types'
 import { MAX_ENQUEUE, type QueueState } from '@shared/queue-types'
 import { AGENT_LABEL } from '@shared/runner-types'
+import type { RunSummary } from '@shared/runner-types'
 import { api, errorText } from '../../api'
 import { useNow } from '../../components/queue/usePipeline'
 import { progress, statusLine } from '../jobs/pipeline-plan'
@@ -25,10 +26,12 @@ interface Props {
   onPipelineChange(state: PipelineState | null): void
   onOpenRun(runId: string): void
   onReview(applicationId: string): void
+  /** The runs of the items, by id, for their time · tokens · cost badge (#44). */
+  runs?: ReadonlyMap<string, RunSummary>
 }
 
 /** The unattended pipeline (#31): progress, what it waits for, its controls, and its jobs. */
-export function PipelinePanel({ state, queue, onQueueChange, onPipelineChange, onOpenRun, onReview }: Props) {
+export function PipelinePanel({ state, queue, onQueueChange, onPipelineChange, onOpenRun, onReview, runs }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [raise, setRaise] = useState<{ maxCostUsd: number | string; maxJobs: number | string } | null>(null)
   const now = useNow(15_000)
@@ -203,7 +206,14 @@ export function PipelinePanel({ state, queue, onQueueChange, onPipelineChange, o
 
         <Stack gap={6}>
           {queue.items.map((item) => (
-            <QueueRow key={item.id} item={item} onAct={queueAct} onOpenRun={onOpenRun} onReview={onReview} />
+            <QueueRow
+              key={item.id}
+              item={item}
+              run={item.runId ? runs?.get(item.runId) : undefined}
+              onAct={queueAct}
+              onOpenRun={onOpenRun}
+              onReview={onReview}
+            />
           ))}
         </Stack>
       </Stack>

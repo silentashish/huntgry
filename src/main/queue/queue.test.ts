@@ -126,6 +126,19 @@ describe('TailorQueue', () => {
     expect(started[0].params.jobDescription).toContain('Build APIs.')
   })
 
+  it('gives every job of one request the same batch id and records it on the runs (#44)', async () => {
+    for (const id of ['url:a', 'url:b', 'url:c']) jobs.set(id, job(id))
+    await queue.enqueue({ jobIds: ['url:a', 'url:b'], options, concurrency: 2 })
+    await queue.enqueue({ jobIds: ['url:c'], options })
+    const s = await until(all('needs-reply'))
+    const [a, b, c] = s.items.map((i) => i.batchId)
+    expect(a).toMatch(/^b-\d{8}-\d{6}-[0-9a-f]{6}$/)
+    expect(b).toBe(a)
+    expect(c).not.toBe(a)
+    expect(started.map((x) => x.params.batchId).sort()).toEqual([a, a, c].sort())
+    expect((await readRun(ws, s.items[0].runId!)).params.batchId).toBe(a)
+  })
+
   it('never has more than `concurrency` runs working at once', async () => {
     for (const id of ['url:a', 'url:b', 'url:c']) jobs.set(id, job(id))
     // SLOW keeps each first turn busy for 300 ms.

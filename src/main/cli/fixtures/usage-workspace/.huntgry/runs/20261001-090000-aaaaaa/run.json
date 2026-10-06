@@ -1,0 +1,62 @@
+{
+  "id": "20261001-090000-aaaaaa",
+  "title": "Engineer \u00b7 Acme (aaaaaa)",
+  "params": {
+    "jobDescription": "x",
+    "company": "Acme",
+    "role": "Engineer",
+    "coverLetter": false,
+    "dateStyle": "right",
+    "batchId": "b-20261001-085959-111111"
+  },
+  "agent": "claude",
+  "status": "finished",
+  "sessionId": "s",
+  "createdAt": "2026-10-01T09:00:00.000Z",
+  "updatedAt": "2026-10-01T11:00:00.000Z",
+  "outputFolder": "engineer/acme/1",
+  "outputFiles": [
+    "build-report.json",
+    "resume.pdf"
+  ],
+  "costUsd": 0.0359246,
+  "live": false,
+  "model": "claude-haiku-4-5-20251001",
+  "metrics": [
+    {
+      "turn": 1,
+      "startedAt": "2026-10-01T09:00:00.000Z",
+      "endedAt": "2026-10-01T09:01:00Z",
+      "activeMs": 60000,
+      "model": "claude-haiku-4-5-20251001",
+      "usage": {
+        "inputTokens": 18,
+        "cacheReadTokens": 32976,
+        "cacheWriteTokens": 10782,
+        "outputTokens": 209,
+        "reasoningTokens": 82,
+        "cacheWrite1hTokens": 10782
+      },
+      "estimatedCostUsd": null,
+      "ok": true,
+      "reportedCostUsd": 0.0259246
+    },
+    {
+      "turn": 2,
+      "startedAt": "2026-10-01T10:30:00.000Z",
+      "endedAt": "2026-10-01T10:32:00Z",
+      "activeMs": 120000,
+      "model": "claude-haiku-4-5-20251001",
+      "usage": {
+        "inputTokens": 1000,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 1800,
+        "reasoningTokens": 0
+      },
+      "estimatedCostUsd": null,
+      "ok": true,
+      "reportedCostUsd": 0.01
+    }
+  ]
+}

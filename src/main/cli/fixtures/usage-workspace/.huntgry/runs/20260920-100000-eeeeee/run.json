@@ -1,0 +1,21 @@
+{
+  "id": "20260920-100000-eeeeee",
+  "title": "Engineer \u00b7 Acme (eeeeee)",
+  "params": {
+    "jobDescription": "x",
+    "company": "Acme",
+    "role": "Engineer",
+    "coverLetter": false,
+    "dateStyle": "right"
+  },
+  "agent": "claude",
+  "status": "finished",
+  "sessionId": "s",
+  "createdAt": "2026-09-20T10:00:00.000Z",
+  "updatedAt": "2026-09-20T10:20:00.000Z",
+  "outputFolder": null,
+  "outputFiles": [],
+  "costUsd": 0.0518492,
+  "live": false,
+  "model": null
+}

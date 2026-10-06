@@ -180,7 +180,11 @@ describe('fake codex', () => {
     expect(first.code).toBe(0)
     const sig = signals('codex', first.events)
     expect(sig[0]).toMatchObject({ type: 'init', sessionId: expect.stringMatching(/^codex-session-/) })
-    expect(sig[sig.length - 1]).toEqual({ type: 'turn-end', usage: { inputTokens: 1200, outputTokens: 80 } })
+    expect(sig[sig.length - 1]).toEqual({
+      type: 'turn-end',
+      usage: { inputTokens: 1200, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 80, reasoningTokens: 0 },
+      usageScope: 'session'
+    })
     expect(sig.filter((s) => s.type === 'keep' && s.content)).toHaveLength(4)
     const t = buildTranscript(first.events, 'codex')
     expect(t.map((i) => i.kind)).toEqual(['assistant', 'tool', 'assistant', 'result'])

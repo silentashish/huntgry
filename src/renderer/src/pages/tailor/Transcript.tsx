@@ -16,11 +16,12 @@ import {
 import { IconAlertTriangle, IconCheck, IconChevronRight, IconLoader2, IconTool, IconX } from '@tabler/icons-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { TranscriptItem } from '@shared/runner-types'
+import type { TranscriptItem, TurnMetrics } from '@shared/runner-types'
 import { formatUsage } from '@shared/transcript'
+import { turnFooter } from '../../components/usage/format'
 
 /** The conversation: the user's messages, the agent's replies (Markdown), compact tool calls and turn results. */
-export function Transcript({ items }: { items: TranscriptItem[] }) {
+export function Transcript({ items, metrics = [] }: { items: TranscriptItem[]; metrics?: TurnMetrics[] }) {
   return (
     <Stack gap="sm">
       {items.map((item) => {
@@ -43,14 +44,20 @@ export function Transcript({ items }: { items: TranscriptItem[] }) {
             )
           case 'tool':
             return <ToolRow key={item.id} item={item} />
-          case 'result':
+          case 'result': {
+            // The same time · tokens · est. cost for every agent (#44); the raw CLI figures for an unmeasured turn.
+            const turn = item.turn ? metrics.find((m) => m.turn === item.turn) : undefined
             return (
               <Stack key={item.id} gap={4}>
                 <Text size="xs" c="dimmed" ta="center">
                   {[
                     item.ok ? 'Turn finished' : `Turn ended with an error: ${item.text}`,
-                    item.usage ? formatUsage(item.usage) : `$${item.costUsd.toFixed(2)}`,
-                    ...(item.durationMs > 0 ? [`${Math.round(item.durationMs / 1000)}s`] : [])
+                    ...(turn
+                      ? [turnFooter(turn)]
+                      : [
+                          item.usage ? formatUsage(item.usage) : `$${item.costUsd.toFixed(2)}`,
+                          ...(item.durationMs > 0 ? [`${Math.round(item.durationMs / 1000)}s`] : [])
+                        ])
                   ].join(' · ')}
                 </Text>
                 {item.denials.length > 0 && (
@@ -70,6 +77,7 @@ export function Transcript({ items }: { items: TranscriptItem[] }) {
                 )}
               </Stack>
             )
+          }
           case 'notice':
             return (
               <Alert key={item.id} color={item.level === 'error' ? 'red' : 'gray'} variant="light">

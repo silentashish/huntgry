@@ -1,6 +1,7 @@
 import type { QueueItemOutcome, QueueItemStatus } from '@shared/queue-types'
 import { AGENT_LABEL, type AgentId, type RunStatus, type RunSummary } from '@shared/runner-types'
 import { formatUsage } from '@shared/transcript'
+import { runBadge } from '../../components/usage/format'
 
 export const STATUS_LABEL: Record<RunStatus, { label: string; color: string }> = {
   running: { label: 'Working', color: 'blue' },
@@ -25,9 +26,9 @@ export function runStatusLabel(status: RunStatus, agent: AgentId): string {
   return status === 'running' ? `${AGENT_LABEL[agent]} is working` : STATUS_LABEL[status].label
 }
 
-/** What a run cost: dollars for Claude, tokens for agents that report no price. */
-export function runCost(run: Pick<RunSummary, 'costUsd' | 'usage'>): string {
-  return run.usage && run.costUsd === 0 ? formatUsage(run.usage) : `$${run.costUsd.toFixed(2)}`
+/** What a run took: `2m 14s · 48k tok · $0.31` (#44); the CLI's own figure for a run with no metrics. */
+export function runCost(run: Pick<RunSummary, 'costUsd' | 'usage' | 'totals'>): string {
+  return runBadge(run) ?? (run.usage && run.costUsd === 0 ? formatUsage(run.usage) : `$${run.costUsd.toFixed(2)}`)
 }
 
 /** Mantine color of each agent's badge. */

@@ -9,12 +9,30 @@
 //   "EMPTY" -> ends the turn with no item and zero output tokens, exits 0
 //   "REASONING_ONLY" -> ends the turn with only a reasoning item (still zero output tokens reported)
 // The agent message echoes the prompt, the cwd and whether this was a resume.
-import { mkdirSync, writeFileSync } from 'node:fs'
+// Like the real CLI, `turn.completed.usage` is the thread's running total (a resume continues it):
+// kept in <cwd>/.fake-codex-<thread>.json between processes.
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 
 const argv = process.argv.slice(2)
 const resumeIdx = argv.indexOf('resume')
 const thread = resumeIdx >= 0 ? argv[resumeIdx + 1] : 'thread-fake-1'
 const out = (e) => process.stdout.write(`${JSON.stringify(e)}\n`)
+const countsFile = `${process.cwd()}/.fake-codex-${thread}.json`
+const zero = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 }
+let counts = zero
+if (resumeIdx >= 0) {
+  try {
+    counts = JSON.parse(readFileSync(countsFile, 'utf8'))
+  } catch {
+    counts = zero
+  }
+}
+/** Adds this turn's tokens to the thread's totals and reports the totals. */
+const completed = (input, output) => {
+  counts = { input_tokens: counts.input_tokens + input, cached_input_tokens: 0, output_tokens: counts.output_tokens + output }
+  writeFileSync(countsFile, JSON.stringify(counts))
+  out({ type: 'turn.completed', usage: counts })
+}
 
 let text = ''
 process.stdin.setEncoding('utf8')
@@ -29,7 +47,7 @@ if (text.includes('CRASH')) {
 if (text.includes('SILENT')) process.exit(0)
 if (text.includes('EMPTY') || text.includes('REASONING_ONLY')) {
   if (text.includes('REASONING_ONLY')) out({ type: 'item.completed', item: { id: 'item_0', type: 'reasoning', text: 'thinking' } })
-  out({ type: 'turn.completed', usage: { input_tokens: 500, cached_input_tokens: 0, output_tokens: 0 } })
+  completed(500, 0)
   process.exit(0)
 }
 if (text.includes('USAGE_LIMIT')) {
@@ -53,5 +71,5 @@ out({
   type: 'item.completed',
   item: { id: 'item_1', type: 'agent_message', text: `echo: ${text.slice(0, 40)} | cwd=${process.cwd()} | resume=${resumeIdx >= 0}` }
 })
-out({ type: 'turn.completed', usage: { input_tokens: 1000, cached_input_tokens: 0, output_tokens: 50 } })
+completed(1000, 50)
 process.exit(0)

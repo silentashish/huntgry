@@ -7,6 +7,7 @@ import { requireCurrentWorkspace, settingsFile } from '../current-workspace'
 import { emit } from '../events'
 import { loadSettings, saveSettings } from '../workspace'
 import { adapterFor, agentOr } from './agents'
+import { agyModel } from './agents/antigravity'
 import { codexModel } from './agents/codex'
 import { skillStatus } from './agents/skills'
 import { buildSystemPrompt, requireStartParams, texRootOf, type UnattendedPromptOptions } from './command'
@@ -19,6 +20,7 @@ import { RunManager, type RunContext } from './runner'
 import { readRun } from './runs'
 import { approvalsForPrompt, loadApprovals } from '../review/approvals'
 import { reopenForContinuation } from '../review/authority'
+import { currentPrices, withPrices } from './usage'
 import { claudeVersion, supportsPermissionPrompts } from './version'
 
 /**
@@ -34,14 +36,15 @@ const runListeners = new Set<(run: RunSummary) => void>()
 export const manager = new RunManager({
   onEvent: (runId, seq, event) => emit('runner:event', { runId, seq, event }),
   onRun: (run) => {
-    emit('runner:run', run)
+    emit('runner:run', withPrices(run))
     for (const listener of runListeners) listener(run)
   },
   // Every continuation of an unattended result (Tailor reply, Review re-run, nudge) revokes its approval first.
   beforeReply: async (run, workspace) => {
     if ((run.unattended || run.params.unattended) && run.outputFolder)
       await reopenForContinuation(workspace, run.outputFolder, run.id, new Date())
-  }
+  },
+  prices: currentPrices
 })
 
 /** Called with every run summary change (the bulk queue follows its runs this way). */
@@ -169,7 +172,10 @@ async function otherAgentContext(
     sandbox: { workspace: workspace.path, skillDir: skill.path, venvDir: venvDir(), texRoot, extraRead: allow },
     command: cliPath,
     env: buildChildEnv({ base: process.env, workspace: workspace.path, venvDir: venvDir(), texBin, loginPath }),
-    model: agent === 'codex' ? await codexModel(homedir()) : undefined,
+    ...(agent === 'codex'
+      ? { model: await codexModel(homedir()) }
+      : // agy gets no --model: it runs the model of its own settings, read only to price the run (#44).
+        { expectedModel: (await agyModel(homedir())) ?? null }),
     systemPrompt: buildSystemPrompt({ workspace: workspace.path, masterProfile: workspace.masterProfile, skillDir: skill.path, unattended })
   }
 }

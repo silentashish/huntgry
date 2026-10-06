@@ -36,6 +36,7 @@ import { useKnowledgeGraph } from '../../components/graph/useKnowledgeGraph'
 import { useNavigation } from '../../navigation'
 import { ApplicationDrawer, BuildBadge } from './ApplicationDrawer'
 import { LastPipelineCard } from './LastPipelineCard'
+import { UsageCard } from './UsageCard'
 import { ReviewBadge } from './ReviewBadge'
 import { PROFILE_SAVED_EVENT, ProfileInsightsCard } from './ProfileInsightsCard'
 import { countByStatus, DEFAULT_FILTER, filterApplications, type Filter, type SortKey } from './filter'
@@ -128,6 +129,8 @@ export function DashboardPage() {
       )}
 
       {list && <LastPipelineCard />}
+
+      {list && <UsageCard onOpenRun={(runId) => navigate('tailor', { runId })} />}
 
       {list && apps.length === 0 && (
         <Card withBorder radius="md" padding="xl">
