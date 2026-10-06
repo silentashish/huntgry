@@ -217,17 +217,17 @@ Before (main) / after (this branch), the e2e demo workspace with the fake agents
 
 | | Before | After |
 | --- | --- | --- |
-| Tailor run | ![](44-images/before-tailor-run.png) | ![](44-images/after-tailor-run.png) |
-| Dashboard | ![](44-images/before-dashboard.png) | ![](44-images/after-dashboard.png) |
-| Settings | ![](44-images/before-settings.png) | ![](44-images/after-settings.png) |
+| Tailor run | ![Before: Tailor run view on main, only a dollar figure in the run header](44-images/before-tailor-run.png) | ![After: Tailor run view with the metrics strip (active time, waiting time, model, tokens, estimated API cost) and the per-turn table](44-images/after-tailor-run.png) |
+| Dashboard | ![Before: Dashboard on main, applications only, no usage figures](44-images/before-dashboard.png) | ![After: Dashboard Usage card with runs, active time, tokens and estimated cost, the agent by model table and the per-day chart](44-images/after-dashboard.png) |
+| Settings | ![Before: Settings on main, with no Pricing card](44-images/before-settings.png) | ![After: Settings with the Pricing card, the Sync prices button and the bundled price table](44-images/after-settings.png) |
 
 Real bulk run (3 jobs by "Tailor all": two on Claude Haiku 4.5, one on Codex gpt-6.1-sol, each
 stopped at the approval step), then **Sync prices** against LiteLLM:
 
-![](44-images/real-tailor-claude-haiku.png)
-![](44-images/real-tailor-codex.png)
-![](44-images/real-dashboard.png)
-![](44-images/real-settings-pricing-synced.png)
+![Real bulk run: Claude Haiku 4.5 run strip, 32 s active, 148k tokens, $0.09 estimated, equal to Claude's reported cost, with the queue above](44-images/real-tailor-claude-haiku.png)
+![Real bulk run: Codex gpt-6.1-sol run strip, 21 s active, 126k tokens, $0.06 estimated](44-images/real-tailor-codex.png)
+![Real bulk run: Dashboard Usage card, 3 runs, 1m 22s active, 483k tokens, $0.20 estimated, split into Claude Haiku and Codex rows, with the bulk-request total](44-images/real-dashboard.png)
+![Real bulk run: Settings, Pricing after a live sync from LiteLLM, 103 models, rows marked synced](44-images/real-settings-pricing-synced.png)
 
 ## Decisions and alternatives rejected
 
