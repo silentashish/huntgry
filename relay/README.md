@@ -73,7 +73,8 @@ relay validates every body with the same guards, so an unknown field is a `400`.
 `/ws` has no room in its URL, so the Worker accepts the socket, reads the `{ auth }` frame,
 opens a socket to that room's Durable Object, hands it the frame unchanged and then forwards
 both ways without reading anything; the room checks the credential exactly as on a direct
-socket, and its close codes reach the client unchanged. The cost is that the Worker stays in
+socket, and its close codes reach the client unchanged. Until the room answers it holds at
+most 16 frames and 128 KiB (one frame at most 64 KiB); more closes the socket with `1009`. The cost is that the Worker stays in
 the path for the socket's life and spends a little CPU on every frame it forwards.
 `/rooms/:room/ws` connects the client to the Durable Object directly, with no Worker in the
 path; the room id is not a credential (ADR-0001 lists it among what the relay learns). It is
@@ -88,7 +89,8 @@ Everything is `https://` / `wss://` only; a plain `http://` request gets `400`.
 The first frame is a `RelayClientFrame.auth` (`{ room, owner }` for the desktop,
 `{ room, pairing }` during pairing, `{ room, device, token }` afterwards). A socket that has not
 authenticated within 5 s is closed (`4003`); a wrong credential closes with `4002`; a new
-socket for the same identity replaces the old one (`4000`); a revoked or replaced device token
+socket for the same identity replaces the old one (`4000`); a client-initiated close is
+answered with the same code; a revoked or replaced device token
 closes with `4001`, a deleted room with `4004`, a missed desktop heartbeat with `4005` and an
 expired pairing with `4006`. After auth:
 
@@ -108,7 +110,13 @@ expired pairing with `4006`. After auth:
   too: at most 50 frames from one phone wait for an offline desktop; the oldest go first and
   the phone gets `{ expired: true, ref }` for each.
 - The desktop counts as offline after two missed heartbeats (any frame counts; 30 s period).
-- 60 frames per minute per connection; over it the socket closes (`1008`).
+- 60 frames per minute per connection; over it the socket closes (`1008`). The window is kept
+  with the socket's attachment, so it survives the room hibernating between bursts.
+- A retransmission (the same sender, recipient and `ref` still queued) is not stored or
+  delivered twice. When a phone's inbox already holds 50 *results* and no event is left to
+  drop, a further result is refused before its command ack is consumed: the desktop gets
+  `{ expired: true, ref }`, the command stays queued, and the desktop answers it again when it
+  is redelivered after the phone has drained its inbox.
 
 ### Push
 
@@ -116,7 +124,16 @@ A desktop frame with `pushHint` triggers one Expo push **only** when that phone 
 socket: title `Huntgry`, the fixed body for the category (`A run needs your reply`,
 `Paused: usage limit`, `Pipeline finished`, `Results need your review`, `Something failed`),
 `data: { category }`, and `pushText` as the body only when present. One push per category per
-5 minutes per device. A `DeviceNotRegistered` ticket deletes the token.
+5 minutes per device; a push Expo refuses for any other reason does not count toward that
+window, so the next hint in the category tries again (there is no retry of its own yet).
+
+A dead token is deleted in two places. A `DeviceNotRegistered` *ticket* deletes it at once.
+An `ok` ticket only means Expo accepted the message: APNs or FCM may report the token dead
+later, in the *receipt*. The room keeps each ok ticket's id with the token it went to
+(at most 1000 per room), reads the receipts `PUSH_RECEIPT_DELAY_SECONDS` (900) after the push
+from `getReceipts`, and deletes the token on `DeviceNotRegistered` if it is still the device's
+token. A ticket with no receipt yet, or a failed receipts call, is asked again one delay later,
+for at most a day (Expo's retention).
 
 ## Free plan limits
 
@@ -130,14 +147,39 @@ duration a day and 5 GB of storage. Three things keep a room inside that:
 - **Hibernation.** Sockets use the WebSocket Hibernation API, so a room with idle sockets is
   evicted from memory and bills no duration; it wakes for a frame, a close or its alarm. One
   WebSocket message costs 1/20 of a request on the DO side.
-- **One alarm.** Auth deadlines, pairing expiry, the heartbeat check and the next frame expiry share one alarm;
-  a room with no sockets and nothing queued schedules none.
+- **One alarm.** Auth deadlines, pairing expiry, the heartbeat check, the next frame expiry
+  and the next push receipt share one alarm; a room with no sockets, nothing queued and no
+  receipt to read schedules none.
 - **Small rows.** A frame is at most 64 KiB and each direction of a phone's queue holds at most
   50 of them.
 
 In practice a desktop heartbeat every 30 s is ~2 900 messages a day, well under the daily
 request allowance even with a few phones. The dashboard should show close to zero duration
 while nothing is happening.
+
+**SQLite row quotas.** The Free plan also meters
+[SQLite storage operations](https://developers.cloudflare.com/durable-objects/platform/pricing/#sqlite-storage-backend):
+5 million rows read and 100 000 rows written a day, across the account. Every insert, update
+and delete counts, each index the row is in adds one written row, and setting an alarm counts
+too. The relay's writes, roughly:
+
+| Event | Rows written |
+| --- | --- |
+| Any desktop frame (presence timestamp) | 1 |
+| A frame queued (`inbox` row and its two indexes) | ~3 |
+| Its ack or expiry (delete) | ~3 |
+| An alarm moved earlier | 1 |
+| A push (coalescing row, receipt row and index, receipt delete) | ~5 |
+
+A heartbeat to one active phone is about 8 rows, so ~23 000 rows a day while a phone stays
+active around the clock. The desktop (#36) only sends heartbeats to phones seen in the last
+5 minutes, so a normal day is far below that, but several phones kept active all day can
+reach the 100 000-row limit. Reads are dominated by the per-frame counts (cap, presence) and
+stay far below 5 million. When a daily limit is exhausted, storage calls fail until the reset
+at 00:00 UTC: the room cannot queue a frame, and a frame that fails to store closes its socket
+with `1008`. Watch **rows read**
+and **rows written** in the Durable Objects metrics of the Cloudflare dashboard after
+deploying; Workers Paid lifts both limits.
 
 ## Tests
 
