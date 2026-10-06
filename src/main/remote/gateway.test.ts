@@ -575,6 +575,21 @@ describe('Gateway: redelivery identity, revocation, storage failures and workspa
     expect(reply.result.error?.code).toBe('denied')
   })
 
+  it('after a restart, a phone paired again under the same id is not held to the old pairing’s seq', async () => {
+    for (let i = 0; i < 3; i++) expect((await send('queue.get')).result.ok).toBe(true)
+    // Paired again: same device id, new keys and sid, counter back at 0.
+    const repaired = fakePhone((await devices.keyPair())!, 'Same phone', phone.id)
+    await devices.add(repaired.record)
+    await devices.flush()
+    const reloaded = new DeviceStore(dir, fakeCipher())
+    await reloaded.load()
+    const restarted = new Gateway(services, reloaded)
+    const reply = await restarted.handle(reloaded.get(phone.id)!, command(repaired, 'queue.get', undefined, identity.id, { ts: at() }))
+    expect(reply.result.ok).toBe(true)
+    expect(reloaded.get(phone.id)!.needsRepair).toBe(false)
+    expect(reloaded.get(phone.id)!.lastSeq).toBe(1)
+  })
+
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('rejects (so the frame is not acked) when the write-ahead entry cannot be written, and runs once after', async () => {
     await queue.setPaused(false)
     const pause = command(phone, 'queue.setPaused', { paused: true }, identity.id, { ts: at() })

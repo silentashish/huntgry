@@ -11,7 +11,9 @@ import { syncDir } from './durable'
  * - `{ id, deviceId, seq, name, started: true }` is written and fsynced **before** a mutating
  *   command executes; `{ id, deviceId, seq, name, ok, result | error }` after it. Reads and
  *   rejected frames get only the second kind.
- * - `lastSeq` per device is derived from it on start (`devices.json` is a checkpoint).
+ * - `lastSeq` per device is derived from it on start (`devices.json` is a checkpoint), per
+ *   pairing: entries carry the pairing's `sid`, so a phone paired again under the same device
+ *   id (counter back at 0) is not held to the old pairing's sequence.
  * - An index of the last `INDEX_SIZE` (device, command id) pairs answers redeliveries: a
  *   finished id returns its stored result, a started one is `interrupted`, an unknown one
  *   executes. Each entry keeps the original `seq` and a digest of the envelope, so only an
@@ -32,6 +34,8 @@ export interface AuditStart {
   name: string
   /** `envelopeDigest` of the command, so a redelivery can be told from a reused id. */
   digest?: string
+  /** The pairing (`DeviceRecord.sid`) the frame came under. */
+  sid?: string
   started: true
 }
 
@@ -49,6 +53,7 @@ export interface AuditFinish {
   /** A read: no write-ahead entry, may run again on redelivery. */
   read?: true
   digest?: string
+  sid?: string
 }
 
 export type AuditEntry = AuditStart | AuditFinish
@@ -68,6 +73,10 @@ export const interruptedError = (): EnvelopeError => ({ ...INTERRUPTED })
 export class AuditLog {
   private index = new Map<string, Known>()
   private lastSeq = new Map<string, number>()
+  /** Highest seq per (device, pairing sid). */
+  private lastSeqBySid = new Map<string, number>()
+  /** Entries written before `sid` was recorded: their seq and time, per device. */
+  private legacy = new Map<string, { seq: number; ts: string }[]>()
   private writing: Promise<void> = Promise.resolve()
 
   constructor(
@@ -83,6 +92,8 @@ export class AuditLog {
   async load(): Promise<void> {
     this.index.clear()
     this.lastSeq.clear()
+    this.lastSeqBySid.clear()
+    this.legacy.clear()
     let text: string
     try {
       text = await readFile(this.file, 'utf8')
@@ -120,6 +131,14 @@ export class AuditLog {
     if (typeof entry.seq === 'number') {
       const prev = this.lastSeq.get(entry.deviceId) ?? 0
       if (entry.seq > prev) this.lastSeq.set(entry.deviceId, entry.seq)
+      if (typeof entry.sid === 'string') {
+        const k = key(entry.deviceId, entry.sid)
+        if (entry.seq > (this.lastSeqBySid.get(k) ?? 0)) this.lastSeqBySid.set(k, entry.seq)
+      } else {
+        const list = this.legacy.get(entry.deviceId) ?? []
+        list.push({ seq: entry.seq, ts: typeof entry.ts === 'string' ? entry.ts : '' })
+        this.legacy.set(entry.deviceId, list)
+      }
     }
     const k = key(entry.deviceId, entry.id)
     const identity = (known: Known): Known => {
@@ -153,8 +172,19 @@ export class AuditLog {
   }
 
   /** Highest `seq` the log proves accepted for a device (0 when none). */
-  lastSeqOf(deviceId: string): number {
-    return this.lastSeq.get(deviceId) ?? 0
+  /**
+   * Highest `seq` the log proves accepted for a device: for `pairing`, only under that pairing's
+   * `sid`, plus entries without a `sid` written at or after `pairedAt` (older logs); without
+   * `pairing`, over every pairing.
+   */
+  lastSeqOf(deviceId: string, pairing?: { sid: string; pairedAt: string }): number {
+    if (!pairing) return this.lastSeq.get(deviceId) ?? 0
+    let max = this.lastSeqBySid.get(key(deviceId, pairing.sid)) ?? 0
+    const since = Date.parse(pairing.pairedAt)
+    for (const e of this.legacy.get(deviceId) ?? []) {
+      if (e.seq > max && Date.parse(e.ts) >= since) max = e.seq
+    }
+    return max
   }
 
   /** Appends the write-ahead entry and fsyncs; resolves only when it is durable. */

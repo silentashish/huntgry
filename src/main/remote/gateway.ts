@@ -191,7 +191,8 @@ export class Gateway {
       pending = (async () => {
         const log = this.openAudit(workspace)
         await log.load()
-        for (const d of this.devices.list()) this.devices.raiseLastSeq(d.id, log.lastSeqOf(d.id))
+        // Per pairing: a phone paired again under the same id starts its counter over.
+        for (const d of this.devices.list()) this.devices.raiseLastSeq(d.id, log.lastSeqOf(d.id, d))
         return log
       })()
       this.logs.set(workspace, pending)
@@ -289,13 +290,13 @@ export class Gateway {
       if (isReadCommand(command.name)) {
         await this.requireSameWorkspace(workspace)
         const body = await this.execute(device, command, workspace)
-        await durable(audit.finish({ id: envelope.id, deviceId: device.id, seq, name: command.name, ok: true, read: true, digest, ts: at }))
+        await durable(audit.finish({ id: envelope.id, deviceId: device.id, sid: device.sid, seq, name: command.name, ok: true, read: true, digest, ts: at }))
         await durable(this.devices.accept(device.id, seq, at))
         return { result: { kind: 'result', re: envelope.id, ok: true, body, ttl: envelope.ttl }, ack }
       }
 
       this.services.crashAt?.('before-start', command.name)
-      await durable(audit.start({ id: envelope.id, deviceId: device.id, seq, name: command.name, digest, ts: at }))
+      await durable(audit.start({ id: envelope.id, deviceId: device.id, sid: device.sid, seq, name: command.name, digest, ts: at }))
       await durable(this.devices.accept(device.id, seq, at))
       this.services.crashAt?.('after-start', command.name)
       let body: unknown
@@ -308,11 +309,11 @@ export class Gateway {
         if (err instanceof SimulatedCrash) throw err
         const error = errorOf(err)
         if (!(err instanceof ProtocolError)) console.error(`[remote] ${command.name} from ${device.name} failed:`, err)
-        await durable(audit.finish({ id: envelope.id, deviceId: device.id, seq, name: command.name, ok: false, error, digest }))
+        await durable(audit.finish({ id: envelope.id, deviceId: device.id, sid: device.sid, seq, name: command.name, ok: false, error, digest }))
         return { result: { kind: 'result', re: envelope.id, ok: false, error, body: null, ttl: envelope.ttl }, ack }
       }
       this.services.crashAt?.('after-execute', command.name)
-      await durable(audit.finish({ id: envelope.id, deviceId: device.id, seq, name: command.name, ok: true, result: body, digest }))
+      await durable(audit.finish({ id: envelope.id, deviceId: device.id, sid: device.sid, seq, name: command.name, ok: true, result: body, digest }))
       this.services.crashAt?.('after-finish', command.name)
       return { result: { kind: 'result', re: envelope.id, ok: true, body, ttl: envelope.ttl }, ack }
     } catch (err) {
@@ -322,7 +323,7 @@ export class Gateway {
       const error = errorOf(err)
       if (!(err instanceof ProtocolError)) console.error(`[remote] ${name} from ${given.name} failed:`, err)
       // Rejected frames are audited too (device, name, outcome); without a seq when it was never accepted.
-      const entry = { id, deviceId: given.id, name, ok: false as const, error, ts: at }
+      const entry = { id, deviceId: given.id, sid: given.sid, name, ok: false as const, error, ts: at }
       if (audit) await durable(audit.finish(seq === undefined ? entry : { ...entry, seq, digest }))
       if (seq !== undefined) await durable(this.devices.accept(given.id, seq, at))
       return { result: { kind: 'result', re: id, ok: false, error, body: null, ttl: envelope.ttl }, ack }
@@ -378,7 +379,7 @@ export class Gateway {
     const workspace = await this.services.workspace().catch(() => null)
     if (!workspace) return
     const audit = await durable(this.auditFor(workspace.path))
-    await durable(audit.finish({ id: ref, deviceId: device.id, name: 'unknown', ok: false, error, ts: new Date(this.now()).toISOString() }))
+    await durable(audit.finish({ id: ref, deviceId: device.id, sid: device.sid, name: 'unknown', ok: false, error, ts: new Date(this.now()).toISOString() }))
   }
 
   /** A redelivered id: finished → the stored result, started → interrupted. */

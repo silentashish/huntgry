@@ -99,4 +99,19 @@ describe('AuditLog', () => {
     await log.start({ id: 'c3', deviceId: 'd1', seq: 2, name: 'queue.setPaused' })
     expect(log.lookup('d1', 'c3')).toMatchObject({ state: 'started' })
   })
+
+  it('derives lastSeq per pairing sid; entries without a sid count only from the current pairing on', async () => {
+    const log = AuditLog.forWorkspace(ws)
+    await log.load()
+    await log.finish({ id: 'legacy-old', deviceId: 'd1', seq: 9, name: 'queue.get', ok: true, read: true, ts: '2026-09-01T00:00:00.000Z' })
+    await log.finish({ id: 'a1', deviceId: 'd1', sid: 'sid-a', seq: 7, name: 'queue.get', ok: true, read: true })
+    await log.finish({ id: 'legacy-new', deviceId: 'd1', seq: 2, name: 'queue.get', ok: true, read: true, ts: '2026-10-02T00:00:00.000Z' })
+    await log.finish({ id: 'b1', deviceId: 'd1', sid: 'sid-b', seq: 1, name: 'queue.get', ok: true, read: true })
+    const again = AuditLog.forWorkspace(ws)
+    await again.load()
+    expect(again.lastSeqOf('d1')).toBe(9)
+    expect(again.lastSeqOf('d1', { sid: 'sid-b', pairedAt: '2026-10-01T00:00:00.000Z' })).toBe(2)
+    expect(again.lastSeqOf('d1', { sid: 'sid-a', pairedAt: '2026-08-01T00:00:00.000Z' })).toBe(9)
+  })
 })
+
