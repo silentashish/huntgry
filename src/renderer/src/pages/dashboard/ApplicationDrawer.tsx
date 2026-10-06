@@ -18,8 +18,10 @@ import {
 } from '@mantine/core'
 import { IconFileTypePdf, IconFolder, IconSend, IconWorld } from '@tabler/icons-react'
 import { APPLICATION_STATUSES, type ApplicationRecord, type ApplicationTracking } from '@shared/applications-types'
+import { AGENT_LABEL, type RunSummary } from '@shared/runner-types'
 import { api, errorText } from '../../api'
 import { applyBlocker } from '../../components/apply/blocker'
+import { runBadge } from '../../components/usage/format'
 import { useNavigation } from '../../navigation'
 import { ReviewBadge } from './ReviewBadge'
 import { STATUS_META } from './status'
@@ -40,14 +42,25 @@ export function ApplicationDrawer({ app, onClose, onUpdate, onApply, applying }:
   const [notes, setNotes] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<string | null>('resume')
+  // The tailoring runs that built this application, with what they took (#44).
+  const [runs, setRuns] = useState<RunSummary[]>([])
 
   const id = app?.id
   useEffect(() => {
     setJd(null)
     setError(null)
     setTab('resume')
+    setRuns([])
     if (!id) return
     api.applications.readJobDescription(id).then(setJd, () => setJd(''))
+    let alive = true
+    api.runner.listRuns().then(
+      (all) => alive && setRuns(all.filter((r) => r.outputFolder === id)),
+      () => undefined
+    )
+    return () => {
+      alive = false
+    }
   }, [id])
   useEffect(() => setNotes(app?.tracking.notes ?? ''), [id, app?.tracking.notes])
 
@@ -136,6 +149,22 @@ export function ApplicationDrawer({ app, onClose, onUpdate, onApply, applying }:
             <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
               {error}
             </Alert>
+          )}
+
+          {runs.length > 0 && (
+            <Stack gap={2} data-testid="application-runs">
+              {runs.map((r) => (
+                <Group key={r.id} gap="xs">
+                  <Anchor component="button" size="sm" onClick={() => navigate('tailor', { runId: r.id })}>
+                    {AGENT_LABEL[r.agent]} run of{' '}
+                    {new Date(r.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+                  </Anchor>
+                  <Text size="xs" c="dimmed">
+                    {runBadge(r) ?? ''}
+                  </Text>
+                </Group>
+              ))}
+            </Stack>
           )}
 
           <Group grow align="flex-start">
