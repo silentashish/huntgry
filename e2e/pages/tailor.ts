@@ -29,6 +29,10 @@ export class TailorPage {
   readonly errorAlert: Locator
   // Queue panel.
   readonly queuePanel: Locator
+  // Unattended pipeline panel (#31).
+  readonly pipelinePanel: Locator
+  /** "N result(s) ready for your review…" with Open Review, once a pipeline has finished. */
+  readonly reviewBanner: Locator
 
   constructor(readonly page: Page) {
     this.heading = page.getByRole('heading', { name: 'Tailor', level: 2 })
@@ -46,6 +50,8 @@ export class TailorPage {
     this.endButton = page.getByRole('button', { name: 'End', exact: true })
     this.errorAlert = page.getByRole('alert').filter({ hasText: 'stopped with an error' })
     this.queuePanel = page.locator('.mantine-Card-root').filter({ has: page.getByRole('heading', { name: 'Tailoring queue' }) })
+    this.pipelinePanel = page.locator('.mantine-Card-root').filter({ has: page.getByRole('heading', { name: 'Unattended pipeline' }) })
+    this.reviewBanner = this.pipelinePanel.getByText(/results? ready for your review/)
   }
 
   /** The "<Agent> cannot run yet" (blocking) or "Some dependencies are missing" alert of the form. */
@@ -164,6 +170,16 @@ export class TailorPage {
     await this.queueAgentSelect(title).click()
     await this.page.getByRole('option', { name: agent }).click()
     await expect(this.queueAgentSelect(title)).toHaveValue(agent)
+  }
+
+  /** The row of a pipeline item in the pipeline panel, found by its "<title> · <company>" label. */
+  pipelineRow(title: string): Locator {
+    return this.pipelinePanel.locator('div').filter({ has: this.page.getByText(title, { exact: true }) }).filter({ has: this.page.getByRole('button', { name: /Open run|Review|Remove/ }) }).last()
+  }
+
+  /** A count chip of the pipeline panel ("1 unreviewed", "1 approved"). */
+  pipelineCount(text: string): Locator {
+    return this.pipelinePanel.getByText(text, { exact: true })
   }
 
   /** Waits until the queue badge counts read like "2 needs your reply". */
