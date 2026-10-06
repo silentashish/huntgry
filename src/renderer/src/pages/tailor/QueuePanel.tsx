@@ -6,7 +6,7 @@ import { AGENT_IDS, AGENT_LABEL, type AgentId, type RunSummary } from '@shared/r
 import { api, errorText } from '../../api'
 import { useNow } from '../../components/queue/usePipeline'
 import { runBadge } from '../../components/usage/format'
-import { AGENT_COLOR, FAILURE_LABEL, OUTCOME_LABEL, QUEUE_STATUS_LABEL } from './status'
+import { AGENT_COLOR, awaitsReview, FAILURE_LABEL, OUTCOME_LABEL, QUEUE_STATUS_LABEL } from './status'
 
 interface Props {
   queue: QueueState
@@ -205,7 +205,7 @@ export function QueueRow({ item, run, onAct, onOpenRun, onReview }: RowProps) {
         )}
       </Stack>
       <Group gap={4} wrap="nowrap" style={{ flexShrink: 0 }}>
-        {item.status === 'done' && item.applicationId && onReview && (
+        {item.status === 'done' && item.applicationId && awaitsReview(item.outcome) && onReview && (
           <Button size="compact-xs" variant={item.outcome === 'needs-attention' ? 'filled' : 'light'} onClick={() => onReview(item.applicationId!)}>
             Review
           </Button>

@@ -63,6 +63,8 @@ export function PipelinePanel({ state, queue, onQueueChange, onPipelineChange, o
     { n: c.running, label: 'working', color: 'blue' },
     { n: c.unreviewed, label: 'unreviewed', color: 'yellow' },
     { n: c.needsAttention, label: 'need attention', color: 'orange' },
+    { n: c.approved, label: 'approved', color: 'green' },
+    { n: c.discarded, label: 'discarded', color: 'gray' },
     { n: c.needsReply, label: 'need your reply', color: 'yellow' },
     { n: c.failed, label: 'failed', color: 'red' },
     { n: c.cancelled, label: 'cancelled', color: 'gray' },

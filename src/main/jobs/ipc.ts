@@ -1,8 +1,22 @@
 import { ipcMain } from 'electron'
+import { normalizePrefsPatch } from '@shared/jobs-prefs'
 import { JOB_ID_PATTERN, JOBS_CHANNELS } from '@shared/jobs-types'
 import { requireCurrentWorkspace } from '../current-workspace'
+import { currentProfilePath } from '../profile/ipc'
+import { readProfile } from '../profile/store'
 import { loadAndExtract } from './loader'
-import { addByUrl, addPasted, fetchDetails, listJobs, searchJobs, updateJob, validateQuery } from './service'
+import { readPrefs, updatePrefs } from './prefs'
+import {
+  addByUrl,
+  addPasted,
+  fetchDetails,
+  listJobs,
+  refreshRelevant,
+  searchJobs,
+  updateJob,
+  validateQuery,
+  validateSources
+} from './service'
 import { recentSearches } from './store'
 
 const workspace = async () => (await requireCurrentWorkspace()).path
@@ -12,7 +26,7 @@ function requireJobId(id: unknown): string {
   return id
 }
 
-/** Job boards: on-demand search, saved jobs, add by URL or pasted text. */
+/** Job boards: search, profile refresh, saved jobs and their page preferences, add by URL or pasted text. */
 export function registerJobsIpc(): void {
   ipcMain.handle(JOBS_CHANNELS.list, async () => listJobs(await workspace()))
   ipcMain.handle(JOBS_CHANNELS.search, async (_e, q: unknown) =>
@@ -34,4 +48,14 @@ export function registerJobsIpc(): void {
     })
   })
   ipcMain.handle(JOBS_CHANNELS.recentSearches, async () => recentSearches(await workspace()))
+  ipcMain.handle(JOBS_CHANNELS.refresh, async (_e, input: unknown) => {
+    const i = (typeof input === 'object' && input !== null ? input : {}) as { sources?: unknown; auto?: unknown }
+    const sources = validateSources(i.sources)
+    const { profile } = await readProfile(await currentProfilePath())
+    return refreshRelevant(await workspace(), profile, sources, loadAndExtract, { auto: i.auto === true })
+  })
+  ipcMain.handle(JOBS_CHANNELS.prefs, async () => readPrefs(await workspace()))
+  ipcMain.handle(JOBS_CHANNELS.setPrefs, async (_e, patch: unknown) =>
+    updatePrefs(await workspace(), normalizePrefsPatch(patch))
+  )
 }

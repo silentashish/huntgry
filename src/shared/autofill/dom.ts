@@ -1,3 +1,4 @@
+import { boundedOption } from '../apply-facts'
 import type { FieldKind } from '../apply-types'
 import { asHuntgry } from './user-edits'
 
@@ -36,6 +37,8 @@ export function isRelevant(el: FormControl): boolean {
 
 export function kindOf(el: FormControl): FieldKind {
   const t = tag(el)
+  // A dropdown button with a listbox (Workday) is a choice, like a combobox (#71).
+  if (t === 'button') return el.getAttribute('aria-haspopup') === 'listbox' ? 'combobox' : 'other'
   if (t === 'select') return 'select'
   if (t === 'textarea') return 'textarea'
   const input = el as HTMLInputElement
@@ -76,11 +79,17 @@ function rawLabel(el: FormControl): string {
     if (group) return textOfIds(doc, group.getAttribute('aria-labelledby'))
   }
   if (kind === 'radio') {
-    const legend = el.closest('fieldset')?.querySelector('legend')?.textContent
+    const fieldset = el.closest('fieldset')
+    const legend = fieldset?.querySelector('legend')?.textContent
     if (legend) return legend
+    // Ashby's EEO groups: a fieldset whose first label is the question ("Gender"), not an option's label.
+    const title = Array.from(fieldset?.children ?? []).find((c) => tag(c) === 'label' && !c.querySelector('input'))?.textContent
+    if (title?.trim()) return title
     const question = el.closest('li.application-question, .application-question')?.querySelector('.application-label')
     if (question?.textContent) return question.textContent
   }
+  // A dropdown button's aria-label also carries its current value ("Country United States Required"): its label first.
+  if (tag(el) === 'button' && el.labels?.length) return Array.from(el.labels).map(labelText).join(' ')
   const labelledBy = textOfIds(doc, el.getAttribute('aria-labelledby'))
   if (labelledBy.trim()) return labelledBy
   const aria = el.getAttribute('aria-label')
@@ -88,6 +97,10 @@ function rawLabel(el: FormControl): string {
   const labels = el.labels ? Array.from(el.labels) : []
   const fromLabel = labels.map(labelText).join(' ')
   if (fromLabel.trim()) return fromLabel
+  // A label pointing at the control's name (Ashby's yes/no groups: the hidden checkbox has a name but no id).
+  const name = el.getAttribute('name')
+  const byName = name ? Array.from(doc.querySelectorAll('label[for]')).find((l) => l.getAttribute('for') === name) : undefined
+  if (byName && !byName.contains(el) && byName.textContent?.trim()) return labelText(byName as HTMLLabelElement)
   return el.getAttribute('placeholder') ?? el.getAttribute('name') ?? el.id ?? ''
 }
 
@@ -141,4 +154,94 @@ export function highlight(el: Element, tone: keyof typeof OUTLINE): void {
   if (!style) return
   style.setProperty('outline', `2px solid ${OUTLINE[tone]}`)
   style.setProperty('outline-offset', '1px')
+}
+
+/** The radios of `radio`'s group inside `root` (by `name`; a radio without one is its own group). */
+export function radioGroup(radio: HTMLInputElement, root: ParentNode): HTMLInputElement[] {
+  const name = radio.getAttribute('name')
+  if (!name) return [radio]
+  return Array.from(root.querySelectorAll<HTMLInputElement>('input[type="radio"]')).filter(
+    (r) => r.getAttribute('name') === name && isRelevant(r)
+  )
+}
+
+/** A radio's own option text ("Yes"), from its label without the control, else its value (see `boundedOption`). */
+export function radioLabel(radio: HTMLInputElement): string {
+  const label = radio.labels?.[0] ?? radio.closest('label')
+  const text = label ? clean(labelText(label as HTMLLabelElement)) : ''
+  return boundedOption(text || radio.value || '')
+}
+
+/** Placeholder options: no value, or "Select…", "Choose", "--". */
+const PLACEHOLDER = /^(select|choose|please (select|choose)|pick|-+|—)\b|^\s*$/i
+
+function isPlaceholder(option: HTMLOptionElement): boolean {
+  return option.value === '' || PLACEHOLDER.test(option.text.trim())
+}
+
+/** The choices a select or radio group offers, as the page words them (at most 30; long ones as `boundedOption`). */
+export function optionsOf(el: FormControl, root: ParentNode): string[] {
+  const kind = kindOf(el)
+  let options: string[] = []
+  if (kind === 'select') {
+    options = Array.from((el as HTMLSelectElement).options)
+      .filter((o) => !o.disabled && !isPlaceholder(o))
+      .map((o) => boundedOption(clean(o.text)))
+  } else if (kind === 'radio') {
+    options = radioGroup(el as HTMLInputElement, root).map(radioLabel)
+  }
+  return [...new Set(options.filter(Boolean))].slice(0, 30)
+}
+
+/** What a select or radio group shows now (the option text), or '' when nothing is chosen. */
+export function chosenOf(el: FormControl, root: ParentNode): string {
+  const kind = kindOf(el)
+  if (kind === 'select') {
+    const option = (el as HTMLSelectElement).selectedOptions?.[0]
+    return option && !isPlaceholder(option) ? boundedOption(clean(option.text)) : ''
+  }
+  if (kind === 'radio') {
+    const checked = radioGroup(el as HTMLInputElement, root).find((r) => r.checked)
+    return checked ? radioLabel(checked) : ''
+  }
+  return el.value.trim()
+}
+
+/**
+ * Chooses the option named `optionText` (as `optionsOf` reports it) the way a person's choice
+ * looks to the page's framework: the select's native `value` setter, then
+ * `input` and `change`. No click, no key. Returns whether it shows the option.
+ */
+export function setSelectValue(select: HTMLSelectElement, optionText: string): boolean {
+  const view = select.ownerDocument.defaultView
+  const option = Array.from(select.options).find((o) => boundedOption(clean(o.text)) === optionText)
+  if (!view || !option) return false
+  const setter = Object.getOwnPropertyDescriptor(view.HTMLSelectElement.prototype, 'value')?.set
+  asHuntgry(() => {
+    if (setter) setter.call(select, option.value)
+    else select.value = option.value
+    select.dispatchEvent(new view.Event('input', { bubbles: true }))
+    select.dispatchEvent(new view.Event('change', { bubbles: true }))
+  })
+  return select.selectedOptions?.[0] === option
+}
+
+/**
+ * Checks the radio of `radio`'s group whose label is `optionText`: the native
+ * `checked` setter, then `input` and `change`. No click. Only for pages that
+ * listen to `change` (plain HTML, Lever); React radios take a click and are
+ * click-only (see answers.ts). Returns whether the radio is checked.
+ */
+export function checkRadio(radio: HTMLInputElement, root: ParentNode, optionText: string): boolean {
+  const view = radio.ownerDocument.defaultView
+  const target = radioGroup(radio, root).find((r) => radioLabel(r) === optionText)
+  if (!view || !target) return false
+  const setter = Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'checked')?.set
+  asHuntgry(() => {
+    if (setter) setter.call(target, true)
+    else target.checked = true
+    target.dispatchEvent(new view.Event('input', { bubbles: true }))
+    target.dispatchEvent(new view.Event('change', { bubbles: true }))
+  })
+  return target.checked
 }

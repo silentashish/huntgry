@@ -346,7 +346,8 @@ export function parseProfileDate(text: string, now = new Date(), end = false): n
   return y + (month + (end ? 1 : 0)) / 12
 }
 
-function interval(start: string, end: string, now: Date): [number, number] | null {
+/** A start/end pair as fractional years (`[2018.4, 2021.9]`), or `null` when the dates do not read. */
+export function interval(start: string, end: string, now: Date): [number, number] | null {
   // "2022 - Present | Atlanta" style strings sometimes arrive in one field.
   const [s, e] = end.trim() ? [start, end] : start.split(RANGE_SEPARATOR)
   const a = parseProfileDate(s ?? '', now)

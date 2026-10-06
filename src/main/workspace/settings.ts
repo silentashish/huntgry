@@ -18,6 +18,8 @@ export interface AppSettings {
   remote?: { enabled?: boolean; notificationDetails?: boolean; transcripts?: boolean }
   /** Settings → Pricing (#44): prices the user changed or added; the bundled table fills in the rest. */
   pricing?: PricingOverrides
+  /** Apply (#71): pick remembered answers in dropdowns and button groups automatically; on unless set to false. */
+  pickDropdowns?: boolean
 }
 
 /** Reads the settings file; a missing or corrupt file yields empty settings. */

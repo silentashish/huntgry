@@ -1,9 +1,14 @@
 import { createHash } from 'node:crypto'
-import type { Job, JobQuery, SearchResult, SearchSource, SourceResult } from '@shared/jobs-types'
+import { matchesLocation } from '@shared/job-filters'
+import { profileSignals, relevantQuery } from '@shared/job-relevance'
+import { autoRefreshDue } from '@shared/jobs-prefs'
+import type { Job, JobQuery, RefreshResult, SearchResult, SearchSource, SourceResult } from '@shared/jobs-types'
+import type { MasterProfile } from '@shared/master-profile'
 import { boardOrigin } from './board-url'
 import type { LoadResult } from './loader'
-import { HIRINGCAFE_EXTRACT, hiringCafeSearchUrl, matchesLocation, parseHiringCafeHits } from './sources/hiringcafe'
+import { HIRINGCAFE_EXTRACT, hiringCafeSearchUrl, parseHiringCafeHits } from './sources/hiringcafe'
 import { INDEED_EXTRACT, indeedSearchUrl, parseIndeedCards } from './sources/indeed'
+import { readPrefs, recordLastSearch } from './prefs'
 import { parsePosting, POSTING_EXTRACT, type PageData } from './sources/posting'
 import { findCanonical, listJobs, readJob, recordSearch, saveJob, saveJobs, writeJobFile } from './store'
 
@@ -28,25 +33,42 @@ const SOURCES: Record<
   }
 }
 
+/** The selected boards from untrusted input; at least one. */
+export function validateSources(input: unknown): SearchSource[] {
+  const sources = Array.isArray(input)
+    ? input.filter((s): s is SearchSource => s === 'hiring.cafe' || s === 'indeed')
+    : []
+  if (sources.length === 0) throw new Error('Pick at least one job board.')
+  return [...new Set(sources)]
+}
+
 export function validateQuery(input: unknown): JobQuery {
   const q = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
   const keywords = typeof q.keywords === 'string' ? q.keywords.trim().slice(0, 200) : ''
   if (!keywords) throw new Error('Enter keywords to search for.')
-  const sources = Array.isArray(q.sources)
-    ? q.sources.filter((s): s is SearchSource => s === 'hiring.cafe' || s === 'indeed')
-    : []
-  if (sources.length === 0) throw new Error('Pick at least one job board.')
+  const sources = validateSources(q.sources)
   return {
     keywords,
     location: typeof q.location === 'string' ? q.location.trim().slice(0, 200) : '',
     remoteOnly: q.remoteOnly === true,
-    sources: [...new Set(sources)]
+    sources
   }
 }
 
-/** Searches each selected board in turn, saves what they return, and reports per board. */
-export async function searchJobs(workspace: string, query: JobQuery, load: Loader): Promise<SearchResult> {
-  await recordSearch(workspace, query)
+/**
+ * Searches each selected board in turn, saves what they return, and reports
+ * per board. The returned ids are remembered (`jobs-prefs.json`), so the
+ * "Last search" view survives leaving the page; a profile refresh (`relevant`)
+ * also records its time.
+ */
+export async function searchJobs(
+  workspace: string,
+  query: JobQuery,
+  load: Loader,
+  opts: { relevant?: boolean; now?: () => Date } = {}
+): Promise<SearchResult> {
+  const now = opts.now ?? (() => new Date())
+  await recordSearch(workspace, query, now())
   const sources: SourceResult[] = []
   const found: Job[] = []
   for (const s of query.sources) {
@@ -77,7 +99,55 @@ export async function searchJobs(workspace: string, query: JobQuery, load: Loade
   // Report each job once, as its canonical record (a job seen on both boards is one job).
   const ids = new Set(found.map((j) => j.id))
   const canonical = (await listJobs(workspace)).filter((j) => ids.has(j.id) || j.aliases?.some((a) => ids.has(a)))
+  await recordLastSearch(workspace, {
+    query,
+    at: now().toISOString(),
+    ids: canonical.map((j) => j.id),
+    relevant: opts.relevant === true
+  })
   return { jobs: canonical, sources }
+}
+
+/** The profile refresh running for each workspace; a second request joins it instead of loading the boards again. */
+const refreshing = new Map<string, Promise<RefreshResult>>()
+
+/**
+ * Searches the boards for jobs like the master profile: its headline (or
+ * latest role) near its location, or remote only when the profile says
+ * "Remote". Saves the results and records the refresh time, whatever the
+ * boards answered, so a blocked board is not retried on every open.
+ *
+ * One refresh per workspace at a time: leaving Jobs and opening it again
+ * while the boards load joins the running refresh. `auto` (the refresh on
+ * opening Jobs) is decided here, against the saved preferences, and gives
+ * `null` when it is not due.
+ */
+export async function refreshRelevant(
+  workspace: string,
+  profile: MasterProfile,
+  sources: SearchSource[],
+  load: Loader,
+  opts: { auto?: boolean; now?: () => Date } = {}
+): Promise<RefreshResult | null> {
+  const now = opts.now ?? (() => new Date())
+  const running = refreshing.get(workspace)
+  if (running) return running
+  if (opts.auto && !autoRefreshDue(await readPrefs(workspace), now())) return null
+  // Another request may have started one while the preferences were read.
+  const started = refreshing.get(workspace)
+  if (started) return started
+  const run = (async (): Promise<RefreshResult> => {
+    const query = relevantQuery(profileSignals(profile, now()), sources)
+    if (!query) throw new Error('Add a headline or a role to your master profile to find relevant jobs.')
+    const res = await searchJobs(workspace, query, load, { relevant: true, now })
+    return { ...res, query, at: now().toISOString() }
+  })()
+  refreshing.set(workspace, run)
+  try {
+    return await run
+  } finally {
+    if (refreshing.get(workspace) === run) refreshing.delete(workspace)
+  }
 }
 
 /** Fetches a posting page and saves it as a job. */

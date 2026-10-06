@@ -13,6 +13,7 @@ import {
   type QueueAgent,
   type QueueFile,
   type QueueItem,
+  type QueueItemOutcome,
   type QueueOptions,
   type QueueState
 } from '@shared/queue-types'
@@ -73,7 +74,7 @@ export interface QueueDeps {
 /** What an unattended run's ended turn means (decided by the pipeline). */
 export type Settlement =
   /** Built (or not): the result was recorded; the run is finished. */
-  | { kind: 'done'; outcome: 'unreviewed' | 'needs-attention'; applicationId?: string; reason?: string }
+  | { kind: 'done'; outcome: QueueItemOutcome; applicationId?: string; reason?: string }
   /** The agent stopped without building: send this one reply and keep the slot. */
   | { kind: 'nudge'; text: string }
   /** Stopped with a question again: wait for the user, session kept. */
@@ -257,6 +258,31 @@ export class TailorQueue {
   /** Items of one pipeline, in queue order. */
   itemsOf(pipelineId: string): QueueItem[] {
     return this.items.filter((i) => i.pipelineId === pipelineId).map((i) => ({ ...i }))
+  }
+
+  /**
+   * Brings done unattended items in step with main's review store (#72): each item whose
+   * application and run match a review takes its state. An item that is no longer done (a re-run
+   * took it back) or whose run differs (an older run's decision) is left alone. Saves and
+   * broadcasts only when something changed; returns whether it did. A list read from another
+   * workspace than the loaded one changes nothing.
+   */
+  setOutcomes(workspace: string, reviews: { applicationId: string; runId: string; state: QueueItemOutcome }[]): boolean {
+    if (workspace !== this.ws) return false
+    let touched = false
+    for (const r of reviews) {
+      for (const item of this.items) {
+        if (item.status !== 'done' || !item.unattended) continue
+        if (item.applicationId !== r.applicationId || item.runId !== r.runId || item.outcome === r.state) continue
+        item.outcome = r.state
+        touched = true
+      }
+    }
+    if (touched) {
+      this.save()
+      this.broadcast()
+    }
+    return touched
   }
 
   /** Saves, broadcasts and starts what can start (the pipeline calls this after changing its policy). */

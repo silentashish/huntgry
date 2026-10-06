@@ -30,6 +30,20 @@ export interface Adapter {
    * user, never typed into.
    */
   choices?: readonly string[]
+  /**
+   * Selectors of native controls (radios, checkboxes, selects) whose
+   * framework only takes a person's click: setting them and firing `change`
+   * may look answered while the site's state stays empty (React radios).
+   * Remembered answers (#71) are only suggested for them, never written.
+   */
+  clickOnly?: readonly string[]
+  /**
+   * Containers outside `formRoot` whose questions belong to the application
+   * (Ashby renders its EEO survey in a second form container). Their
+   * controls are only answered or suggested from remembered answers (#71),
+   * never matched to contact values or uploads.
+   */
+  answerRoots?(doc: Document): Element[]
 
   /**
    * Readiness: whether the form is rendered and the page's framework has

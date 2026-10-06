@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { FieldReport } from '@shared/apply-types'
-import { groupReport, stepLabel } from './apply-report'
+import { answerChoices, badgeOf, canAnswer, groupReport, stepLabel, suggestionNote } from './apply-report'
 
 const f = (label: string, outcome: FieldReport['outcome'], required = false): FieldReport => ({
   key: null,
@@ -48,5 +48,50 @@ describe('stepLabel', () => {
       'Step: Sign in or create account (Create Account/Sign In)'
     )
     expect(stepLabel({ kind: 'other', title: 'Application Questions' })).toBe('Step: Other step (Application Questions)')
+  })
+})
+
+describe('answers in the panel (#71)', () => {
+  const q = (extra: Partial<FieldReport>): FieldReport => ({
+    ...f('Gender', 'skipped-unsupported'),
+    kind: 'select',
+    fieldId: 'select:g',
+    question: 'choice|gender|0',
+    ...extra
+  })
+
+  it('lists a choice Huntgry can learn (a fact or a suggestion) under "Needs you", other choices under "Your choice"', () => {
+    const groups = groupReport({
+      ats: 'lever',
+      url: 'https://x.example',
+      hasSubmitButton: true,
+      fields: [q({ label: 'Gender', fact: 'gender' }), q({ label: 'Authorized', suggestion: 'Yes', suggestedBy: 'saved' }), q({ label: 'Country' })]
+    })
+    expect(groups.map((g) => [g.title, g.fields.map((f) => f.label)])).toEqual([
+      ['Needs you', ['Gender', 'Authorized']],
+      ['Your choice', ['Country']]
+    ])
+    expect(badgeOf(q({ fact: 'gender' }))).toEqual({ label: 'Answer once', color: 'orange' })
+    expect(badgeOf(q({}))).toEqual({ label: 'Your choice', color: 'gray' })
+    expect(badgeOf(q({ fact: 'gender', outcome: 'filled' })).label).toBe('Filled')
+  })
+
+  it('offers an answer for reported questions that are still open', () => {
+    expect(canAnswer(q({}))).toBe(true)
+    expect(canAnswer(q({ outcome: 'filled' }))).toBe(false)
+    expect(canAnswer(q({ outcome: 'kept' }))).toBe(false)
+    expect(canAnswer(f('Email', 'unmatched'))).toBe(false)
+  })
+
+  it('puts "decline" first for sensitive questions only', () => {
+    const options = ['Male', 'Female', 'Decline to self-identify']
+    expect(answerChoices(q({ fact: 'gender', options }))).toEqual(['Decline to self-identify', 'Male', 'Female'])
+    expect(answerChoices(q({ fact: 'workAuthorized', options: ['Yes', 'No', 'Prefer not to say'] }))).toEqual(['Yes', 'No', 'Prefer not to say'])
+  })
+
+  it("says whether a suggestion is the user's own or the model's", () => {
+    expect(suggestionNote(q({}))).toBeNull()
+    expect(suggestionNote(q({ suggestion: 'Yes', suggestedBy: 'saved' }))).toMatch(/saved answers: "Yes". Pick it in the page/)
+    expect(suggestionNote(q({ suggestion: 'Woman', suggestedBy: 'model', fact: 'gender' }))).toMatch(/AI matched this question to gender/)
   })
 })

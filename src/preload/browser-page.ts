@@ -1,4 +1,5 @@
 import { ipcRenderer } from 'electron'
+import type { PageAnswers } from '@shared/apply-facts'
 import type { FillValues } from '@shared/apply-types'
 import { AUTOFILL_CHANNELS } from '@shared/autofill-channels'
 import { detectConfirmation, pageStep } from '@shared/autofill/engine'
@@ -22,6 +23,10 @@ import { PageSession, watchForForm } from '@shared/autofill/session'
 interface Request {
   requestId: string
   values?: FillValues
+  /** Remembered application answers (#71), checked like everything else main sends. */
+  answers?: PageAnswers
+  /** Pick remembered answers in click-only widgets (the Settings switch). */
+  pick?: boolean
   text?: boolean
   key?: 'resume' | 'coverLetter'
   fileName?: string
@@ -93,6 +98,14 @@ function watchForSteps(initial: string): void {
   }).observe(document.documentElement, { childList: true, subtree: true })
 }
 
+/** Main's answers, or none when the shape is off (main is trusted, but a bad message must not break a fill). */
+function answersOf(input: unknown): PageAnswers | undefined {
+  if (typeof input !== 'object' || input === null) return undefined
+  const { facts, questions } = input as Partial<PageAnswers>
+  if (typeof facts !== 'object' || facts === null || typeof questions !== 'object' || questions === null) return undefined
+  return { facts, questions }
+}
+
 function reply(requestId: string, run: () => Promise<unknown>): void {
   run().then(
     (result) => ipcRenderer.send(AUTOFILL_CHANNELS.result, { requestId, ok: true, result }),
@@ -116,7 +129,7 @@ ipcRenderer.on(AUTOFILL_CHANNELS.detect, (_e, req: Request) => {
 ipcRenderer.on(AUTOFILL_CHANNELS.fill, (_e, req: Request) => {
   reply(req.requestId, async () => {
     if (!req.values) throw new Error('No values to fill.')
-    return page.fill(req.values, req.text)
+    return page.fill(req.values, req.text, answersOf(req.answers), req.pick === true)
   })
 })
 

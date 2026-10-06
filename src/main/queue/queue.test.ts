@@ -473,6 +473,38 @@ describe('TailorQueue', () => {
     expect((await queue.sync()).items[0].agent).toBe('claude')
   })
 
+  it('takes review states for done unattended items whose application and run match, and only then saves and broadcasts (#72)', async () => {
+    await mkdir(join(ws, '.huntgry'), { recursive: true })
+    const at = '2026-09-30T00:00:00.000Z'
+    const base = { title: 'x', options, agent: 'claude', attempts: 1, createdAt: at, updatedAt: at }
+    const items = [
+      { ...base, id: 'q-20260930-010203-aaaaaa', jobId: 'url:a', status: 'done', runId: 'run-a', unattended: true, outcome: 'unreviewed', applicationId: 'R/C/a' },
+      { ...base, id: 'q-20260930-010203-bbbbbb', jobId: 'url:b', status: 'done', runId: 'run-b2', unattended: true, outcome: 'unreviewed', applicationId: 'R/C/b' },
+      { ...base, id: 'q-20260930-010203-cccccc', jobId: 'url:c', status: 'queued', runId: null, unattended: true, applicationId: 'R/C/c' },
+      { ...base, id: 'q-20260930-010203-dddddd', jobId: 'url:d', status: 'done', runId: 'run-d', applicationId: 'R/C/d' }
+    ]
+    await writeFile(queueFile(ws), JSON.stringify({ version: 1, concurrency: 2, items }))
+    await queue.sync()
+    const before = states.length
+    const changed = queue.setOutcomes(ws, [
+      { applicationId: 'R/C/a', runId: 'run-a', state: 'approved' },
+      // An older run's decision, an item that is no longer done, an attended item: all left alone.
+      { applicationId: 'R/C/b', runId: 'run-b1', state: 'discarded' },
+      { applicationId: 'R/C/c', runId: 'run-c', state: 'approved' },
+      { applicationId: 'R/C/d', runId: 'run-d', state: 'approved' }
+    ])
+    expect(changed).toBe(true)
+    expect(queue.state().items.map((i) => i.outcome)).toEqual(['approved', 'unreviewed', undefined, undefined])
+    expect(states.length).toBe(before + 1)
+    await queue.flush()
+    expect(JSON.parse(await readFile(queueFile(ws), 'utf8')).items[0].outcome).toBe('approved')
+    // Same state again, or another workspace's list: nothing to save or broadcast.
+    expect(queue.setOutcomes(ws, [{ applicationId: 'R/C/a', runId: 'run-a', state: 'approved' }])).toBe(false)
+    expect(queue.setOutcomes(`${ws}-other`, [{ applicationId: 'R/C/b', runId: 'run-b2', state: 'approved' }])).toBe(false)
+    expect(queue.state().items[1].outcome).toBe('unreviewed')
+    expect(states.length).toBe(before + 1)
+  })
+
   it('ignores a broken queue file', async () => {
     await mkdir(join(ws, '.huntgry'), { recursive: true })
     await writeFile(queueFile(ws), '{not json')

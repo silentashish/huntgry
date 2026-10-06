@@ -1,4 +1,4 @@
-import type { Job } from '@shared/jobs-types'
+import type { Job, WorkplaceType } from '@shared/jobs-types'
 import { money } from '../text'
 
 /**
@@ -16,21 +16,12 @@ export function hiringCafeSearchUrl(
   q: { keywords: string; location: string; remoteOnly: boolean },
   origin: string = HIRINGCAFE_ORIGIN
 ): string {
-  // Location in the free-text query narrows results to near nothing; `matchesLocation` applies it instead.
+  // Location in the free-text query narrows results to near nothing; `matchesLocation` (shared/job-filters) applies it instead.
   const state: Record<string, unknown> = {
     searchQuery: q.keywords.trim()
   }
   if (q.remoteOnly) state.workplaceTypes = ['Remote']
   return `${origin}/?searchState=${encodeURIComponent(JSON.stringify(state))}`
-}
-
-/**
- * Whether a job fits the searched location: remote jobs always do; otherwise
- * the city (first part of "Atlanta, GA") must appear in the job's location.
- */
-export function matchesLocation(job: { location: string; remote: boolean }, location: string): boolean {
-  const city = location.split(',')[0].trim().toLowerCase()
-  return !city || job.remote || job.location.toLowerCase().includes(city)
 }
 
 /** Runs in the page: returns the raw search hits (or `null` when the data is missing). */
@@ -45,6 +36,8 @@ type Obj = Record<string, unknown>
 const obj = (v: unknown): Obj => (typeof v === 'object' && v !== null ? (v as Obj) : {})
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+const WORKPLACE_TYPES: WorkplaceType[] = ['Remote', 'Hybrid', 'Onsite', 'Field']
 
 export function parseHiringCafeHits(data: unknown, now = new Date()): Job[] {
   const hits = Array.isArray(obj(data).hits) ? (obj(data).hits as unknown[]) : []
@@ -57,8 +50,8 @@ export function parseHiringCafeHits(data: unknown, now = new Date()): Job[] {
     const url = str(h.apply_url)
     if (!id || !title || h.is_expired === true) continue
     const workplace = str(v5.workplace_type)
-    const min = typeof v5.yearly_min_compensation === 'number' ? v5.yearly_min_compensation : null
-    const max = typeof v5.yearly_max_compensation === 'number' ? v5.yearly_max_compensation : null
+    const min = num(v5.yearly_min_compensation)
+    const max = num(v5.yearly_max_compensation)
     const currency = str(v5.listed_compensation_currency) || 'USD'
     const salary =
       min && max
@@ -88,7 +81,15 @@ export function parseHiringCafeHits(data: unknown, now = new Date()): Job[] {
       description: summary.join('\n\n'),
       descriptionComplete: false,
       tags: strs(v5.technical_tools),
-      fetchedAt: now.toISOString()
+      fetchedAt: now.toISOString(),
+      // Structured facts for the filters and the Relevant view; `null` when the board did not say.
+      visaSponsorship: typeof v5.visa_sponsorship === 'boolean' ? v5.visa_sponsorship : null,
+      seniority: str(v5.seniority_level),
+      minYearsExperience: num(v5.min_industry_and_role_yoe),
+      commitment: strs(v5.commitment),
+      workplaceType: WORKPLACE_TYPES.find((w) => w.toLowerCase() === workplace.toLowerCase()) ?? '',
+      salaryMin: min,
+      salaryMax: max
     })
   }
   return jobs

@@ -204,8 +204,11 @@ Behaviour switches, from `fake-agent/config.json` (written by `withFakeAgents` a
 | `exit-early` | exit 0 right after `init`, before any turn ends (a Claude run reads as *finished* with nothing built, a Codex one as "exited before the turn ended") |
 
 Markers: every spawn appends to `fake-agent/invocations.jsonl` (`{ agent, mode, pid, cwd, args,
-resume, session, at }`, `mode` one of `version`, `auth`, `run`) and every turn adds `turn-start` /
-`turn-end` lines. `fakeAgents(app)` reads them: `invocations()`, `runs()` (the agent processes,
+resume, session, at }`, `mode` one of `version`, `auth`, `run`, `oneshot`) and every turn adds `turn-start` /
+`turn-end` lines. `oneshot` is a one-shot structured call (`--json-schema`), as the Apply question mapping makes it
+(#71): `claude -p` with the prompt on stdin or `agy --print=<prompt>`. It answers one JSON result whose
+`structured_output.mappings` maps questions that mention "gender" to `gender`, and the others to null. Its marker
+also records the `prompt`, so a spec can check that no stored answer was sent. `fakeAgents(app)` reads them: `invocations()`, `runs()` (the agent processes,
 oldest first: which agent the app really started, with which arguments, resuming which session)
 and `turns()` (start/end per turn, for the "2 at a time" check).
 
@@ -271,6 +274,14 @@ assert a resolvable public URL is refused before a lookup.
 clear itself before reporting it, so "a bot wall gives the blocked message" takes ~13 s
 (`test.slow()`); a search of both boards takes ~2 s; fetching a posting right after a search on
 the same host waits for the 4 s gap.
+
+**Auto-refresh is off in `mocks` (#73).** Opening Jobs refreshes the relevant jobs in the background
+when the last refresh is over 12 hours old, and that setting is on by default. A fixture cannot hold
+a "fresh" refresh time, so `mocks/.huntgry/jobs-prefs.json` sets `"autoRefresh": false`: no spec
+loads a board just by opening Jobs, and specs that count board requests (or expect none) stay exact.
+The auto-refresh spec in `jobs.spec.ts` turns the toggle on through the UI. A new workspace fixture
+whose specs open Jobs needs the same file. Jobs also opens on the **Relevant** segment now;
+`openJobs` in `jobs.spec.ts` switches to **All** for the specs that look at every saved job.
 
 ### Tabs are `WebContentsView`s
 

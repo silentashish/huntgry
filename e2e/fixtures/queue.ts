@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Job } from '../../src/shared/jobs-types'
+import type { PipelineRecord } from '../../src/shared/pipeline-types'
 import type { QueueItem, QueueOptions } from '../../src/shared/queue-types'
 import type { AgentId } from '../../src/shared/runner-types'
 
@@ -58,12 +59,17 @@ export interface SeedQueueItem {
   /** For an interrupted item (`running` when the app closed). */
   runId?: string | null
   options?: Partial<QueueOptions>
+  /** An unattended pipeline item (#31): its pipeline, and for a `done` one the recorded result. */
+  unattended?: true
+  pipelineId?: string
+  outcome?: QueueItem['outcome']
+  applicationId?: string
 }
 
 const DEFAULT_OPTIONS: QueueOptions = { coverLetter: false, dateStyle: 'right' }
 
-/** Writes `.huntgry/queue.json` as the queue saves it; the app loads it paused. */
-export async function seedQueue(workspace: string, items: SeedQueueItem[], concurrency = 2): Promise<QueueItem[]> {
+/** Writes `.huntgry/queue.json` as the queue saves it (with the pipeline's record, if any); the app loads it paused. */
+export async function seedQueue(workspace: string, items: SeedQueueItem[], concurrency = 2, pipeline?: PipelineRecord): Promise<QueueItem[]> {
   const at = '2026-09-30T12:00:00.000Z'
   const out: QueueItem[] = items.map((i, n) => ({
     id: `q-20260930-120000-${String(n).padStart(6, '0')}`,
@@ -75,10 +81,15 @@ export async function seedQueue(workspace: string, items: SeedQueueItem[], concu
     runId: i.runId ?? null,
     attempts: 0,
     createdAt: at,
-    updatedAt: at
+    updatedAt: at,
+    ...(i.unattended ? { unattended: true as const } : {}),
+    ...(i.pipelineId ? { pipelineId: i.pipelineId } : {}),
+    ...(i.outcome ? { outcome: i.outcome } : {}),
+    ...(i.applicationId ? { applicationId: i.applicationId } : {})
   }))
   await mkdir(join(workspace, '.huntgry'), { recursive: true })
-  await writeFile(join(workspace, '.huntgry/queue.json'), `${JSON.stringify({ version: 1, concurrency, items: out }, null, 2)}\n`)
+  const file = { version: 1, concurrency, items: out, ...(pipeline ? { pipeline } : {}) }
+  await writeFile(join(workspace, '.huntgry/queue.json'), `${JSON.stringify(file, null, 2)}\n`)
   return out
 }
 
