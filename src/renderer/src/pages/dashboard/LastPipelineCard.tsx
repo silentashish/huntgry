@@ -11,11 +11,15 @@ export function LastPipelineCard() {
   const [summary, setSummary] = useState<PipelineSummary | null>(null)
   useEffect(() => {
     let live = true
-    api.pipeline.lastSummary().then((s) => live && setSummary(s), () => undefined)
+    const load = () => void api.pipeline.lastSummary().then((s) => live && setSummary(s), () => undefined)
+    load()
     const off = api.on('pipeline:finished', (s) => setSummary(s))
+    // A result approved or discarded since is no longer "ready to review" (#72): main reads the states live.
+    const offReview = api.on('applications:changed', load)
     return () => {
       live = false
       off()
+      offReview()
     }
   }, [])
   if (!summary) return null
@@ -45,6 +49,16 @@ export function LastPipelineCard() {
           {c.needsAttention > 0 && (
             <Badge variant="light" color="orange">
               {c.needsAttention} need attention
+            </Badge>
+          )}
+          {c.approved > 0 && (
+            <Badge variant="light" color="green">
+              {c.approved} approved
+            </Badge>
+          )}
+          {c.discarded > 0 && (
+            <Badge variant="light" color="gray">
+              {c.discarded} discarded
             </Badge>
           )}
           {c.needsReply > 0 && (
