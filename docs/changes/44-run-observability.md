@@ -157,11 +157,15 @@ bundled table can be refreshed from a community-maintained list instead of being
   is added as a new model. Dated and undated keys of one model give one entry (the undated wins).
 - **Checks.** Input and output must be present; every figure must be a finite number, ≥ 0 and
   ≤ $1000 per 1M tokens, or the model is dropped; all-zero entries (placeholders) are dropped; a
-  missing cache-read price is taken as the input price. 15 s timeout, 20 MB cap on the response.
+  missing cache-read price is taken as the input price. 15 s timeout for the whole exchange (body
+  included), 20 MB cap on the response; on any error the request is aborted and its body cancelled
+  before the next source is tried.
   Settings read back from disk are checked again.
 - **Failure.** Offline, HTTP error, bad JSON, no usable model: the card shows the reason for each
   source and nothing changes, in memory or on disk.
-- **Precedence.** The user's own edits, then synced prices, then the bundled table. "Reset to
+- **Precedence.** The user's own edits, then synced prices, then the bundled table, compared by
+  the same normalized names the lookup uses: a user's `gpt-x-2026-10-01` replaces a synced `gpt-x`
+  (and keeps its own id, so its row still edits and resets). "Reset to
   defaults" clears the user's edits (the sync stays); "Clear synced prices" drops the sync. Runs
   reprice on read, as for any price change.
 
