@@ -37,6 +37,10 @@ async function openJobs(
   return jobs
 }
 
+/** The Jobs preferences as saved on disk. */
+const savedPrefs = async (workspace: string) =>
+  JSON.parse(await readFile(join(workspace, '.huntgry/jobs-prefs.json'), 'utf8'))
+
 /** The searchState objects the mock hiring.cafe was asked for. */
 const searchStates = (requests: string[]) =>
   requests
@@ -165,6 +169,8 @@ test.describe('relevant jobs, Refresh and filters (#73)', () => {
     await jobs.filterSponsorship('Only sponsors')
     await expect.poll(() => jobs.listedTitles()).toEqual(['Platform Engineer'])
     await expect(app.window.getByText('Sponsors visa', { exact: true })).toBeVisible()
+    // The page shows a change before main has saved it; leave only once it is on disk.
+    await expect.poll(async () => (await savedPrefs(app.workspace!)).filters.sponsorship).toBe('only-yes')
 
     await shell.goTo('dashboard')
     await shell.goTo('jobs')
@@ -176,8 +182,7 @@ test.describe('relevant jobs, Refresh and filters (#73)', () => {
     // Unknown counts as passing "Hide no sponsorship": every result is back.
     await jobs.filterSponsorship('Hide "no sponsorship"')
     await expect.poll(() => jobs.listedTitles()).toHaveLength(4)
-    const prefs = JSON.parse(await readFile(join(app.workspace!, '.huntgry/jobs-prefs.json'), 'utf8'))
-    expect(prefs.filters.sponsorship).toBe('hide-no')
+    await expect.poll(async () => (await savedPrefs(app.workspace!)).filters.sponsorship).toBe('hide-no')
   })
 
   test('with auto-refresh on, opening Jobs refreshes once in the background, then not again within 12 hours', async ({
@@ -188,6 +193,7 @@ test.describe('relevant jobs, Refresh and filters (#73)', () => {
     const jobs = await openJobs(app)
     await expect(jobs.autoRefresh).not.toBeChecked()
     await jobs.toggleAutoRefresh(true)
+    await expect.poll(async () => (await savedPrefs(app.workspace!)).autoRefresh).toBe(true)
     // Turning it on loads nothing by itself.
     expect(mock.requests).toEqual([])
 
@@ -220,11 +226,11 @@ test.describe('relevant jobs, Refresh and filters (#73)', () => {
     await expect(jobs.autoRefresh).not.toBeChecked()
     await jobs.toggleAutoRefresh(true)
     await expect
-      .poll(async () => JSON.parse(await readFile(join(app.workspace!, '.huntgry/jobs-prefs.json'), 'utf8')).autoRefresh)
+      .poll(async () => (await savedPrefs(app.workspace!)).autoRefresh)
       .toBe(true)
     await jobs.toggleAutoRefresh(false)
     await expect
-      .poll(async () => JSON.parse(await readFile(join(app.workspace!, '.huntgry/jobs-prefs.json'), 'utf8')).autoRefresh)
+      .poll(async () => (await savedPrefs(app.workspace!)).autoRefresh)
       .toBe(false)
     expect(mock.requests).toEqual([])
   })
