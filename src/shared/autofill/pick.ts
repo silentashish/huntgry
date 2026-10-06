@@ -23,7 +23,12 @@ import { asHuntgry } from './user-edits'
  *   Apply / Next / Continue / Save / Review (the target and every wrapper it
  *   bubbles through inside the widget);
  * - the check runs again before every event of a press, so a page handler
- *   that turns the target into a submit button mid-sequence stops it.
+ *   that turns the target into a submit button mid-sequence stops it;
+ * - a widget whose options read like consent (agree, accept, certify…) is
+ *   never picked in;
+ * - and every pick runs inside `withSafetyNet`, which cancels any submit and
+ *   any click outside the widget while it runs, puts back outside checkboxes
+ *   and stops picking when the page changes step.
  * Only pointer and mouse events are sent (pointerdown, mousedown, pointerup,
  * mouseup, click); never a key, so nothing can press Enter in a form. The
  * value is read back afterwards; a pick that did not stick is reported.
@@ -37,7 +42,8 @@ export type PickWidget =
 export type PickResult =
   | { status: 'filled'; value: string }
   | { status: 'kept'; value: string }
-  | { status: 'failed'; reason: string }
+  /** `halt`: the safety net caught the page acting outside the field; no more picks in this fill. */
+  | { status: 'failed'; reason: string; halt?: boolean }
 
 const tag = (el: Element) => el.tagName.toLowerCase()
 const text = (el: Element) => (el.textContent ?? '').replace(/\s+/g, ' ').trim()
@@ -45,6 +51,8 @@ const text = (el: Element) => (el.textContent ?? '').replace(/\s+/g, ' ').trim()
 const PLACEHOLDER = /^(select|choose|pick)( one| an option)?\b|^\s*$/i
 /** Labels of the site's own flow buttons: never pressed, whatever widget they sit in. */
 const FLOW_WORDS = /\b(submit|apply|next|continue|save|review)\b/i
+/** Options that read like consent: such a widget is never picked in, whatever was remembered. */
+const CONSENT_OPTION = /\b(consent\w*|certif\w*|agree\w*|acknowledg\w*|accept\w*|authori[sz]e|opt[ -]?in|subscribe)\b/i
 
 /** Elements a page uses to submit or leave: never inside a widget we press. */
 const CONTROLS_OUTSIDE = 'input:not([type="hidden"]), select, textarea'
@@ -105,25 +113,54 @@ export function ownListboxes(widget: Extract<PickWidget, { type: 'listbox' }>): 
   const ids = `${widget.opener.getAttribute('aria-controls') ?? ''} ${widget.opener.getAttribute('aria-owns') ?? ''}`
     .split(/\s+/)
     .filter(Boolean)
-  const owned = new Set<Element>()
+  const candidates = new Set<Element>()
   for (const id of ids) {
     const box = doc.getElementById(id)
-    if (box) owned.add(box)
+    if (box) candidates.add(box)
   }
-  for (const box of Array.from(widget.scope.querySelectorAll('[role="listbox"], [class*="__menu"]'))) owned.add(box)
-  const all = Array.from(doc.querySelectorAll('[role="listbox"]'))
+  for (const box of Array.from(widget.scope.querySelectorAll('[role="listbox"], [class*="__menu"]'))) candidates.add(box)
   if (widget.opener.id) {
-    for (const box of all) if ((box.getAttribute('aria-labelledby') ?? '').split(/\s+/).includes(widget.opener.id)) owned.add(box)
+    for (const box of Array.from(doc.querySelectorAll('[role="listbox"]')))
+      if (idsOf(box, 'aria-labelledby').includes(widget.opener.id)) candidates.add(box)
   }
-  return [...owned]
+  return [...candidates].filter((box) => isOwnListbox(box, widget))
 }
 
-/** The options of the widget's own listboxes (role=option, or react-select's option class). */
+const idsOf = (el: Element, attr: string) => (el.getAttribute(attr) ?? '').split(/\s+/).filter(Boolean)
+
+/** Controls that open a list of their own: another field's widget, never part of this one. */
+const OTHER_OPENERS = '[role="combobox"], [aria-haspopup="listbox"], select'
+
+/**
+ * A referenced or contained element is this field's list only when it is a
+ * list (role=listbox, or react-select's menu inside the widget), does not
+ * name another control as its owner, and holds no other field's opener or
+ * list: a broad region (a panel with other fields) is never a listbox.
+ */
+function isOwnListbox(box: Element, widget: Extract<PickWidget, { type: 'listbox' }>): boolean {
+  const isList = box.getAttribute('role') === 'listbox' || (widget.scope.contains(box) && /__menu\b/.test(box.className))
+  if (!isList) return false
+  const doc = box.ownerDocument
+  const owners = idsOf(box, 'aria-labelledby')
+    .map((id) => doc.getElementById(id))
+    .filter((el): el is HTMLElement => el !== null && el.matches(OTHER_OPENERS))
+  if (owners.some((el) => el !== widget.opener)) return false
+  if (Array.from(box.querySelectorAll(OTHER_OPENERS)).some((el) => el !== widget.opener)) return false
+  // A list inside the list (another widget's) is not ours either.
+  if (box.querySelector('[role="listbox"]')) return false
+  return true
+}
+
+/** The options of the widget's own listboxes (role=option, or react-select's option class), not of nested lists. */
 function listboxOptions(boxes: Element[]): HTMLElement[] {
   const out: HTMLElement[] = []
   for (const box of boxes) {
     const options = box.querySelectorAll<HTMLElement>('[role="option"], [class*="__option"]')
-    for (const o of Array.from(options)) if (!out.includes(o) && o.getAttribute('aria-disabled') !== 'true') out.push(o)
+    for (const o of Array.from(options)) {
+      const list = o.closest('[role="listbox"]')
+      if (list && list !== box) continue
+      if (!out.includes(o) && o.getAttribute('aria-disabled') !== 'true') out.push(o)
+    }
   }
   return out
 }
@@ -168,12 +205,15 @@ function elementRefusal(el: Element, isTarget: boolean, widget: PickWidget, with
   // "continue"), so the opener counts only its shown text; everything else its label, title, value and text.
   const opener = widget.type === 'listbox' && el === widget.opener
   const named = isTarget || t === 'button' || t === 'label' || ['button', 'option', 'menuitem', 'link'].includes(el.getAttribute('role') ?? '')
+  const labelledBy = idsOf(el, 'aria-labelledby')
+    .map((id) => el.ownerDocument.getElementById(id)?.textContent ?? '')
+    .join(' ')
   const words = opener
     ? t === 'button'
-      ? text(el)
+      ? `${text(el)} ${labelledBy}`
       : ''
-    : `${el.getAttribute('aria-label') ?? ''} ${el.getAttribute('title') ?? ''} ${el.getAttribute('value') ?? ''} ${named ? text(el) : ''}`
-  if (FLOW_WORDS.test(words.slice(0, 200))) return 'something labelled like a submit or navigation button'
+    : `${el.getAttribute('aria-label') ?? ''} ${labelledBy} ${el.getAttribute('title') ?? ''} ${el.getAttribute('value') ?? ''} ${named ? text(el) : ''}`
+  if (FLOW_WORDS.test(words.slice(0, 400))) return 'something labelled like a submit or navigation button'
   return null
 }
 
@@ -258,6 +298,82 @@ export interface PickOptions {
   timeoutMs?: number
   /** Whether the person changed the field: checked before every press (also after the menu wait); then kept. */
   touched?: () => boolean
+  /** The page and step the pick happens on (default: URL and first heading); a change stops picking. */
+  pageState?: () => string
+}
+
+/** Events a press could turn into an action elsewhere: blocked outside the widget while a pick runs. */
+const NET_POINTER_EVENTS = ['click', 'auxclick', 'dblclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup']
+
+const defaultPageState = (doc: Document) => () =>
+  `${doc.location?.href ?? doc.URL}|${(doc.querySelector('h1, h2')?.textContent ?? '').trim().slice(0, 200)}`
+
+/**
+ * The safety net around every pick, so a case `refusal` did not foresee
+ * fails closed instead of acting:
+ * - while it runs, capture listeners on the window cancel (preventDefault +
+ *   stopImmediatePropagation) every `submit` event, and every click, mouse
+ *   or pointer event whose target (composedPath()[0]) is outside the field's
+ *   widget and its own listboxes: a label activating an outside checkbox, a
+ *   button turned into a submit button at click time, a handler re-sending
+ *   the click elsewhere;
+ * - it snapshots every checkbox of the page outside the widget and the page
+ *   state (URL and step) first; a changed checkbox is put back, and any of
+ *   these makes the pick fail with `halt`, so the fill stops picking.
+ * The listeners are removed in `finally`.
+ */
+async function withSafetyNet(
+  widget: PickWidget,
+  pageState: () => string,
+  run: () => Promise<PickResult>
+): Promise<PickResult> {
+  const doc = widget.scope.ownerDocument
+  const view = doc.defaultView
+  if (!view) return { status: 'failed', reason: 'The page has no window.' }
+  const inWidget = (node: Node | null): boolean => {
+    if (!node) return false
+    const el = node.nodeType === 1 ? (node as Element) : node.parentElement
+    if (!el) return false
+    if (widget.scope.contains(el)) return true
+    return widget.type === 'listbox' && ownListboxes(widget).some((box) => box.contains(el))
+  }
+  // Every checkbox of the page (the form's, those tied to it with `form=`, and any other), outside the widget.
+  const checkboxes = Array.from(doc.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).filter((c) => !widget.scope.contains(c))
+  const ticked = checkboxes.map((c) => c.checked)
+  const state = pageState()
+  let caught: string | null = null
+  const block = (event: Event, why: string) => {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    caught ??= why
+  }
+  const onSubmit = (event: Event) => block(event, 'the page tried to submit the form')
+  const onPointer = (event: Event) => {
+    const target = (event.composedPath?.()[0] ?? event.target) as Node | null
+    if (!inWidget(target)) block(event, 'a click reached something outside the field')
+  }
+  view.addEventListener('submit', onSubmit, true)
+  for (const type of NET_POINTER_EVENTS) view.addEventListener(type, onPointer, true)
+  let result: PickResult
+  try {
+    result = await run()
+  } catch (err) {
+    result = { status: 'failed', reason: err instanceof Error ? err.message : String(err) }
+  } finally {
+    view.removeEventListener('submit', onSubmit, true)
+    for (const type of NET_POINTER_EVENTS) view.removeEventListener(type, onPointer, true)
+  }
+  checkboxes.forEach((c, i) => {
+    if (c.checked === ticked[i]) return
+    c.checked = ticked[i]
+    caught ??= 'a checkbox outside the field changed (put back)'
+  })
+  if (pageState() !== state) caught ??= 'the page moved to another step'
+  if (caught) {
+    closeMenu(widget)
+    return { status: 'failed', reason: `Huntgry stopped: ${caught}.`, halt: true }
+  }
+  return result
 }
 
 /**
@@ -266,10 +382,16 @@ export interface PickOptions {
  * already shows an answer, or that the person touched, is left alone
  * (`kept`), unless it already shows that answer.
  */
-export async function pick(
+export function pick(widget: PickWidget, choose: (options: string[]) => string | null, options: PickOptions = {}): Promise<PickResult> {
+  return withSafetyNet(widget, options.pageState ?? defaultPageState(widget.scope.ownerDocument), () =>
+    pickInside(widget, choose, options)
+  )
+}
+
+async function pickInside(
   widget: PickWidget,
   choose: (options: string[]) => string | null,
-  { timeoutMs = 1500, touched = () => false }: PickOptions = {}
+  { timeoutMs = 1500, touched = () => false }: PickOptions
 ): Promise<PickResult> {
   const doc = widget.scope.ownerDocument
   const current = pickedValue(widget)
@@ -278,6 +400,7 @@ export async function pick(
     if (widget.type === 'radios' || widget.type === 'buttons') {
       const options: HTMLElement[] = widget.options
       const texts = widget.type === 'radios' ? widget.options.map(radioLabel) : widget.options.map(text)
+      if (texts.some((t) => CONSENT_OPTION.test(t))) return { status: 'failed', reason: 'Its options read like consent.' }
       const chosen = choose(texts)
       if (!chosen) return { status: 'failed', reason: 'None of the options fits your saved answer.' }
       if (current) return same(current, chosen) ? { status: 'filled', value: current } : { status: 'kept', value: current }
@@ -309,6 +432,10 @@ export async function pick(
     }
     const options = listboxOptions(boxes)
     const texts = options.map(text)
+    if (texts.some((t) => CONSENT_OPTION.test(t))) {
+      closeMenu(widget)
+      return { status: 'failed', reason: 'Its options read like consent.' }
+    }
     const chosen = choose(texts)
     if (!chosen) {
       closeMenu(widget)

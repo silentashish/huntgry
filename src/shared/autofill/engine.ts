@@ -606,11 +606,15 @@ export async function pickAnswers(report: FillReport, picks: readonly PickReques
   const deadline = Date.now() + PICK_BUDGET_MS
   for (const req of picks.slice(0, MAX_PICKS)) {
     if (Date.now() > deadline) break
+    const doc = req.el.ownerDocument
+    // The page and step as the adapter sees them: if a pick moves the page on, the safety net stops picking.
+    const pageState = () => `${doc.location?.href ?? doc.URL}|${currentAdapter(doc).stepTitle?.(doc) ?? ''}|${currentAdapter(doc).step?.(doc) ?? 'form'}`
     const widget = req.el.isConnected ? widgetOf(req.el) : null
     if (!widget) continue
     const line = req.line
     const result = await pick(widget, (options) => resolveAnswer(req.fact, req.value, 'select', options), {
-      touched: () => editedInGroup(req.el, kindOf(req.el), req.root)
+      touched: () => editedInGroup(req.el, kindOf(req.el), req.root),
+      pageState
     })
     if (result.status === 'filled') {
       line.outcome = 'filled'
@@ -625,8 +629,10 @@ export async function pickAnswers(report: FillReport, picks: readonly PickReques
       line.reason = 'Already answered; left as is.'
     } else {
       line.outcome = 'rejected'
-      line.reason = `Huntgry could not pick "${(line.suggestion ?? '').slice(0, 80)}" (${result.reason.slice(0, 80)}); pick it yourself.`
+      line.reason = `Huntgry could not pick "${(line.suggestion ?? '').slice(0, 80)}" (${result.reason.slice(0, 120)}); pick it yourself.`
       highlight(widget.scope, 'attention')
+      // The safety net caught the page acting outside the field: no more picks in this fill.
+      if (result.halt) break
     }
   }
   return report

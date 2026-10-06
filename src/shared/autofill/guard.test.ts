@@ -154,7 +154,7 @@ describe('preload bundles', () => {
 
 describe("pick.ts presses only inside the field's widget", () => {
   /** A form with a react-select-like Gender question, its Submit button, and a page that can misbehave on open. */
-  function page(menu: string, { tie = true } = {}) {
+  function page(menu: string, { tie = true, controls = 'g-listbox' } = {}) {
     const dom = new JSDOM(
       `<form id="f"><div class="select__container"><label id="g-label">Gender</label>
          <input role="combobox" id="g" aria-labelledby="g-label"><div class="select__single-value"></div>
@@ -170,7 +170,7 @@ describe("pick.ts presses only inside the field's widget", () => {
     const requestSubmit = vi.spyOn(w.HTMLFormElement.prototype, 'requestSubmit').mockImplementation(() => undefined)
     doc.addEventListener('submit', (e) => e.preventDefault())
     doc.getElementById('g')!.addEventListener('mousedown', () => {
-      if (tie) doc.getElementById('g')!.setAttribute('aria-controls', 'g-listbox')
+      if (tie) doc.getElementById('g')!.setAttribute('aria-controls', controls)
       doc.body.insertAdjacentHTML('beforeend', menu)
     })
     const widget = widgetOf(doc.getElementById('g')!)!
@@ -273,5 +273,92 @@ describe("pick.ts presses only inside the field's widget", () => {
     expect(await pick(widget, female, { timeoutMs: 150 })).toMatchObject({ status: 'failed' })
     expect(handled).toEqual([])
     expect(clicked).not.toContain('stray')
+  })
+
+  it('cancels a submit the page arranges at click time (type changed in a click listener)', async () => {
+    const turned = page('<div role="listbox" id="g-listbox"><button role="option" type="button" form="f" id="opt">Female</button></div>')
+    turned.doc.addEventListener('click', (e) => {
+      if ((e.target as Element).id === 'opt') (e.target as HTMLButtonElement).type = 'submit'
+    }, true)
+    const result = await pick(turned.widget, female, { timeoutMs: 200 })
+    expect(result).toMatchObject({ status: 'failed', halt: true })
+    expect(turned.fired).toEqual([])
+    expect(turned.submit).not.toHaveBeenCalled()
+    expect(turned.requestSubmit).not.toHaveBeenCalled()
+  })
+
+  it('cancels a consent checkbox a label is tied to at click time, and puts it back', async () => {
+    const { doc, widget } = page(
+      '<div role="listbox" id="g-listbox"><label role="option" id="opt">Female</label></div><input type="checkbox" id="consent" form="f">'
+    )
+    doc.addEventListener('click', (e) => {
+      if ((e.target as Element).id === 'opt') (e.target as HTMLLabelElement).htmlFor = 'consent'
+    }, true)
+    const result = await pick(widget, female, { timeoutMs: 200 })
+    expect(result).toMatchObject({ status: 'failed', halt: true })
+    expect((doc.getElementById('consent') as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('reads aria-labelledby names on the path: an option inside an externally named Next button is refused', async () => {
+    const { doc, widget, clicked } = page(
+      '<span id="next-name">Next</span><div role="listbox" id="g-listbox"><button type="button" id="next" aria-labelledby="next-name"><span role="option" id="opt">Female</span></button></div>'
+    )
+    const advanced: string[] = []
+    doc.addEventListener('mousedown', () => doc.getElementById('next')?.addEventListener('click', () => advanced.push('next')), { once: true })
+    expect(await pick(widget, female, { timeoutMs: 200 })).toMatchObject({ status: 'failed' })
+    expect(advanced).toEqual([])
+    expect(clicked).not.toContain('opt')
+  })
+
+  it("does not take another field's listbox inside a region the control names", async () => {
+    const { doc, widget, clicked } = page(
+      `<div id="panel"><input role="combobox" id="other" aria-controls="other-list">
+         <div role="listbox" id="other-list" aria-labelledby="other"><div role="option" id="theirs">Female</div></div></div>`,
+      { controls: 'panel' }
+    )
+    const handled: string[] = []
+    doc.addEventListener('mousedown', () => doc.getElementById('theirs')?.addEventListener('click', () => handled.push('theirs')), { once: true })
+    expect(await pick(widget, female, { timeoutMs: 150 })).toMatchObject({ status: 'failed' })
+    expect(handled).toEqual([])
+    expect(clicked).not.toContain('theirs')
+  })
+
+  it('the safety net: a click re-sent outside, an outside checkbox ticked or a step change stops the pick, and the net is removed after', async () => {
+    const resent = page('<div role="listbox" id="g-listbox"><div role="option" id="opt">Female</div></div>')
+    const outside: string[] = []
+    resent.doc.getElementById('submit')!.addEventListener('click', (e) => {
+      e.preventDefault()
+      outside.push('submit button')
+    })
+    resent.doc.addEventListener('click', (e) => {
+      // A page handler that forwards the option's click to the form's Submit button.
+      if ((e.target as Element).id === 'opt') resent.doc.getElementById('submit')!.dispatchEvent(new resent.doc.defaultView!.MouseEvent('click', { bubbles: true }))
+    })
+    expect(await pick(resent.widget, female, { timeoutMs: 200 })).toMatchObject({ status: 'failed', halt: true })
+    expect(outside).toEqual([])
+    expect(resent.fired).toEqual([])
+    // Removed afterwards: the page's own clicks work again.
+    resent.doc.getElementById('submit')!.dispatchEvent(new resent.doc.defaultView!.MouseEvent('click', { bubbles: true }))
+    expect(outside).toEqual(['submit button'])
+
+    const ticked = page('<div role="listbox" id="g-listbox"><div role="option" id="opt">Female</div></div>')
+    ticked.doc.getElementById('f')!.insertAdjacentHTML('beforeend', '<input type="checkbox" id="news">')
+    ticked.doc.addEventListener('click', (e) => {
+      if ((e.target as Element).id === 'opt') (ticked.doc.getElementById('news') as HTMLInputElement).checked = true
+    })
+    expect(await pick(ticked.widget, female, { timeoutMs: 200 })).toMatchObject({ status: 'failed', halt: true })
+    expect((ticked.doc.getElementById('news') as HTMLInputElement).checked).toBe(false)
+
+    const moved = page('<div role="listbox" id="g-listbox"><div role="option" id="opt">Female</div></div>')
+    moved.doc.addEventListener('click', (e) => {
+      if ((e.target as Element).id === 'opt') moved.doc.defaultView!.history.pushState({}, '', '/apply/step-2')
+    })
+    expect(await pick(moved.widget, female, { timeoutMs: 200 })).toMatchObject({ status: 'failed', halt: true })
+  })
+
+  it('never picks in a widget whose options read like consent', async () => {
+    const { widget, clicked } = page('<div role="listbox" id="g-listbox"><div role="option" id="yes">I agree</div><div role="option">I do not agree</div></div>')
+    expect(await pick(widget, (o) => o[0] ?? null, { timeoutMs: 200 })).toMatchObject({ status: 'failed', reason: expect.stringMatching(/consent/) })
+    expect(clicked).not.toContain('yes')
   })
 })
