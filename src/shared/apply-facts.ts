@@ -78,6 +78,19 @@ function fnv1a(text: string): string {
   return (h >>> 0).toString(16).padStart(8, '0')
 }
 
+/** Longest option text reported to main and the panel. */
+export const MAX_OPTION_CHARS = 120
+
+/**
+ * How an option is named outside the page: its text, or for a longer one a
+ * prefix plus a hash of the whole text, so two long options with the same
+ * start stay apart and the page can find the exact option again.
+ */
+export function boundedOption(text: string): string {
+  if (text.length <= MAX_OPTION_CHARS) return text
+  return `${text.slice(0, MAX_OPTION_CHARS - 12)}… #${fnv1a(text)}`
+}
+
 /** Kinds that are answered the same way: typed text, or one choice out of a list. */
 function kindGroup(kind: string): string {
   if (kind === 'text' || kind === 'textarea') return 'text'
@@ -114,7 +127,13 @@ const RULES: Array<[FactKey, (q: string) => boolean]> = [
       /\b(authori[sz]ed|eligible|legally (able|permitted|allowed|entitled)|permitted|right|entitled) to work\b/.test(q) ||
       /\bwork (authori[sz]ation|permit|eligibility)\b/.test(q)
   ],
-  ['over18', (q) => /\b(18|eighteen) (years|yrs)\b|\b(over|at least|older than) (the age of )?(18|eighteen)\b|\b18 or (older|over)\b|\blegal (working )?age\b/.test(q)],
+  // Affirmative wording only: "Are you under 18?" would invert the answer, so it is left to the user.
+  [
+    'over18',
+    (q) =>
+      !/\b(under|younger|less than|below|minor|not yet)\b/.test(q) &&
+      /\b(18|eighteen) (years|yrs)( of age)? or (older|over|above)\b|\b(over|at least|older than) (the age of )?(18|eighteen)\b|\b18 or (older|over)\b|\blegal (working )?age\b/.test(q)
+  ],
   ['willingToRelocate', (q) => /\brelocat/.test(q)],
   ['noticePeriod', (q) => /\bnotice period\b|\bhow much notice\b|\bweeks? (of )?notice\b/.test(q)],
   ['earliestStart', (q) => /\b(earliest|available|availability|when (can|could) you) (to |date to )?start\b|\bstart date\b/.test(q)],
@@ -142,7 +161,7 @@ export function matchFact(question: string): FactKey | null {
 }
 
 const DECLINE =
-  /\b(decline|prefer not|rather not|dont wish|do not wish|not wish|choose not|wish not|not to (answer|say|disclose|self identify|identify)|not specified|no answer)\b/
+  /\b(decline|prefer not|rather not|dont wish|do not wish|not wish|choose not|wish not|(dont|do not|not) want to (answer|say|disclose|share|self identify|identify|respond)|not to (answer|say|disclose|self identify|identify)|not specified|no answer)\b/
 
 export const isDecline = (text: string): boolean => DECLINE.test(normalizeText(text))
 
@@ -237,8 +256,14 @@ export function displayAnswer(value: string): string {
 export function factsFromProfile(workAuthorization: string): Partial<Record<FactKey, string>> {
   const t = normalizeText(workAuthorization)
   if (!t) return {}
-  if (/\b(h ?1 ?b|visa|opt|stem|cpt|tn|e ?3|o ?1|l ?1|sponsor\w*|ead|pending)\b/.test(t)) return {}
-  if (/\b(citizen|citizenship|green card|permanent resident|lawful permanent|gc holder|national)\b/.test(t)) {
+  // Negations, visas and anything pending: no seed ("Not a US citizen", "green card pending").
+  if (/\b(not|non|no|never|no longer|without|former|expired|applying|applied|pending)\b/.test(t)) return {}
+  if (/\b(h ?1 ?b|visa|opt|stem|cpt|tn|e ?3|o ?1|l ?1|sponsor\w*|ead)\b/.test(t)) return {}
+  // Only US status counts (the forms Huntgry sees ask about the US); "Indian citizen" or a Canadian PR says nothing here.
+  const us = /\b(us|u s|usa|u s a|united states|american)\b/.test(t)
+  const foreign = /\b(canad\w*|uk|british|indian|india|eu|european|australian|mexican|chinese|german|french)\b/.test(t)
+  if (foreign) return {}
+  if (/\bgreen card\b|\blawful permanent resident\b|\blpr\b/.test(t) || (us && /\b(citizen|citizenship|national|permanent resident)\b/.test(t))) {
     return { workAuthorized: 'yes', needsSponsorship: 'no' }
   }
   return {}
@@ -256,6 +281,8 @@ export interface QuestionAnswer {
   fact?: FactKey | null
   /** A direct answer to this question (no fact), e.g. one given in the panel. */
   value?: string
+  /** The exact option the user confirmed for this question (and these options); wins over the fact's value. */
+  option?: string
   /** The user confirmed the mapping (or gave the answer). A model's mapping alone only suggests. */
   confirmed: boolean
 }

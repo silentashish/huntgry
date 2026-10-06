@@ -57,7 +57,8 @@ export function lookup(answers: PageAnswers, question: string, label: string): L
   const q = answers.questions[question]
   if (q) {
     const fact = q.fact ?? undefined
-    return { fact, value: q.value ?? (fact ? answers.facts[fact] : undefined), confirmed: q.confirmed }
+    // The exact option the user confirmed for this very question wins over the fact (which may fit several options).
+    return { fact, value: q.value ?? q.option ?? (fact ? answers.facts[fact] : undefined), confirmed: q.confirmed }
   }
   const fact = matchFact(label)
   // A catalog match is trusted like a confirmation: the fact's value is the user's own.

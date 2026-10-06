@@ -1,3 +1,4 @@
+import { boundedOption } from '../apply-facts'
 import type { FieldKind } from '../apply-types'
 import { asHuntgry } from './user-edits'
 
@@ -76,8 +77,12 @@ function rawLabel(el: FormControl): string {
     if (group) return textOfIds(doc, group.getAttribute('aria-labelledby'))
   }
   if (kind === 'radio') {
-    const legend = el.closest('fieldset')?.querySelector('legend')?.textContent
+    const fieldset = el.closest('fieldset')
+    const legend = fieldset?.querySelector('legend')?.textContent
     if (legend) return legend
+    // Ashby's EEO groups: a fieldset whose first label is the question ("Gender"), not an option's label.
+    const title = Array.from(fieldset?.children ?? []).find((c) => tag(c) === 'label' && !c.querySelector('input'))?.textContent
+    if (title?.trim()) return title
     const question = el.closest('li.application-question, .application-question')?.querySelector('.application-label')
     if (question?.textContent) return question.textContent
   }
@@ -152,11 +157,11 @@ export function radioGroup(radio: HTMLInputElement, root: ParentNode): HTMLInput
   )
 }
 
-/** A radio's own option text ("Yes"), from its label without the control, else its value. */
+/** A radio's own option text ("Yes"), from its label without the control, else its value (see `boundedOption`). */
 export function radioLabel(radio: HTMLInputElement): string {
   const label = radio.labels?.[0] ?? radio.closest('label')
   const text = label ? clean(labelText(label as HTMLLabelElement)) : ''
-  return (text || radio.value || '').slice(0, 120)
+  return boundedOption(text || radio.value || '')
 }
 
 /** Placeholder options: no value, or "Select…", "Choose", "--". */
@@ -166,14 +171,14 @@ function isPlaceholder(option: HTMLOptionElement): boolean {
   return option.value === '' || PLACEHOLDER.test(option.text.trim())
 }
 
-/** The choices a select or radio group offers, as the page words them (at most 30, 120 characters each). */
+/** The choices a select or radio group offers, as the page words them (at most 30; long ones as `boundedOption`). */
 export function optionsOf(el: FormControl, root: ParentNode): string[] {
   const kind = kindOf(el)
   let options: string[] = []
   if (kind === 'select') {
     options = Array.from((el as HTMLSelectElement).options)
       .filter((o) => !o.disabled && !isPlaceholder(o))
-      .map((o) => clean(o.text).slice(0, 120))
+      .map((o) => boundedOption(clean(o.text)))
   } else if (kind === 'radio') {
     options = radioGroup(el as HTMLInputElement, root).map(radioLabel)
   }
@@ -185,7 +190,7 @@ export function chosenOf(el: FormControl, root: ParentNode): string {
   const kind = kindOf(el)
   if (kind === 'select') {
     const option = (el as HTMLSelectElement).selectedOptions?.[0]
-    return option && !isPlaceholder(option) ? clean(option.text) : ''
+    return option && !isPlaceholder(option) ? boundedOption(clean(option.text)) : ''
   }
   if (kind === 'radio') {
     const checked = radioGroup(el as HTMLInputElement, root).find((r) => r.checked)
@@ -195,13 +200,13 @@ export function chosenOf(el: FormControl, root: ParentNode): string {
 }
 
 /**
- * Chooses the option whose text is `optionText` the way a person's choice
+ * Chooses the option named `optionText` (as `optionsOf` reports it) the way a person's choice
  * looks to the page's framework: the select's native `value` setter, then
  * `input` and `change`. No click, no key. Returns whether it shows the option.
  */
 export function setSelectValue(select: HTMLSelectElement, optionText: string): boolean {
   const view = select.ownerDocument.defaultView
-  const option = Array.from(select.options).find((o) => clean(o.text) === optionText)
+  const option = Array.from(select.options).find((o) => boundedOption(clean(o.text)) === optionText)
   if (!view || !option) return false
   const setter = Object.getOwnPropertyDescriptor(view.HTMLSelectElement.prototype, 'value')?.set
   asHuntgry(() => {

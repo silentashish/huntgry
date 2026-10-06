@@ -49,6 +49,8 @@ export const ashby: Adapter = {
   // React radios and the yes/no buttons' hidden checkboxes only take a click (React's change event for them
   // listens to `click`): remembered answers are suggested in the panel, never set (#71).
   clickOnly: ['input[type="radio"]', 'input[type="checkbox"]'],
+  // The voluntary EEO survey is a second `.ashby-application-form-container` inside `.ashby-survey-form-container`.
+  answerRoots: (doc) => Array.from(doc.querySelectorAll('.ashby-survey-form-container')),
 
   // Client-rendered: ready once React has rendered the system fields.
   ready: (doc) => doc.querySelector(`${CONTAINER} #_systemfield_name, ${CONTAINER} #_systemfield_email`) !== null,

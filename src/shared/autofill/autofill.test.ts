@@ -449,6 +449,61 @@ describe('application answers (#71)', () => {
     expect(checked(dom, 'eeo_gender')).toEqual([])
   })
 
+  it('suggests on the captured Ashby form, EEO survey included, and never selects', () => {
+    const dom = new JSDOM(fixture('ashby-form.html'), { url: 'https://jobs.ashbyhq.com/acme/00000000-0000-4000-8000-000000000001/application' })
+    const check = forbidSubmit(dom)
+    const report = fillPage(dom.window.document, VALUES, { text: true, answers: facts({ gender: 'Female' }) })
+    expect(field(report, 'Gender')).toMatchObject({
+      kind: 'radio',
+      fact: 'gender',
+      outcome: 'skipped-unsupported',
+      suggestion: 'Female',
+      suggestedBy: 'saved'
+    })
+    expect(field(report, 'Gender').options).toContain('Female')
+    // The resume autofill pane stays out; nothing in the survey is checked.
+    expect(report.fields.some((f) => /autofill/i.test(f.label))).toBe(false)
+    expect(Array.from(dom.window.document.querySelectorAll<HTMLInputElement>('input[type="radio"]')).some((r) => r.checked)).toBe(false)
+    check()
+  })
+
+  it('leaves an inverse age question alone however the saved age fact reads', () => {
+    const dom = new JSDOM(
+      `<form><label>Email <input name="email" type="email"></label><label for="u">Are you under 18 years of age?</label>
+       <select id="u" name="u"><option value="">Select</option><option>Yes</option><option>No</option></select>
+       <input type="file" name="resume"><button type="submit">Send</button></form>`,
+      { url: GENERIC }
+    )
+    const report = fillPage(dom.window.document, VALUES, { answers: facts({ over18: 'yes' }) })
+    expect(field(report, 'Are you under 18 years of age?')).toMatchObject({ outcome: 'skipped-unsupported' })
+    expect(field(report, 'Are you under 18 years of age?').fact).toBeUndefined()
+    expect(select(dom, '#u').value).toBe('')
+  })
+
+  it('finds a long option again by the name it reported, even when another shares its start', () => {
+    const start = 'I am not a protected veteran, and I have read the definitions of every protected veteran category above, '
+    const long = `${start}so this applies to me.`
+    const other = `${start}but I want to discuss it.`
+    const dom = new JSDOM(
+      `<form><label>Email <input name="email" type="email"></label><label for="v">Veteran status</label>
+       <select id="v" name="v"><option value="">Select</option><option>${other}</option><option>${long}</option></select>
+       <input type="file" name="resume"><button type="submit">Send</button></form>`,
+      { url: GENERIC }
+    )
+    const first = fillPage(dom.window.document, VALUES)
+    const options = field(first, 'Veteran status').options!
+    expect(options).toHaveLength(2)
+    expect(options.every((o) => o.length <= 120)).toBe(true)
+    expect(new Set(options).size).toBe(2)
+    // The panel's pick (the reported name) is written and read back as the exact option.
+    const question = field(first, 'Veteran status').question!
+    const report = fillPage(dom.window.document, VALUES, {
+      answers: { facts: {}, questions: { [question]: { fact: null, value: options[1], confirmed: true } } }
+    })
+    expect(field(report, 'Veteran status')).toMatchObject({ outcome: 'filled', value: options[1] })
+    expect(select(dom, '#v').selectedOptions[0].text).toBe(long)
+  })
+
   it('keeps a choice the page or the user already made', () => {
     const dom = page('lever-form.html', LEVER)
     select(dom, 'select[name="eeo[gender]"]').value = 'Male'

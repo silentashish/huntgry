@@ -38,6 +38,8 @@ interface Planned {
   el: FormControl
   key: FieldKey | null
   score: number
+  /** The container the control was found in, when it is one of the adapter's `answerRoots`. */
+  root?: Element
   /** Set when the planner already knows the outcome (ambiguous, unsupported…). */
   outcome?: FieldReport['outcome']
   reason?: string
@@ -84,11 +86,32 @@ function fieldIdsOf(controls: FormControl[]): Map<FormControl, string> {
 }
 
 /** Controls the adapter marks as pickers or click-only: answers are only suggested for them. */
-function clickOnlyOf(adapter: Adapter, root: Element): Set<Element> {
+function clickOnlyOf(adapter: Adapter, roots: Element[]): Set<Element> {
   const out = new Set<Element>()
-  for (const selector of [...(adapter.choices ?? []), ...(adapter.clickOnly ?? [])])
-    for (const el of Array.from(root.querySelectorAll(selector))) out.add(el)
+  for (const root of roots)
+    for (const selector of [...(adapter.choices ?? []), ...(adapter.clickOnly ?? [])])
+      for (const el of Array.from(root.querySelectorAll(selector))) out.add(el)
   return out
+}
+
+/** The adapter's extra answer-only containers (outside the form root), with their questions. */
+function answerRootsOf(adapter: Adapter, doc: Document, root: Element): Element[] {
+  return (adapter.answerRoots?.(doc) ?? []).filter((r) => r !== root && !root.contains(r) && !r.contains(root))
+}
+
+/** Questions of the extra containers: only ever answered from memory, never matched to contact values. */
+function answerOnlyPlanned(roots: Element[]): Planned[] {
+  return roots.flatMap((root) =>
+    controlsOf(root)
+      .filter((el) => kindOf(el) !== 'file')
+      .map((el): Planned => {
+        const kind = kindOf(el)
+        const choice = kind === 'select' || kind === 'combobox' || kind === 'checkbox' || kind === 'radio'
+        return choice
+          ? { el, key: null, score: 0, root, outcome: 'skipped-unsupported', reason: 'A choice; pick it yourself.' }
+          : { el, key: null, score: 0, root, outcome: 'unmatched', reason: 'Huntgry does not answer this; fill it in.' }
+      })
+  )
 }
 
 /** Decides what each control gets: adapter fields first, then the generic matcher, one field per key. */
@@ -290,9 +313,10 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
     for (const old of Array.from(doc.querySelectorAll(`[${attr}]`))) old.removeAttribute(attr)
   }
   let first: Element | null = null
-  const planned = plan(adapter, root)
+  const extraRoots = answerRootsOf(adapter, doc, root)
+  const planned = [...plan(adapter, root), ...answerOnlyPlanned(extraRoots)]
   const ids = fieldIdsOf(planned.map((p) => p.el))
-  const clickOnly = clickOnlyOf(adapter, root)
+  const clickOnly = clickOnlyOf(adapter, [root, ...extraRoots])
   const answers = options.answers ?? NO_ANSWERS
 
   for (const p of planned) {
@@ -311,7 +335,7 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
       // A question the contact block does not cover: answered from what the user taught Huntgry (#71).
       if (writeText && p.outcome !== 'ambiguous' && answerable(kind) && kind !== 'checkbox') {
         line.fieldId = ids.get(p.el)
-        if (answerField(p.el, line, root, answers, clickOnly.has(p.el))) first ??= p.el
+        if (answerField(p.el, line, p.root ?? root, answers, clickOnly.has(p.el))) first ??= p.el
       }
       report.fields.push(line)
       continue
@@ -396,10 +420,11 @@ export async function verifyFill(
   const adapter = adapterFor(url, doc)
   const root = adapter.formRoot(doc)
   if (!root) return report
-  const planned = plan(adapter, root)
+  const planned = [...plan(adapter, root), ...answerOnlyPlanned(answerRootsOf(adapter, doc, root))]
   const byKey = new Map<FieldKey, FormControl>()
   for (const p of planned) if (p.key && !p.outcome && !byKey.has(p.key)) byKey.set(p.key, p.el)
   const byId = new Map([...fieldIdsOf(planned.map((p) => p.el))].map(([el, id]) => [id, el]))
+  const rootOf = new Map(planned.map((p) => [p.el, p.root ?? root]))
 
   const rewritten: Array<{ line: FieldReport; el: HTMLInputElement | HTMLTextAreaElement; value: string }> = []
   const reanswered: Array<{ line: FieldReport; el: FormControl; value: string }> = []
@@ -410,10 +435,11 @@ export async function verifyFill(
       if (!el) {
         line.outcome = 'rejected'
         line.reason = 'The field disappeared after it was filled.'
-      } else if (chosenOf(el, root) !== line.value) {
-        if (editedInGroup(el, kindOf(el), root)) keepUserAnswer(line, el, root)
+      } else if (chosenOf(el, rootOf.get(el) ?? root) !== line.value) {
+        const at = rootOf.get(el) ?? root
+        if (editedInGroup(el, kindOf(el), at)) keepUserAnswer(line, el, at)
         else {
-          writeAnswer(el, strategyOf(kindOf(el), false), root, line.value)
+          writeAnswer(el, strategyOf(kindOf(el), false), at, line.value)
           reanswered.push({ line, el, value: line.value })
         }
       }
@@ -449,9 +475,10 @@ export async function verifyFill(
   await sleep(doc, settleMs)
   if (pageUrl(doc).href !== report.url) return report
   for (const { line, el, value } of reanswered) {
-    if (editedInGroup(el, kindOf(el), root)) {
-      keepUserAnswer(line, el, root)
-    } else if (el.isConnected && chosenOf(el, root) === value) {
+    const at = rootOf.get(el) ?? root
+    if (editedInGroup(el, kindOf(el), at)) {
+      keepUserAnswer(line, el, at)
+    } else if (el.isConnected && chosenOf(el, at) === value) {
       highlight(el, 'done')
     } else {
       line.outcome = 'rejected'

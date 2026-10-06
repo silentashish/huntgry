@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canonicalAnswer, factsFromProfile, matchFact, questionKey, resolveAnswer, yesNoOf } from './apply-facts'
+import { boundedOption, canonicalAnswer, factsFromProfile, matchFact, questionKey, resolveAnswer, yesNoOf } from './apply-facts'
 
 describe('matchFact', () => {
   it.each([
@@ -31,6 +31,9 @@ describe('matchFact', () => {
     expect(matchFact('Sexual orientation')).toBeNull()
     expect(matchFact('Do you identify as transgender?')).toBeNull()
     expect(matchFact('Why do you want to work here?')).toBeNull()
+    // Inverse age wording would flip the answer: left to the user.
+    expect(matchFact('Are you under 18 years of age?')).toBeNull()
+    expect(matchFact('Are you younger than 18?')).toBeNull()
     expect(matchFact('')).toBeNull()
   })
 })
@@ -50,6 +53,21 @@ describe('resolveAnswer', () => {
       'Yes, I have a disability'
     )
     expect(resolveAnswer('workAuthorized', 'yes', 'radio', ['Yes', 'No'])).toBe('Yes')
+  })
+
+  it('keeps "I do not want to answer" a decline, apart from the No option', () => {
+    const disability = ['Yes, I have a disability', 'No, I do not have a disability', 'I do not want to answer']
+    expect(resolveAnswer('disabilityStatus', 'no', 'radio', disability)).toBe('No, I do not have a disability')
+    expect(resolveAnswer('disabilityStatus', 'decline', 'radio', disability)).toBe('I do not want to answer')
+    expect(canonicalAnswer('disabilityStatus', 'I do not want to answer')).toBe('decline')
+    expect(canonicalAnswer('disabilityStatus', "I don't want to answer")).toBe('decline')
+    // Saved from that form, reused on one offering Yes / No / Prefer not to say: the decline, never "No".
+    expect(resolveAnswer('disabilityStatus', canonicalAnswer('disabilityStatus', 'I do not want to answer'), 'select', ['Yes', 'No', 'Prefer not to say'])).toBe(
+      'Prefer not to say'
+    )
+    expect(resolveAnswer('disabilityStatus', canonicalAnswer('disabilityStatus', 'No, I do not have a disability'), 'select', ['Yes', 'No', 'Prefer not to say'])).toBe(
+      'No'
+    )
   })
 
   it('returns null when nothing fits, never guessing', () => {
@@ -82,6 +100,15 @@ describe('stored answers', () => {
     expect(factsFromProfile('Green card holder')).toEqual({ workAuthorized: 'yes', needsSponsorship: 'no' })
     expect(factsFromProfile('H-1B visa (transfer needed)')).toEqual({})
     expect(factsFromProfile('F-1 OPT')).toEqual({})
+    expect(factsFromProfile('U.S. citizen')).toEqual({ workAuthorized: 'yes', needsSponsorship: 'no' })
+    expect(factsFromProfile('Permanent resident of the United States')).toEqual({ workAuthorized: 'yes', needsSponsorship: 'no' })
+    // Negated, foreign or unqualified status says nothing about working in the US.
+    expect(factsFromProfile('Not a US citizen')).toEqual({})
+    expect(factsFromProfile('Indian citizen')).toEqual({})
+    expect(factsFromProfile('Citizen')).toEqual({})
+    expect(factsFromProfile('Canadian permanent resident')).toEqual({})
+    expect(factsFromProfile('Not a permanent resident')).toEqual({})
+    expect(factsFromProfile('Green card pending')).toEqual({})
     expect(factsFromProfile('')).toEqual({})
   })
 
@@ -90,5 +117,16 @@ describe('stored answers', () => {
     expect(questionKey('will you require visa sponsorship', 'select', ['no', 'yes'])).toBe(a)
     expect(questionKey('Will you require visa sponsorship?', 'radio', ['Yes', 'No', 'Maybe'])).not.toBe(a)
     expect(questionKey('Why us?', 'textarea')).toBe(questionKey('Why us', 'text'))
+  })
+})
+
+describe('boundedOption', () => {
+  it('keeps short options and names long ones by prefix and hash, apart even with the same start', () => {
+    expect(boundedOption('Yes')).toBe('Yes')
+    const a = `${'I identify as one of the protected veteran classifications listed in the explanation above, '.repeat(2)}A`
+    const b = `${a.slice(0, -1)}B`
+    expect(boundedOption(a).length).toBeLessThanOrEqual(120)
+    expect(boundedOption(a)).not.toBe(boundedOption(b))
+    expect(boundedOption(a)).toBe(boundedOption(a))
   })
 })

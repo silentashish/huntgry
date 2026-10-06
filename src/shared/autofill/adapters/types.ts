@@ -37,6 +37,13 @@ export interface Adapter {
    * Remembered answers (#71) are only suggested for them, never written.
    */
   clickOnly?: readonly string[]
+  /**
+   * Containers outside `formRoot` whose questions belong to the application
+   * (Ashby renders its EEO survey in a second form container). Their
+   * controls are only answered or suggested from remembered answers (#71),
+   * never matched to contact values or uploads.
+   */
+  answerRoots?(doc: Document): Element[]
 
   /**
    * Readiness: whether the form is rendered and the page's framework has
