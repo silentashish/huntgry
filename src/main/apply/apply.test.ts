@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JSDOM } from 'jsdom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { factsFromProfile, type PageAnswers } from '@shared/apply-facts'
 import type { ApplySession, FillReport, FillValues } from '@shared/apply-types'
 import { AUTOFILL_CHANNELS, UPLOAD_ATTR } from '@shared/autofill-channels'
 import { detectConfirmation, fillPage, scanPage, uploadStateOf, verifyFill, type UploadKey } from '@shared/autofill/engine'
@@ -11,7 +12,9 @@ import { updateReview, type RecordedReview } from '../review/authority'
 import { contentRevisionOf } from '../review/service'
 import { refusalFor } from '../browser/url'
 import { isLoopbackUrl, localUrlsAllowed } from '../cli/dev-urls'
-import { ApplyService, type ApplyDeps, type ApplyPage } from './service'
+import { answersFile, pageAnswers, readAnswers, rememberAnswer, rememberMappings, setAnswersRoot } from './answers-store'
+import type { MapQuestion } from './map-questions'
+import { ApplyService, type AnswersDeps, type ApplyDeps, type ApplyPage } from './service'
 import { uploadFile, type Cdp } from './upload'
 import { parseFillReport, parsePageScan } from './validate'
 
@@ -46,6 +49,8 @@ class FakeTab implements ApplyPage {
   uploadAnswer: string = 'attached'
   lastReport: FillReport | null = null
   sent: string[] = []
+  /** The answers each fill request carried (#71). */
+  answersSeen: Array<PageAnswers | undefined> = []
   /** When set, fill replies wait here until `releaseFills()` (a slow page). */
   heldFills: Array<() => void> | null = null
 
@@ -75,9 +80,10 @@ class FakeTab implements ApplyPage {
   }
 
   /** The preload's fill: fill, then the verify pass (without its delays). A marker-only pass keeps the text report. */
-  private async fill(values: FillValues, text?: boolean): Promise<FillReport> {
+  private async fill(values: FillValues, text?: boolean, answers?: PageAnswers): Promise<FillReport> {
     const doc = this.dom.window.document
-    const report = await verifyFill(doc, values, fillPage(doc, values, { text }), { settleMs: 0 })
+    this.answersSeen.push(answers)
+    const report = await verifyFill(doc, values, fillPage(doc, values, { text, answers }), { settleMs: 0 })
     if (text !== false) this.lastReport = report
     return report
   }
@@ -114,9 +120,10 @@ class FakeTab implements ApplyPage {
 
   send(channel: string, payload: unknown): void {
     this.sent.push(channel)
-    const { requestId, values, text, key, fileName, timeoutMs } = payload as {
+    const { requestId, values, text, key, fileName, timeoutMs, answers } = payload as {
       requestId: string
       values?: FillValues
+      answers?: PageAnswers
       text?: boolean
       key?: UploadKey
       fileName?: string
@@ -125,7 +132,7 @@ class FakeTab implements ApplyPage {
     const doc = this.dom.window.document
     if (channel === AUTOFILL_CHANNELS.fill && this.heldFills) {
       // The page did the fill already; only its answer is late.
-      const result = this.fill(values as FillValues, text)
+      const result = this.fill(values as FillValues, text, answers)
       this.heldFills.push(() => void result.then((r) => this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result: r })))
       return
     }
@@ -133,7 +140,7 @@ class FakeTab implements ApplyPage {
       await Promise.resolve()
       let result: unknown
       if (channel === AUTOFILL_CHANNELS.detect) result = scanPage(doc)
-      else if (channel === AUTOFILL_CHANNELS.fill) result = await this.fill(values as FillValues, text)
+      else if (channel === AUTOFILL_CHANNELS.fill) result = await this.fill(values as FillValues, text, answers)
       else if (channel === AUTOFILL_CHANNELS.uploadState)
         result =
           this.uploadAnswer === 'engine'
@@ -1224,5 +1231,131 @@ describe('dev-only local URLs', () => {
     expect(await refusalFor('http://localhost:4173/', noDns)).toMatch(/local or private/)
     expect(await refusalFor('http://localhost:4173/', noDns, true)).toBeNull()
     expect(await refusalFor('http://10.0.0.1/', noDns, true)).toMatch(/local or private/)
+  })
+})
+
+describe('application answers (#71)', () => {
+  const POSTING = 'https://jobs.lever.co/acme/00000000-0000-4000-8000-000000000001'
+  const SPONSOR = 'cards[00000000-0000-4000-8000-0000000000c1][field1]'
+  /** The Lever form with a gender question the catalog does not know ("How do you identify?"). */
+  const IDENTIFY = fixture('lever-form.html').replace(
+    '<div class="application-label">Gender</div><div class="application-field"><select name="eeo[gender]"><option value="">Select ...</option><option>Male</option><option>Female</option>',
+    '<div class="application-label">How do you identify?</div><div class="application-field"><select name="eeo[gender]"><option value="">Select ...</option><option>Man</option><option>Woman</option>'
+  )
+  let root: string
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'huntgry-answers-'))
+    setAnswersRoot(root)
+  })
+  afterEach(async () => {
+    // A test may end while the model's mappings are still being written in the background.
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  })
+
+  /** The real store (under a temp "userData") and a fake model: "identify" / "gender" questions are about gender. */
+  function answers(seeds: PageAnswers['facts'] = {}, map?: AnswersDeps['map']) {
+    const calls: MapQuestion[][] = []
+    const deps: AnswersDeps = {
+      load: async () => pageAnswers(await readAnswers(ws), seeds),
+      remember: async (a) => void (await rememberAnswer(ws, a)),
+      rememberMappings: async (m) => void (await rememberMappings(ws, m)),
+      map:
+        map ??
+        (async (questions) => {
+          calls.push(questions)
+          return questions.map((q) => ({ id: q.id, fact: /identify|gender/i.test(q.question) ? ('gender' as const) : null }))
+        })
+    }
+    return { deps, calls }
+  }
+
+  async function open(deps: AnswersDeps, html: string, id = ID) {
+    await application({ 'job-description.md': `Engineer\n${POSTING}\n`, 'resume.pdf': '%PDF' }, id)
+    const tab = new FakeTab('', `${POSTING}/apply`)
+    const { service } = setup(tab, undefined, { answers: deps })
+    await service.start(id)
+    tab.load(html, `${POSTING}/apply`)
+    await until(service, 'filled')
+    return { tab, service }
+  }
+
+  const select = (tab: FakeTab) => tab.dom.window.document.querySelector('select[name="eeo[gender]"]') as HTMLSelectElement
+  const line = (service: ApplyService, label: string) => service.current()!.report!.fields.find((f) => f.label === label)!
+
+  it('sends remembered answers with the fill: a US citizen profile answers sponsorship, no prompt, no model for it', async () => {
+    const { deps, calls } = answers(factsFromProfile('US Citizen'))
+    await rememberAnswer(ws, { question: 'x', label: 'Gender', fact: 'gender', value: 'Female' })
+    const { tab, service } = await open(deps, fixture('lever-form.html'))
+    expect(tab.answersSeen[0]?.facts).toMatchObject({ workAuthorized: 'yes', needsSponsorship: 'no', gender: 'Female' })
+    expect(line(service, 'Will you require visa sponsorship?')).toMatchObject({ outcome: 'filled', value: 'No' })
+    expect(line(service, 'Gender')).toMatchObject({ outcome: 'filled', value: 'Female' })
+    const radio = Array.from(tab.dom.window.document.querySelectorAll<HTMLInputElement>('input[type="radio"]')).find((r) => r.checked)
+    expect(radio && radio.name === SPONSOR && radio.value).toBe('No')
+    // One call for the page's unknown questions: neither the answered ones nor any stored value goes to the model.
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    const sent = JSON.stringify(calls[0])
+    expect(sent).toContain('What interests you about this role?')
+    expect(sent).not.toMatch(/sponsorship|Gender|Female/)
+    // Filling again asks nothing new.
+    await service.fill(service.current()!.id)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(calls).toHaveLength(1)
+  })
+
+  it("only suggests a model's mapping; once confirmed it fills, and the next posting fills it with no model call", async () => {
+    const { deps, calls } = answers()
+    await rememberAnswer(ws, { question: 'x', label: 'Gender', fact: 'gender', value: 'Female' })
+    const first = await open(deps, IDENTIFY)
+    await vi.waitFor(() => expect(line(first.service, 'How do you identify?')).toMatchObject({ fact: 'gender', suggestion: 'Woman', suggestedBy: 'model' }))
+    expect(line(first.service, 'How do you identify?').outcome).toBe('skipped-unsupported')
+    expect(select(first.tab).value).toBe('')
+    expect(calls).toHaveLength(1)
+
+    const fieldId = line(first.service, 'How do you identify?').fieldId!
+    const after = await first.service.answer(first.service.current()!.id, fieldId, 'Woman', true)
+    expect(after.report!.fields.find((f) => f.fieldId === fieldId)).toMatchObject({ outcome: 'filled', value: 'Woman' })
+    expect(select(first.tab).value).toBe('Woman')
+    // Remembered under the temp userData, not in the workspace.
+    expect(JSON.parse(readFileSync(answersFile(ws), 'utf8')).questions[line(first.service, 'How do you identify?').question!]).toMatchObject({
+      fact: 'gender',
+      confirmed: true,
+      source: 'user'
+    })
+    expect(await readdir(ws)).not.toContain('.huntgry')
+
+    const second = await open(deps, IDENTIFY, 'software-engineer/acme/lv-2')
+    expect(line(second.service, 'How do you identify?')).toMatchObject({ outcome: 'filled', value: 'Woman' })
+    expect(select(second.tab).value).toBe('Woman')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(calls).toHaveLength(1)
+  })
+
+  it('checks an answer against the reported field; without Remember it fills once and stores nothing', async () => {
+    const { deps } = answers()
+    const { tab, service } = await open(deps, fixture('lever-form.html'))
+    const id = service.current()!.id
+    const gender = line(service, 'Gender')
+    expect(gender).toMatchObject({ fact: 'gender', options: ['Male', 'Female', 'Decline to self-identify'] })
+    await expect(service.answer('00000000-0000-4000-8000-000000000000', gender.fieldId!, 'Male', true)).rejects.toThrow(/ended/)
+    await expect(service.answer(id, 'select:nope', 'Male', true)).rejects.toThrow(/no longer on the page/)
+    await expect(service.answer(id, gender.fieldId!, 'Attack helicopter', true)).rejects.toThrow(/options the page offers/)
+    await expect(service.answer(id, gender.fieldId!, ' ', true)).rejects.toThrow(/Type an answer/)
+    await service.answer(id, gender.fieldId!, 'Decline to self-identify', false)
+    expect(select(tab).value).toBe('Decline to self-identify')
+    expect(line(service, 'Gender')).toMatchObject({ outcome: 'filled' })
+    expect((await readAnswers(ws)).facts.gender).toBeUndefined()
+    // The upload lines of the first fill stay in the report.
+    expect(line(service, 'Resume/CV').outcome).toBe('uploaded')
+  })
+
+  it('a missing or failing model leaves the fill complete and the questions with the user', async () => {
+    const { deps } = answers({}, async () => {
+      throw new Error('No model available to map questions.')
+    })
+    const { service } = await open(deps, IDENTIFY)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(service.current()!.status).toBe('filled')
+    expect(line(service, 'How do you identify?')).toMatchObject({ outcome: 'skipped-unsupported' })
+    expect(line(service, 'How do you identify?').fact).toBeUndefined()
   })
 })

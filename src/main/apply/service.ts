@@ -12,6 +12,7 @@ import {
   type UploadState
 } from '@shared/apply-types'
 import { embedPageFor } from '@shared/apply-embeds'
+import { NO_ANSWERS, resolveAnswer, type FactKey, type PageAnswers } from '@shared/apply-facts'
 import { applyUrlFor, isTrustedApplyPage } from '@shared/apply-url'
 import { AUTOFILL_CHANNELS, UPLOAD_ATTR } from '@shared/autofill-channels'
 import { reviewBlocker } from '@shared/review-types'
@@ -19,6 +20,7 @@ import { resolveApplicationFile, resolveApplicationFolder } from '../application
 import { readApplication } from '../applications/scan'
 import { approvalDrift } from '../review/service'
 import { isBlockedPage } from '../jobs/blocked'
+import type { Mapping, MapQuestion } from './map-questions'
 import { uploadFile, type Cdp } from './upload'
 import { parseFillReport, parsePageScan, parseUploadState } from './validate'
 
@@ -47,10 +49,27 @@ export interface ApplyPage {
   onClosed(listener: () => void): () => void
 }
 
+/**
+ * Application answers (#71): the memory under userData and the model that
+ * maps unknown questions. Values never go to the model, only labels/options.
+ */
+export interface AnswersDeps {
+  /** What the page gets with each fill: confirmed facts (stored over the profile's) and the question memory. */
+  load(): Promise<PageAnswers>
+  /** The user's answer, to remember: the fact for a question that asks one, else the answer itself. */
+  remember(answer: { question: string; label: string; fact: FactKey | null; value: string }): Promise<void>
+  /** A model's mappings, stored unconfirmed. */
+  rememberMappings(mappings: Array<{ question: string; label: string; fact: FactKey | null }>): Promise<void>
+  /** One model call for the questions nothing knows yet; rejects when no model is available or it fails. */
+  map(questions: MapQuestion[]): Promise<Mapping[]>
+}
+
 export interface ApplyDeps {
   workspace(): Promise<string>
   /** Values from the current master profile. */
   values(): Promise<FillValues>
+  /** Remembered application answers (#71); without them only contact fields are filled. */
+  answers?: AnswersDeps
   openTab(url: string): Promise<string>
   navigate(tabId: string, url: string): Promise<unknown>
   page(tabId: string): ApplyPage
@@ -73,6 +92,12 @@ interface Context {
   tabId: string
   page: ApplyPage
   values: FillValues
+  /** Remembered answers, loaded at start and after the user teaches one (#71). */
+  answers: PageAnswers
+  /** Answers the user gave in the panel without Remember: this session only, by question key. */
+  once: Record<string, string>
+  /** Question keys already sent to the model this session, so a page costs at most one call. */
+  asked: Set<string>
   resumePath: string
   coverPath: string | null
   /** Listeners of the session's tab (replaced when a popup takes over). */
@@ -115,6 +140,8 @@ interface Pending {
 }
 
 const DEFAULT_RETRIES = [1000, 3000]
+/** Questions of one page sent to the model at most (the call's own bound). */
+const MAX_MAPPED = 40
 /** The preload waits for the page to settle (up to ~6 s) before it answers a detect. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 const DEFAULT_UPLOAD_CONFIRM_MS = 10_000
@@ -164,6 +191,7 @@ export class ApplyService {
     })
     const coverPath = await resolveApplicationFile(workspace, applicationId, 'cover.pdf').catch(() => null)
     const values = await this.deps.values()
+    const answers = (await this.deps.answers?.load().catch(() => null)) ?? NO_ANSWERS
     const applyUrl = applyUrlFor(record.jobUrl)
 
     this.end()
@@ -174,6 +202,9 @@ export class ApplyService {
       tabId,
       page: this.deps.page(tabId),
       values,
+      answers,
+      once: {},
+      asked: new Set(),
       resumePath,
       coverPath,
       unsubscribe: [],
@@ -440,7 +471,7 @@ export class ApplyService {
     this.update({ status: 'filling', message: null })
     try {
       // The preload waits for the page to settle, fills, then checks a moment later that the values held.
-      let report = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { values: ctx.values }))
+      let report = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, this.fillPayload(ctx)))
       if (!current()) return
       if (report.step && report.step !== 'form') {
         // Fill form pressed on a step that is the user's (a sign-in wall…): the page was left untouched.
@@ -467,12 +498,13 @@ export class ApplyService {
         if (verified && report.uploadOrder === 'text-first') report = withTextFrom(report, parseFillReport(verified))
       }
       if (report.uploadOrder === 'files-first') {
-        const text = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { values: ctx.values, text: true }))
+        const text = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { ...this.fillPayload(ctx), text: true }))
         if (!current()) return
         report = withFilesFrom(text, report)
       }
       this.markHandled(ctx, report)
       this.update({ status: 'filled', ats: report.ats, report, message: summary(report.fields) })
+      void this.learn(ctx, report)
       if (ctx.recheck) {
         ctx.recheck = false
         // Fields the step rendered meanwhile get filled now (finally clears fillingSeq first).
@@ -489,6 +521,105 @@ export class ApplyService {
           this.update({ status: 'ready', message: 'Press Fill form to fill this page.' })
         }
       }
+    }
+  }
+
+  /** What a fill sends the page: the profile values and the answers (this session's own on top). */
+  private fillPayload(ctx: Context): { values: FillValues; answers: PageAnswers } {
+    const questions = { ...ctx.answers.questions }
+    for (const [question, value] of Object.entries(ctx.once)) questions[question] = { ...questions[question], value, confirmed: true }
+    return { values: ctx.values, answers: { facts: ctx.answers.facts, questions } }
+  }
+
+  /**
+   * After a fill (#71): the questions nothing knows yet (no fact from the
+   * catalog, nothing in the memory) go to the model in one call, labels and
+   * options only. Its mappings are stored unconfirmed and shown as
+   * suggestions; they are never written until the user confirms one. A
+   * missing CLI, a timeout or a bad reply leaves the fields as they are.
+   */
+  private async learn(ctx: Context, report: FillReport): Promise<void> {
+    const answers = this.deps.answers
+    if (!answers) return
+    const unknown = new Map<string, FieldReport>()
+    for (const f of report.fields) {
+      if (!f.question || !f.fieldId || f.fact || f.outcome === 'filled' || f.outcome === 'kept') continue
+      if (ctx.answers.questions[f.question] || ctx.once[f.question] || ctx.asked.has(f.question)) continue
+      if (!unknown.has(f.question)) unknown.set(f.question, f)
+    }
+    if (unknown.size === 0) return
+    const asked = [...unknown.values()].slice(0, MAX_MAPPED)
+    for (const f of asked) ctx.asked.add(f.question!)
+    const byId = new Map(asked.map((f, i) => [`q${i + 1}`, f]))
+    let mappings: Mapping[]
+    try {
+      mappings = await answers.map([...byId].map(([id, f]) => ({ id, question: f.label, kind: f.kind, options: f.options ?? [] })))
+    } catch {
+      return
+    }
+    if (this.ctx !== ctx) return
+    const learned = mappings
+      .filter((m) => byId.has(m.id))
+      .map((m) => ({ question: byId.get(m.id)!.question!, label: byId.get(m.id)!.label, fact: m.fact }))
+    if (learned.length === 0) return
+    await answers.rememberMappings(learned).catch(() => undefined)
+    for (const l of learned) ctx.answers.questions[l.question] ??= { fact: l.fact, confirmed: false }
+    const current = this.session?.report
+    if (this.ctx !== ctx || !current || current.url !== report.url) return
+    const facts = new Map(learned.filter((l) => l.fact).map((l) => [l.question, l.fact as FactKey]))
+    const fields = current.fields.map((f) => {
+      const fact = f.question ? facts.get(f.question) : undefined
+      if (!fact || f.fact || f.outcome === 'filled' || f.outcome === 'kept') return f
+      const value = ctx.answers.facts[fact]
+      const suggestion = value ? resolveAnswer(fact, value, f.kind, f.options ?? []) : null
+      return suggestion
+        ? { ...f, fact, suggestion, suggestedBy: 'model' as const, reason: 'Suggested from your saved answers; confirm it below.' }
+        : { ...f, fact, reason: 'Answer it once below; Huntgry remembers it.' }
+    })
+    this.update({ report: { ...current, fields } })
+  }
+
+  /**
+   * The user answered a question in the panel (#71). The field must be one
+   * the page reported, and a select or radio answer one of its options. With
+   * `remember` the answer is saved (main's store under userData); without it
+   * it holds for this session. Then the page is filled again (typed fields
+   * and choices only; the PDFs stay attached).
+   */
+  async answer(sessionId: string, fieldId: string, value: string, remember: boolean): Promise<ApplySession> {
+    const ctx = this.require(sessionId)
+    const field = this.session?.report?.fields.find((f) => f.fieldId === fieldId)
+    if (!field?.question) throw new Error('That question is no longer on the page. Press Fill again.')
+    const answer = value.trim()
+    if (!answer || answer.length > 500) throw new Error('Type an answer (at most 500 characters).')
+    if ((field.kind === 'select' || field.kind === 'radio') && !(field.options ?? []).includes(answer)) {
+      throw new Error('Pick one of the options the page offers.')
+    }
+    if (remember && this.deps.answers) {
+      await this.deps.answers.remember({ question: field.question, label: field.label, fact: field.fact ?? null, value: answer })
+      ctx.answers = (await this.deps.answers.load().catch(() => null)) ?? ctx.answers
+    }
+    if (this.ctx !== ctx) throw new Error('This apply session has ended. Press Apply again.')
+    // This page takes the exact option the user picked (a saved fact may match several of its options).
+    ctx.once[field.question] = answer
+    await this.refill(ctx)
+    return this.session as ApplySession
+  }
+
+  /** Fills the current page again for an answer, without uploading again; the report keeps the upload lines. */
+  private async refill(ctx: Context): Promise<void> {
+    if (ctx.fillingSeq !== null) throw new Error('Huntgry is still filling this page. Try again in a moment.')
+    const seq = ctx.loadSeq
+    ctx.fillingSeq = seq
+    const current = () => this.ctx === ctx && ctx.loadSeq === seq
+    try {
+      const text = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { ...this.fillPayload(ctx), text: true }))
+      if (!current() || (text.step && text.step !== 'form')) return
+      const previous = this.session?.report
+      const report = previous && previous.url === text.url ? withFilesFrom(text, previous) : text
+      this.update({ status: 'filled', report, message: summary(report.fields) })
+    } finally {
+      if (ctx.fillingSeq === seq) ctx.fillingSeq = null
     }
   }
 

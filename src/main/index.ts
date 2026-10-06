@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import icon from '../../resources/icon.png?asset'
 import { stopApplicationsWatcher } from './applications/ipc'
 import { handleFileScheme, registerFileScheme } from './applications/protocol'
+import { setAnswersRoot } from './apply/answers-store'
 import { stopApply } from './apply/ipc'
 import { attachBrowser, destroyBrowser } from './browser/manager'
 import { setPackagedBuild } from './cli/env'
@@ -19,6 +20,8 @@ import { registerIpcHandlers } from './ipc'
 app.setName('Huntgry')
 // Review decisions and standing approvals live under userData, outside every agent's writable roots (#31).
 setReviewAuthorityRoot(() => join(app.getPath('userData'), 'review'))
+// Remembered application answers (gender, veteran status…) too: never in the workspace (#71).
+setAnswersRoot(() => join(app.getPath('userData'), 'apply-answers'))
 // CLI discovery's e2e escape hatch (HUNTGRY_E2E) is only honoured by unpackaged builds.
 setPackagedBuild(app.isPackaged)
 
