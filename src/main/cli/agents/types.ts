@@ -94,6 +94,11 @@ export interface AgentAdapter {
   explainFailure(stderr: string, version: string | null): string | null
 }
 
+/** The turn-end says something about what the turn used (a failed Codex turn reports nothing). */
+export function reportsUsage(s: TurnEndSignal): boolean {
+  return s.usage !== undefined || s.costUsd !== undefined || s.models !== undefined
+}
+
 export const isObj = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v)
 export const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0)
 

@@ -589,6 +589,13 @@ describe('RunManager metrics (#44)', () => {
     expect(waiting.turnStartedAt).toBeUndefined()
   })
 
+  it('a failed Codex turn that reports no usage is "usage unknown", not a free turn', async () => {
+    const { id } = await manager.start({ ...params, notes: 'FAIL_TURN' }, { ...codexCtx(), model: 'gpt-6.1-sol' })
+    const failed = await until(id, (r) => r.status === 'failed' && !r.live && (r.metrics?.length ?? 0) === 1)
+    expect(failed.metrics![0]).toMatchObject({ ok: false, usageIncomplete: true, model: 'gpt-6.1-sol', usage: { inputTokens: 0, outputTokens: 0 } })
+    expect(failed.totals).toMatchObject({ incompleteTurns: 1 })
+  })
+
   it('a failed turn records its tokens and time (Claude error result)', async () => {
     const { id } = await manager.start({ ...params, notes: 'BUILT_THEN_ERROR' }, ctx())
     const failed = await until(id, (r) => r.status === 'failed' && !r.live)

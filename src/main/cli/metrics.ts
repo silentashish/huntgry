@@ -1,6 +1,6 @@
 import { addUsage, estimateTurn, MODEL_PRICES, normalizeModelId, runTotals, totalTokens, ZERO_USAGE, type ModelPrice } from '@shared/pricing'
 import type { AgentId, CliCounters, ModelTurnUsage, RunSummary, TokenUsage, TurnMetrics } from '@shared/runner-types'
-import { isObj, type TurnEndSignal } from './agents/types'
+import { isObj, reportsUsage, type TurnEndSignal } from './agents/types'
 import { adapterFor } from './agents'
 
 /**
@@ -150,7 +150,9 @@ export function backfillMetrics(
 
   let partials = new Map<string, { model?: string; usage: TokenUsage }>()
   const close = (ok: boolean, share: TurnShare | null, signal?: TurnEndSignal) => {
-    if (!share && !signal) {
+    // No share: the turn never ended, or its end reported nothing.
+    const incomplete = !share
+    if (!share) {
       // The turn never ended: what the CLI reported per request until then.
       const p = partialShare(partials.values(), model)
       if (p) {
@@ -176,7 +178,7 @@ export function backfillMetrics(
           ...(apiMs !== undefined ? { apiMs } : {}),
           model: m,
           ok,
-          ...(!signal ? { usageIncomplete: true as const } : {})
+          ...(incomplete ? { usageIncomplete: true as const } : {})
         },
         share,
         table
@@ -204,7 +206,8 @@ export function backfillMetrics(
     if (signal.type !== 'turn-end') continue
     const share = turnShare(signal, counters, signal.model ?? model)
     counters = share.counters
-    close(!signal.error, share, signal)
+    // A turn end that reports nothing (Codex `turn.failed`) counts as a turn that never ended.
+    close(!signal.error, reportsUsage(signal) ? share : null, signal)
   }
   if (open && turn > 0) close(false, null)
   return { metrics, counters, model }

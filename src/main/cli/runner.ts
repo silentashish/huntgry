@@ -6,7 +6,7 @@ import { LineBuffer, parseEventLine, type HuntgryEvent } from '@shared/transcrip
 import { buildFirstPrompt, runTitle, type SandboxPaths } from './command'
 import { recordJobSource } from '../applications/tracking'
 import { adapterFor, type AgentAdapter } from './agents'
-import type { PartialUsage } from './agents/types'
+import { reportsUsage, type PartialUsage } from './agents/types'
 import { backfillMetrics, legacyFields, partialShare, turnMetrics, turnModel, turnShare } from './metrics'
 import { appendEvent, findOutputFolder, newRunId, readEvents, readRun, saveRun } from './runs'
 
@@ -514,7 +514,9 @@ export class RunManager {
       // The CLI's counters are the session's running totals: this turn's share is the difference.
       const share = turnShare(signal, r.cliCounters, signal.model ?? entry.model)
       r.cliCounters = share.counters
-      this.endTurn(entry, { ...share, apiMs: signal.apiMs, model: signal.model }, !signal.error)
+      // A turn end that reports nothing (Codex `turn.failed`) is not a free turn: it counts as one that
+      // never ended (what was reported per request, else "usage unknown").
+      this.endTurn(entry, reportsUsage(signal) ? { ...share, apiMs: signal.apiMs, model: signal.model } : null, !signal.error)
       if (signal.sessionId) r.sessionId = signal.sessionId
       // A per-turn agent that exits after a turn with no output and nothing done would leave the
       // run waiting for a reply to nothing: fail it instead, so the user sees it and can retry.
