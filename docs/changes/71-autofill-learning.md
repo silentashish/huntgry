@@ -114,13 +114,18 @@ it already fills.
 - **One module:** `src/shared/autofill/pick.ts` is the only code that dispatches synthetic events. `fillPage` queues
   the picks on the report, and `PageSession.fill` runs them through `pickAnswers` before the verify pass: at most 25,
   within 8 s, well inside main's 15 s wait.
-- **How a press is bounded** (`refusal`, checked before every press):
-  - the target must be inside the field's own widget: its control, its button group or radio group, or the listbox
-    that control owns. A listbox counts as owned when it is referenced by `aria-controls` / `aria-owns`, is inside
-    the widget, has an `aria-labelledby` naming the control, or, for popups rendered elsewhere (Workday), is the
-    **single** listbox that appeared after the press;
-  - it is refused when it is a link, a `type=submit` control, a button that would submit its form, a button outside
-    the widget, a disabled element, or anything labelled Submit / Apply / Next / Continue / Save / Review.
+- **How a press is bounded** (`refusal`, checked again **before every event** of a press, so a page handler that turns
+  the target into a submit button, moves it or disables it mid-sequence stops the press):
+  - the target must be inside the field's own widget: its control, its button group or radio group, or a listbox the
+    control **demonstrably owns**. Owned means the listbox is named by the control's `aria-controls` / `aria-owns`,
+    sits inside the widget, or names the control in `aria-labelledby`. An untied popup is never used: the pick fails
+    and stays a suggestion. For Workday this means a dropdown is picked only if its popup names its button. A live
+    check of Workday's markup is a follow-up;
+  - everything the press reaches or activates is checked, not just the target: every wrapper it bubbles through
+    inside the widget, any activatable element around the widget, and a label's control;
+  - refused: links, submit / image / reset controls, buttons that would submit their form, checkbox, file and button
+    inputs, labels whose control is outside the widget (or is a checkbox or button), buttons enclosing the widget,
+    disabled elements, and anything named Submit / Apply / Next / Continue / Save / Review.
 - **Events:** pointerdown, mousedown, pointerup, mouseup and click on the control and then on the option element.
   Never a keyboard event, so nothing can press Enter in a form. A menu left open is closed by blurring the control.
 - **Read back:** react-select's single value, the Workday button's text, the pressed button (`aria-pressed`) or the
@@ -129,8 +134,17 @@ it already fills.
 - **Guard:** `guard.test.ts` keeps its scan for every other file. It allowlists exactly `pick.ts` for mouse and pointer
   event constructors; submit, requestSubmit, `.click()`, keyboard and submit events stay forbidden there too. New guard
   tests show that `pick` refuses out-of-widget targets, links, submit buttons, flow-labelled options, a submit button
-  posing as an option, and listboxes it cannot tie to the widget. No key or submit event fires in any of them.
-- **Never:** consent, certification and acknowledgement checkboxes are still never ticked.
+  posing as an option, and listboxes it cannot tie to the widget. Review round 2 added: a label for an outside image
+  submit or a consent checkbox, an option nested in a Next button, a target turned into a submit button or moved
+  mid-press, and a single untied listbox. No key or submit event fires in any of them.
+- **User edits:** a click-only field the person touched, or a combobox they are typing into, is `kept`. Edits are
+  checked again before each press and after the menu opens.
+- **After the fill:** the verify pass (and the one after an upload) re-reads every picked widget from the current page.
+  A pick that a late re-render wiped goes to the user as `rejected`, with the saved answer as its suggestion; a
+  change the user made is `kept`. Nothing is pressed again.
+- **Never:** consent, certification, acknowledgement, arbitration and signature questions are refused before any
+  memory lookup, for every strategy, even with a remembered answer. A checkbox becomes a yes/no question only in
+  Ashby's screening shape: a hidden `tabindex=-1` checkbox in a `yesno` group of exactly a Yes and a No button.
 - **Still not filled:** the Workday steps that #65 never fills (Application Questions, Voluntary Disclosures). Picking
   applies only to the steps autofill already fills, and those steps stay a follow-up.
 
