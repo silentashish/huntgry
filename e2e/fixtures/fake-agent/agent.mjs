@@ -25,8 +25,12 @@
 //   FAKE_AGENT_SLOW_MS  the pause of `slow`, default 1500
 //   claudeVersion / codexVersion / agyVersion in config.json: what `--version` prints
 //
+// One-shot calls (`claude -p … --json-schema …` with the prompt on stdin, `agy … --json-schema … --print=<prompt>`),
+// as the Apply question mapping makes them (#71), answer one JSON result whose `structured_output.mappings` maps
+// questions mentioning "gender" to `gender` and the rest to null; the marker records `mode: 'oneshot'` and the prompt.
+//
 // Every spawn appends a line to `$FAKE_AGENT_HOME/invocations.jsonl` (the marker the tests
-// read): `{ agent, mode: 'version' | 'auth' | 'run', pid, cwd, args, resume, at }`, then
+// read): `{ agent, mode: 'version' | 'auth' | 'run' | 'oneshot', pid, cwd, args, resume, at }`, then
 // `{ event: 'turn-start' | 'turn-end', pid, turn, at }` around each turn of a run.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -80,6 +84,27 @@ if (agent === 'claude' && args[0] === 'auth' && args[1] === 'status') {
   process.stdout.write(
     `${JSON.stringify({ loggedIn: true, email: 'fake@example.com', authMethod: 'claude.ai', subscriptionType: 'max' })}\n`
   )
+  process.exit(0)
+}
+
+// --- a one-shot structured call (the Apply question mapping, #71) ----------------------------
+
+const printArg = args.find((a) => a.startsWith('--print='))
+if (args.includes('--json-schema') && (args.includes('-p') || (agent === 'agy' && printArg && printArg !== '--print='))) {
+  let prompt = printArg && printArg !== '--print=' ? printArg.slice('--print='.length) : ''
+  if (!prompt) {
+    process.stdin.setEncoding('utf8')
+    for await (const chunk of process.stdin) prompt += chunk
+  }
+  mark({ mode: 'oneshot', args, cwd: process.cwd(), prompt })
+  let questions = []
+  try {
+    questions = JSON.parse(prompt.slice(prompt.indexOf('['), prompt.lastIndexOf(']') + 1))
+  } catch {
+    // Not a mapping prompt: no mappings.
+  }
+  const mappings = questions.map((q) => ({ id: String(q.id), factKey: /gender/i.test(String(q.question)) ? 'gender' : null }))
+  process.stdout.write(`${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, structured_output: { mappings }, total_cost_usd: 0.017 })}\n`)
   process.exit(0)
 }
 

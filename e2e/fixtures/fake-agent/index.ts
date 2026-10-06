@@ -49,9 +49,11 @@ export interface FakeAgentInvocation {
   pid: number
   /** Epoch ms. */
   at: number
-  mode?: 'version' | 'auth' | 'run'
-  /** `run` only. */
+  mode?: 'version' | 'auth' | 'run' | 'oneshot'
+  /** `run` and `oneshot`. */
   args?: string[]
+  /** `oneshot` only: the prompt it was given (stdin, or agy's `--print=` value). */
+  prompt?: string
   cwd?: string
   /** The session id the process was told to resume, or `null` for a fresh one. */
   resume?: string | null

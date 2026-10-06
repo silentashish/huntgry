@@ -9,6 +9,7 @@ import { buildTranscript, LineBuffer, parseEventLine } from '../../../src/shared
 import { parseAuthStatus } from '../../../src/main/cli/install-claude'
 import { CLAUDE_VERSION_RECOMMENDED, parseClaudeVersion, versionAtLeast } from '../../../src/main/cli/version'
 import { parsePreflight } from '../../../src/main/cli/env'
+import { agyMappingArgs, claudeMappingArgs, mappingPrompt, parseMappingOutput, type MapQuestion } from '../../../src/main/apply/map-questions'
 import { extractText, getDocumentProxy } from 'unpdf'
 
 /**
@@ -243,5 +244,35 @@ describe('fixture skill', () => {
     expect(items.length).toBeGreaterThan(3)
     expect(items.filter((i) => i.status === 'missing')).toEqual([])
     expect(items.map((i) => i.name)).toContain('pdflatex')
+  })
+})
+
+describe('one-shot structured calls (the Apply question mapping, #71)', () => {
+  const QUESTIONS = [
+    { id: 'q1', question: 'Your gender identity', kind: 'select', options: ['Man', 'Woman'] },
+    { id: 'q2', question: 'Why us?', kind: 'textarea', options: [] }
+  ]
+
+  it('answers what parseMappingOutput reads, for claude (stdin) and agy (--print=), and records the prompt', async () => {
+    const prompt = mappingPrompt(QUESTIONS as MapQuestion[])
+    const claude = execFileSync(process.execPath, [SHIM, 'claude', ...claudeMappingArgs()], {
+      input: prompt,
+      env: { ...process.env, FAKE_AGENT_HOME: home },
+      cwd
+    }).toString()
+    const agy = execFileSync(process.execPath, [SHIM, 'agy', ...agyMappingArgs(prompt)], { env: { ...process.env, FAKE_AGENT_HOME: home }, cwd }).toString()
+    const ids = new Set(['q1', 'q2'])
+    for (const out of [claude, agy]) {
+      expect(parseMappingOutput(out, ids)).toEqual([
+        { id: 'q1', fact: 'gender' },
+        { id: 'q2', fact: null }
+      ])
+    }
+    const marks = (await readFile(join(home, 'invocations.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l))
+    expect(marks.map((m) => [m.agent, m.mode])).toEqual([
+      ['claude', 'oneshot'],
+      ['agy', 'oneshot']
+    ])
+    expect(marks[0].prompt).toContain('Your gender identity')
   })
 })
