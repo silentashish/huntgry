@@ -8,7 +8,10 @@ import { HUNTGRY_DIR } from '../workspace/constants'
 
 export const prefsPath = (workspace: string) => join(workspace, HUNTGRY_DIR, 'jobs-prefs.json')
 
-export async function readPrefs(workspace: string): Promise<JobsPrefs> {
+/** One read-modify-write at a time per workspace, so a filter change and a finishing search cannot undo each other. */
+const pending = new Map<string, Promise<unknown>>()
+
+async function load(workspace: string): Promise<JobsPrefs> {
   try {
     return normalizePrefs(JSON.parse(await readFile(prefsPath(workspace), 'utf8')))
   } catch {
@@ -16,12 +19,15 @@ export async function readPrefs(workspace: string): Promise<JobsPrefs> {
   }
 }
 
-/** One read-modify-write at a time per workspace, so a filter change and a finishing search cannot undo each other. */
-const pending = new Map<string, Promise<unknown>>()
+/** The saved preferences, after any change still being written (leaving the page right after a change reads it back). */
+export async function readPrefs(workspace: string): Promise<JobsPrefs> {
+  await pending.get(workspace)?.catch(() => undefined)
+  return load(workspace)
+}
 
 async function change(workspace: string, edit: (p: JobsPrefs) => JobsPrefs): Promise<JobsPrefs> {
   const run = (pending.get(workspace) ?? Promise.resolve()).catch(() => undefined).then(async () => {
-    const next = edit(await readPrefs(workspace))
+    const next = edit(await load(workspace))
     await mkdir(join(workspace, HUNTGRY_DIR), { recursive: true })
     const path = prefsPath(workspace)
     const tmp = `${path}.${randomBytes(4).toString('hex')}.tmp`
