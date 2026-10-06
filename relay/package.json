@@ -1,0 +1,22 @@
+{
+  "name": "@huntgry/relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Huntgry relay: a Cloudflare Worker + one Durable Object per room that queues opaque ciphertext between the desktop and each paired phone (ADR-0001)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "sh scripts/deploy.sh",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@huntgry/remote-protocol": "0.1.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260930.2",
+    "esbuild": "^0.28.2",
+    "miniflare": "^4.20260730.0",
+    "wrangler": "^4.145.0"
+  }
+}
