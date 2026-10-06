@@ -152,6 +152,14 @@ const RULES: Array<[FactKey, (q: string) => boolean]> = [
   ['currentCity', (q) => /\b(current|which|what) city\b/.test(q)]
 ]
 
+/**
+ * Consent, certification, acknowledgement, arbitration, signature: never
+ * answered, written or picked from memory, whatever was remembered for it.
+ */
+export function isConsentQuestion(question: string): boolean {
+  return NEVER.test(normalizeText(question))
+}
+
 /** The fact a question asks for, from its text alone, or null. Deterministic; consent-like text never matches. */
 export function matchFact(question: string): FactKey | null {
   const q = normalizeText(question)

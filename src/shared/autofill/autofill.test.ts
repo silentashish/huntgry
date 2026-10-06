@@ -7,6 +7,7 @@ import type { FieldReport, FillReport, FillValues } from '../apply-types'
 import { UPLOAD_ATTR } from '../autofill-channels'
 import { setNativeValue } from './dom'
 import { detectConfirmation, fillPage, pendingPicks, pickAnswers, scanPage, verifyFill } from './engine'
+import { watchUserEdits } from './user-edits'
 import { identifierWords } from './match'
 
 const fixture = (name: string) => readFileSync(join(__dirname, 'fixtures', name), 'utf8')
@@ -655,16 +656,90 @@ describe('picking remembered answers in click-only widgets (#71, owner decision)
     check()
   })
 
+  it('never presses in a popup that is not tied to the dropdown, and leaves it to the user', async () => {
+    const dom = new JSDOM(fixture('workday-my-information.html'), { url: WORKDAY })
+    const doc = dom.window.document
+    const button = doc.getElementById('source--source')!
+    const pressed: string[] = []
+    button.addEventListener('click', () => {
+      // One popup appears, but nothing ties it to this button: it could be any other widget's.
+      doc.body.insertAdjacentHTML('beforeend', '<ul role="listbox"><li role="option" id="stray">LinkedIn</li></ul>')
+      doc.getElementById('stray')!.addEventListener('click', () => pressed.push('stray'))
+    })
+    const first = fillPage(doc, VALUES, { answers: facts({}), pick: true })
+    const question = field(first, 'How Did You Hear About Us?').question!
+    const report = fillPage(doc, VALUES, {
+      answers: { facts: {}, questions: { [question]: { fact: null, value: 'LinkedIn', confirmed: true } } },
+      pick: true
+    })
+    await pickAnswers(report)
+    expect(pressed).toEqual([])
+    expect(field(report, 'How Did You Hear About Us?')).toMatchObject({ outcome: 'rejected', suggestion: 'LinkedIn' })
+    expect(button.textContent).toBe('Select One')
+  })
+
+  it('never answers or picks a certification, even when a "Yes" was remembered for it', async () => {
+    const dom = new JSDOM(
+      `<div class="ashby-application-form-container"><label for="_systemfield_name">Name</label><input id="_systemfield_name">
+       <label for="cert">I certify that all information is accurate</label>
+       <div class="ashby-application-form-input-yesno"><button data-option="yes" aria-pressed="false">Yes</button>
+       <button data-option="no" aria-pressed="false">No</button><input type="checkbox" tabindex="-1" name="cert"></div></div>`,
+      { url: ASHBY }
+    )
+    const doc = dom.window.document
+    const question = questionKey('I certify that all information is accurate', 'radio', ['Yes', 'No'])
+    const report = fillPage(doc, VALUES, {
+      text: true,
+      answers: { facts: {}, questions: { [question]: { fact: null, value: 'Yes', confirmed: true } } },
+      pick: true
+    })
+    expect(pendingPicks(report)).toEqual([])
+    const line = report.fields.find((f) => f.label === 'I certify that all information is accurate')
+    expect(line?.question).toBeUndefined()
+    expect(line?.suggestion).toBeUndefined()
+    await pickAnswers(report)
+    expect((doc.querySelector('input[name="cert"]') as HTMLInputElement).checked).toBe(false)
+    expect(doc.querySelector('button[data-option="yes"]')!.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('keeps a click-only field the person touched or is typing into', async () => {
+    const dom = greenhouse()
+    const doc = dom.window.document
+    watchUserEdits(doc, { isUserEvent: () => true })
+    const input = doc.getElementById('question_1000007') as HTMLInputElement
+    input.value = 'Ma'
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+    const report = fillPage(doc, VALUES, { answers: facts({ workAuthorized: 'yes' }), pick: true })
+    expect(pendingPicks(report)).toEqual([])
+    expect(field(report, AUTHORIZED)).toMatchObject({ outcome: 'kept', value: 'Ma' })
+    expect(input.value).toBe('Ma')
+    expect(doc.querySelector('.select__menu')).toBeNull()
+  })
+
+  it('reports a picked answer the page wiped afterwards as needing the user, with the suggestion', async () => {
+    const dom = new JSDOM(fixture('ashby-form.html'), { url: ASHBY })
+    const doc = dom.window.document
+    const report = fillPage(doc, VALUES, { text: true, answers: facts({ gender: 'Female' }), pick: true })
+    await pickAnswers(report)
+    expect(field(report, 'Gender')).toMatchObject({ outcome: 'filled', value: 'Female' })
+    // A late re-render clears it before the verify pass.
+    for (const r of Array.from(doc.querySelectorAll<HTMLInputElement>('input[type="radio"]'))) r.checked = false
+    await verifyFill(doc, VALUES, report, { settleMs: 1 })
+    expect(field(report, 'Gender')).toMatchObject({ outcome: 'rejected', suggestion: 'Female', suggestedBy: 'saved' })
+    expect(field(report, 'Gender').reason).toMatch(/cleared the picked answer "Female"/)
+  })
+
   it('chooses a remembered option in a Workday dropdown (button and popup listbox)', async () => {
     const dom = new JSDOM(fixture('workday-my-information.html'), { url: WORKDAY })
     const doc = dom.window.document
     const check = forbidSubmitAndKeys(dom)
     const button = doc.getElementById('source--source')!
-    // Workday renders the options in a popup at the end of <body>.
+    // Workday renders the options in a popup at the end of <body>; here it names its button (aria-labelledby), the
+    // tie pick.ts requires before it presses anything in a popup.
     button.addEventListener('click', () => {
       doc.body.insertAdjacentHTML(
         'beforeend',
-        '<div data-automation-id="activeListContainer"><ul role="listbox"><li role="option"><div>Job board</div></li><li role="option"><div>LinkedIn</div></li></ul></div>'
+        '<div data-automation-id="activeListContainer"><ul role="listbox" aria-labelledby="source--source"><li role="option"><div>Job board</div></li><li role="option"><div>LinkedIn</div></li></ul></div>'
       )
       for (const li of Array.from(doc.querySelectorAll('[role="option"]'))) {
         li.addEventListener('click', () => {

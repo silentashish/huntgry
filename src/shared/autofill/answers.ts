@@ -1,4 +1,4 @@
-import { matchFact, questionKey, resolveAnswer, type FactKey, type PageAnswers } from '../apply-facts'
+import { isConsentQuestion, matchFact, questionKey, resolveAnswer, type FactKey, type PageAnswers } from '../apply-facts'
 import type { FieldKind, FieldReport } from '../apply-types'
 import {
   checkRadio,
@@ -43,6 +43,8 @@ export type ClickOnlyPolicy = 'suggest' | 'pick'
 /** An answer to pick after the synchronous fill (the engine's `pickAnswers` runs them). */
 export interface PickRequest {
   el: FormControl
+  /** The container the control was found in (radio groups are looked up there). */
+  root: ParentNode
   line: FieldReport
   fact: FactKey | null
   value: string
@@ -123,6 +125,8 @@ export function answerField(
   policy: ClickOnlyPolicy = 'suggest',
   picks: PickRequest[] = []
 ): boolean {
+  // Consent, certification and acknowledgement are never answered from memory, by any strategy (#71 review).
+  if (isConsentQuestion(line.label)) return false
   // A yes/no button group is a single choice whose options are its buttons, reported as a radio question.
   const buttons = yesNoGroup(el)
   if (buttons) line.kind = 'radio'
@@ -154,7 +158,16 @@ export function answerField(
     line.suggestion = answer
     line.suggestedBy = 'saved'
     line.reason = `This picker takes a click: choose "${answer.slice(0, 80)}" yourself.`
-    if (policy === 'pick') picks.push({ el, line, fact: found.fact ?? null, value: found.value })
+    if (policy !== 'pick') return false
+    // A control the person touched, or a combobox they are typing into, is theirs (checked again before the press).
+    const typed = kind === 'combobox' && el.value.trim() !== ''
+    if (editedInGroup(el, kind, root) || typed) {
+      line.outcome = 'kept'
+      line.value = (typed ? el.value.trim() : chosenOf(el, root)).slice(0, 200)
+      line.reason = 'You changed it; left as is.'
+      return false
+    }
+    picks.push({ el, root, line, fact: found.fact ?? null, value: found.value })
     return false
   }
   const shown = chosenOf(el, root)

@@ -1,4 +1,4 @@
-import { NO_ANSWERS, resolveAnswer, type PageAnswers } from '../apply-facts'
+import { NO_ANSWERS, normalizeText, resolveAnswer, type PageAnswers } from '../apply-facts'
 import type { AdapterStep, ApplyAts, FieldKey, FieldReport, FillReport, FillValues, PageScan, UploadState } from '../apply-types'
 import { EMBED_RULES, embedPathMatches } from '../apply-embeds'
 import { adapterFor, type Adapter, type UploadProbe } from './adapters'
@@ -16,7 +16,7 @@ import {
   type FormControl
 } from './dom'
 import { answerable, answerField, editedInGroup, strategyOf, writeAnswer, yesNoGroup, type PickRequest } from './answers'
-import { pick, widgetOf } from './pick'
+import { pick, pickedValue, widgetOf } from './pick'
 import { matchFileField, matchTextField, type Match } from './match'
 import { sleep } from './ready'
 import { defaultUploadAttached } from './upload-state'
@@ -428,6 +428,31 @@ const keepUserEdit = (line: FieldReport, el: HTMLInputElement | HTMLTextAreaElem
   line.reason = 'You changed it after Huntgry filled it; left as is.'
 }
 
+/**
+ * A picked answer, checked again after the fill (hydration, a late re-render
+ * or a resume parser may wipe it): still shown, fine; changed by the person,
+ * kept; otherwise it goes to the user with the answer as a suggestion.
+ */
+function recheckPick(line: FieldReport, el: FormControl, root: ParentNode): void {
+  const value = line.value ?? ''
+  const widget = el.isConnected ? widgetOf(el) : null
+  const shown = widget ? pickedValue(widget) : ''
+  if (widget && normalizeText(shown) === normalizeText(value)) return
+  if (widget && editedInGroup(el, kindOf(el), root)) {
+    line.outcome = 'kept'
+    line.value = shown.slice(0, 200)
+    line.reason = 'You changed it after Huntgry picked it; left as is.'
+    return
+  }
+  line.outcome = 'rejected'
+  line.suggestion = value
+  line.suggestedBy = 'saved'
+  line.reason = widget
+    ? `The page cleared the picked answer "${value.slice(0, 80)}"; pick it yourself.`
+    : 'The field disappeared after Huntgry picked it.'
+  if (widget) highlight(widget.scope, 'attention')
+}
+
 const keepUserAnswer = (line: FieldReport, el: FormControl, root: ParentNode) => {
   line.outcome = 'kept'
   line.value = chosenOf(el, root).slice(0, 200)
@@ -455,7 +480,9 @@ export async function verifyFill(
   const root = adapter.formRoot(doc)
   if (!root) return report
   const extraRoots = answerRootsOf(adapter, doc, root)
-  const planned = [...plan(adapter, root), ...answerOnlyPlanned(extraRoots)]
+  const base = [...plan(adapter, root), ...answerOnlyPlanned(extraRoots)]
+  // The same list (and so the same field ids) as the fill, Workday dropdown buttons included.
+  const planned = [...base, ...listboxButtons(root, base)]
   const clickOnly = clickOnlyOf(adapter, [root, ...extraRoots])
   const byKey = new Map<FieldKey, FormControl>()
   for (const p of planned) if (p.key && !p.outcome && !byKey.has(p.key)) byKey.set(p.key, p.el)
@@ -468,9 +495,11 @@ export async function verifyFill(
     // A remembered answer Huntgry wrote (#71): the same check, keyed by the control's id.
     if (!line.key && line.outcome === 'filled' && line.fieldId && line.value) {
       const el = byId.get(line.fieldId)
-      // A picked widget (pick.ts read it back) or a dropdown button: nothing here may write it again.
-      if (el && (yesNoGroup(el) || ['click-only', 'never'].includes(strategyOf(kindOf(el), clickOnly.has(el))))) continue
-      if (!el && line.kind === 'combobox') continue
+      // A picked widget: read it again from the page as it is now; never pressed again here.
+      if (el && (yesNoGroup(el) || ['click-only', 'never'].includes(strategyOf(kindOf(el), clickOnly.has(el))))) {
+        recheckPick(line, el, rootOf.get(el) ?? root)
+        continue
+      }
       if (!el) {
         line.outcome = 'rejected'
         line.reason = 'The field disappeared after it was filled.'
@@ -580,7 +609,9 @@ export async function pickAnswers(report: FillReport, picks: readonly PickReques
     const widget = req.el.isConnected ? widgetOf(req.el) : null
     if (!widget) continue
     const line = req.line
-    const result = await pick(widget, (options) => resolveAnswer(req.fact, req.value, 'select', options))
+    const result = await pick(widget, (options) => resolveAnswer(req.fact, req.value, 'select', options), {
+      touched: () => editedInGroup(req.el, kindOf(req.el), req.root)
+    })
     if (result.status === 'filled') {
       line.outcome = 'filled'
       line.value = result.value.slice(0, 200)
