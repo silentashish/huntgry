@@ -6,7 +6,8 @@ import { LineBuffer, parseEventLine, type HuntgryEvent } from '@shared/transcrip
 import { buildFirstPrompt, runTitle, type SandboxPaths } from './command'
 import { recordJobSource } from '../applications/tracking'
 import { adapterFor, type AgentAdapter } from './agents'
-import { backfillMetrics, legacyFields, turnMetrics, turnModel, turnShare } from './metrics'
+import type { PartialUsage } from './agents/types'
+import { backfillMetrics, legacyFields, partialShare, turnMetrics, turnModel, turnShare } from './metrics'
 import { appendEvent, findOutputFolder, newRunId, readEvents, readRun, saveRun } from './runs'
 
 /**
@@ -85,6 +86,8 @@ interface Live {
   turnOpen: boolean
   /** The model the CLI said it runs (Claude's `init`), else the expected one. */
   model: string | null
+  /** Per-request usage seen in the current turn, by request id: used only if the turn never ends. */
+  partials: Map<string, PartialUsage>
 }
 
 const STDERR_TAIL = 4000
@@ -358,7 +361,11 @@ export class RunManager {
       turnStartedAt: Date.now(),
       turn: turns,
       turnOpen: false,
-      model: run.model ?? ctx.expectedModel ?? ctx.model ?? null
+      // This process's model: what Huntgry passes or the agent's settings name now (a resume may run
+      // another model than the last turn). Only Claude names its model itself (`init`), so only for
+      // Claude does the last turn's model stand in until then.
+      model: ctx.expectedModel ?? ctx.model ?? (adapter.id === 'claude' ? (run.model ?? null) : null),
+      partials: new Map()
     }
     entry.run.lastOutputAt = new Date().toISOString()
     this.live.set(run.id, entry)
@@ -460,6 +467,9 @@ export class RunManager {
     entry.turnStartedAt = Date.now()
     entry.turn++
     entry.turnOpen = true
+    entry.partials = new Map()
+    // Lets the page freeze "waiting for you" while the agent works.
+    entry.run.turnStartedAt = new Date(entry.turnStartedAt).toISOString()
     entry.turnContent = 0
     entry.turnEnded = false
     // A new turn starts now: the stall watchdog counts from here, not from before a long wait.
@@ -492,6 +502,7 @@ export class RunManager {
     }
     this.record(entry, event)
     if (signal.type === 'keep' && signal.content) entry.turnContent++
+    if (signal.type === 'keep' && signal.partial) entry.partials.set(signal.partial.key, signal.partial)
     if (signal.type === 'init') {
       r.sessionId = signal.sessionId
       if (signal.model) {
@@ -559,6 +570,17 @@ export class RunManager {
   ): void {
     const r = entry.run
     const now = Date.now()
+    const incomplete = share === null
+    if (!share) {
+      // The turn never ended: keep what the CLI reported per request until then (a lower bound).
+      const p = partialShare(entry.partials.values(), entry.model)
+      if (p) {
+        share = p.share
+        r.cliCounters = { ...(r.cliCounters ?? {}), interrupted: p.interrupted }
+      }
+    }
+    entry.partials = new Map()
+    delete r.turnStartedAt
     const model = share ? turnModel(share, share.model ?? entry.model) : entry.model
     const turn = turnMetrics(
       {
@@ -569,7 +591,8 @@ export class RunManager {
         activeMs: entry.turnOpen ? Math.max(0, now - entry.turnStartedAt) : 0,
         ...(share?.apiMs !== undefined ? { apiMs: share.apiMs } : {}),
         model,
-        ok
+        ok,
+        ...(incomplete ? { usageIncomplete: true as const } : {})
       },
       share,
       this.prices()

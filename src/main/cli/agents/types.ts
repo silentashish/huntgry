@@ -27,14 +27,25 @@ export interface AgentInvocation {
 export type AgentSignal =
   /** Not shown or stored (hook chatter, rate-limit pings). */
   | { type: 'drop' }
-  /** Stored for the transcript. `content`: something the user sees (a message, a command, an edit). */
-  | { type: 'keep'; content?: boolean }
+  /**
+   * Stored for the transcript. `content`: something the user sees (a message, a command, an edit).
+   * `partial`: usage of one API request seen before the turn ends (Claude's `assistant.message.usage`,
+   * repeated for every block of the same message: `key` dedupes it). Only used when the turn never
+   * ends (stop, crash), since the turn-end figures are the complete ones.
+   */
+  | { type: 'keep'; content?: boolean; partial?: PartialUsage }
   /** The session id to resume with is known (and the model, when the CLI says). */
   | { type: 'init'; sessionId: string; model?: string }
   /** The turn ended: the agent waits for the user. `error` = the turn failed. */
   | TurnEndSignal
   /** Claude's `rate_limit_event`: stored on the run (not shown), read by the unattended pipeline. */
   | { type: 'rate-limit'; status: RunRateLimit['status']; resetsAt?: number; rateLimitType?: string; utilization?: number }
+
+export interface PartialUsage {
+  key: string
+  model?: string
+  usage: TokenUsage
+}
 
 /**
  * The end of a turn, with what the CLI reported about it, normalized to `TokenUsage` (#44).

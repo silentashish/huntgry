@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { buildClaudeArgs, userMessageLine } from '../command'
 import { explainClaudeError } from '../version'
 import type { TokenUsage } from '@shared/runner-types'
-import { isObj, num, usageOf, type AgentAdapter, type Json, type TurnEndSignal } from './types'
+import { isObj, num, usageOf, type AgentAdapter, type Json, type PartialUsage, type TurnEndSignal } from './types'
 
 /**
  * Claude Code: `claude -p` in stream-json mode, one process kept alive between
@@ -60,7 +60,8 @@ export const claude: AgentAdapter = {
         error: failed ? (text ?? `Claude ended the turn with ${String(event.subtype ?? 'an error')}`) : undefined
       }
     }
-    return { type: 'keep' }
+    const partial = claudePartialUsage(event)
+    return partial ? { type: 'keep', partial } : { type: 'keep' }
   },
   explainFailure: explainClaudeError
 }
@@ -106,4 +107,27 @@ export function claudeUsage(event: Json): Pick<TurnEndSignal, 'usage' | 'usageSc
   if (num(event.duration_api_ms) > 0) out.apiMs = num(event.duration_api_ms)
   if (num(event.duration_ms) > 0) out.durationMs = num(event.duration_ms)
   return out
+}
+
+/**
+ * The usage of one API request, as an `assistant` event carries it (sub-agents' too: they are billed).
+ * Its `output_tokens` is only what was streamed so far, so a turn built from these is incomplete.
+ */
+export function claudePartialUsage(event: Json): PartialUsage | undefined {
+  if (event.type !== 'assistant' || !isObj(event.message) || !isObj(event.message.usage)) return undefined
+  const m = event.message
+  const u = m.usage as Json
+  if (typeof m.id !== 'string' || !m.id) return undefined
+  const creation = isObj(u.cache_creation) ? u.cache_creation : {}
+  return {
+    key: m.id,
+    ...(typeof m.model === 'string' && m.model ? { model: m.model } : {}),
+    usage: usageOf({
+      inputTokens: num(u.input_tokens),
+      cacheReadTokens: num(u.cache_read_input_tokens),
+      cacheWriteTokens: num(u.cache_creation_input_tokens),
+      cacheWrite1hTokens: num(creation.ephemeral_1h_input_tokens),
+      outputTokens: num(u.output_tokens)
+    })
+  }
 }

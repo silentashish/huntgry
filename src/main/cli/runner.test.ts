@@ -541,9 +541,52 @@ describe('RunManager metrics (#44)', () => {
     manager.stop(id)
     const stopped = await until(id, (r) => r.status === 'stopped' && !r.live)
     expect(stopped.metrics).toHaveLength(1)
-    expect(stopped.metrics![0]).toMatchObject({ turn: 1, ok: false, usage: { inputTokens: 0, outputTokens: 0 }, estimatedCostUsd: 0 })
+    expect(stopped.metrics![0]).toMatchObject({ turn: 1, ok: false, usageIncomplete: true, usage: { inputTokens: 0, outputTokens: 0 } })
+    expect(stopped.totals).toMatchObject({ incompleteTurns: 1 })
     expect(stopped.metrics![0].activeMs).toBeGreaterThanOrEqual(150)
     expect((await readRun(ws, id)).metrics).toHaveLength(1)
+  })
+
+  it('a turn stopped mid-way keeps the usage Claude reported per request, once per request', async () => {
+    const { id } = await manager.start({ ...params, notes: 'PARTIAL_STALL' }, ctx())
+    await new Promise((r) => setTimeout(r, 300))
+    manager.stop(id)
+    const stopped = await until(id, (r) => r.status === 'stopped' && !r.live)
+    const [t] = stopped.metrics!
+    expect(t).toMatchObject({
+      ok: false,
+      usageIncomplete: true,
+      model: 'claude-haiku-4-5-20251001',
+      usage: { inputTokens: 10, cacheReadTokens: 1200, cacheWriteTokens: 800, cacheWrite1hTokens: 800, outputTokens: 3 }
+    })
+    expect(t.estimatedCostUsd).toBeCloseTo((10 * 1 + 1200 * 0.1 + 800 * 2 + 3 * 5) / 1e6, 12)
+    // The CLI's running totals may report these again at the next turn: remembered, to subtract.
+    expect(stopped.cliCounters?.interrupted).toEqual({ 'claude-haiku-4-5-20251001': t.usage })
+  })
+
+  it('a resumed turn is priced with the model of its own process (Codex -m changed between turns)', async () => {
+    const { id } = await manager.start(params, { ...codexCtx(), model: 'gpt-6.1-sol' })
+    await until(id, (r) => r.status === 'waiting' && !r.live)
+    await manager.whenIdle()
+    await manager.reply(id, 'again', async () => ({ ...codexCtx(), model: 'gpt-6-astra' }))
+    const done = await until(id, (r) => r.status === 'waiting' && !r.live && (r.metrics?.length ?? 0) === 2)
+    expect(done.metrics!.map((m) => m.model)).toEqual(['gpt-6.1-sol', 'gpt-6-astra'])
+    expect(done.metrics![0].estimatedCostUsd).toBeCloseTo((1000 * 2 + 50 * 10) / 1e6, 12)
+    expect(done.metrics![1].estimatedCostUsd).toBeCloseTo((1000 * 10 + 50 * 50) / 1e6, 12)
+    expect(done.model).toBe('gpt-6-astra')
+    // Codex with no model passed: unknown, not the last turn's.
+    await manager.whenIdle()
+    await manager.reply(id, 'third', async () => codexCtx())
+    const third = await until(id, (r) => r.status === 'waiting' && !r.live && (r.metrics?.length ?? 0) === 3)
+    expect(third.metrics![2].model).toBeNull()
+  })
+
+  it('records the turn start while it runs, so the waiting time freezes', async () => {
+    const { id } = await manager.start({ ...params, notes: 'SLOW' }, ctx())
+    const running = await until(id, (r) => r.status === 'running' && !!r.turnStartedAt)
+    expect(Date.parse(running.turnStartedAt!)).toBeGreaterThan(0)
+    const waiting = await until(id, (r) => r.status === 'waiting' && (r.metrics?.length ?? 0) === 1)
+    expect(waiting.turnStartedAt).toBeUndefined()
   })
 
   it('a failed turn records its tokens and time (Claude error result)', async () => {

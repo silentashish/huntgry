@@ -92,6 +92,11 @@ export interface TurnMetrics {
   estimatedCostUsd: number | null
   /** The turn ended normally (not an error, a stop or a crash). */
   ok: boolean
+  /**
+   * The turn never ended (stop, crash): `usage` is what the CLI had reported per request until then
+   * (Claude), a lower bound; with nothing reported it is zero and the cost unknown, not free.
+   */
+  usageIncomplete?: true
 }
 
 /** Sums over a run's `metrics`, recomputed whenever a turn is added or prices change. */
@@ -104,6 +109,8 @@ export interface RunTotals {
   pricedTurns: number
   /** Turns whose model has no price: `estimatedCostUsd` leaves them out. */
   unpricedTurns: number
+  /** Turns that never ended (stop, crash): their tokens and cost are a lower bound. */
+  incompleteTurns: number
   /** Sum of what the CLI reported (Claude), when it reported anything. */
   reportedCostUsd?: number
 }
@@ -117,6 +124,11 @@ export interface CliCounters {
   usage?: TokenUsage
   costUsd?: number
   models?: Record<string, { usage: TokenUsage; costUsd?: number }>
+  /**
+   * Tokens already given to an interrupted turn (per model, `''` = unknown), which the CLI's running
+   * totals may report again at the next turn's end: subtracted from that turn's share, then cleared.
+   */
+  interrupted?: Record<string, TokenUsage>
 }
 
 /** One dependency line from the skill's `scripts/preflight.py`, plus the app's own checks. */
@@ -260,6 +272,8 @@ export interface RunSummary {
   unattended?: true
   /** Claude's latest `rate_limit_event` (absent for other agents and API-key sessions). */
   rateLimit?: RunRateLimit
+  /** ISO time the current turn was sent, while it runs (#44): the waiting time stops growing then. */
+  turnStartedAt?: string
   /** ISO time of the last stdout line of the current process; the pipeline's stall watchdog reads it. */
   lastOutputAt?: string
 }

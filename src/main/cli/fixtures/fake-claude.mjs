@@ -9,6 +9,7 @@
 //                                     "You've hit your session limit · resets 3:45pm" error result, exit 1
 //   "RATE_WARN" -> a rate_limit_event allowed_warning (utilization 0.96) before a normal turn
 //   "STALL" -> after init, never answers (stays silent until killed)
+//   "PARTIAL_STALL" -> streams one request's assistant message (with its usage, twice, as Claude repeats it per block), then stalls
 //   "ASK" -> the turn ends with a question and nothing written
 //   "WRITE_NOTES" -> like WRITE_OUTPUT, plus review-notes.md in the documented format
 //   "VERIFY_FAIL" -> like WRITE_NOTES, but build-report.json says ok: false with a failed hard check
@@ -75,6 +76,11 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (text.includes('RATE_LIMIT')) {
     process.stderr.write('API Error: Server is temporarily limiting requests (not your usage limit)\n')
     process.exit(1)
+  }
+  if (text.includes('PARTIAL_STALL')) {
+    const usage = { input_tokens: 10, cache_creation_input_tokens: 800, cache_read_input_tokens: 1200, cache_creation: { ephemeral_1h_input_tokens: 800 }, output_tokens: 3 }
+    for (const block of [{ type: 'thinking', thinking: '' }, { type: 'text', text: 'Working on it…' }])
+      out({ type: 'assistant', message: { id: `p${turn}`, model: MODEL, role: 'assistant', content: [block], usage } })
   }
   if (text.includes('STALL')) {
     await new Promise(() => undefined)
