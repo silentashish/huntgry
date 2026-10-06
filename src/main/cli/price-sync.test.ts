@@ -1,10 +1,12 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer, type Server, type ServerResponse } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { effectivePrices, findPrice, MODEL_PRICES, type SyncedPrices } from '@shared/pricing'
+import { effectivePrices, findPrice, MODEL_PRICES, normalizeModelId, type SyncedPrices } from '@shared/pricing'
 import { fetchJson, fetchSyncedPrices, LITELLM_URL, OPENROUTER_URL, parseLiteLlm, parseOpenRouter } from './price-sync'
-import { clearSyncedPrices, currentPrices, loadPrices, pricingState, resetPrices, setPrice, syncPrices } from './usage'
+import { clearSyncedPrices, currentPrices, loadPrices, pricingState, removePrice, resetPrices, setPrice, syncPrices } from './usage'
 
 /**
  * Settings → Pricing → Sync prices (#44). The fixtures are small extracts of the two public lists
@@ -133,6 +135,56 @@ describe('fetching', () => {
   })
 })
 
+describe('fetching releases the connection on every error (loopback server, no internet)', () => {
+  let server: Server
+  let url: string
+  let closed: Promise<void>
+  /** Answers with `head` (and maybe a first chunk), then stalls; `closed` resolves when the client hangs up. */
+  async function stall(head: (res: ServerResponse) => void): Promise<void> {
+    let onClose!: () => void
+    closed = new Promise((r) => (onClose = r))
+    server = createServer((req, res) => {
+      req.socket.on('close', onClose)
+      head(res)
+    })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/prices.json`
+  }
+  afterEach(async () => {
+    server.closeAllConnections()
+    await new Promise((r) => server.close(r))
+  })
+  const within = (p: Promise<void>, ms: number) =>
+    Promise.race([p.then(() => 'closed'), new Promise((r) => setTimeout(() => r('still open'), ms))])
+
+  it('an HTTP error whose body stalls', async () => {
+    await stall((res) => {
+      res.writeHead(503, { 'content-type': 'text/plain' })
+      res.write('Service Unavailable')
+    })
+    await expect(fetchJson(url)).rejects.toThrow('HTTP 503')
+    expect(await within(closed, 2000)).toBe('closed')
+  })
+
+  it('a Content-Length over the cap, then nothing', async () => {
+    await stall((res) => {
+      res.writeHead(200, { 'content-type': 'application/json', 'content-length': String(500 * 1024 * 1024) })
+      res.write('{')
+    })
+    await expect(fetchJson(url)).rejects.toThrow('too large')
+    expect(await within(closed, 2000)).toBe('closed')
+  })
+
+  it('a body that stops mid-way hits the timeout', async () => {
+    await stall((res) => {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.write('{"a":')
+    })
+    await expect(fetchJson(url, fetch, 300)).rejects.toThrow('no answer within 0.3 s')
+    expect(await within(closed, 2000)).toBe('closed')
+  })
+})
+
 describe('the synced layer', () => {
   let dir: string
   let file: string
@@ -173,6 +225,23 @@ describe('the synced layer', () => {
     expect(state.synced).toBeNull()
     expect(findPrice('claude-haiku-4-5', currentPrices())).toMatchObject({ input: 1 })
     expect(currentPrices().some((m) => m.id === 'gpt-6.1-sol-pro')).toBe(false)
+  })
+
+  it('the user\'s price wins over a synced one that means the same model under another spelling', async () => {
+    // A model the bundled table does not have, added by hand under a dated id.
+    await setPrice(file, { id: 'gpt-6.1-sol-pro-2026-10-01', input: 7, cachedInput: 0.7, output: 70 })
+    expect(findPrice('gpt-6.1-sol-pro', currentPrices())).toMatchObject({ input: 7, custom: true })
+    await syncPrices(file, async () => synced())
+    const table = currentPrices()
+    expect(findPrice('gpt-6.1-sol-pro', table)).toMatchObject({ id: 'gpt-6.1-sol-pro-2026-10-01', input: 7, custom: true })
+    expect(findPrice('gpt-6.1-sol-pro-2026-10-01', table)).toMatchObject({ input: 7 })
+    expect(table.filter((m) => normalizeModelId(m.id) === 'gpt-6.1-sol-pro')).toHaveLength(1)
+    // Its own row still edits and resets by its own id: removing it brings the synced price back.
+    await removePrice(file, 'gpt-6.1-sol-pro-2026-10-01')
+    expect(findPrice('gpt-6.1-sol-pro', currentPrices())).toMatchObject({ input: 20, synced: true })
+    // Same for a bundled model edited under its dated id.
+    await setPrice(file, { id: 'claude-haiku-4-5-20251001', input: 9, cachedInput: 0.9, output: 45 })
+    expect(findPrice('claude-haiku-4-5', currentPrices())).toMatchObject({ input: 9, custom: true })
   })
 
   it('a failed sync keeps the prices in use and on disk', async () => {

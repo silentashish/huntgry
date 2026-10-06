@@ -172,27 +172,34 @@ export function parseOpenRouter(json: unknown, asOf: string): ModelPrice[] {
   return toModelPrices(raw, OPENROUTER_URL, asOf)
 }
 
-/** GETs `url` as JSON with a timeout and a size cap. */
-export async function fetchJson(url: string, fetcher: typeof fetch = fetch): Promise<unknown> {
+/**
+ * GETs `url` as JSON with a timeout covering the whole exchange (headers and body) and a size cap.
+ * Every way out releases the request: on any error the response body is cancelled and the request
+ * aborted, so a rejected source never keeps a socket open while the next one is tried.
+ */
+export async function fetchJson(url: string, fetcher: typeof fetch = fetch, timeoutMs = TIMEOUT_MS): Promise<unknown> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+  let res: Response | undefined
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   try {
-    const res = await fetcher(url, { signal: controller.signal, headers: { accept: 'application/json' }, redirect: 'follow' })
+    res = await fetcher(url, { signal: controller.signal, headers: { accept: 'application/json' }, redirect: 'follow' })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const length = Number(res.headers.get('content-length') ?? 0)
     if (length > MAX_BYTES) throw new Error('the response is too large')
     if (!res.body) throw new Error('empty response')
-    const reader = res.body.getReader()
+    reader = res.body.getReader()
     const chunks: Uint8Array[] = []
     let size = 0
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
       size += value.byteLength
-      if (size > MAX_BYTES) {
-        await reader.cancel()
-        throw new Error('the response is too large')
-      }
+      if (size > MAX_BYTES) throw new Error('the response is too large')
       chunks.push(value)
     }
     const text = Buffer.concat(chunks).toString('utf8')
@@ -202,7 +209,11 @@ export async function fetchJson(url: string, fetcher: typeof fetch = fetch): Pro
       throw new Error('the response is not JSON')
     }
   } catch (err) {
-    if (controller.signal.aborted) throw new Error(`no answer within ${TIMEOUT_MS / 1000} s`)
+    // Release the body and the connection first; keep the original reason.
+    controller.abort()
+    // A locked body is cancelled through its reader.
+    await (reader ? reader.cancel() : res?.body?.cancel())?.catch(() => undefined)
+    if (timedOut) throw new Error(`no answer within ${timeoutMs / 1000} s`)
     throw err
   } finally {
     clearTimeout(timer)
