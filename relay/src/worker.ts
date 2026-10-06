@@ -23,6 +23,7 @@ import {
 } from '@huntgry/remote-protocol'
 import { bearerOf, matchesHash, sha256Hex } from './auth'
 import { configOf, type Env } from './env'
+import { PendingFrames } from './pending'
 import { CLOSE } from './room'
 
 // The entry module may export only handlers and Durable Object classes (workerd checks every export).
@@ -34,8 +35,8 @@ const ADMIN_WINDOW_MS = 15 * 60 * 1000
 
 /** The `auth` frame is small; anything bigger before authentication is refused unread. */
 const AUTH_FRAME_MAX_CHARS = 2048
-/** Frames a client may send while `/ws` is still connecting to its room (the desktop sends a heartbeat right after auth). */
-const PENDING_FRAMES_MAX = 16
+/** "Message too big" (RFC 6455). */
+const CLOSE_TOO_BIG = 1009
 
 const json = (value: unknown, status = 200, headers: Record<string, string> = {}): Response =>
   new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json', ...headers } })
@@ -166,7 +167,7 @@ function proxySocket(env: Env): Response {
   let upstream: WebSocket | null = null
   let connecting = false
   let done = false
-  const pending: string[] = []
+  const pending = new PendingFrames() // the desktop sends a heartbeat right behind its auth frame
 
   const finish = (code: number, reason: string, upstreamCode = code): void => {
     if (done) return
@@ -182,8 +183,9 @@ function proxySocket(env: Env): Response {
     const data = event.data
     if (upstream) return void upstream.send(data)
     if (connecting) {
-      if (pending.length >= PENDING_FRAMES_MAX || typeof data !== 'string') return finish(CLOSE.policy, 'too many frames before the room answered')
-      pending.push(data)
+      const refused = pending.add(data)
+      if (refused === 'tooMany') return finish(CLOSE.policy, 'too many frames before the room answered')
+      if (refused === 'tooBig') return finish(CLOSE_TOO_BIG, 'too much data before the room answered')
       return
     }
     const roomId = typeof data === 'string' && data.length <= AUTH_FRAME_MAX_CHARS ? authRoomOf(data) : null
@@ -202,7 +204,7 @@ function proxySocket(env: Env): Response {
       ws.addEventListener('error', () => finish(1011, 'relay error'))
       clearTimeout(timer) // the room runs its own auth timeout from here
       ws.send(data)
-      for (const frame of pending.splice(0)) ws.send(frame)
+      for (const frame of pending.drain()) ws.send(frame)
     })
   })
   server.addEventListener('close', (e) => finish(1000, 'client closed', roomCode(e.code)))
@@ -231,7 +233,7 @@ async function connectRoom(stub: DurableObjectStub): Promise<WebSocket | null> {
 }
 
 /** Codes a peer may send: 1000 and the application range pass through; 1005 / 1006 (no code, abnormal) cannot be sent. */
-const sendable = (code: number): boolean => code === 1000 || code === 1008 || code === 1011 || (code >= 3000 && code <= 4999)
+const sendable = (code: number): boolean => code === 1000 || code === 1008 || code === 1009 || code === 1011 || (code >= 3000 && code <= 4999)
 const clientCode = (code: number): number => (sendable(code) ? code : 1011)
 const roomCode = (code: number): number => (sendable(code) ? code : 1000)
 
