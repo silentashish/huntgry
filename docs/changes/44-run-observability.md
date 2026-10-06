@@ -144,7 +144,8 @@ with a 1-hour cache write) equals the CLI's `costUSD` to the 7th decimal (unit t
 
 ### Turns that never end
 
-A turn stopped or crashed before its end signal still records its active time, with
+A turn stopped or crashed before its end signal, or whose end reports no usage at all (Codex
+`turn.failed`), still records its active time, with
 `ok: false` and `usageIncomplete: true`. Its tokens are what the CLI had reported per API request
 until then: Claude's `assistant.message.usage`, repeated on every block of the same message and
 therefore counted once per message id (sub-agents included). Streamed `output_tokens` are only
@@ -195,7 +196,7 @@ compare runs, agents and models. Claude's own `costUSD` is shown next to it as "
   per agent and could change what agy runs; reading `settings.json` prices what it actually runs
   today. A model changed in agy between runs prices the next run correctly.
 - **No aliases like `opus`.** The CLIs report full ids (`init.model`); an alias's meaning changes
-  over time, so guessing one would misprice. Dated ids, `[1m]`, Bedrock/Vertex spellings and agy
+  over time, so guessing one would misprice. Dated ids, `[1m]`, Bedrock/Vertex spellings (cross-region profiles such as `us.anthropic.…` included) and agy
   display names are normalized; a suffix like `gpt-6-sol-high` maps to its base, but an unknown
   version (`claude-opus-5-6`) never falls back to another one.
 - **Long-context tiers not modelled.** The tier depends on each request's size; a turn's tokens are

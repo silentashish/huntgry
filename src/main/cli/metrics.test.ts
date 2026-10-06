@@ -175,6 +175,10 @@ describe('pricing', () => {
     expect(normalizeModelId('Claude Opus 4.6 (Thinking)')).toBe('claude-opus-4-6')
     expect(normalizeModelId('claude-opus-5-5[1m]')).toBe('claude-opus-5-5')
     expect(normalizeModelId('anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe('claude-sonnet-4-5')
+    // Bedrock cross-region inference profiles.
+    expect(normalizeModelId('us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe('claude-sonnet-4-5')
+    expect(normalizeModelId('global.anthropic.claude-opus-4-6-v1')).toBe('claude-opus-4-6')
+    expect(findPrice('eu.anthropic.claude-haiku-4-5-20251001-v1:0')?.id).toBe('claude-haiku-4-5')
     expect(normalizeModelId('gpt-6-sol-2026-05-01')).toBe('gpt-6-sol')
     expect(findPrice('Claude Opus 4.6 (Thinking)')?.id).toBe('claude-opus-4-6')
     expect(findPrice('Gemini 3.1 Pro (High)')?.id).toBe('gemini-3.1-pro-preview')
@@ -305,6 +309,16 @@ describe('backfill from events.jsonl', () => {
       [2, true, 3_480_000, undefined]
     ])
     expect(metrics[1].model).toBe('gpt-6.1-sol')
+    // A failed Codex turn reports no usage: incomplete, not free.
+    const failed = backfillMetrics(
+      { agent: 'codex', createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:01:00Z' },
+      [
+        { type: 'huntgry', subtype: 'user_message', text: 'go', ts: '2026-10-01T00:00:00Z' },
+        { type: 'turn.failed', error: { message: 'stream disconnected' } }
+      ],
+      'gpt-6.1-sol'
+    ).metrics
+    expect(failed).toEqual([expect.objectContaining({ ok: false, usageIncomplete: true, model: 'gpt-6.1-sol' })])
   })
 })
 

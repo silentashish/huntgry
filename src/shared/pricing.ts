@@ -133,7 +133,8 @@ export function normalizeModelId(model: string): string {
   m = m.replace(/\[[^\]]*\]/g, '').replace(/\([^)]*\)/g, '').trim()
   m = m.replace(/\s+/g, '-')
   // Bedrock/Vertex spellings: `anthropic.claude-…-v1:0`, `claude-…@20251001`.
-  m = m.replace(/^(?:[a-z]+\.)?(?=claude-)/, '').replace(/@\d{8}$/, '').replace(/-v\d+(?::\d+)?$/, '')
+  // Bedrock: `anthropic.claude-…`, and cross-region inference profiles `us.anthropic.claude-…`.
+  m = m.replace(/^(?:[a-z0-9-]+\.)+(?=claude-)/, '').replace(/@\d{8}$/, '').replace(/-v\d+(?::\d+)?$/, '')
   m = m.replace(/-\d{8}$/, '').replace(/-\d{4}-\d{2}-\d{2}$/, '')
   // Claude ids spell versions with dashes (`claude-opus-4-6`); display names use dots.
   if (m.startsWith('claude-')) m = m.replace(/(\d)\.(\d)/g, '$1-$2')
