@@ -225,6 +225,30 @@ export class Relay {
     return client
   }
 
+  /**
+   * Resolves once the room has authenticated a desktop. Sending `{ auth }` returns at once, and
+   * through `/ws` the Worker still has to reach the room, so a test that acts on the room right
+   * after `connectAs` could beat the auth frame to it (a DELETE then makes the late auth a
+   * 4002). The desktop gets no reply to its auth, so a short-lived pairing socket watches for
+   * `presence: online` instead.
+   */
+  async untilDesktopOnline(roomId: string, ownerSecret: string, timeoutMs = 3000): Promise<void> {
+    const pairingId = randomId('observer')
+    if ((await this.registerPairing(roomId, ownerSecret, pairingId)) !== 201) throw new Error('untilDesktopOnline: pairing refused')
+    const observer = await this.connectAs(roomId, { room: roomId, pairing: pairingId })
+    const deadline = Date.now() + timeoutMs
+    try {
+      for (;;) {
+        const left = deadline - Date.now()
+        if (left <= 0) throw new Error('the desktop did not come online')
+        const notice = await observer.next<{ presence?: string }>(left)
+        if (notice.presence === 'online') return
+      }
+    } finally {
+      await observer.close()
+    }
+  }
+
   async dispose(): Promise<void> {
     await this.mf.dispose()
   }
@@ -237,6 +261,7 @@ export interface Fixture {
   ownerSecret: string
   deviceId: string
   relayToken: string
+  /** The desktop's socket, once the room has authenticated it. */
   desktop: () => Promise<Client>
   phone: () => Promise<Client>
 }
@@ -254,7 +279,11 @@ export async function fixture(relay: Relay): Promise<Fixture> {
     ownerSecret,
     deviceId,
     relayToken,
-    desktop: () => relay.connectAs(roomId, { room: roomId, owner: ownerSecret }),
+    desktop: async () => {
+      const desktop = await relay.connectAs(roomId, { room: roomId, owner: ownerSecret })
+      await relay.untilDesktopOnline(roomId, ownerSecret)
+      return desktop
+    },
     phone: () => relay.connectAs(roomId, { room: roomId, device: deviceId, token: relayToken })
   }
 }
