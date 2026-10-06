@@ -4,12 +4,16 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { RunSummary } from '@shared/runner-types'
 import { readTracking } from '../applications/tracking'
+import { getReview, setReviewAuthorityRoot, updateReview, type RecordedReview } from './authority'
 import { RunManager, type RunContext } from '../cli/runner'
 import { readEvents, saveRun } from '../cli/runs'
 import { approvalsFile, loadApprovals } from './approvals'
 import { reframingId } from './notes'
 import {
+  approvalDrift,
   approveReview,
+  MAX_NOTES_BYTES,
+  MAX_REPORT_BYTES,
   discardReview,
   listReviews,
   requireApproveInput,
@@ -64,12 +68,20 @@ async function application(
   await writeFile(join(dir, 'build-report.json'), over.report ?? '{"ok": true}')
   if (over.notes !== null) await writeFile(join(dir, 'review-notes.md'), over.notes ?? NOTES)
   const review = over.review === undefined ? { state: 'unreviewed', runId: RUN, at: '2026-09-30T01:00:00.000Z' } : over.review
-  await writeFile(join(dir, 'huntgry.json'), JSON.stringify({ status: 'generated', notes: '', ...(review ? { review } : {}) }))
+  await writeFile(join(dir, 'huntgry.json'), JSON.stringify({ status: 'generated', notes: '' }))
+  // The review state is main's (the authority store), as the pipeline records it.
+  if (review) await updateReview(ws, id, () => review as unknown as RecordedReview)
   return dir
 }
 
+const recorded = (id = ID) => getReview(ws, id)
+
+let authority: string
+
 beforeEach(async () => {
   ws = await mkdtemp(join(tmpdir(), 'huntgry-review-'))
+  authority = await mkdtemp(join(tmpdir(), 'huntgry-authority-'))
+  setReviewAuthorityRoot(authority)
   replies = []
   deps = {
     workspace: async () => ws,
@@ -80,7 +92,10 @@ beforeEach(async () => {
     now: () => new Date('2026-09-30T02:00:00.000Z')
   }
 })
-afterEach(() => rm(ws, { recursive: true, force: true }))
+afterEach(async () => {
+  await rm(ws, { recursive: true, force: true })
+  await rm(authority, { recursive: true, force: true })
+})
 
 describe('review service', () => {
   it('lists unreviewed and needs-attention results newest first', async () => {
@@ -147,8 +162,9 @@ describe('review service', () => {
       via: 'desktop',
       approvedAt: '2026-09-30T02:00:00.000Z'
     })
-    const tracking = await readTracking(join(ws, ID))
-    expect(tracking.review).toMatchObject({ state: 'approved', runId: RUN, reviewedAt: '2026-09-30T02:00:00.000Z', via: 'desktop' })
+    expect(await recorded()).toMatchObject({ state: 'approved', runId: RUN, reviewedAt: '2026-09-30T02:00:00.000Z', via: 'desktop' })
+    // The approval vouches for these files: Apply's drift check passes now.
+    expect(await approvalDrift(ws, ID)).toBeNull()
     const audit = (await readFile(join(ws, '.huntgry', REVIEW_AUDIT_FILE), 'utf8')).trim().split('\n').map((l) => JSON.parse(l))
     expect(audit).toEqual([expect.objectContaining({ action: 'approve', applicationId: ID, ids: [r1.id], via: 'desktop' })])
     // Approving without ticks saves nothing new.
@@ -156,7 +172,7 @@ describe('review service', () => {
     const d2 = await reviewDetail(ws, 'a/b/2')
     await approveReview(deps, { applicationId: 'a/b/2', revision: d2.revision }, 'phone:dev1')
     expect(await loadApprovals(ws)).toHaveLength(1)
-    expect((await readTracking(join(ws, 'a/b/2'))).review?.via).toBe('phone:dev1')
+    expect((await recorded('a/b/2'))?.via).toBe('phone:dev1')
   })
 
   it('refuses a stale revision, a forged id and an id from another application without writing', async () => {
@@ -179,7 +195,7 @@ describe('review service', () => {
     expect(regenerated).toMatchObject({ ok: false, error: 'stale' })
 
     await expect(readFile(approvalsFile(ws))).rejects.toThrow()
-    expect((await readTracking(join(ws, ID))).review?.state).toBe('unreviewed')
+    expect((await recorded())?.state).toBe('unreviewed')
     expect(replies).toEqual([])
     await expect(discardReview(deps, { applicationId: ID, revision: 'b'.repeat(64) }, 'desktop')).resolves.toMatchObject({ ok: false, error: 'stale' })
     await expect(rerunReview(deps, { applicationId: ID, revision: 'b'.repeat(64), answers: 'x' }, 'desktop')).resolves.toMatchObject({ ok: false, error: 'stale' })
@@ -191,11 +207,11 @@ describe('review service', () => {
     expect((await rerunReview(deps, { applicationId: ID, revision: before.revision, answers: 'Drop R2.' }, 'desktop')).ok).toBe(true)
     const late = await approveReview(deps, { applicationId: ID, revision: before.revision, approvedReframingIds: [] }, 'desktop')
     expect(late).toMatchObject({ ok: false, error: 'stale' })
-    expect((await readTracking(join(ws, ID))).review?.state).toBe('unreviewed')
+    expect((await recorded())?.state).toBe('unreviewed')
   })
 
   it('refuses approve and re-run while the run is still working on the result; discard still works', async () => {
-    const dir = await application()
+    await application()
     const busy: ReviewDeps = { ...deps, busy: (runId) => runId === RUN }
     const d = await reviewDetail(ws, ID)
     await expect(approveReview(busy, { applicationId: ID, revision: d.revision, approvedReframingIds: [] }, 'desktop')).rejects.toThrow(
@@ -203,27 +219,87 @@ describe('review service', () => {
     )
     await expect(rerunReview(busy, { applicationId: ID, revision: d.revision, answers: 'x' }, 'desktop')).rejects.toThrow(/still being tailored/)
     expect(replies).toEqual([])
-    expect((await readTracking(dir)).review?.state).toBe('unreviewed')
+    expect((await recorded())?.state).toBe('unreviewed')
     expect((await discardReview(busy, { applicationId: ID, revision: d.revision }, 'desktop')).ok).toBe(true)
   })
 
   it('notes without a review state (a stopped or crashed run) read as Unreviewed and can be approved', async () => {
-    const dir = await application(ID, { review: null })
+    await application(ID, { review: null })
     const [item] = await listReviews(ws)
     expect(item).toMatchObject({ applicationId: ID, state: 'unreviewed', reason: expect.stringContaining('never checked') })
     const d = await reviewDetail(ws, ID)
     expect(d.state).toBe('unreviewed')
     await expect(rerunReview(deps, { applicationId: ID, revision: d.revision, answers: 'x' }, 'desktop')).rejects.toThrow(/no run to continue/)
     expect((await approveReview(deps, { applicationId: ID, revision: d.revision, approvedReframingIds: [] }, 'desktop')).ok).toBe(true)
-    expect((await readTracking(dir)).review?.state).toBe('approved')
+    expect((await recorded())?.state).toBe('approved')
   })
 
-  it('a malformed review state in huntgry.json fails closed (Needs attention), never open', async () => {
-    const dir = await application(ID, { review: { state: 'approvedish', runId: RUN, at: 'x' } })
-    expect((await readTracking(dir)).review).toMatchObject({ state: 'needs-attention', reason: expect.stringContaining('unreadable') })
-    await application('other/co/7', { review: { state: 'approved' } })
-    expect((await readTracking(join(ws, 'other/co/7'))).review?.state).toBe('needs-attention')
-    expect((await listReviews(ws)).map((r) => r.applicationId).sort()).toEqual(['other/co/7', ID].sort())
+  it('a review state an agent wrote into huntgry.json never unlocks anything (fails closed)', async () => {
+    const dir = await application(ID, { review: null })
+    // The agent forges "approved" in the workspace file; main recorded nothing.
+    await writeFile(join(dir, 'huntgry.json'), JSON.stringify({ status: 'generated', review: { state: 'approved', runId: RUN, at: '2026-09-30T05:00:00.000Z' } }))
+    const [item] = await listReviews(ws)
+    expect(item).toMatchObject({ applicationId: ID, state: 'needs-attention', reason: expect.stringContaining('did not record') })
+    expect(await recorded()).toBeUndefined()
+    // Recorded Unreviewed by main, forged Approved in the workspace: main's state wins.
+    await updateReview(ws, ID, () => ({ state: 'unreviewed', runId: RUN, at: '2026-09-30T01:00:00.000Z' }))
+    expect((await reviewDetail(ws, ID)).state).toBe('unreviewed')
+    // A forged "approved" in main's own format, but inside the workspace, is ignored too.
+    await mkdir(join(ws, '.huntgry'), { recursive: true })
+    await writeFile(join(ws, '.huntgry', 'reviews.json'), JSON.stringify({ version: 1, reviews: { [ID]: { state: 'approved', runId: RUN, at: 'x' } } }))
+    expect((await reviewDetail(ws, ID)).state).toBe('unreviewed')
+  })
+
+  it('serialises decisions: concurrent approve and re-run on one revision, exactly one wins', async () => {
+    await application()
+    const d = await reviewDetail(ws, ID)
+    const [r1] = d.proposedReframings
+    const [approve, rerun] = await Promise.all([
+      approveReview(deps, { applicationId: ID, revision: d.revision, approvedReframingIds: [r1.id] }, 'desktop'),
+      rerunReview(deps, { applicationId: ID, revision: d.revision, answers: 'Drop R2.' }, 'desktop')
+    ])
+    expect([approve.ok, rerun.ok]).toEqual([true, false])
+    expect(rerun).toMatchObject({ ok: false, error: 'stale' })
+    expect(replies).toEqual([])
+    expect((await recorded())?.state).toBe('approved')
+    // And the other order: the re-run wins, the approval is stale and writes no standing approval.
+    await application('a/b/2')
+    const d2 = await reviewDetail(ws, 'a/b/2')
+    const [rerun2, approve2] = await Promise.all([
+      rerunReview(deps, { applicationId: 'a/b/2', revision: d2.revision, answers: 'Drop R2.' }, 'desktop'),
+      approveReview(deps, { applicationId: 'a/b/2', revision: d2.revision, approvedReframingIds: [d2.proposedReframings[1].id] }, 'desktop')
+    ])
+    expect(rerun2.ok).toBe(true)
+    expect(approve2).toMatchObject({ ok: false, error: 'stale' })
+    expect((await recorded('a/b/2'))?.state).toBe('unreviewed')
+    expect((await loadApprovals(ws)).map((a) => a.id)).toEqual([r1.id])
+  })
+
+  it('an approval stops holding once the files change (Apply drift check)', async () => {
+    await application()
+    const d = await reviewDetail(ws, ID)
+    expect((await approveReview(deps, { applicationId: ID, revision: d.revision, approvedReframingIds: [] }, 'desktop')).ok).toBe(true)
+    expect(await approvalDrift(ws, ID)).toBeNull()
+    await writeFile(join(ws, ID, 'resume.pdf'), '%PDF-1.4 rewritten after approval')
+    expect(await approvalDrift(ws, ID)).toMatch(/changed since you approved/)
+  })
+
+  it('a re-run whose reply fails puts back the previous state', async () => {
+    await application()
+    const d = await reviewDetail(ws, ID)
+    const failing: ReviewDeps = { ...deps, reply: async () => { throw new Error('no session') } }
+    await expect(rerunReview(failing, { applicationId: ID, revision: d.revision, answers: 'x' }, 'desktop')).rejects.toThrow(/no session/)
+    expect(await recorded()).toMatchObject({ state: 'unreviewed', at: '2026-09-30T01:00:00.000Z' })
+  })
+
+  it('reads oversized notes and reports without parsing them, and says so', async () => {
+    await application(ID, { notes: `${NOTES}\n${'x'.repeat(MAX_NOTES_BYTES)}`, report: `{"ok": true, "pad": "${'y'.repeat(MAX_REPORT_BYTES)}"}` })
+    const d = await reviewDetail(ws, ID)
+    expect(d.proposedReframings).toEqual([])
+    expect(d.reviewNotes).toBeNull()
+    expect(d.parseWarning).toMatch(/review-notes\.md is too large/)
+    expect(d.parseWarning).toMatch(/build-report\.json is too large/)
+    expect(d.revision).toMatch(/^[0-9a-f]{64}$/)
   })
 
   it('re-run sends the decisions and the ticked reframings to the run and makes the result unreviewed again', async () => {
@@ -245,9 +321,8 @@ describe('review service', () => {
     expect(replies[0].text).toContain('Wording: Built event-streaming pipelines (RabbitMQ; Kafka-adjacent)')
     expect(replies[0].text).toContain('update review-notes.md')
     expect((await loadApprovals(ws)).map((a) => a.id)).toEqual([r1.id])
-    const tracking = await readTracking(join(ws, ID))
-    expect(tracking.review).toMatchObject({ state: 'unreviewed', runId: RUN, reason: 'Re-running with your answers.' })
-    expect(tracking.review?.at).toBe('2026-09-30T02:00:00.000Z')
+    expect(await recorded()).toMatchObject({ state: 'unreviewed', runId: RUN, reason: 'Re-running with your answers.' })
+    expect((await recorded())?.at).toBe('2026-09-30T02:00:00.000Z')
   })
 
   it('re-run against a real fake-claude session echoes the decisions on the same session', async () => {
@@ -296,8 +371,8 @@ describe('review service', () => {
     const d = await reviewDetail(ws, ID)
     const out = await discardReview(deps, { applicationId: ID, revision: d.revision }, 'desktop')
     expect(out.ok).toBe(true)
-    const tracking = await readTracking(dir)
-    expect(tracking).toMatchObject({ status: 'archived', review: { state: 'discarded', reviewedAt: '2026-09-30T02:00:00.000Z' } })
+    expect(await readTracking(dir)).toMatchObject({ status: 'archived' })
+    expect(await recorded()).toMatchObject({ state: 'discarded', reviewedAt: '2026-09-30T02:00:00.000Z' })
     await expect(readFile(join(dir, 'resume.pdf'), 'utf8')).resolves.toBe('%PDF-1.4 fake')
   })
 

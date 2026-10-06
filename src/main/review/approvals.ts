@@ -1,21 +1,22 @@
-import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { APPROVALS_PROMPT_CAP, type StandingApproval } from '@shared/review-types'
-import { HUNTGRY_DIR } from '../workspace/constants'
+import { authorityDir, serialized, writeAuthorityFile } from './authority'
 import { normalizeText, reframingId } from './notes'
 
 /**
- * `<workspace>/.huntgry/approved-reframings.json`: the reframings the user
- * approved on the Review page, which later unattended runs may reuse as they
- * are. Pure fs; only the review service (desktop) and #42's gateway write it,
- * and only with source-fact → wording pairs read from disk, never free text.
+ * The reframings the user approved on the Review page, which later unattended
+ * runs may reuse as they are. Kept in the review authority folder under the
+ * app's userData (`authority.ts`), never in the workspace, which every agent
+ * can write: a file an agent wrote there is not an approval. Only the review
+ * service (desktop) and #42's gateway write it, and only with source-fact →
+ * wording pairs read from disk, never free text.
  */
 
-export const APPROVALS_FILE = 'approved-reframings.json'
+export const APPROVALS_FILE = 'approvals.json'
 const VERSION = 1
 
-export const approvalsFile = (workspace: string): string => join(workspace, HUNTGRY_DIR, APPROVALS_FILE)
+export const approvalsFile = (workspace: string): string => join(authorityDir(workspace), APPROVALS_FILE)
 
 const HEX64 = /^[0-9a-f]{64}$/
 
@@ -35,41 +36,27 @@ function valid(v: unknown): v is StandingApproval {
   )
 }
 
-/** Newest first. A missing or broken file reads as empty. */
+/** Newest first. A missing or broken file (invalid JSON, a non-object root, another version) reads as empty. */
 export async function loadApprovals(workspace: string): Promise<StandingApproval[]> {
-  let raw: { version?: unknown; approvals?: unknown }
+  let raw: unknown
   try {
     raw = JSON.parse(await readFile(approvalsFile(workspace), 'utf8'))
   } catch {
     return []
   }
-  const list = Array.isArray(raw.approvals) ? raw.approvals.filter(valid) : []
-  return list.sort((a, b) => b.approvedAt.localeCompare(a.approvedAt))
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return []
+  const root = raw as { version?: unknown; approvals?: unknown }
+  if (root.version !== VERSION || !Array.isArray(root.approvals)) return []
+  return root.approvals.filter(valid).sort((a, b) => b.approvedAt.localeCompare(a.approvedAt))
 }
 
-const saving = new Map<string, Promise<void>>()
-
-/** Serialises writes per workspace: read-merge-write, temp file + rename. */
+/** Read-merge-write, serialised with every other write of the workspace's authority store. */
 function write(workspace: string, update: (list: StandingApproval[]) => StandingApproval[]): Promise<StandingApproval[]> {
-  const previous = saving.get(workspace) ?? Promise.resolve()
-  let result: StandingApproval[] = []
-  const run = previous
-    .catch(() => undefined)
-    .then(async () => {
-      const next = update(await loadApprovals(workspace)).sort((a, b) => b.approvedAt.localeCompare(a.approvedAt))
-      const file = approvalsFile(workspace)
-      await mkdir(join(workspace, HUNTGRY_DIR), { recursive: true })
-      const tmp = `${file}.${randomBytes(4).toString('hex')}.tmp`
-      await writeFile(tmp, `${JSON.stringify({ version: VERSION, approvals: next }, null, 2)}\n`, 'utf8')
-      await rename(tmp, file)
-      result = next
-    })
-  const tail = run.catch(() => undefined)
-  saving.set(workspace, tail)
-  void tail.then(() => {
-    if (saving.get(workspace) === tail) saving.delete(workspace)
+  return serialized(workspace, async () => {
+    const next = update(await loadApprovals(workspace)).sort((a, b) => b.approvedAt.localeCompare(a.approvedAt))
+    await writeAuthorityFile(workspace, APPROVALS_FILE, { version: VERSION, approvals: next })
+    return next
   })
-  return run.then(() => result)
 }
 
 /** Adds entries (id recomputed from the pair; duplicates by id keep the older entry). */

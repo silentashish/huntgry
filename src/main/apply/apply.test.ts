@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApplySession, FillReport, FillValues } from '@shared/apply-types'
 import { AUTOFILL_CHANNELS, UPLOAD_ATTR } from '@shared/autofill-channels'
 import { detectConfirmation, fillPage, scanPage, uploadStateOf, verifyFill, type UploadKey } from '@shared/autofill/engine'
+import { updateReview, type RecordedReview } from '../review/authority'
+import { contentRevisionOf } from '../review/service'
 import { refusalFor } from '../browser/url'
 import { isLoopbackUrl, localUrlsAllowed } from '../cli/dev-urls'
 import { ApplyService, type ApplyDeps, type ApplyPage } from './service'
@@ -283,18 +285,38 @@ describe('ApplyService', () => {
   })
 
   it('refuses an unattended result until it is approved on the Review page (#31 gate)', async () => {
-    const review = (state: string) =>
-      JSON.stringify({ status: 'generated', notes: '', review: { state, runId: '20260930-000000-aaaaaa', at: '2026-09-30T00:00:00.000Z' } })
-    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF', 'huntgry.json': review('unreviewed') })
+    const files = { 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF', 'huntgry.json': JSON.stringify({ status: 'generated' }) }
+    const record = (state: RecordedReview['state'], extra: Partial<RecordedReview> = {}) =>
+      updateReview(ws, ID, () => ({ state, runId: '20260930-000000-aaaaaa', at: '2026-09-30T00:00:00.000Z', ...extra }))
+    await application(files)
+    await record('unreviewed')
     const { service } = setup(new FakeTab('', GH_URL))
     await expect(service.start(ID)).rejects.toThrow(/Unreviewed.*Review page/)
-    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF', 'huntgry.json': review('needs-attention') })
+    await record('needs-attention')
     await expect(service.start(ID)).rejects.toThrow(/needs attention/)
-    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF', 'huntgry.json': review('discarded') })
+    await record('discarded')
     await expect(service.start(ID)).rejects.toThrow(/discarded/)
     expect(service.current()).toBeNull()
-    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF', 'huntgry.json': review('approved') })
+    // Approved without the files it vouches for: refused; with them: opens.
+    await record('approved')
+    await expect(service.start(ID)).rejects.toThrow(/changed since you approved/)
+    await record('approved', { contentRevision: await contentRevisionOf(ws, ID) })
     await expect(service.start(ID)).resolves.toMatchObject({ status: 'opened' })
+  })
+
+  it('an approval no longer holds once the resume changed, and an agent cannot approve through huntgry.json', async () => {
+    const dir = await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF', 'huntgry.json': '{}' })
+    await updateReview(ws, ID, () => ({ state: 'unreviewed', runId: '20260930-000000-aaaaaa', at: '2026-09-30T00:00:00.000Z' }))
+    const { service } = setup(new FakeTab('', GH_URL))
+    // The agent writes "approved" where it can write: main's state stays Unreviewed.
+    await writeFile(join(dir, 'huntgry.json'), JSON.stringify({ review: { state: 'approved', runId: '20260930-000000-aaaaaa', at: '2026-09-30T09:00:00.000Z' } }))
+    await expect(service.start(ID)).rejects.toThrow(/Unreviewed/)
+    // Approved, then the run (or anything) rewrites the PDF: Apply refuses until it is reviewed again.
+    const approvedRevision = await contentRevisionOf(ws, ID)
+    await updateReview(ws, ID, (c) => ({ ...c!, state: 'approved', contentRevision: approvedRevision }))
+    await writeFile(join(dir, 'resume.pdf'), '%PDF rewritten')
+    await expect(service.start(ID)).rejects.toThrow(/changed since you approved/)
+    expect(service.current()).toBeNull()
   })
 
   it('fails closed: review notes without a review state, or a malformed one, block Apply (#31 gate)', async () => {
@@ -304,6 +326,9 @@ describe('ApplyService', () => {
     await expect(service.start('a/b/stopped-run')).rejects.toThrow(/Unreviewed.*Review page/)
     await application({ ...jd, 'huntgry.json': JSON.stringify({ status: 'generated', review: { state: 'aproved' } }) }, 'a/b/broken')
     await expect(service.start('a/b/broken')).rejects.toThrow(/needs attention/)
+    // A well-formed "approved" that main never recorded is no better.
+    await application({ ...jd, 'huntgry.json': JSON.stringify({ review: { state: 'approved', runId: 'x', at: 'y' } }) }, 'a/b/forged')
+    await expect(service.start('a/b/forged')).rejects.toThrow(/needs attention/)
     expect(service.current()).toBeNull()
   })
 

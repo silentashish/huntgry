@@ -114,7 +114,11 @@ export function registerRunnerIpc(): void {
     // A bulk run's reply may have to wait for a free slot (the queue's concurrency).
     const viaQueue = await replyThroughQueue(runId, text)
     if (viaQueue === 'held') return currentRun(runId)
-    return viaQueue ?? manager.reply(runId, text, () => contextForRun(runId))
+    if (viaQueue) return viaQueue
+    // An unattended run continues only through the queue (process cap, pipeline policy, verify gate).
+    const run = await currentRun(runId)
+    if (run.unattended || run.params.unattended) throw new Error('This unattended run cannot be continued now. Try again in a moment.')
+    return manager.reply(runId, text, () => contextForRun(runId))
   })
 
   ipcMain.handle(RUNNER_CHANNELS.stop, async (_e, id: unknown) => {

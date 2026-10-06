@@ -198,10 +198,11 @@ After a restart the queue is paused until you press **Resume**.
 answering: each run uses only your master-profile facts and your *standing approvals*, leaves every
 other reframing out, lists it in `review-notes.md`, and builds and verifies in one go. Results land
 as **Unreviewed** on the new **Review** page (and cannot be auto-applied until you approve them);
-approving ticked reframings saves them as standing approvals in
-`<workspace>/.huntgry/approved-reframings.json`, which later unattended runs may reuse and which
-**Settings** lists. The pipeline pauses on a usage limit until the agent's reset time (or switches the
-remaining jobs to a fallback agent), retries transient failures and stalls with backoff, keeps the
+approving ticked reframings saves them as standing approvals, which later unattended runs may reuse
+and which **Settings** lists. Review decisions and standing approvals are kept with the app's data
+(`~/Library/Application Support/Huntgry/review/`), outside the workspace, so an agent (which can write
+the workspace) can never approve its own result. The pipeline pauses on a usage limit until the
+agent's reset time (or switches the jobs that have not started to a fallback agent), retries transient failures and stalls with backoff, keeps the
 Mac awake while it has work (closing the lid on battery still sleeps), resumes after a restart, stops
 on an optional budget, and leaves a summary card on the Dashboard with a macOS notification and a dock
 badge. See [docs/changes/31-unattended-pipeline.md](docs/changes/31-unattended-pipeline.md).

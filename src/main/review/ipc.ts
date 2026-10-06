@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import { REVIEW_CHANNELS } from '@shared/review-types'
-import { contextForRun, manager } from '../cli/start'
+import { manager } from '../cli/start'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
 import { queue, replyThroughQueue } from '../queue/ipc'
@@ -26,11 +26,12 @@ const workspace = async () => (await requireCurrentWorkspace()).path
 /** The desktop's review deps; #42's gateway builds the same shape with `via: 'phone:<id>'`. */
 export const reviewDeps: ReviewDeps = {
   workspace,
-  reply: async (runId, text, ws) => {
-    // A run the queue manages waits for a free slot like any reply; a re-run of a result whose queue
-    // item is gone continues the session directly (the pipeline still settles it).
+  reply: async (runId, text) => {
+    // Always through the queue (it takes back a result whose item was removed): the process cap,
+    // the pipeline's policy and the verify gate apply to a re-run like to any job. Never directly.
     const viaQueue = await replyThroughQueue(runId, text)
-    return viaQueue ?? manager.reply(runId, text, () => contextForRun(runId, ws))
+    if (viaQueue === null) throw new Error('This result cannot be re-run now (another workspace is open, or the app is quitting).')
+    return viaQueue
   },
   changed: () => emit('applications:changed', null),
   busy: (runId) =>

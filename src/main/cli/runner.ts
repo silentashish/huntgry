@@ -40,6 +40,11 @@ export interface RunnerHooks {
   /** `seq` is the event's index in the run's `events.jsonl`. */
   onEvent(runId: string, seq: number, event: unknown): void
   onRun(run: RunSummary): void
+  /**
+   * Before any reply reaches a run (live or resumed): an unattended result is about to change,
+   * so its approval is revoked first (#31). A failure here fails the reply: nothing is sent.
+   */
+  beforeReply?(run: RunSummary, workspace: string): Promise<void>
 }
 
 interface Live {
@@ -84,6 +89,28 @@ export class RunManager {
     return this.live.has(id)
   }
 
+  /** Runs with an agent process right now (working, waiting with its process, or still exiting). */
+  liveIds(): string[] {
+    return [...this.live.keys()]
+  }
+
+  /**
+   * Ends the process of the run that has waited longest for a reply (session kept, see `release`),
+   * so a job can use its slot. `false` when no live run is waiting (or one is already being released).
+   */
+  releaseIdle(): boolean {
+    // Not an unattended run: one that waits is being settled (and finished) by the queue right now.
+    const idle = [...this.live.values()].filter(
+      (e) => e.run.status === 'waiting' && !e.run.unattended && !e.run.params.unattended && !e.releasing && !e.stopping && !e.finishing
+    )
+    // One at a time: a release already under way frees a slot when its process exits.
+    if ([...this.live.values()].some((e) => e.releasing)) return false
+    const oldest = idle.sort((a, b) => a.run.updatedAt.localeCompare(b.run.updatedAt))[0]
+    if (!oldest) return false
+    this.release(oldest.run.id)
+    return true
+  }
+
   /** The in-memory summary of a live run (fresher than `run.json`). */
   liveRun(id: string): RunSummary | null {
     return this.live.get(id)?.run ?? null
@@ -122,6 +149,7 @@ export class RunManager {
     if (live) {
       // An exec agent's process lives for one turn: while it runs, the turn is not over.
       if (live.adapter.turnMode === 'exec') throw stillWorking(live)
+      await this.hooks.beforeReply?.({ ...live.run }, live.ctx.workspace)
       await this.send(id, text)
       return { ...live.run }
     }
@@ -131,12 +159,14 @@ export class RunManager {
         // A reply that came first resumed the run meanwhile. An exec agent has already read its
         // whole prompt (stdin is closed), so this one could never reach it: refuse it.
         if (entry.adapter.turnMode === 'exec') throw stillWorking(entry)
+        await this.hooks.beforeReply?.({ ...entry.run }, entry.ctx.workspace)
       } else {
         const ctx = await context()
         const run = await readRun(ctx.workspace, id)
         if ((ctx.agent ?? DEFAULT_AGENT) !== run.agent)
           throw new Error(`This run uses ${AGENT_LABEL[run.agent]}; it cannot be continued with another agent.`)
         if (!run.sessionId) throw new Error(`This run has no ${AGENT_LABEL[run.agent]} session to resume.`)
+        await this.hooks.beforeReply?.(run, ctx.workspace)
         run.error = undefined
         const existing = (await readEvents(ctx.workspace, id)).length
         this.spawnFor(run, ctx, run.sessionId, existing)

@@ -39,7 +39,7 @@ export function StandingApprovalsCard() {
           <Title order={4}>Standing approvals</Title>
           <Text size="sm" c="dimmed">
             Reframings you approved on the Review page. Unattended runs may use each one as written (same fact, same
-            wording) without asking. Stored in <code>.huntgry/approved-reframings.json</code> of the workspace.
+            wording) without asking. Stored with the app's data, outside the workspace, so an agent can never add one.
           </Text>
         </div>
         {list.length > 0 &&

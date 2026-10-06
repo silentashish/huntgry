@@ -8,9 +8,11 @@ import {
 } from '@shared/applications-types'
 import { REVIEW_NOTES_FILE } from '@shared/review-types'
 import { APPLICATION_DEPTH, APPLICATION_MARKERS, IGNORED_ENTRIES, MAX_SCAN_ENTRIES } from '../workspace/constants'
+import { getReview } from '../review/authority'
 import { readTracking, TRACKING_FILE } from './tracking'
 
 export const UNCHECKED_REASON = 'Unattended result that was never checked (review-notes.md without a review state).'
+export const NOT_RECORDED_REASON = 'huntgry.json carries a review state Huntgry did not record (an agent may have written it): check this result on the Review page.'
 
 /**
  * Finds every `<role>/<company>/<job-id>/` application folder in a workspace
@@ -118,12 +120,19 @@ export async function readApplication(workspace: string, folder: string): Promis
       .sort((a, b) => Number(a[2]) - Number(b[2]))
       .map((m) => m[0])
 
-  // An unattended run writes review-notes.md before it builds (#31). A folder that has the notes but
-  // no review state (the run was stopped, crashed or is still in its turn) reads as Unreviewed, so
-  // Apply never sees an unattended result nobody checked. Not persisted: the Review page decides.
-  if (!tracking.review && names.includes(REVIEW_NOTES_FILE)) {
-    tracking.review = { state: 'unreviewed', runId: '', at: new Date(updated || created || 0).toISOString(), reason: UNCHECKED_REASON }
-  }
+  // The review state (#31) comes only from main's authority store (outside the workspace, which
+  // agents can write), never from huntgry.json. It fails closed:
+  // - a `review` in huntgry.json that main did not record (an agent wrote it) reads as Needs attention;
+  // - review-notes.md without a recorded state (an unattended run stopped, crashed or still in its
+  //   turn: it writes the notes before it builds) reads as Unreviewed.
+  // Neither is persisted: the Review page decides.
+  const recorded = await getReview(workspace, id)
+  const at = new Date(updated || created || 0).toISOString()
+  if (recorded) {
+    const { contentRevision: _c, verify: _v, ...review } = recorded
+    tracking.review = review
+  } else if (tracking.review) tracking.review = { state: 'needs-attention', runId: '', at, reason: NOT_RECORDED_REASON }
+  else if (names.includes(REVIEW_NOTES_FILE)) tracking.review = { state: 'unreviewed', runId: '', at, reason: UNCHECKED_REASON }
 
   return {
     id,

@@ -18,6 +18,7 @@ import { pinnedFetch } from './public-url'
 import { RunManager, type RunContext } from './runner'
 import { readRun } from './runs'
 import { approvalsForPrompt, loadApprovals } from '../review/approvals'
+import { reopenForContinuation } from '../review/authority'
 import { claudeVersion, supportsPermissionPrompts } from './version'
 
 /**
@@ -35,6 +36,11 @@ export const manager = new RunManager({
   onRun: (run) => {
     emit('runner:run', run)
     for (const listener of runListeners) listener(run)
+  },
+  // Every continuation of an unattended result (Tailor reply, Review re-run, nudge) revokes its approval first.
+  beforeReply: async (run, workspace) => {
+    if ((run.unattended || run.params.unattended) && run.outputFolder)
+      await reopenForContinuation(workspace, run.outputFolder, run.id, new Date())
   }
 })
 
