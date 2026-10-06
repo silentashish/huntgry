@@ -339,7 +339,22 @@ export class Room extends DurableObject<Env> {
       session.kind === 'desktop' &&
       (frame.ack === frame.ref || this.sql<{ seq: number }>('SELECT seq FROM inbox WHERE owner = ? AND sender = ? AND ref = ? LIMIT 1', DESKTOP, frame.to, frame.ref).length > 0)
 
+    // A retransmission (same sender, recipient and ref still queued) is not stored or sent twice.
+    const duplicate = this.sql<{ seq: number }>('SELECT seq FROM inbox WHERE owner = ? AND sender = ? AND ref = ? LIMIT 1', frame.to, sender, frame.ref).length > 0
+
+    // A full phone inbox with no event left to drop refuses the result before consuming the
+    // command's ack, so the command stays queued for the desktop and is answered again later.
+    if (!duplicate && isResult && this.inboxFullOfResults(frame.to)) {
+      this.notify(ws, { expired: true, ref: frame.ref })
+      return
+    }
+
     if (frame.ack !== undefined) this.sql('DELETE FROM inbox WHERE owner = ? AND ref = ?', sender, frame.ack)
+
+    if (duplicate) {
+      if (frame.to === DESKTOP && this.socketsOf('desktop', DESKTOP).length === 0) this.notify(ws, { queued: true, ref: frame.ref })
+      return
+    }
 
     // Only the clear routing fields travel on; ack / pushHint / pushText are consumed here.
     const forwarded: RelayFrame = { to: frame.to, ref: frame.ref, nonce: frame.nonce, ct: frame.ct }
@@ -365,6 +380,12 @@ export class Room extends DurableObject<Env> {
   private knowsRecipient(id: string, now: number): boolean {
     if (this.sql<{ id: string }>('SELECT id FROM devices WHERE id = ?', id).length > 0) return true
     return this.sql<{ id: string }>('SELECT id FROM pairings WHERE id = ? AND exp > ?', id, now).length > 0
+  }
+
+  /** `true` when a phone's inbox is at the cap and every frame in it is a result (nothing the cap may drop). */
+  private inboxFullOfResults(owner: string): boolean {
+    const row = this.sql<{ n: number; events: number }>('SELECT COUNT(*) AS n, COALESCE(SUM(result = 0), 0) AS events FROM inbox WHERE owner = ?', owner)[0]
+    return (row?.n ?? 0) >= MAX_UNACKED_PER_PHONE && (row?.events ?? 0) === 0
   }
 
   /** Keeps a phone's inbox at `MAX_UNACKED_PER_PHONE`, dropping the oldest events; results stay. */

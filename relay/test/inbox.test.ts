@@ -197,6 +197,36 @@ describe('inbox', () => {
     await phone2.close()
   })
 
+  it('refuses a result once a phone holds 50 results, keeping the command it answers queued', async () => {
+    const f = await fixture(relay)
+    const phone = await f.phone()
+    await phone.next()
+    const desktop = await f.desktop()
+    await phone.next() // online
+    phone.send(frame('desktop', 'cmd-x'))
+    expect((await desktop.next<RelayFrame>()).ref).toBe('cmd-x')
+    await phone.close()
+
+    for (let i = 0; i < 50; i++) desktop.send(frame(f.deviceId, `res-${i}`, { ack: `res-${i}` }))
+    desktop.send(frame(f.deviceId, 'res-0', { ack: 'res-0' })) // a retransmission is not stored twice
+    await desktop.expectNone()
+    desktop.send(frame(f.deviceId, 'cmd-x', { ack: 'cmd-x' })) // its result: no room left
+    expect(await desktop.next()).toEqual({ expired: true, ref: 'cmd-x' })
+    await desktop.close()
+
+    // The command was not consumed: the desktop gets it again and can answer once the phone acks.
+    const again = await f.desktop()
+    expect((await again.next<RelayFrame>()).ref).toBe('cmd-x')
+    const phone2 = await f.phone()
+    await phone2.next()
+    const refs: string[] = []
+    for (let i = 0; i < 50; i++) refs.push((await phone2.next<RelayFrame>()).ref)
+    await phone2.expectNone()
+    expect(refs).toEqual(Array.from({ length: 50 }, (_, i) => `res-${i}`))
+    await again.close()
+    await phone2.close()
+  })
+
   it('holds at most 50 frames from one phone while the desktop is away, telling the phone which went', async () => {
     const f = await fixture(relay)
     const phone = await f.phone()
