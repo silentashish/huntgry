@@ -118,14 +118,29 @@ it already fills.
   the target into a submit button, moves it or disables it mid-sequence stops the press):
   - the target must be inside the field's own widget: its control, its button group or radio group, or a listbox the
     control **demonstrably owns**. Owned means the listbox is named by the control's `aria-controls` / `aria-owns`,
-    sits inside the widget, or names the control in `aria-labelledby`. An untied popup is never used: the pick fails
+    sits inside the widget, or names the control in `aria-labelledby`. It must also be a list itself (`role=listbox`,
+    or react-select's menu inside the widget), name no other control as its owner, and hold no other field's opener
+    or nested list. A broad region named by `aria-controls` is never a listbox. An untied popup is never used: the pick fails
     and stays a suggestion. For Workday this means a dropdown is picked only if its popup names its button. A live
     check of Workday's markup is a follow-up;
   - everything the press reaches or activates is checked, not just the target: every wrapper it bubbles through
     inside the widget, any activatable element around the widget, and a label's control;
   - refused: links, submit / image / reset controls, buttons that would submit their form, checkbox, file and button
     inputs, labels whose control is outside the widget (or is a checkbox or button), buttons enclosing the widget,
-    disabled elements, and anything named Submit / Apply / Next / Continue / Save / Review.
+    disabled elements, and anything named Submit / Apply / Next / Continue / Save / Review. Names include
+    `aria-labelledby` text, also for dropdown-button openers;
+  - a widget whose options read like consent (agree, accept, certify, acknowledge…) is never picked in.
+- **Safety net around every pick** (`withSafetyNet`; review round 3 asked for it so the next unforeseen variant
+  fails closed):
+  - while a pick runs, capture listeners on the window cancel (preventDefault + stopImmediatePropagation) every
+    `submit` event, and every click, mouse or pointer event whose `composedPath()` target is outside the widget and
+    its own listboxes. This catches a page that turns the option into a submit button inside its own click listener,
+    a label re-pointed at an outside checkbox at click time, and a handler re-sending the click to another control;
+  - before the pick it snapshots every checkbox outside the widget and the page state (URL and the adapter's step).
+    A blocked event, a changed checkbox (put back) or a step change fails the pick with `halt`. The field goes to
+    the user ("Needs you", with the suggestion), and the fill stops picking;
+  - the listeners are removed in `finally`. A real click outside the field is ignored for the second or two a pick
+    takes.
 - **Events:** pointerdown, mousedown, pointerup, mouseup and click on the control and then on the option element.
   Never a keyboard event, so nothing can press Enter in a form. A menu left open is closed by blurring the control.
 - **Read back:** react-select's single value, the Workday button's text, the pressed button (`aria-pressed`) or the
@@ -136,14 +151,20 @@ it already fills.
   tests show that `pick` refuses out-of-widget targets, links, submit buttons, flow-labelled options, a submit button
   posing as an option, and listboxes it cannot tie to the widget. Review round 2 added: a label for an outside image
   submit or a consent checkbox, an option nested in a Next button, a target turned into a submit button or moved
-  mid-press, and a single untied listbox. No key or submit event fires in any of them.
+  mid-press, and a single untied listbox. Review round 3 added: a submit arranged in a click listener, a label tied
+  to a consent checkbox at click time, an option in a button named Next through `aria-labelledby`, another field's
+  listbox inside a region the control names, consent-worded options, and the net itself (a click re-sent outside,
+  an outside checkbox ticked, a step change, and the listeners removed afterwards). No key or submit event fires in
+  any of them.
 - **User edits:** a click-only field the person touched, or a combobox they are typing into, is `kept`. Edits are
   checked again before each press and after the menu opens.
 - **After the fill:** the verify pass (and the one after an upload) re-reads every picked widget from the current page.
   A pick that a late re-render wiped goes to the user as `rejected`, with the saved answer as its suggestion; a
   change the user made is `kept`. Nothing is pressed again.
 - **Never:** consent, certification, acknowledgement, arbitration and signature questions are refused before any
-  memory lookup, for every strategy, even with a remembered answer. A checkbox becomes a yes/no question only in
+  memory lookup, for every strategy, even with a remembered answer. This includes consent phrased as a question ("Do
+  you agree to receive recruiting emails?", "Do you accept the terms?") and any question whose options read like
+  consent ("I agree" / "I do not agree"), for native radio and select writes too. A checkbox becomes a yes/no question only in
   Ashby's screening shape: a hidden `tabindex=-1` checkbox in a `yesno` group of exactly a Yes and a No button.
 - **Still not filled:** the Workday steps that #65 never fills (Application Questions, Voluntary Disclosures). Picking
   applies only to the steps autofill already fills, and those steps stay a follow-up.
