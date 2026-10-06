@@ -97,6 +97,18 @@ describe('device ids in paths', () => {
     expect(await relay.revokeDevice(f.roomId, f.ownerSecret, odd)).toBe(404)
     expect((await relay.fetch(`${RELAY_PATHS.devices(f.roomId)}/%E0%A4%A`, { method: 'DELETE', headers: Relay.bearer(f.ownerSecret) })).status).toBe(404)
   })
+
+  it('refuses "." and ".." as device ids, so no revocation path can resolve to the room itself', async () => {
+    const f = await fixture(relay)
+    for (const dots of ['.', '..']) {
+      const res = await relay.fetch(RELAY_PATHS.devices(f.roomId), { method: 'POST', headers: Relay.bearer(f.ownerSecret), body: { deviceId: dots, tokenHash: sha256('t') } })
+      expect(res.status).toBe(400)
+    }
+    // The room is untouched: its registered device still authenticates.
+    const phone = await f.phone()
+    expect(await phone.next()).toMatchObject({ presence: 'offline' })
+    await phone.close()
+  })
 })
 
 describe.each([
