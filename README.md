@@ -128,6 +128,15 @@ and job id (the board's id), first fetching the full posting from the employer's
 there is one. Indeed shows full descriptions only after a human check, so Indeed jobs arrive
 with the search snippet: the Tailor page says so, and you can paste the full text first.
 
+Jobs opens on **Relevant**: the saved jobs that fit your master profile (headline and roles,
+skills, seniority, location), best first, with the reasons on each card. **Refresh** with an
+empty keyword box searches both boards for your headline near your location; when the last
+refresh is over 12 hours old, opening Jobs does that in the background (turn it off with the
+toggle under the list). Filters for visa sponsorship, workplace, seniority, date posted and
+minimum salary apply to any list and are kept in `<workspace>/.huntgry/jobs-prefs.json`. If your
+Work authorization says you need a sponsor, Relevant leaves out postings that say they won't
+sponsor.
+
 ## Browser
 
 **Open posting** (Jobs) and the posting links on the Dashboard open the job in the
