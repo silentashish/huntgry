@@ -13,7 +13,7 @@ import { UsagePage } from '../pages/usage'
  *
  * The fake Claude reports Claude Haiku 4.5 and, per turn, 2300 input + 2000 output tokens and
  * $0.0123 (the session's running total grows by that much, as the real CLI's does): the table's
- * estimate for those tokens is the same $0.0123.
+ * estimate for those tokens is the same $0.0123, shown as $0.01 (two decimals from a cent up).
  */
 
 const JOB = {
@@ -38,8 +38,8 @@ test.describe('run observability', () => {
     await tailor.expectStatus('Waiting for you')
     await expect(usage.runMetric('model')).toHaveText('claude-haiku-4-5-20251001')
     await expect(usage.runMetric('tokens')).toHaveText('4.3k')
-    await expect(usage.runMetric('cost')).toHaveText('$0.0123')
-    await expect(tailor.turnResults.first()).toContainText('2.3k in · 2.0k out · $0.0123')
+    await expect(usage.runMetric('cost')).toHaveText('$0.01')
+    await expect(tailor.turnResults.first()).toContainText('2.3k in · 2.0k out · $0.01')
     await expect(usage.runMetric('active')).toHaveText(/^\d+s$/)
 
     // Second turn: the running total is split per turn, not added up again.
