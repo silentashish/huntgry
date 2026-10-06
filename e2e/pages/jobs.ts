@@ -1,6 +1,9 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 
-/** The Jobs page: board search, add by URL, paste, the saved-job list with selection, the job drawer and "Tailor all". */
+/**
+ * The Jobs page: board search, Refresh (profile-derived search), add by URL, paste, the saved-job list with its
+ * segments (Relevant, Last search, All, …), filters and selection, the job drawer and "Tailor all".
+ */
 export class JobsPage {
   readonly keywords: Locator
   readonly location: Locator
@@ -16,6 +19,15 @@ export class JobsPage {
   /** The bar that appears once a job is ticked. */
   readonly selectionBar: Locator
   readonly tailorAllButton: Locator
+  readonly refreshButton: Locator
+  /** "Relevant jobs updated 5 min ago". */
+  readonly lastRefreshed: Locator
+  /** The sponsorship filter (a Mantine Select: a combobox). */
+  readonly sponsorshipFilter: Locator
+  /** The auto-refresh toggle (a Mantine Switch: `role="switch"`, its input visually hidden). */
+  readonly autoRefresh: Locator
+  /** The hint shown instead of the Relevant segment when the profile has no headline or role. */
+  readonly relevantHint: Locator
 
   constructor(readonly page: Page) {
     this.keywords = page.getByLabel('Keywords')
@@ -30,6 +42,47 @@ export class JobsPage {
     this.pasteModal = page.getByRole('dialog', { name: 'Paste a job' })
     this.selectionBar = page.getByLabel('Selected jobs')
     this.tailorAllButton = this.selectionBar.getByRole('button', { name: 'Tailor all' })
+    this.refreshButton = page.getByRole('button', { name: 'Refresh', exact: true })
+    this.lastRefreshed = page.getByText(/^Relevant jobs updated /)
+    this.sponsorshipFilter = page.getByRole('combobox', { name: 'Visa sponsorship' })
+    this.autoRefresh = page.getByRole('switch', { name: 'Auto-refresh relevant jobs' })
+    this.relevantHint = page.getByRole('alert').filter({ hasText: 'See the jobs that fit you' })
+  }
+
+  /**
+   * A segment of the saved-job list (a Mantine SegmentedControl: a radio named by its label,
+   * e.g. "Relevant (2)", "Last search (4)", "All").
+   */
+  segment(name: 'Relevant' | 'Last search' | 'Last refresh' | 'All' | 'Not tailored' | 'Tailored' | 'Dismissed'): Locator {
+    const counted = name === 'Relevant' || name === 'Last search' || name === 'Last refresh'
+    return this.page.getByRole('radio', { name: counted ? new RegExp(`^${name} \\(\\d+\\)$`) : name, exact: !counted })
+  }
+
+  /** Shows a segment; the radio input is visually hidden, so its label is clicked. */
+  async show(name: Parameters<JobsPage['segment']>[0]): Promise<void> {
+    await this.segment(name).locator('xpath=following-sibling::label[1]').click()
+    await expect(this.segment(name)).toBeChecked()
+  }
+
+  /** Flips auto-refresh by clicking the switch's label (the input itself is visually hidden). */
+  async toggleAutoRefresh(on: boolean): Promise<void> {
+    await this.page.getByText('Auto-refresh relevant jobs', { exact: true }).click()
+    await expect(this.autoRefresh).toBeChecked({ checked: on })
+  }
+
+  /** Picks a sponsorship filter option. */
+  async filterSponsorship(option: 'Any' | 'Hide "no sponsorship"' | 'Only sponsors'): Promise<void> {
+    await this.sponsorshipFilter.click()
+    await this.page.getByRole('option', { name: option, exact: true }).click()
+    await expect(this.sponsorshipFilter).toHaveValue(option)
+  }
+
+  /** Titles of the listed job cards, top to bottom. */
+  async listedTitles(): Promise<string[]> {
+    return this.page.getByRole('checkbox', { name: /^Select / }).evaluateAll((boxes) =>
+      // Only the cards' boxes carry an aria-label; "Select all shown (n)" is named by its <label>.
+      boxes.map((b) => (b.getAttribute('aria-label') ?? '').replace(/^Select /, '')).filter(Boolean)
+    )
   }
 
   /** A board chip (Mantine Chip: a checkbox named by its label). */

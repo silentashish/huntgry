@@ -22,6 +22,10 @@ export interface EmployerPosting {
   requirements: string
   description: string[]
   datePosted: string
+  /** hiring.cafe's `visa_sponsorship` (default `false`, the board's "not mentioned"). */
+  visaSponsorship?: boolean
+  /** hiring.cafe's `seniority_level` (default `Senior Level`). */
+  seniority?: string
 }
 
 /** The employer pages behind the mock hiring.cafe hits (`/postings/employer/<id>`). */
@@ -40,7 +44,9 @@ export const EMPLOYER_POSTINGS: EmployerPosting[] = [
       'You will design the next generation of our deployment pipeline, keep the clusters boring and mentor two engineers who joined this year.',
       'We are remote across North America and meet in person twice a year. The salary band is published and the interview loop takes two weeks.'
     ],
-    datePosted: '2026-09-24'
+    datePosted: '2026-09-24',
+    // The one hit that sponsors: the sponsorship filter (#73) keeps it and hides the others.
+    visaSponsorship: true
   },
   {
     id: '102',
@@ -56,7 +62,8 @@ export const EMPLOYER_POSTINGS: EmployerPosting[] = [
       'You will build Python services on AWS, own their PostgreSQL schemas and take part in a calm on-call rotation with eight colleagues.',
       'The office is in Portland, Oregon, with two days a week from home. Relocation help is available.'
     ],
-    datePosted: '2026-09-22'
+    datePosted: '2026-09-22',
+    seniority: 'Mid Level'
   },
   {
     // Not a board hit: the `mocks` workspace saves this one as a job added by URL, so it never merges with a search result.
@@ -119,7 +126,9 @@ export function hiringCafePage(searchState: string, origin: string): string {
         role_activities: ['building services', 'running infrastructure'],
         commitment: ['Full Time'],
         role_type: 'Individual Contributor',
-        seniority_level: 'Senior Level',
+        seniority_level: p.seniority ?? 'Senior Level',
+        visa_sponsorship: p.visaSponsorship ?? false,
+        min_industry_and_role_yoe: null,
         workplace_type: p.remote ? 'Remote' : 'Onsite',
         formatted_workplace_location: p.location,
         yearly_min_compensation: p.salary[0],

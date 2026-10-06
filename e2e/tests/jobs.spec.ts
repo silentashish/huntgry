@@ -19,13 +19,29 @@ const jobFiles = async (workspace: string, prefix: string) => (await readdir(job
 const readJobs = async (workspace: string, prefix: string) =>
   Promise.all((await jobFiles(workspace, prefix)).map(async (n) => JSON.parse(await readFile(join(jobsDir(workspace), n), 'utf8'))))
 
-async function openJobs(app: { window: import('@playwright/test').Page }): Promise<JobsPage> {
+/**
+ * Opens Jobs. It opens on the jobs relevant to the master profile (#73), rendered from the saved jobs; the `mocks`
+ * workspace turns auto-refresh off (`.huntgry/jobs-prefs.json`), so nothing loads a board unless a test asks.
+ * Most tests then look at every saved job: `show` picks the segment.
+ */
+async function openJobs(
+  app: { window: import('@playwright/test').Page },
+  show: 'All' | 'Relevant' = 'All'
+): Promise<JobsPage> {
   await new Shell(app.window).goTo('jobs')
   const jobs = new JobsPage(app.window)
+  await expect(jobs.segment('Relevant')).toBeChecked()
   // The seeded jobs are listed before anything else happens.
   await expect(jobs.jobTitle('Infrastructure Engineer')).toBeVisible()
+  if (show === 'All') await jobs.show('All')
   return jobs
 }
+
+/** The searchState objects the mock hiring.cafe was asked for. */
+const searchStates = (requests: string[]) =>
+  requests
+    .filter((r) => r.startsWith('/?searchState='))
+    .map((r) => JSON.parse(decodeURIComponent(r.slice('/?searchState='.length))))
 
 test.describe('job search', () => {
   test('Search shows results from both boards and saves them under .huntgry/jobs', async ({ app, mock }) => {
@@ -96,8 +112,116 @@ test.describe('job search', () => {
       await expect(again.jobTitle(title)).toBeVisible()
     }
     await expect(app.window.getByText('6 of 6 saved jobs')).toBeVisible()
+    // The last search is kept as well (#73), not only the jobs.
+    await expect(again.segment('Last search')).toHaveAccessibleName('Last search (4)')
     // The recent search is offered again.
     await expect(app.window.getByRole('button', { name: 'engineer', exact: true })).toBeVisible()
+  })
+})
+
+test.describe('relevant jobs, Refresh and filters (#73)', () => {
+  test('Jobs opens on the relevant saved jobs, ranked against the profile, without loading a board', async ({ app, mock }) => {
+    const jobs = await openJobs(app, 'Relevant')
+    // Both seeded jobs fit "Backend Engineer" with Go: the closer title first.
+    await expect(jobs.segment('Relevant')).toHaveAccessibleName('Relevant (2)')
+    await expect.poll(() => jobs.listedTitles()).toEqual(['Staff Backend Engineer', 'Infrastructure Engineer'])
+    await expect(app.window.getByText(/^Title: Backend Engineer · Skills: Go/)).toBeVisible()
+    await expect(jobs.lastRefreshed).toHaveText('Relevant jobs updated never')
+    expect(mock.requests).toEqual([])
+  })
+
+  test('Refresh with no keywords searches the boards for the profile headline near its location', async ({ app, mock }) => {
+    const jobs = await openJobs(app, 'Relevant')
+    await expect(jobs.keywords).toHaveValue('')
+    await jobs.refreshButton.click()
+
+    await expect(jobs.report('hiring.cafe: 2 jobs')).toBeVisible()
+    await expect(jobs.report('Indeed: 2 jobs')).toBeVisible()
+    await expect(jobs.lastRefreshed).toHaveText('Relevant jobs updated just now')
+    await expect(jobs.segment('Relevant')).toBeChecked()
+    // The new Portland backend job fits best and leads the list.
+    await expect.poll(async () => (await jobs.listedTitles())[0]).toBe('Backend Engineer')
+
+    // The profile's headline and location (Portland, OR) made the query; only the verified searchState key was sent.
+    expect(searchStates(mock.requests)).toEqual([{ searchQuery: 'Backend Engineer' }])
+    const indeed = mock.requests.filter((r) => r.startsWith('/jobs?'))
+    expect(indeed).toHaveLength(1)
+    expect(indeed[0]).toMatch(/[?&]q=Backend\+Engineer(&|$)/)
+    expect(indeed[0]).toMatch(/[?&]l=Portland/)
+    const prefs = JSON.parse(await readFile(join(app.workspace!, '.huntgry/jobs-prefs.json'), 'utf8'))
+    expect(prefs.lastRefreshAt).toEqual(expect.any(String))
+    expect(prefs.lastSearch).toMatchObject({ relevant: true, query: { keywords: 'Backend Engineer', location: 'Portland, OR' } })
+  })
+
+  test('"Only sponsors" hides the jobs that do not say they sponsor; filters and the last search survive leaving the page', async ({
+    app
+  }) => {
+    const shell = new Shell(app.window)
+    const jobs = await openJobs(app)
+    await jobs.search('engineer')
+    await expect(jobs.report('hiring.cafe: 2 jobs')).toBeVisible()
+    await expect.poll(() => jobs.listedTitles()).toHaveLength(4)
+
+    await jobs.filterSponsorship('Only sponsors')
+    await expect.poll(() => jobs.listedTitles()).toEqual(['Platform Engineer'])
+    await expect(app.window.getByText('Sponsors visa', { exact: true })).toBeVisible()
+
+    await shell.goTo('dashboard')
+    await shell.goTo('jobs')
+    await expect(jobs.sponsorshipFilter).toHaveValue('Only sponsors')
+    await jobs.show('Last search')
+    await expect(jobs.segment('Last search')).toHaveAccessibleName('Last search (4)')
+    await expect.poll(() => jobs.listedTitles()).toEqual(['Platform Engineer'])
+
+    // Unknown counts as passing "Hide no sponsorship": every result is back.
+    await jobs.filterSponsorship('Hide "no sponsorship"')
+    await expect.poll(() => jobs.listedTitles()).toHaveLength(4)
+    const prefs = JSON.parse(await readFile(join(app.workspace!, '.huntgry/jobs-prefs.json'), 'utf8'))
+    expect(prefs.filters.sponsorship).toBe('hide-no')
+  })
+
+  test('with auto-refresh on, opening Jobs refreshes once in the background, then not again within 12 hours', async ({
+    app,
+    mock
+  }) => {
+    const shell = new Shell(app.window)
+    const jobs = await openJobs(app)
+    await expect(jobs.autoRefresh).not.toBeChecked()
+    await jobs.toggleAutoRefresh(true)
+    // Turning it on loads nothing by itself.
+    expect(mock.requests).toEqual([])
+
+    await shell.goTo('dashboard')
+    await shell.goTo('jobs')
+    // The saved relevant jobs are listed at once; the boards answer in the background.
+    await expect(jobs.segment('Relevant')).toBeChecked()
+    await expect(jobs.jobTitle('Staff Backend Engineer')).toBeVisible()
+    await expect(jobs.report('hiring.cafe: 2 jobs')).toBeVisible()
+    await expect(jobs.lastRefreshed).toHaveText('Relevant jobs updated just now')
+    await expect(jobs.jobTitle('Backend Engineer')).toBeVisible()
+    expect(searchStates(mock.requests)).toHaveLength(1)
+
+    await shell.goTo('dashboard')
+    await shell.goTo('jobs')
+    await expect(jobs.autoRefresh).toBeChecked()
+    await expect(jobs.jobTitle('Backend Engineer')).toBeVisible()
+    await expect(app.window.getByText(/^Refreshing relevant jobs/)).toHaveCount(0)
+    expect(searchStates(mock.requests)).toHaveLength(1)
+  })
+
+  test('without a headline or a role, Jobs opens on All and says how to get relevant jobs', async ({ app, mock }) => {
+    const path = join(app.workspace!, 'master-profile.md')
+    const profile = await readFile(path, 'utf8')
+    await writeFile(path, profile.replace(/^- Headline: .*$/m, '- Headline:').replace(/^- Role: .*$/gm, '- Role:'))
+
+    await new Shell(app.window).goTo('jobs')
+    const jobs = new JobsPage(app.window)
+    await expect(jobs.relevantHint).toBeVisible()
+    await expect(jobs.segment('All')).toBeChecked()
+    await expect(jobs.segment('Relevant')).toHaveCount(0)
+    await expect(jobs.jobTitle('Infrastructure Engineer')).toBeVisible()
+    await expect(jobs.refreshButton).toBeDisabled()
+    expect(mock.requests).toEqual([])
   })
 })
 
