@@ -1,4 +1,4 @@
-import type { QueueItemStatus } from '@shared/queue-types'
+import type { QueueItemOutcome, QueueItemStatus } from '@shared/queue-types'
 import { AGENT_LABEL, type AgentId, type RunStatus, type RunSummary } from '@shared/runner-types'
 import { formatUsage } from '@shared/transcript'
 
@@ -33,11 +33,17 @@ export function runCost(run: Pick<RunSummary, 'costUsd' | 'usage'>): string {
 /** Mantine color of each agent's badge. */
 export const AGENT_COLOR: Record<AgentId, string> = { claude: 'orange', codex: 'teal', antigravity: 'indigo' }
 
-/** Badge for an unattended item's recorded result. */
-export const OUTCOME_LABEL: Record<'unreviewed' | 'needs-attention', { label: string; color: string }> = {
+/** Badge for an unattended item's review state. */
+export const OUTCOME_LABEL: Record<QueueItemOutcome, { label: string; color: string }> = {
   unreviewed: { label: 'Unreviewed', color: 'yellow' },
-  'needs-attention': { label: 'Needs attention', color: 'orange' }
+  'needs-attention': { label: 'Needs attention', color: 'orange' },
+  approved: { label: 'Approved', color: 'green' },
+  discarded: { label: 'Discarded', color: 'gray' }
 }
+
+/** A done unattended result still waiting for the user's review (no outcome: saved before the verify gate recorded one). */
+export const awaitsReview = (outcome: QueueItemOutcome | undefined): boolean =>
+  outcome === undefined || outcome === 'unreviewed' || outcome === 'needs-attention'
 
 /** Short chip text for what last went wrong with an unattended item. */
 export const FAILURE_LABEL: Record<string, string> = {

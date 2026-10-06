@@ -13,8 +13,8 @@ import { readEvents, readRun } from '../cli/runs'
 import { queueFile, TailorQueue, type QueueDeps } from '../queue/queue'
 import { LIMIT_MARGIN_MS } from './failures'
 import { IN_PROGRESS_REASON, NUDGE_TEXT, Pipeline, summaryFile, type PipelineDeps } from './pipeline'
-import { getReview, reopenForContinuation, setReviewAuthorityRoot } from '../review/authority'
-import { approvalDrift, approveReview, discardReview, reviewDetail } from '../review/service'
+import { getReview, reopenForContinuation, setReviewAuthorityRoot, updateReview } from '../review/authority'
+import { approvalDrift, approveReview, discardReview, rerunReview, reviewDetail } from '../review/service'
 import { requirePipelineStartInput } from './service'
 
 const FAKE_CLAUDE = join(__dirname, '../cli/fixtures/fake-claude.mjs')
@@ -845,6 +845,11 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     release()
     await until((p) => p?.status === 'finished' && finished.length > 0)
     expect(await getReview(ws, app)).toMatchObject({ state: 'discarded', runId: run.id })
+    // The queue item says so too, not Unreviewed (#72), and nothing waits for review.
+    expect(queue.state().items[0].outcome).toBe('discarded')
+    expect(pipeline.state()!.counts).toMatchObject({ unreviewed: 0, needsAttention: 0, discarded: 1 })
+    expect(finished[0].counts).toMatchObject({ unreviewed: 0, discarded: 1 })
+    expect(badges).toEqual([0])
     expect(reviewBlocker((await readApplication(ws, join(ws, app))).tracking.review)).toMatch(/discarded/)
 
     // Report-less results keep verify.py's own report (pass and fail) for Review.
@@ -859,6 +864,123 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(failed.state).toBe('needs-attention')
     // The passing one (discarded above) shows its passing report too.
     expect((await reviewDetail(ws, app)).verify).toEqual({ ok: true, report: 'page_count: pass' })
+  })
+
+  it('follows Approve, Discard and Re-run from the Review page: items, counts, dock badge and summary (#72)', async () => {
+    jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
+    jobs.set('url:b', job('url:b', { description: 'WRITE_NOTES' }))
+    await pipeline.start(input(['url:a', 'url:b'], { concurrency: 1 }))
+    await until((p) => p?.status === 'finished' && finished.length > 0)
+    expect(badges).toEqual([2])
+    const [a, b] = ['url:a', 'url:b'].map((id) => queue.state().items.find((i) => i.jobId === id)!)
+    // As the desktop wires it (review/ipc.ts): every decision syncs the queue.
+    let syncs: Promise<void>[] = []
+    const reviewDeps = {
+      workspace: async () => ws,
+      reply: async (runId: string, text: string) => (await queue.reply(runId, text))!,
+      changed: () => void syncs.push(pipeline.syncReviews())
+    }
+    const settled = () => Promise.all(syncs)
+
+    // An approval recorded for an older run of the same folder never touches this result.
+    await updateReview(ws, a.applicationId!, (c) => ({ ...c!, state: 'approved', runId: 'older-run' }))
+    await pipeline.syncReviews()
+    expect(queue.state().items.find((i) => i.id === a.id)!.outcome).toBe('unreviewed')
+    // Nor the Dashboard's summary: it still counts the result as waiting.
+    expect((await pipeline.lastSummary())!.counts).toMatchObject({ unreviewed: 2, approved: 0 })
+    expect(finished[0].items.find((i) => i.jobId === 'url:a')!.runId).toBe(a.runId)
+    await updateReview(ws, a.applicationId!, (c) => ({ ...c!, state: 'unreviewed', runId: a.runId! }))
+
+    const emitted = states.length
+    const broadcasts = queueStates.length
+    expect((await approveReview(reviewDeps, { applicationId: a.applicationId!, revision: (await reviewDetail(ws, a.applicationId!)).revision }, 'desktop')).ok).toBe(true)
+    await settled()
+    expect(queue.state().items.find((i) => i.id === a.id)!.outcome).toBe('approved')
+    expect(queueStates.length).toBe(broadcasts + 1)
+    expect(queueStates.at(-1)!.items.find((i) => i.id === a.id)!.outcome).toBe('approved')
+    expect(states.length).toBeGreaterThan(emitted)
+    expect(states.at(-1)!.counts).toMatchObject({ unreviewed: 1, approved: 1, discarded: 0 })
+    expect(badges.at(-1)).toBe(1)
+    expect(await pipeline.lastSummary()).toMatchObject({ counts: { unreviewed: 1, approved: 1 } })
+    // Nothing changed: no save, no broadcast, no badge.
+    await pipeline.syncReviews()
+    expect(queueStates.length).toBe(broadcasts + 1)
+    expect(badges).toEqual([2, 1])
+
+    syncs = []
+    expect((await discardReview(reviewDeps, { applicationId: b.applicationId!, revision: (await reviewDetail(ws, b.applicationId!)).revision }, 'desktop')).ok).toBe(true)
+    await settled()
+    expect(queue.state().items.find((i) => i.id === b.id)!.outcome).toBe('discarded')
+    expect(pipeline.state()!.counts).toMatchObject({ unreviewed: 0, needsAttention: 0, approved: 1, discarded: 1 })
+    expect(badges.at(-1)).toBe(0)
+    const summary = (await pipeline.lastSummary())!
+    expect(summary.counts).toMatchObject({ unreviewed: 0, needsAttention: 0, approved: 1, discarded: 1 })
+    expect(summary.items.map((i) => i.outcome).sort()).toEqual(['approved', 'discarded'])
+    // The file keeps what the pipeline ended with; the notification is not sent again.
+    expect(JSON.parse(await readFile(summaryFile(ws), 'utf8')).counts.unreviewed).toBe(2)
+    expect(notifications.filter((n) => n.category === 'pipeline-finished')).toHaveLength(1)
+
+    // Re-run the approved one: it leaves `done`, then settles again like any result.
+    syncs = []
+    expect((await rerunReview(reviewDeps, { applicationId: a.applicationId!, revision: (await reviewDetail(ws, a.applicationId!)).revision, answers: 'Shorten it.' }, 'desktop')).ok).toBe(true)
+    await settled()
+    expect(queue.state().items.find((i) => i.id === a.id)!.status).not.toBe('done')
+    await until((_p, q) => q.items.find((i) => i.id === a.id)!.status === 'done')
+    expect(queue.state().items.find((i) => i.id === a.id)!.outcome).toBe('unreviewed')
+    await until((p) => p?.status === 'finished')
+    expect(pipeline.state()!.counts).toMatchObject({ unreviewed: 1, approved: 0, discarded: 1 })
+  })
+
+  it('fixes items saved with an old review state when the app starts (#72)', async () => {
+    jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
+    await pipeline.start(input(['url:a'], { concurrency: 1 }))
+    await until((p) => p?.status === 'finished' && finished.length > 0)
+    const item = queue.state().items[0]
+    // Approved while nothing synced (before this fix, or by another process).
+    await updateReview(ws, item.applicationId!, (c) => ({ ...c!, state: 'approved' }))
+    await pipeline.shutdown()
+    await queue.shutdown()
+    expect(JSON.parse(await readFile(queueFile(ws), 'utf8')).items[0].outcome).toBe('unreviewed')
+    badges = []
+    queue = new TailorQueue(queueDeps())
+    pipeline = new Pipeline(pipelineDeps())
+    await pipeline.init(0)
+    expect(queue.state().items[0].outcome).toBe('approved')
+    expect(pipeline.state()!.counts).toMatchObject({ unreviewed: 0, approved: 1 })
+    // The dock starts without a badge and nothing waits for review: none is set.
+    expect(badges).toEqual([])
+    await queue.flush()
+    expect(JSON.parse(await readFile(queueFile(ws), 'utf8')).items[0].outcome).toBe('approved')
+    // A summary written before #72 has no run ids: the queue item's run stands in for it.
+    const file = JSON.parse(await readFile(summaryFile(ws), 'utf8'))
+    for (const i of file.items) delete i.runId
+    await writeFile(summaryFile(ws), JSON.stringify(file))
+    expect((await pipeline.lastSummary())!.counts).toMatchObject({ unreviewed: 0, approved: 1 })
+  })
+
+  it('fixes stale review states when another workspace\'s queue is loaded, not only at startup (#72)', async () => {
+    jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
+    await pipeline.start(input(['url:a'], { concurrency: 1 }))
+    await until((p) => p?.status === 'finished' && finished.length > 0)
+    const item = queue.state().items[0]
+    await updateReview(ws, item.applicationId!, (c) => ({ ...c!, state: 'approved' }))
+    await pipeline.shutdown()
+    await queue.shutdown()
+    // The app starts in another workspace, then the user opens this one.
+    const saved = ws
+    ws = await mkdtemp(join(tmpdir(), 'huntgry-pipeline-other-'))
+    try {
+      queue = new TailorQueue(queueDeps())
+      pipeline = new Pipeline(pipelineDeps())
+      await pipeline.init(0)
+      expect(queue.state().items).toEqual([])
+      await rm(ws, { recursive: true, force: true })
+    } finally {
+      ws = saved
+    }
+    await queue.sync()
+    await until((_p, q) => q.items[0]?.outcome === 'approved')
+    expect(pipeline.state()!.counts).toMatchObject({ unreviewed: 0, approved: 1 })
   })
 
   it('validates the start input', () => {

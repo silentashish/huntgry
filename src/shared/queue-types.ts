@@ -32,6 +32,9 @@ export interface QueueOptions {
   notes?: string
 }
 
+/** The review state of a done unattended item (the same values as the review store's `ReviewState`). */
+export type QueueItemOutcome = 'unreviewed' | 'needs-attention' | 'approved' | 'discarded'
+
 export interface QueueItem {
   /** `q-<run id style>`, e.g. `q-20260930-010203-a1b2c3`. */
   id: string
@@ -65,8 +68,11 @@ export interface QueueItem {
   retries?: number
   /** What the last failure was (usage limit, transient, stall, …). */
   lastFailure?: string
-  /** For `done` unattended items: how the result was recorded. */
-  outcome?: 'unreviewed' | 'needs-attention'
+  /**
+   * For `done` unattended items: the result's review state. Set by the verify gate, then kept in
+   * step with main's review store after every Approve / Discard (#72).
+   */
+  outcome?: QueueItemOutcome
   /** The application folder (`<role>/<company>/<job-id>`) of a done unattended item. */
   applicationId?: string
   /** The app died once while this item was working; a second time fails it. */

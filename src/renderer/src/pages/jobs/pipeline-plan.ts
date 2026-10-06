@@ -74,5 +74,6 @@ export function progress(state: PipelineState): number {
   const c = state.counts
   const items = c.total - c.skipped
   if (items <= 0) return 0
-  return Math.round(((c.unreviewed + c.needsAttention + c.needsReply + c.failed + c.cancelled) / items) * 100)
+  const ended = c.unreviewed + c.needsAttention + c.approved + c.discarded + c.needsReply + c.failed + c.cancelled
+  return Math.round((ended / items) * 100)
 }

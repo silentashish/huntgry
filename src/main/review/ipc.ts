@@ -3,6 +3,7 @@ import { REVIEW_CHANNELS } from '@shared/review-types'
 import { manager } from '../cli/start'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
+import { pipeline } from '../pipeline/ipc'
 import { queue, replyThroughQueue } from '../queue/ipc'
 import { requireApprovalId } from './approvals'
 import {
@@ -23,6 +24,16 @@ import {
 
 const workspace = async () => (await requireCurrentWorkspace()).path
 
+/**
+ * After every review decision (Approve, Discard, Re-run), whoever made it: the desktop re-lists,
+ * and the queue items, pipeline counts and dock badge take the new state (#72). #42's gateway
+ * `ReviewDeps.changed` must call this too, so a phone decision refreshes the Tailor page.
+ */
+export function afterReviewDecision(): void {
+  emit('applications:changed', null)
+  void pipeline.syncReviews().catch((err: unknown) => console.error('Syncing review states into the queue failed:', err))
+}
+
 /** The desktop's review deps; #42's gateway builds the same shape with `via: 'phone:<id>'`. */
 export const reviewDeps: ReviewDeps = {
   workspace,
@@ -33,7 +44,7 @@ export const reviewDeps: ReviewDeps = {
     if (viaQueue === null) throw new Error('This result cannot be re-run now (another workspace is open, or the app is quitting).')
     return viaQueue
   },
-  changed: () => emit('applications:changed', null),
+  changed: afterReviewDecision,
   busy: (runId) =>
     manager.liveRun(runId)?.status === 'running' ||
     queue.state().items.some((i) => i.runId === runId && (i.status === 'queued' || i.status === 'preparing' || i.status === 'running'))

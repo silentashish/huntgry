@@ -17,7 +17,7 @@ const plan: PipelinePlan = {
 const state = (over: Partial<PipelineState>): PipelineState => ({
   id: 'p',
   status: 'running',
-  counts: { queued: 2, running: 1, needsReply: 0, unreviewed: 3, needsAttention: 1, failed: 0, cancelled: 0, skipped: 1, total: 8 },
+  counts: { queued: 2, running: 1, needsReply: 0, unreviewed: 3, needsAttention: 1, approved: 0, discarded: 0, failed: 0, cancelled: 0, skipped: 1, total: 8 },
   startedAt: '2026-09-30T00:00:00.000Z',
   etaMinutes: 12,
   costUsd: 1.5,
@@ -64,5 +64,11 @@ describe('pipeline plan helpers', () => {
     expect(statusLine(state({ status: 'finished' }))).toBe('Finished')
     expect(progress(state({}))).toBe(57)
     expect(progress(state({ counts: { ...state({}).counts, total: 1, skipped: 1 } }))).toBe(0)
+  })
+
+  it('keeps a finished pipeline at 100 % after its results are approved or discarded (#72)', () => {
+    const done = { queued: 0, running: 0, needsReply: 0, unreviewed: 2, needsAttention: 1, approved: 0, discarded: 0, failed: 1, cancelled: 0, skipped: 1, total: 5 }
+    expect(progress(state({ status: 'finished', counts: done }))).toBe(100)
+    expect(progress(state({ status: 'finished', counts: { ...done, unreviewed: 0, needsAttention: 0, approved: 2, discarded: 1 } }))).toBe(100)
   })
 })

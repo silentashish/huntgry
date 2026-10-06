@@ -107,6 +107,9 @@ export interface PipelineCounts {
   needsReply: number
   unreviewed: number
   needsAttention: number
+  /** Done results the user approved or discarded since (#72): no longer waiting for review. */
+  approved: number
+  discarded: number
   failed: number
   cancelled: number
   skipped: number
@@ -142,7 +145,7 @@ export interface PipelineState {
   concurrency: number
 }
 
-export type PipelineItemOutcome = 'unreviewed' | 'needs-attention' | 'needs-reply' | 'failed' | 'cancelled'
+export type PipelineItemOutcome = 'unreviewed' | 'needs-attention' | 'approved' | 'discarded' | 'needs-reply' | 'failed' | 'cancelled'
 
 /** Written to `.huntgry/pipeline-summary.json` when a pipeline finishes (the Dashboard's card). */
 export interface PipelineSummary {
@@ -152,7 +155,8 @@ export interface PipelineSummary {
   counts: PipelineCounts
   costUsd: number
   stopReason?: string
-  items: { jobId: string; title: string; outcome: PipelineItemOutcome; applicationId?: string; error?: string }[]
+  /** `runId`: the run that built the result; a review recorded for another run never counts for it (#72). */
+  items: { jobId: string; title: string; outcome: PipelineItemOutcome; applicationId?: string; runId?: string; error?: string }[]
   skipped: PipelineSkip[]
 }
 

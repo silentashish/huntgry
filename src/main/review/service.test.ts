@@ -210,6 +210,26 @@ describe('review service', () => {
     expect((await recorded())?.state).toBe('unreviewed')
   })
 
+  it('tells the app after every decision that went through, and never after a refused one (#72: the Tailor page syncs on it)', async () => {
+    let changed = 0
+    const counting: ReviewDeps = { ...deps, changed: () => changed++ }
+    await application()
+    await application('a/b/2')
+    await application('a/b/3')
+    const stale = 'c'.repeat(64)
+    await approveReview(counting, { applicationId: ID, revision: stale }, 'desktop')
+    await discardReview(counting, { applicationId: ID, revision: stale }, 'desktop')
+    await rerunReview(counting, { applicationId: ID, revision: stale, answers: 'x' }, 'desktop')
+    await approveReview(counting, { applicationId: ID, revision: (await reviewDetail(ws, ID)).revision, approvedReframingIds: ['f'.repeat(64)] }, 'desktop')
+    expect(changed).toBe(0)
+    expect((await approveReview(counting, { applicationId: ID, revision: (await reviewDetail(ws, ID)).revision }, 'desktop')).ok).toBe(true)
+    expect(changed).toBe(1)
+    expect((await discardReview(counting, { applicationId: 'a/b/2', revision: (await reviewDetail(ws, 'a/b/2')).revision }, 'desktop')).ok).toBe(true)
+    expect(changed).toBe(2)
+    expect((await rerunReview(counting, { applicationId: 'a/b/3', revision: (await reviewDetail(ws, 'a/b/3')).revision, answers: 'x' }, 'desktop')).ok).toBe(true)
+    expect(changed).toBe(3)
+  })
+
   it('refuses approve and re-run while the run is still working on the result; discard still works', async () => {
     await application()
     const busy: ReviewDeps = { ...deps, busy: (runId) => runId === RUN }
