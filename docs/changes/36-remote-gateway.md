@@ -139,15 +139,26 @@ sequenceDiagram
     another workspace is refused, and a resumed run's context is built for that workspace.
   - A command bound to A therefore fails with "The workspace open on the Mac changed" and
     never runs on B.
+- **The replay counter is per pairing.** Audit entries record the pairing's `sid`, and on
+  load a device's `lastSeq` is derived from that pairing's entries only. Older entries with
+  no `sid` count if they were written at or after the current `pairedAt`. A phone paired
+  again under the same device id starts at 0 and is not marked for re-pair after a restart.
+- **Unattended runs continue only through the queue, from the phone too.** When the queue
+  does not take a phone reply, the gateway refuses it for an unattended (#31) run with the
+  desktop's message, as `RUNNER_CHANNELS.reply` does. The reply never reaches the session
+  directly, so the process cap, the pipeline policy and the verify gate always apply.
 - **Durable writes.** `devices.json` (the outgoing `seq` reservation), the desktop key,
   `relay.json` and `remote.json` are written with `writeDurable`: the temp file is fsynced,
-  renamed, then the directory is fsynced. A failed reservation rejects, so nothing is sent
+  renamed, then the directory is fsynced; a failed write or rename removes the temp file. A failed reservation rejects, so nothing is sent
   under an unsaved `seq`. The audit log cuts a torn last record on load, before it appends
   again, and indexes an entry only after its fsync.
 - **Revocation works during a relay outage.** `revoke.ts` removes the device on the Mac
   first. Then it sends `device.revoked`, boxed with the captured record's key, and deletes
   the relay token, each with a 10 s deadline. If the relay does not confirm, Settings says
-  so; the phone is refused by the Mac either way. Every relay `fetch` has a timeout.
+  so; the phone is refused by the Mac either way. Every relay `fetch` has a timeout. Any
+  rotation clears that warning: Rotate in the relay form or Unpair everything (`rooms.ts`).
+  Unpair everything reconnects even when the relay refuses the new room, then shows the
+  relay's error.
 - **Backoff survives a relay that opens and then refuses.** The retry counter resets only
   after a session outlives the 5 s auth grace, so repeated refusals back off to 60 s.
 - **A redelivered read runs again.** Reads keep no result in the log, and the relay redelivers
