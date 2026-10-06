@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { FieldReport } from '@shared/apply-types'
-import { answerChoices, canAnswer, groupReport, stepLabel, suggestionNote } from './apply-report'
+import { answerChoices, badgeOf, canAnswer, groupReport, stepLabel, suggestionNote } from './apply-report'
 
 const f = (label: string, outcome: FieldReport['outcome'], required = false): FieldReport => ({
   key: null,
@@ -71,6 +71,9 @@ describe('answers in the panel (#71)', () => {
       ['Needs you', ['Gender', 'Authorized']],
       ['Your choice', ['Country']]
     ])
+    expect(badgeOf(q({ fact: 'gender' }))).toEqual({ label: 'Answer once', color: 'orange' })
+    expect(badgeOf(q({}))).toEqual({ label: 'Your choice', color: 'gray' })
+    expect(badgeOf(q({ fact: 'gender', outcome: 'filled' })).label).toBe('Filled')
   })
 
   it('offers an answer for reported questions that are still open', () => {

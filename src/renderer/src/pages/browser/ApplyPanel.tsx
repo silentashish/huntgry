@@ -4,7 +4,7 @@ import { IconCheck, IconInfoCircle, IconRefresh, IconSend } from '@tabler/icons-
 import { ATS_LABEL, type ApplySession } from '@shared/apply-types'
 import { api, errorText } from '../../api'
 import { AnswerControl } from './AnswerControl'
-import { canAnswer, groupReport, OUTCOME_META, STATUS_META, stepLabel, suggestionNote } from './apply-report'
+import { badgeOf, canAnswer, groupReport, STATUS_META, stepLabel, suggestionNote } from './apply-report'
 
 /**
  * Auto-apply beside the page: what was detected, filled and uploaded, what is
@@ -198,7 +198,7 @@ export function ApplyPanel({ activeTabId }: { activeTabId: string | null }) {
                 {group.title} ({group.fields.length})
               </Text>
               {group.fields.map((f, i) => {
-                const meta = OUTCOME_META[f.outcome]
+                const meta = badgeOf(f)
                 return (
                   <Box key={`${f.label}-${i}`} py={2}>
                     <Group gap={6} wrap="nowrap" justify="space-between">
