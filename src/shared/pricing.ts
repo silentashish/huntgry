@@ -132,18 +132,25 @@ export function effectivePrices(overrides?: PricingOverrides | null): ModelPrice
 }
 
 /**
- * `layer` over `table`: same-id entries are replaced (keeping the names the replaced entry was
- * known by: agy's `Gemini 3.1 Pro` …, whatever the layer sent), new ids are added at the end.
+ * `layer` over `table`. An entry replaces the table entry it means by any name, compared the way
+ * `findPrice` looks prices up (normalized ids and aliases): a user's `gpt-x-2026-10-01` replaces a
+ * synced `gpt-x`, so the higher layer always wins the lookup. It keeps its own id (edit and reset
+ * act on it) and takes over the names the replaced entry was known by. New models go at the end.
  */
-function applyLayer(table: ModelPrice[], layer: readonly ModelPrice[]): ModelPrice[] {
-  const byId = new Map(layer.map((m) => [m.id, m]))
-  const merged = table.map((m) => {
-    const c = byId.get(m.id)
-    if (!c) return m
-    const aliases = [...new Set([...(m.aliases ?? []), ...(c.aliases ?? [])])]
-    return { ...c, ...(aliases.length ? { aliases } : {}) }
-  })
-  for (const m of byId.values()) if (!table.some((b) => b.id === m.id)) merged.push(m)
+function applyLayer(table: readonly ModelPrice[], layer: readonly ModelPrice[]): ModelPrice[] {
+  const names = (p: ModelPrice) => new Set([p.id, ...(p.aliases ?? [])].map(normalizeModelId))
+  const merged = [...table]
+  for (const c of layer) {
+    const own = names(c)
+    const i = merged.findIndex((m) => [...names(m)].some((n) => own.has(n)))
+    if (i < 0) {
+      merged.push(c)
+      continue
+    }
+    const replaced = merged[i]
+    const aliases = [...new Set([...(replaced.aliases ?? []), ...(replaced.id !== c.id ? [replaced.id] : []), ...(c.aliases ?? [])])]
+    merged[i] = { ...c, ...(aliases.length ? { aliases } : {}) }
+  }
   return merged
 }
 
