@@ -15,6 +15,8 @@ export interface AppSettings {
   defaultAgent?: string
   /** Remote control (ADR-0001): the session is off unless enabled; the two toggles default to details off, transcripts on. */
   remote?: { enabled?: boolean; notificationDetails?: boolean; transcripts?: boolean }
+  /** Apply (#71): pick remembered answers in dropdowns and button groups automatically; on unless set to false. */
+  pickDropdowns?: boolean
 }
 
 /** Reads the settings file; a missing or corrupt file yields empty settings. */

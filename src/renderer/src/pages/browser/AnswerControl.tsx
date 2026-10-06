@@ -8,8 +8,8 @@ import { answerChoices, isSensitive } from './apply-report'
  * Answers one question of the page from the Apply panel (#71): one of the
  * page's own options (a native select, so nothing pops over the page view) or
  * typed text, with "Remember" on by default. Main checks the answer against
- * the field and fills it in the page; a widget that only takes a click keeps
- * the answer as a suggestion to pick there.
+ * the field and fills it in the page; a widget that only takes a click is
+ * picked when the Settings switch allows it, otherwise suggested there.
  */
 export function AnswerControl({ sessionId, field, disabled }: { sessionId: string; field: FieldReport; disabled: boolean }) {
   const choices = answerChoices(field)
@@ -19,7 +19,6 @@ export function AnswerControl({ sessionId, field, disabled }: { sessionId: strin
   const [remember, setRemember] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const clickOnly = field.kind === 'combobox' || field.suggestedBy === 'saved'
   const name = field.label || 'this question'
 
   if (!open) {
@@ -83,7 +82,7 @@ export function AnswerControl({ sessionId, field, disabled }: { sessionId: strin
       )}
       <Group gap={6}>
         <Button size="compact-xs" loading={busy} disabled={!value.trim() || disabled} onClick={() => void submit()}>
-          {clickOnly ? 'Save answer' : 'Use'}
+          Use
         </Button>
         <Button size="compact-xs" variant="subtle" color="gray" onClick={() => setOpen(false)}>
           Cancel

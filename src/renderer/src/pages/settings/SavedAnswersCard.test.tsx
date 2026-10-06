@@ -18,7 +18,9 @@ const empty: SavedAnswers = { facts: [], questions: [] }
 const apply = {
   answers: vi.fn(async () => saved),
   forgetAnswer: vi.fn(async () => ({ ...saved, facts: saved.facts.slice(0, 1) })),
-  forgetAllAnswers: vi.fn(async () => empty)
+  forgetAllAnswers: vi.fn(async () => empty),
+  pickSetting: vi.fn(async () => true),
+  setPickSetting: vi.fn(async (on: boolean) => on)
 }
 
 beforeAll(() => {
@@ -70,6 +72,15 @@ describe('SavedAnswersCard', () => {
     await act(async () => button('Forget Gender').click())
     expect(apply.forgetAnswer).toHaveBeenCalledWith({ fact: 'gender' })
     expect(container.textContent).not.toContain('Female')
+
+    // "Pick dropdown answers automatically": on by default, saved when turned off.
+    const pick = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((i) =>
+      (i.closest('.mantine-Switch-root')?.textContent ?? '').includes('Pick dropdown answers automatically')
+    )!
+    expect(pick.checked).toBe(true)
+    await act(async () => pick.click())
+    expect(apply.setPickSetting).toHaveBeenCalledWith(false)
+    expect(pick.checked).toBe(false)
 
     await act(async () => button('Forget all').click())
     await act(async () => button('Forget all').click())

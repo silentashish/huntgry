@@ -9,5 +9,7 @@ export const apply: ApplyApi = {
   answer: (sessionId, fieldId, value, remember) => ipcRenderer.invoke(APPLY_CHANNELS.answer, sessionId, fieldId, value, remember),
   answers: () => ipcRenderer.invoke(APPLY_CHANNELS.answers),
   forgetAnswer: (target) => ipcRenderer.invoke(APPLY_CHANNELS.forgetAnswer, target),
-  forgetAllAnswers: () => ipcRenderer.invoke(APPLY_CHANNELS.forgetAllAnswers)
+  forgetAllAnswers: () => ipcRenderer.invoke(APPLY_CHANNELS.forgetAllAnswers),
+  pickSetting: () => ipcRenderer.invoke(APPLY_CHANNELS.pickSetting),
+  setPickSetting: (on) => ipcRenderer.invoke(APPLY_CHANNELS.setPickSetting, on)
 }

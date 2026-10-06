@@ -223,6 +223,9 @@ export interface ApplyApi {
   forgetAnswer(target: { fact: FactKey } | { question: string }): Promise<SavedAnswers>
   /** Forgets every saved answer of the current workspace. */
   forgetAllAnswers(): Promise<SavedAnswers>
+  /** Settings: "Pick dropdown answers automatically" (on by default). */
+  pickSetting(): Promise<boolean>
+  setPickSetting(on: boolean): Promise<boolean>
 }
 
 /** The saved application answers, as Settings lists them. */
@@ -240,7 +243,9 @@ export const APPLY_CHANNELS = {
   answer: 'apply:answer',
   answers: 'apply:answers:list',
   forgetAnswer: 'apply:answers:forget',
-  forgetAllAnswers: 'apply:answers:clear'
+  forgetAllAnswers: 'apply:answers:clear',
+  pickSetting: 'apply:pick-setting',
+  setPickSetting: 'apply:set-pick-setting'
 } as const
 
 export interface ApplyEvents {

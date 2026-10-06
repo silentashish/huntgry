@@ -5,7 +5,8 @@ import { APPLY_CHANNELS } from '@shared/apply-types'
 import { fillValuesFrom } from '@shared/apply-values'
 import { browserManager, onPopupTab } from '../browser/manager'
 import { localUrlsAllowed } from '../cli/dev-urls'
-import { requireCurrentWorkspace } from '../current-workspace'
+import { requireCurrentWorkspace, settingsFile } from '../current-workspace'
+import { loadSettings, saveSettings } from '../workspace/settings'
 import { emit } from '../events'
 import { currentProfilePath } from '../profile/ipc'
 import { readProfile } from '../profile/store'
@@ -111,10 +112,14 @@ const answers: AnswersDeps = {
   }
 }
 
+/** "Pick dropdown answers automatically" (Settings): on unless the user turned it off. */
+const pickSetting = async () => (await loadSettings(settingsFile())).pickDropdowns !== false
+
 const service = new ApplyService({
   workspace: workspacePath,
   values: async () => fillValuesFrom((await readProfile(await currentProfilePath())).profile),
   answers,
+  pickWidgets: pickSetting,
   openTab: (url) => browserManager().openTab(url),
   navigate: (tabId, url) => browserManager().navigate(tabId, url),
   page: (tabId) => pageOf(browserManager().getWebContents(tabId)),
@@ -169,6 +174,12 @@ export function registerApplyIpc(): void {
     const t = requireForgetTarget(target)
     const ws = await workspacePath()
     return savedAnswers('fact' in t ? await forgetFact(ws, t.fact) : await forgetQuestion(ws, t.question))
+  })
+  ipcMain.handle(APPLY_CHANNELS.pickSetting, () => pickSetting())
+  ipcMain.handle(APPLY_CHANNELS.setPickSetting, async (_e, on: unknown) => {
+    if (typeof on !== 'boolean') throw new Error('Invalid setting.')
+    await saveSettings(settingsFile(), { pickDropdowns: on })
+    return pickSetting()
   })
   ipcMain.handle(APPLY_CHANNELS.forgetAllAnswers, async () => savedAnswers(await clearAnswers(await workspacePath())))
 }

@@ -73,6 +73,11 @@ export interface ApplyDeps {
   values(): Promise<FillValues>
   /** Remembered application answers (#71); without them only contact fields are filled. */
   answers?: AnswersDeps
+  /**
+   * The Settings switch "Pick dropdown answers automatically" (#71, owner decision): read before every fill, so
+   * turning it off applies to the next fill. Without it, or off, click-only widgets only get suggestions.
+   */
+  pickWidgets?(): Promise<boolean>
   openTab(url: string): Promise<string>
   navigate(tabId: string, url: string): Promise<unknown>
   page(tabId: string): ApplyPage
@@ -97,6 +102,8 @@ interface Context {
   values: FillValues
   /** Remembered answers, loaded at start and after the user teaches one (#71). */
   answers: PageAnswers
+  /** Pick trusted answers in click-only widgets (the Settings switch as of the last fill). */
+  pick: boolean
   /** Answers the user gave in the panel without Remember: this session only, by question key. */
   once: Record<string, string>
   /** The workspace the session started in; every answer read and write goes there (#71). */
@@ -211,6 +218,7 @@ export class ApplyService {
       values,
       answers,
       once: {},
+      pick: false,
       workspace,
       asked: new Set(),
       mappedSteps: new Set(),
@@ -479,6 +487,8 @@ export class ApplyService {
     const current = () => this.ctx === ctx && ctx.loadSeq === seq
     this.update({ status: 'filling', message: null })
     try {
+      await this.refreshPick(ctx)
+      if (!current()) return
       // The preload waits for the page to settle, fills, then checks a moment later that the values held.
       let report = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, this.fillPayload(ctx)))
       if (!current()) return
@@ -534,10 +544,15 @@ export class ApplyService {
   }
 
   /** What a fill sends the page: the profile values and the answers (this session's own on top). */
-  private fillPayload(ctx: Context): { values: FillValues; answers: PageAnswers } {
+  private fillPayload(ctx: Context): { values: FillValues; answers: PageAnswers; pick: boolean } {
     const questions = { ...ctx.answers.questions }
     for (const [question, value] of Object.entries(ctx.once)) questions[question] = { ...questions[question], value, confirmed: true }
-    return { values: ctx.values, answers: { facts: ctx.answers.facts, questions } }
+    return { values: ctx.values, answers: { facts: ctx.answers.facts, questions }, pick: ctx.pick }
+  }
+
+  /** Reads the Settings switch for the coming fill (off when it cannot be read). */
+  private async refreshPick(ctx: Context): Promise<void> {
+    ctx.pick = (await this.deps.pickWidgets?.().catch(() => false)) ?? false
   }
 
   /**
@@ -630,6 +645,7 @@ export class ApplyService {
     ctx.fillingSeq = seq
     const current = () => this.ctx === ctx && ctx.loadSeq === seq
     try {
+      await this.refreshPick(ctx)
       const text = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { ...this.fillPayload(ctx), text: true }))
       if (!current() || (text.step && text.step !== 'form')) return
       const previous = this.session?.report

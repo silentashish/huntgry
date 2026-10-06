@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { factsFromProfile, type PageAnswers } from '@shared/apply-facts'
 import type { ApplySession, FillReport, FillValues } from '@shared/apply-types'
 import { AUTOFILL_CHANNELS, UPLOAD_ATTR } from '@shared/autofill-channels'
-import { detectConfirmation, fillPage, scanPage, uploadStateOf, verifyFill, type UploadKey } from '@shared/autofill/engine'
+import { detectConfirmation, fillPage, pickAnswers, scanPage, uploadStateOf, verifyFill, type UploadKey } from '@shared/autofill/engine'
 import { updateReview, type RecordedReview } from '../review/authority'
 import { contentRevisionOf } from '../review/service'
 import { refusalFor } from '../browser/url'
@@ -51,6 +51,8 @@ class FakeTab implements ApplyPage {
   sent: string[] = []
   /** The answers each fill request carried (#71). */
   answersSeen: Array<PageAnswers | undefined> = []
+  /** The pick switch each fill request carried (#71). */
+  picksSeen: Array<boolean | undefined> = []
   /** When set, fill replies wait here until `releaseFills()` (a slow page). */
   heldFills: Array<() => void> | null = null
 
@@ -80,10 +82,13 @@ class FakeTab implements ApplyPage {
   }
 
   /** The preload's fill: fill, then the verify pass (without its delays). A marker-only pass keeps the text report. */
-  private async fill(values: FillValues, text?: boolean, answers?: PageAnswers): Promise<FillReport> {
+  private async fill(values: FillValues, text?: boolean, answers?: PageAnswers, pick?: boolean): Promise<FillReport> {
     const doc = this.dom.window.document
     this.answersSeen.push(answers)
-    const report = await verifyFill(doc, values, fillPage(doc, values, { text, answers }), { settleMs: 0 })
+    this.picksSeen.push(pick)
+    const filled = fillPage(doc, values, { text, answers, pick })
+    await pickAnswers(filled)
+    const report = await verifyFill(doc, values, filled, { settleMs: 0 })
     if (text !== false) this.lastReport = report
     return report
   }
@@ -120,10 +125,11 @@ class FakeTab implements ApplyPage {
 
   send(channel: string, payload: unknown): void {
     this.sent.push(channel)
-    const { requestId, values, text, key, fileName, timeoutMs, answers } = payload as {
+    const { requestId, values, text, key, fileName, timeoutMs, answers, pick } = payload as {
       requestId: string
       values?: FillValues
       answers?: PageAnswers
+      pick?: boolean
       text?: boolean
       key?: UploadKey
       fileName?: string
@@ -132,7 +138,7 @@ class FakeTab implements ApplyPage {
     const doc = this.dom.window.document
     if (channel === AUTOFILL_CHANNELS.fill && this.heldFills) {
       // The page did the fill already; only its answer is late.
-      const result = this.fill(values as FillValues, text, answers)
+      const result = this.fill(values as FillValues, text, answers, pick)
       this.heldFills.push(() => void result.then((r) => this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result: r })))
       return
     }
@@ -140,7 +146,7 @@ class FakeTab implements ApplyPage {
       await Promise.resolve()
       let result: unknown
       if (channel === AUTOFILL_CHANNELS.detect) result = scanPage(doc)
-      else if (channel === AUTOFILL_CHANNELS.fill) result = await this.fill(values as FillValues, text, answers)
+      else if (channel === AUTOFILL_CHANNELS.fill) result = await this.fill(values as FillValues, text, answers, pick)
       else if (channel === AUTOFILL_CHANNELS.uploadState)
         result =
           this.uploadAnswer === 'engine'
@@ -1422,6 +1428,19 @@ describe('application answers (#71)', () => {
     const second = await open(deps, AUTH(2), 'software-engineer/acme/lv-2')
     expect(line(second.service, 'Are you legally authorized to work in the United States?')).toMatchObject({ outcome: 'filled', value: 'Yes, with a visa' })
     expect(checked(second.tab)).toBe('b')
+  })
+
+  it('sends the "Pick dropdown answers automatically" switch with every fill, read again before each one', async () => {
+    const { deps } = answers()
+    let on = true
+    const { tab, service } = await open(deps, fixture('lever-form.html'), ID, { pickWidgets: async () => on })
+    expect(tab.picksSeen.at(-1)).toBe(true)
+    on = false
+    await service.fill(service.current()!.id)
+    expect(tab.picksSeen.at(-1)).toBe(false)
+    // Without the setting (or when it cannot be read), nothing is picked.
+    const plain = await open(deps, fixture('lever-form.html'), 'software-engineer/acme/lv-3')
+    expect(plain.tab.picksSeen.every((p) => p === false)).toBe(true)
   })
 
   it('a missing or failing model leaves the fill complete and the questions with the user', async () => {

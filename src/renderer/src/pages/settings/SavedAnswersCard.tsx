@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ActionIcon, Alert, Button, Card, Group, Table, Text, Title, Tooltip } from '@mantine/core'
+import { ActionIcon, Alert, Button, Card, Group, Switch, Table, Text, Title, Tooltip } from '@mantine/core'
 import { IconEye, IconTrash } from '@tabler/icons-react'
 import { displayAnswer } from '@shared/apply-facts'
 import type { SavedAnswers } from '@shared/apply-types'
@@ -15,6 +15,7 @@ export function SavedAnswersCard() {
   const [error, setError] = useState<string | null>(null)
   const [shown, setShown] = useState<Set<string>>(new Set())
   const [confirmAll, setConfirmAll] = useState(false)
+  const [pick, setPick] = useState<boolean | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -26,7 +27,17 @@ export function SavedAnswersCard() {
   }, [])
   useEffect(() => {
     void load()
+    api.apply.pickSetting().then(setPick, (err: unknown) => setError(errorText(err)))
   }, [load])
+
+  async function togglePick(on: boolean) {
+    setError(null)
+    try {
+      setPick(await api.apply.setPickSetting(on))
+    } catch (err) {
+      setError(errorText(err))
+    }
+  }
 
   async function act(call: () => Promise<SavedAnswers>) {
     setError(null)
@@ -76,6 +87,14 @@ export function SavedAnswersCard() {
             </Button>
           ))}
       </Group>
+      <Switch
+        mb="sm"
+        label="Pick dropdown answers automatically"
+        description="Choose saved answers in dropdowns and Yes/No buttons (Greenhouse, Ashby, Workday) for you. Only answers you confirmed; never Submit, Next or a consent box. Off: they are only suggested in the Apply panel."
+        checked={pick ?? true}
+        disabled={pick === null}
+        onChange={(e) => void togglePick(e.currentTarget.checked)}
+      />
       {error && (
         <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)} mb="xs">
           {error}
