@@ -8,5 +8,8 @@ export const jobs: JobsApi = {
   addByUrl: (url) => ipcRenderer.invoke(JOBS_CHANNELS.addByUrl, url),
   addPasted: (input) => ipcRenderer.invoke(JOBS_CHANNELS.addPasted, input),
   update: (id, patch) => ipcRenderer.invoke(JOBS_CHANNELS.update, id, patch),
-  recentSearches: () => ipcRenderer.invoke(JOBS_CHANNELS.recentSearches)
+  recentSearches: () => ipcRenderer.invoke(JOBS_CHANNELS.recentSearches),
+  refresh: (input) => ipcRenderer.invoke(JOBS_CHANNELS.refresh, input),
+  prefs: () => ipcRenderer.invoke(JOBS_CHANNELS.prefs),
+  setPrefs: (patch) => ipcRenderer.invoke(JOBS_CHANNELS.setPrefs, patch)
 }

@@ -1,12 +1,25 @@
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { DEFAULT_FILTERS, matchesLocation } from '@shared/job-filters'
+import { DEFAULT_JOBS_PREFS } from '@shared/jobs-prefs'
 import { jobDescriptionFor, type Job } from '@shared/jobs-types'
+import { emptyProfile } from '@shared/master-profile'
 import { isBlockedPage } from './blocked'
 import type { LoadResult } from './loader'
-import { addByUrl, addPasted, fetchDetails, searchJobs, updateJob, validateQuery } from './service'
-import { hiringCafeSearchUrl, matchesLocation, parseHiringCafeHits } from './sources/hiringcafe'
+import { prefsPath, readPrefs, recordLastSearch, updatePrefs } from './prefs'
+import {
+  addByUrl,
+  addPasted,
+  fetchDetails,
+  refreshRelevant,
+  searchJobs,
+  updateJob,
+  validateQuery,
+  validateSources
+} from './service'
+import { hiringCafeSearchUrl, parseHiringCafeHits } from './sources/hiringcafe'
 import { indeedSearchUrl, parseIndeedCards } from './sources/indeed'
 import { findJobPosting, isoDate, parsePosting, urlJobId, type PageData } from './sources/posting'
 import { canonicalize, canonicalKey, jobFileName, listJobs, mergeJob, recentSearches, saveJob, writeJobFile } from './store'
@@ -41,6 +54,52 @@ describe('hiring.cafe', () => {
     expect(j.tags).toContain('Python')
     expect(j.description).toContain('Requirements:')
     expect(j.postedAt).toBe('2026-09-03T21:38:00.000Z')
+    // Structured facts for the filters and the Relevant view (#73).
+    expect(j).toMatchObject({
+      visaSponsorship: false,
+      seniority: 'Senior Level',
+      minYearsExperience: null,
+      commitment: ['Full Time'],
+      workplaceType: 'Onsite',
+      salaryMin: 131644,
+      salaryMax: 190789
+    })
+    expect(jobs[1]).toMatchObject({ seniority: 'Mid Level', salaryMin: null, salaryMax: null })
+    expect(jobs[2].minYearsExperience).toBe(5)
+  })
+
+  it('reads a hit that sponsors visas, and leaves unknown facts unknown', () => {
+    const [sponsoring, bare] = parseHiringCafeHits({
+      hits: [
+        {
+          id: 's',
+          job_information: { title: 'Backend Engineer' },
+          v5_processed_job_data: {
+            visa_sponsorship: true,
+            workplace_type: 'Hybrid',
+            seniority_level: 'Entry Level',
+            min_industry_and_role_yoe: 1
+          }
+        },
+        { id: 'b', job_information: { title: 'Data Engineer' } }
+      ]
+    })
+    expect(sponsoring).toMatchObject({
+      visaSponsorship: true,
+      workplaceType: 'Hybrid',
+      remote: false,
+      seniority: 'Entry Level',
+      minYearsExperience: 1
+    })
+    expect(bare).toMatchObject({
+      visaSponsorship: null,
+      seniority: '',
+      minYearsExperience: null,
+      commitment: [],
+      workplaceType: '',
+      salaryMin: null,
+      salaryMax: null
+    })
   })
 
   it('skips expired or incomplete hits and builds search URLs', () => {
@@ -293,6 +352,43 @@ describe('store', () => {
     expect(merged.find((j) => j.id === 'hiring.cafe:h')?.aliases).toEqual(['indeed:h'])
   })
 
+  it('keeps the known structured facts of a job found on two boards (#73)', () => {
+    const indeed = base({ id: 'indeed:9', title: 'Backend Engineer', company: 'Acme', location: 'Remote' })
+    const hc = base({
+      id: 'hiring.cafe:9',
+      source: 'hiring.cafe',
+      title: 'Backend Engineer',
+      company: 'Acme',
+      location: 'Remote',
+      fetchedAt: '2026-09-05T00:00:00Z',
+      visaSponsorship: true,
+      seniority: 'Senior Level',
+      workplaceType: 'Remote',
+      salaryMin: 100,
+      salaryMax: 200
+    })
+    const [job] = canonicalize([indeed, hc])
+    // The Indeed copy was saved first and stays canonical, but the facts come from hiring.cafe.
+    expect(job).toMatchObject({
+      id: 'indeed:9',
+      visaSponsorship: true,
+      seniority: 'Senior Level',
+      workplaceType: 'Remote',
+      salaryMin: 100,
+      salaryMax: 200
+    })
+    // A copy that says `true` wins over one that says `false`, whichever is canonical.
+    const [both] = canonicalize([
+      { ...indeed, visaSponsorship: false },
+      { ...hc, visaSponsorship: true }
+    ])
+    expect(both.visaSponsorship).toBe(true)
+    // Old records without the fields stay without them.
+    const [old] = canonicalize([indeed, { ...hc, visaSponsorship: undefined, seniority: undefined, workplaceType: undefined, salaryMin: undefined, salaryMax: undefined }])
+    expect(old).not.toHaveProperty('visaSponsorship')
+    expect(old).not.toHaveProperty('seniority')
+  })
+
   it('makes safe file names', () => {
     expect(jobFileName('hiring.cafe:adp___x/../y')).toBe('hiring.cafe-adp___x-..-y.json')
     expect(jobFileName('url:abc')).not.toContain(':')
@@ -506,5 +602,82 @@ describe('service with a stub loader', () => {
   it('validates queries', () => {
     expect(() => validateQuery({ keywords: ' ', sources: ['indeed'] })).toThrow(/keywords/)
     expect(() => validateQuery({ keywords: 'x', sources: ['monster'] })).toThrow(/job board/)
+    expect(validateSources(['indeed', 'indeed', 'monster'])).toEqual(['indeed'])
+    expect(() => validateSources('indeed')).toThrow(/job board/)
+  })
+
+  it('remembers the last search in the Jobs preferences, so it survives leaving the page (#73)', async () => {
+    const hc = await fixture('hiringcafe-next-data.json')
+    pages['https://hiringcafe.com/'] = { status: 'ok', data: { hits: hc.props.pageProps.ssrHits } }
+    const at = new Date('2026-10-06T12:00:00Z')
+    const res = await searchJobs(ws, validateQuery({ keywords: 'platform', sources: ['hiring.cafe'] }), load, {
+      now: () => at
+    })
+    const prefs = await readPrefs(ws)
+    expect(prefs.lastSearch).toMatchObject({ at: at.toISOString(), relevant: false, query: { keywords: 'platform' } })
+    expect(prefs.lastSearch?.ids).toEqual(res.jobs.map((j) => j.id))
+    // A typed search is not a profile refresh.
+    expect(prefs.lastRefreshAt).toBeNull()
+  })
+
+  it('refreshes with the profile-derived query and records the refresh time (#73)', async () => {
+    const hc = await fixture('hiringcafe-next-data.json')
+    const urls: string[] = []
+    const recording = async (url: string): Promise<LoadResult> => {
+      urls.push(url)
+      return url.includes('indeed')
+        ? { status: 'blocked', message: 'www.indeed.com asked for a human check (x).' }
+        : { status: 'ok', data: { hits: hc.props.pageProps.ssrHits } }
+    }
+    const profile = emptyProfile()
+    profile.contact.headline = 'Platform Engineer | Infrastructure'
+    profile.contact.location = 'Remote'
+    const at = new Date('2026-10-06T12:00:00Z')
+    const res = await refreshRelevant(ws, profile, ['hiring.cafe', 'indeed'], recording, () => at)
+    expect(res.query).toEqual({ keywords: 'Platform Engineer', location: '', remoteOnly: true, sources: ['hiring.cafe', 'indeed'] })
+    const state = JSON.parse(new URL(urls[0]).searchParams.get('searchState')!)
+    // Only the keys our own code has verified are sent; visa, salary and experience are filtered locally.
+    expect(state).toEqual({ searchQuery: 'Platform Engineer', workplaceTypes: ['Remote'] })
+    expect(urls[1]).toMatch(/[?&]q=Platform\+Engineer/)
+    expect(res.sources.map((s) => s.status)).toEqual(['ok', 'blocked'])
+    const prefs = await readPrefs(ws)
+    // Recorded even though a board was blocked, so auto-refresh does not retry it on every open.
+    expect(prefs.lastRefreshAt).toBe(at.toISOString())
+    expect(prefs.lastSearch).toMatchObject({ relevant: true, query: { keywords: 'Platform Engineer' } })
+    expect((await recentSearches(ws))[0].query.keywords).toBe('Platform Engineer')
+
+    // Without a headline or a role there is nothing to search for.
+    await expect(refreshRelevant(ws, emptyProfile(), ['hiring.cafe'], recording)).rejects.toThrow(/headline or a role/)
+  })
+})
+
+describe('Jobs preferences', () => {
+  it('defaults when missing or corrupt, and keeps filter and toggle changes', async () => {
+    expect(await readPrefs(ws)).toEqual(DEFAULT_JOBS_PREFS)
+    await mkdir(join(ws, '.huntgry'), { recursive: true })
+    await writeFile(prefsPath(ws), '{ not json')
+    expect(await readPrefs(ws)).toEqual(DEFAULT_JOBS_PREFS)
+
+    const filters = { ...DEFAULT_FILTERS, sponsorship: 'only-yes' as const, workplace: ['Remote' as const] }
+    await updatePrefs(ws, { filters })
+    await updatePrefs(ws, { autoRefresh: false })
+    expect(await readPrefs(ws)).toMatchObject({ filters, autoRefresh: false })
+  })
+
+  it('does not lose a change when two land at once', async () => {
+    await Promise.all([
+      updatePrefs(ws, { autoRefresh: false }),
+      recordLastSearch(ws, {
+        query: { keywords: 'x', location: '', remoteOnly: false, sources: ['indeed'] },
+        at: '2026-10-06T00:00:00.000Z',
+        ids: ['indeed:1'],
+        relevant: true
+      })
+    ])
+    expect(await readPrefs(ws)).toMatchObject({
+      autoRefresh: false,
+      lastRefreshAt: '2026-10-06T00:00:00.000Z',
+      lastSearch: { ids: ['indeed:1'] }
+    })
   })
 })
