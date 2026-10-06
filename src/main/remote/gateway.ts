@@ -101,6 +101,9 @@ export interface GatewayReply {
   ack: string
 }
 
+/** RUNNER_CHANNELS.reply's message for an unattended run the queue cannot take a reply for right now. */
+const UNATTENDED_REPLY = 'This unattended run cannot be continued now. Try again in a moment.'
+
 /** Largest application file a phone may fetch (generated PDFs and notes are far smaller). */
 export const MAX_REMOTE_FILE_BYTES = 32 * 1024 * 1024
 const HASH_CACHE_SIZE = 32
@@ -483,12 +486,16 @@ export class Gateway {
       case 'run.reply': {
         const runId = requireRunId(command.args.runId)
         const text = command.args.text
-        // The same rule as RUNNER_CHANNELS.reply: non-empty, at most MAX_TEXT, the queue first.
+        // The same rules as RUNNER_CHANNELS.reply: non-empty, at most MAX_TEXT, the queue first,
+        // and an unattended run continues only through the queue (process cap, pipeline policy, verify gate).
         if (!text.trim() || text.length > MAX_TEXT) throw new ProtocolError('invalid', 'Type a reply first.')
         const viaQueue = await s.queue.reply(ws, runId, text)
         // Held by the queue until a slot is free (like a desktop reply): the run is unchanged for now.
         if (viaQueue === 'held') return projectRun((await s.runs.get(ws, runId)).run)
-        return projectRun(viaQueue ?? (await s.runs.reply(ws, runId, text)))
+        if (viaQueue) return projectRun(viaQueue)
+        const { run } = await s.runs.get(ws, runId)
+        if (run.unattended || run.params.unattended) throw new ProtocolError('failed', UNATTENDED_REPLY)
+        return projectRun(await s.runs.reply(ws, runId, text))
       }
       case 'run.stop':
         return projectRun(await s.runs.stop(ws, requireRunId(command.args.runId)))

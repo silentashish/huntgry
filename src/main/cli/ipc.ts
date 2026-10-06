@@ -71,7 +71,9 @@ export const runsForRemote = {
     return { run, items: buildTranscript(await readEvents(workspace, runId), run.agent) }
   },
   reply: async (workspace: string, runId: string, text: string): Promise<RunSummary> => {
-    await runIn(workspace, runId)
+    const run = await runIn(workspace, runId)
+    // Same rule as RUNNER_CHANNELS.reply (the gateway checks it first): an unattended run continues only through the queue.
+    if (run.unattended || run.params.unattended) throw new Error('This unattended run cannot be continued now. Try again in a moment.')
     // A run with no process resumes in a context built for `workspace`; `context` refuses another open one.
     return manager.reply(runId, text, () => contextForRun(runId, workspace))
   },

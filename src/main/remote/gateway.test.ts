@@ -423,6 +423,25 @@ describe('Gateway: enqueue and reply through the real queue', () => {
     expect((page.result.body as RunPage).items.some((i) => i.kind === 'user' && i.text === 'approve')).toBe(true)
   }, 20_000)
 
+  it('refuses a phone reply to an unattended run the queue does not take, like the desktop reply handler', async () => {
+    // An unattended (#31) run outside the queue's items: queue.reply answers null for it.
+    const started = await manager.start({ jobDescription: 'Build APIs at Acme.', company: 'Acme', role: 'Engineer', coverLetter: false, dateStyle: 'right', unattended: true }, ctx())
+    const t0 = Date.now()
+    for (;;) {
+      await manager.flush(started.id)
+      const r = manager.liveRun(started.id) ?? (await readRun(ws, started.id))
+      if (r.status !== 'running') break
+      if (Date.now() - t0 > 10_000) throw new Error('the fake agent never finished its turn')
+      await new Promise((res) => setTimeout(res, 20))
+    }
+    const reply = await send('run.reply', { runId: started.id, text: 'continue from the phone' })
+    expect(reply.result).toMatchObject({ ok: false, error: { code: 'failed' } })
+    expect(reply.result.error?.message).toMatch(/unattended run cannot be continued/)
+    await manager.flush(started.id)
+    const texts = (await readEvents(ws, started.id)).filter((e) => (e as { subtype?: string }).subtype === 'user_message').map((e) => (e as { text: string }).text)
+    expect(texts).not.toContain('continue from the phone')
+  }, 20_000)
+
   it('rate-limits enqueue at once per 10 s and replies at once per 2 s per run; caps text at LIMITS.textBytes', async () => {
     jobs.set('url:a', job('url:a'))
     jobs.set('url:b', job('url:b'))
