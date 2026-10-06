@@ -154,10 +154,35 @@ export function canonicalize(jobs: readonly Job[]): Job[] {
       location: first.location || rest.find((j) => j.location)?.location || '',
       tags: [...new Set(sorted.flatMap((j) => j.tags))],
       tailoredAt: tailored,
-      aliases: rest.map((j) => j.id)
+      aliases: rest.map((j) => j.id),
+      ...mergeFacts(sorted)
     })
   }
   return out
+}
+
+/**
+ * Structured facts of a merged job: the first copy that knows a fact gives it,
+ * and sponsorship is `true` when any copy says so (Indeed knows none of them).
+ * Only facts some copy knows are set, so old records stay as they were.
+ */
+function mergeFacts(group: readonly Job[]): Partial<Job> {
+  const first = <K extends keyof Job>(k: K, known: (v: Job[K]) => boolean): Partial<Job> => {
+    const hit = group.find((j) => j[k] !== undefined && known(j[k]))
+    return hit ? { [k]: hit[k] } : {}
+  }
+  const sponsors = group.some((j) => j.visaSponsorship === true)
+    ? { visaSponsorship: true }
+    : first('visaSponsorship', (v) => v !== null)
+  return {
+    ...sponsors,
+    ...first('seniority', (v) => !!v),
+    ...first('minYearsExperience', (v) => v !== null),
+    ...first('commitment', (v) => (v?.length ?? 0) > 0),
+    ...first('workplaceType', (v) => !!v),
+    ...first('salaryMin', (v) => v !== null),
+    ...first('salaryMax', (v) => v !== null)
+  }
 }
 
 /** Raw saved records (one per file), not canonicalized. */

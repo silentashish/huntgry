@@ -272,6 +272,14 @@ clear itself before reporting it, so "a bot wall gives the blocked message" take
 (`test.slow()`); a search of both boards takes ~2 s; fetching a posting right after a search on
 the same host waits for the 4 s gap.
 
+**Auto-refresh is off in `mocks` (#73).** Opening Jobs refreshes the relevant jobs in the background
+when the last refresh is over 12 hours old, and that setting is on by default. A fixture cannot hold
+a "fresh" refresh time, so `mocks/.huntgry/jobs-prefs.json` sets `"autoRefresh": false`: no spec
+loads a board just by opening Jobs, and specs that count board requests (or expect none) stay exact.
+The auto-refresh spec in `jobs.spec.ts` turns the toggle on through the UI. A new workspace fixture
+whose specs open Jobs needs the same file. Jobs also opens on the **Relevant** segment now;
+`openJobs` in `jobs.spec.ts` switches to **All** for the specs that look at every saved job.
+
 ### Tabs are `WebContentsView`s
 
 Browser tabs are not windows. Two ways to see them, both in `e2e/fixtures/tabs.ts`:

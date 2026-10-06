@@ -4,6 +4,8 @@
  * (`.huntgry/jobs/<source>-<id>.json`).
  */
 
+import type { JobsPrefs, JobsPrefsPatch } from './jobs-prefs'
+
 export type JobSourceId = 'hiring.cafe' | 'indeed' | 'url' | 'pasted'
 
 /** Shape of `Job.id`, checked on every id the renderer sends. */
@@ -11,6 +13,9 @@ export const JOB_ID_PATTERN = /^(hiring\.cafe|indeed|url|pasted):[\w.:-]{1,200}$
 
 export const SEARCH_SOURCES = ['hiring.cafe', 'indeed'] as const
 export type SearchSource = (typeof SEARCH_SOURCES)[number]
+
+/** hiring.cafe's `workplace_type` values. */
+export type WorkplaceType = 'Remote' | 'Hybrid' | 'Onsite' | 'Field'
 
 export interface Job {
   /** `<source>:<source id>`; stable across searches, used for dedupe. */
@@ -43,6 +48,21 @@ export interface Job {
   dismissed?: boolean
   /** Ids of the same job found on other boards, merged into this record (see `canonicalize`). */
   aliases?: string[]
+  /*
+   * Structured facts a board extracted (hiring.cafe's `v5_processed_job_data`). All optional: jobs saved
+   * before #73, and jobs from Indeed, by URL or pasted, do not have them; `undefined`/`null` means unknown.
+   */
+  /** The board's reading of the posting: `true` sponsors a visa; `false` is often "not mentioned". */
+  visaSponsorship?: boolean | null
+  /** e.g. `Entry Level`, `Mid Level`, `Senior Level`. */
+  seniority?: string
+  minYearsExperience?: number | null
+  /** e.g. `['Full Time']`. */
+  commitment?: string[]
+  workplaceType?: WorkplaceType | ''
+  /** Yearly pay range in the posting's currency. */
+  salaryMin?: number | null
+  salaryMax?: number | null
 }
 
 export interface JobQuery {
@@ -71,6 +91,12 @@ export interface SavedSearch {
   at: string
 }
 
+/** A profile-derived search (the Refresh button, or the automatic one when Jobs opens). */
+export interface RefreshResult extends SearchResult {
+  query: JobQuery
+  at: string
+}
+
 export interface JobsApi {
   /** Saved jobs of the workspace, newest first (dismissed ones included, flagged). */
   list(): Promise<Job[]>
@@ -84,6 +110,17 @@ export interface JobsApi {
   addPasted(input: { title: string; company: string; url: string; text: string }): Promise<Job>
   update(id: string, patch: { dismissed?: boolean; tailored?: boolean }): Promise<Job>
   recentSearches(): Promise<SavedSearch[]>
+  /**
+   * Searches the boards for jobs like the master profile (its headline or latest role, and its location),
+   * saves them and records the time in the Jobs preferences. A refresh already running for the workspace is
+   * joined, not repeated. `auto`: the refresh on opening Jobs, which runs only when it is due (auto-refresh on,
+   * last refresh 12 h old) and resolves to `null` otherwise.
+   */
+  refresh(input: { sources: SearchSource[]; auto?: boolean }): Promise<RefreshResult | null>
+  /** The workspace's Jobs preferences: filters, auto-refresh, last search and last refresh. */
+  prefs(): Promise<JobsPrefs>
+  /** Saves filters and the auto-refresh toggle (validated in main); returns the whole preferences. */
+  setPrefs(patch: JobsPrefsPatch): Promise<JobsPrefs>
 }
 
 export const JOBS_CHANNELS = {
@@ -93,7 +130,10 @@ export const JOBS_CHANNELS = {
   addByUrl: 'jobs:add-by-url',
   addPasted: 'jobs:add-pasted',
   update: 'jobs:update',
-  recentSearches: 'jobs:recent-searches'
+  recentSearches: 'jobs:recent-searches',
+  refresh: 'jobs:refresh',
+  prefs: 'jobs:prefs',
+  setPrefs: 'jobs:set-prefs'
 } as const
 
 /** Builds the job description handed to the resume tailor. */
