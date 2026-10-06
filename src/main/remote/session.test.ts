@@ -399,7 +399,12 @@ describe('RemoteSession', () => {
 
 describe('RemoteSession: acknowledging delivered frames', () => {
   const onDisk = () => JSON.parse(readFileSync(join(dir, 'devices.json'), 'utf8')) as { devices: { id: string; lastSeq: number; lastSeen?: string }[] }
-  const auditOnDisk = () => (existsSync(auditFile(ws)) ? readFileSync(auditFile(ws), 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [])
+  // Complete lines only: the test may read while the gateway is appending.
+  const auditOnDisk = () => {
+    if (!existsSync(auditFile(ws))) return []
+    const text = readFileSync(auditFile(ws), 'utf8')
+    return text.slice(0, text.lastIndexOf('\n') + 1).split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  }
 
   it('acks a command in its result frame only after the audit outcome and the lastSeq checkpoint are on disk', async () => {
     session.start(creds)
