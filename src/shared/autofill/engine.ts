@@ -592,7 +592,10 @@ export function currentAdapter(doc: Document): Adapter {
 
 /** Picks at most this many answers per fill (each waits for its menu)… */
 const MAX_PICKS = 25
-/** …within this time, well inside main's 15 s wait for the fill; later ones stay suggestions. */
+/**
+ * …within this time; later ones stay suggestions. Each pick's waits are capped to what is left, so with the
+ * session's readiness wait (≤ 3 s), the verify delay (1 s) and the settle (0.3 s) a fill stays under main's 15 s.
+ */
 const PICK_BUDGET_MS = 8000
 
 /**
@@ -605,7 +608,8 @@ const PICK_BUDGET_MS = 8000
 export async function pickAnswers(report: FillReport, picks: readonly PickRequest[] = pendingPicks(report)): Promise<FillReport> {
   const deadline = Date.now() + PICK_BUDGET_MS
   for (const req of picks.slice(0, MAX_PICKS)) {
-    if (Date.now() > deadline) break
+    const left = deadline - Date.now()
+    if (left <= 0) break
     const doc = req.el.ownerDocument
     // The page and step as the adapter sees them: if a pick moves the page on, the safety net stops picking.
     const pageState = () => `${doc.location?.href ?? doc.URL}|${currentAdapter(doc).stepTitle?.(doc) ?? ''}|${currentAdapter(doc).step?.(doc) ?? 'form'}`
@@ -613,6 +617,8 @@ export async function pickAnswers(report: FillReport, picks: readonly PickReques
     if (!widget) continue
     const line = req.line
     const result = await pick(widget, (options) => resolveAnswer(req.fact, req.value, 'select', options), {
+      // A pick waits twice (menu, read-back): each wait gets at most half of what is left, so the budget is a hard limit.
+      timeoutMs: Math.min(1500, Math.max(100, Math.floor(left / 2))),
       touched: () => editedInGroup(req.el, kindOf(req.el), req.root),
       pageState
     })
