@@ -45,7 +45,8 @@ above read $2.01 instead of $1.53, the second $0.76 instead of $0.38. The pipeli
 | Batches | `src/main/queue/queue.ts`, `src/shared/queue-types.ts`, `command.ts` | Every item of one enqueue (one **Tailor all**, one pipeline) shares a `batchId` (`b-<timestamp>-<hex>`), passed in the run parameters, so `run.json` carries it and a batch can be totalled from the runs alone, even after its queue items are cleared. |
 | Tailor page | `components/usage/{format.ts,RunMetrics.tsx}` (new), `pages/tailor/{RunView,Transcript,RunList,QueuePanel,PipelinePanel,status,index}.tsx`, `navigation.ts` | A metrics strip on the run: **Active time · Waiting for you · Model · Tokens · Est. API cost**, the token split, what the CLI reported (Claude), and a per-turn table. Every transcript turn footer reads that turn's metrics (`2m 14s · 18 in · 33.0k cached · 209 out (82 reasoning) · $0.03`); results now carry their `turn` number to find them. Run list, queue and pipeline rows show `2m 14s · 48k tok · $0.31`. The page opens on `{ runId }`. |
 | Dashboard | `pages/dashboard/UsageCard.tsx` (new), `index.tsx`, `ApplicationDrawer.tsx` | **Usage** card: Runs · Active time · Tokens · Est. API cost (per run, per built resume, share spent on failed runs), filters (7 days / 30 days / all, agent, model, status, one batch), the agent × model table with unpriced turns, a per-day chart (cost or tokens), the latest bulk requests with their totals, links to the latest runs, **Export CSV**. It reloads (debounced) on `runner:run` and `runner:prices`, so it follows a running batch. The application drawer lists the runs that built the application with their badge, linked to the Tailor page. |
-| Settings | `pages/settings/PricingCard.tsx` (new), `src/main/workspace/settings.ts` | **Pricing**: the table in use with source and date per model, edit a model, add one, reset one or all. Stored in the app settings (`pricing.models`), never in the workspace. |
+| Settings | `pages/settings/PricingCard.tsx` (new), `src/main/workspace/settings.ts` | **Pricing**: the table in use with source and date per model, edit a model, add one, reset one or all. **Sync prices** fetches current prices on click, with a "Last synced … from …" line and **Clear synced prices**. Stored in the app settings (`pricing.models`, `pricing.synced`), never in the workspace. |
+| Price sync | `src/main/cli/price-sync.ts` (new), `usage.ts`, `ipc.ts` (`runner:sync-prices`, `runner:clear-synced-prices`) | Fetches a public price list in main (see "Price sync" below), keeps Anthropic / OpenAI / Gemini models only, checks every figure, stores the result as its own layer. |
 | Fakes | `src/main/cli/fixtures/fake-{claude,codex}.mjs`, `e2e/fixtures/fake-agent/agent.mjs` | Report running totals as the real CLIs do (kept in a file between processes, so a resume continues them); fake Claude names Haiku 4.5 with tokens that price to its reported cost. |
 
 ### How a turn is measured
@@ -131,6 +132,38 @@ confirmed there are not in the table (they read "not priced").
 The issue's seed values for Opus ($5) and Sonnet ($3) are the older generations; Opus 5.5 is $4
 and Sonnet 5.5 $2. The Claude estimate of the recorded fixture (`read-file-turn.jsonl`, Haiku 4.5
 with a 1-hour cache write) equals the CLI's `costUSD` to the 7th decimal (unit test).
+
+### Price sync (owner request)
+
+The estimate is meant as a **rough "what would this cost on the API"**, not billing, so the
+bundled table can be refreshed from a community-maintained list instead of being edited by hand.
+
+- **On click only.** Settings → Pricing → **Sync prices** asks main (`runner:sync-prices`); the
+  renderer never fetches. No background or startup sync.
+- **Sources, in order.**
+  1. LiteLLM's [`model_prices_and_context_window.json`](https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json):
+     `input_cost_per_token`, `output_cost_per_token`, `cache_read_input_token_cost`,
+     `cache_creation_input_token_cost` and `cache_creation_input_token_cost_above_1hr`, × 10⁶.
+     Only entries whose `litellm_provider` is `anthropic`, `openai` or Google's
+     (`gemini`, `vertex_ai-language-models`), in `chat` / `responses` mode, keyed by the model
+     itself (`gemini/<id>` included); resellers (Bedrock, Azure, Vertex's Claude …) are skipped.
+  2. If that fails: OpenRouter's [`/api/v1/models`](https://openrouter.ai/api/v1/models):
+     `pricing.prompt`, `completion`, `input_cache_read`, `input_cache_write`,
+     `input_cache_write_1h` (decimal strings), for `anthropic/…`, `openai/…` and `google/…` ids;
+     variants (`…:batch`, `…:free`) are skipped.
+- **Matching.** Names go through `normalizeModelId` and must look like one of our providers'
+  models (`claude-…`, `gpt-…` / `o3…` / `codex-…`, `gemini-…`), not an image, audio, realtime or
+  embedding one. A name that means a bundled model (by id or alias) updates that entry; any other
+  is added as a new model. Dated and undated keys of one model give one entry (the undated wins).
+- **Checks.** Input and output must be present; every figure must be a finite number, ≥ 0 and
+  ≤ $1000 per 1M tokens, or the model is dropped; all-zero entries (placeholders) are dropped; a
+  missing cache-read price is taken as the input price. 15 s timeout, 20 MB cap on the response.
+  Settings read back from disk are checked again.
+- **Failure.** Offline, HTTP error, bad JSON, no usable model: the card shows the reason for each
+  source and nothing changes, in memory or on disk.
+- **Precedence.** The user's own edits, then synced prices, then the bundled table. "Reset to
+  defaults" clears the user's edits (the sync stays); "Clear synced prices" drops the sync. Runs
+  reprice on read, as for any price change.
 
 ### Active time and waiting time
 
@@ -221,7 +254,7 @@ compare runs, agents and models. Claude's own `costUSD` is shown next to it as "
 
 ```bash
 pnpm install
-npx vitest run src/main/cli/metrics.test.ts src/main/cli/runner.test.ts src/main/queue src/renderer/src/components/usage e2e/fixtures/fake-agent
+npx vitest run src/main/cli/price-sync.test.ts src/main/cli/metrics.test.ts src/main/cli/runner.test.ts src/main/queue src/renderer/src/components/usage e2e/fixtures/fake-agent
 npm test && npm run typecheck && npx electron-vite build
 ```
 
@@ -240,11 +273,22 @@ npm test && npm run typecheck && npx electron-vite build
   `-m` model, agy's settings model, an unknown model is `null`, an old run is backfilled before a
   resumed turn, the batch id lands in `run.json`.
 - `queue.test.ts`: one batch id per request, recorded on the runs.
+- `price-sync.test.ts`: both lists parsed from small recorded extracts (`src/main/cli/fixtures/prices/`,
+  no network), bad values rejected (negative, > $1000/M, not a number, all-zero), other providers
+  and resellers ignored, the OpenRouter fallback on a 403 / bad JSON / offline, both reasons when
+  both fail, the size cap, precedence (edits > synced > bundled), Reset and Clear, a failed sync
+  leaving prices and the settings file untouched.
 - `e2e/tests/usage.spec.ts` (CI): a two-turn Claude run through the app: strip, turn footers, run
   list badge, `run.json`, the Dashboard's totals, a price change in Settings and Reset.
 - By hand (after 16:00, coordinator): a bulk run of ≥ 3 jobs across two agents, then compare the
   Dashboard's totals and the batch row with the sum of the runs' strips; check a Claude run's
   "Claude reported" against its estimate; change a price and see the Dashboard follow.
+
+- **Price sync from a community list, on click.** The owner asked for a rough estimate, robustly
+  refreshed. LiteLLM's list is maintained per provider and per token type (cache writes and the
+  1-hour write included); OpenRouter is a second, independent list. Rejected: scraping the
+  providers' pricing pages (HTML changes, OpenAI's page refuses fetches) and a background sync (a
+  network call the user did not ask for, and a price that changes under them).
 
 ## Follow-ups
 
