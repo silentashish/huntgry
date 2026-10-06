@@ -55,6 +55,8 @@ flowchart TD
   and pronouns are sensitive.
 - **`matchFact(question)`** is deterministic and ordered: sponsorship is checked before authorization, Hispanic before
   race. A question about consent, certification, acknowledgement, arbitration or a signature never matches.
+  `over18` needs affirmative wording ("18 or older"): an inverse question such as "Are you under 18?" would flip the
+  answer, so it is left to the user.
 - **`questionKey(label, kind, options)`** is the memory key. It is built from the normalised text, the kind group
   (typed or chosen) and a hash of the sorted options. Element ids are not used: Workday and Ashby give every posting
   new UUIDs.
@@ -62,8 +64,13 @@ flowchart TD
   the same text first, then the page's "decline" option for `decline`, then the single Yes/No-like option ("I am not a
   protected veteran" counts as no), then synonyms (Man/Male, Woman/Female). If no single option fits, it returns null
   and **nothing is written**.
-- **`factsFromProfile(workAuthorization)`**: "US citizen", "green card" and "permanent resident" mean authorized with
-  no sponsorship needed. Visa wording (H-1B, OPT, TN…) gives nothing, so the user is asked.
+- **`factsFromProfile(workAuthorization)`**: "US citizen", "green card" and "US permanent resident" mean authorized
+  with no sponsorship needed. Visa wording (H-1B, OPT, TN…), negations ("Not a US citizen"), pending status and foreign
+  or unqualified status ("Indian citizen", "Citizen") give nothing, so the user is asked.
+- **Refusals count as "decline"** before any yes/no reading: "I do not want to answer" is a decline, never "no".
+- **`boundedOption(text)`**: an option longer than 120 characters is named by a prefix plus a hash of its whole text.
+  The page reports that name, and reads and writes options by it, so a long option chosen in the panel is found
+  again, and two long options with the same start stay apart.
 
 ### Engine (`src/shared/autofill/answers.ts`, `engine.ts`, `dom.ts`)
 
@@ -79,6 +86,9 @@ flowchart TD
   - comboboxes, adapter `choices` and the new adapter `clickOnly` selectors (Ashby's and Workday's React radios and
     checkboxes): `CLICK_ONLY_POLICY = 'suggest'`. The panel shows the remembered answer and the user picks it in the
     page.
+- **`Adapter.answerRoots`**: containers outside `formRoot` whose questions are only answered or suggested, never
+  matched to contact values or uploads. Ashby uses it for its EEO survey, which is a second form container. When a
+  fieldset has no legend, its question label names the radio group.
 - `verifyFill` also checks the answers it wrote (by `fieldId`) and restores one that the page wiped. A user's edit is
   kept.
 - The page's preload passes the answers through. `guard.test.ts` is **unchanged** and still passes: no click, no
@@ -88,15 +98,18 @@ flowchart TD
 
 - `<userData>/apply-answers/<sha256(workspace)[0..32]>/answers.json`, readable and writable by the owner only
   (`0600`). Writes are atomic (temp file plus rename), one at a time per workspace. A corrupt file reads as empty.
-- It holds `facts` (one canonical value per fact) and `questions` (question key to fact, an optional direct answer,
-  `source: user | model`, `confirmed`).
+- It holds `facts` (one canonical value per fact) and `questions`. Each question entry maps a question key to a fact,
+  an optional direct answer, `source: user | model` and `confirmed`. A confirmed fact question also keeps the exact
+  `option` the user chose. That option wins when the same question (same options) comes back: a fact alone cannot pick
+  between "Yes, I am" and "Yes, with a visa". Forgetting the fact also drops these options.
 - Only a `user` entry is confirmed. A file that claims a model mapping is confirmed is not trusted.
 - Up to 1,000 questions are kept; the oldest are dropped first.
 
 ### Mapping call (`src/main/apply/map-questions.ts`, `mapper.ts`)
 
-- After a fill, the questions that neither the catalog nor the memory knows are sent in **one call per page**, up to
-  40 questions, each label at most 300 characters, with up to 30 options of at most 120 characters each.
+- After a fill, the questions that neither the catalog nor the memory knows are sent in **one call per page and step**,
+  made or failed. Questions over the limit, or rendered later on the same page, stay with the user. The call takes up
+  to 40 questions, each label at most 300 characters, with up to 30 options of at most 120 characters each.
 - The model gets the question text, the options and the fact *names*. **It never gets a stored value.**
 - **Claude:** `claude -p --model haiku --output-format json --tools '' --setting-sources '' --strict-mcp-config
   --no-session-persistence [--permission-prompts none] --json-schema … --system-prompt …`. It runs in an empty temp
@@ -113,7 +126,10 @@ flowchart TD
 
 ### Service and IPC
 
-- `ApplyDeps.answers` has four calls: `load`, `remember`, `rememberMappings` and `map`. Every fill sends
+- `ApplyDeps.answers` has four calls: `load`, `remember`, `rememberMappings` and `map`. Each one takes **the
+  workspace the session started in**. A workspace switch mid-session can therefore never write one person's answers
+  into another's memory, nor show them on the other's application; a mapping that finishes late is stored in the
+  session's workspace too. The profile seeds are read from that workspace's own master profile. Every fill sends
   `{ values, answers }`. A session keeps answers given without Remember in `once`.
 - `apply:answer(sessionId, fieldId, value, remember)` checks the field against the current report. For a select or
   radio, the value must be one of the reported options; a text answer is at most 500 characters. Main then stores the
@@ -157,9 +173,8 @@ flowchart TD
   fact. If the user answers such a question with Remember, it is kept as that question's direct answer.
 - **The memory is per workspace (open question 7, default).** Each workspace is one person's profile.
 - **Workday's question steps stay unfilled (open question 8, default).** The #65 step rule is unchanged.
-- **The store does not keep the exact option per question for fact questions.** It keeps the fact, so a new wording
-  on another posting still resolves. The page in front of the user takes the exact option they picked (the session's
-  `once`), because a stored fact can match several of that page's options ("Yes, I am" / "Yes, with a visa").
+- **The store keeps both the fact and the exact option.** The fact lets a new wording on another posting resolve. The
+  exact option answers the same question with the same options, where the fact alone may fit several options.
 - **A native select in the panel,** not a Mantine dropdown. The panel sits next to a native page view, and a dropdown
   could open over it.
 - **Rejected:**
