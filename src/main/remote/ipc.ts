@@ -250,7 +250,10 @@ async function init(): Promise<void> {
     transcripts: () => transcriptsOn
   }
   gateway = new Gateway(services, devices)
-  const status = async () => projectStatus({ desktopName: services.desktopName, appVersion: services.appVersion, workspace: await services.workspace(), queue: await queueForRemote.state(), agents: await agentsReady() })
+  const status = async () => {
+    const workspace = await services.workspace()
+    return projectStatus({ desktopName: services.desktopName, appVersion: services.appVersion, workspace, queue: await queueForRemote.state(workspace.path), agents: await agentsReady() })
+  }
   session = new RemoteSession({
     connect,
     devices,

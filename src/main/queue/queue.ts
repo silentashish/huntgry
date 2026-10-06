@@ -19,6 +19,7 @@ import {
 import { DEFAULT_AGENT, isAgentId, type AgentId, type RunSummary, type StartRunParams } from '@shared/runner-types'
 import { MAX_TEXT } from '../cli/command'
 import { newRunId } from '../cli/runs'
+import { WorkspaceChangedError } from '../workspace/changed'
 import { HUNTGRY_DIR } from '../workspace/constants'
 
 /**
@@ -263,10 +264,17 @@ export class TailorQueue {
     if (this.ws) this.changed()
   }
 
-  /** Loads the queue of the open workspace when it changed (first call, workspace switch). */
-  async sync(): Promise<QueueState> {
+  /**
+   * Loads the queue of the open workspace when it changed (first call, workspace switch).
+   * With `expected` (a remote command bound to that workspace), another open workspace throws
+   * `WorkspaceChangedError` instead of loading it. The callers mutate synchronously after this
+   * resolves, so the change lands in `expected`'s queue or not at all.
+   */
+  async sync(expected?: string): Promise<QueueState> {
     const ws = await this.deps.workspace()
+    if (expected !== undefined && ws !== expected) throw new WorkspaceChangedError()
     if (ws !== this.ws) await this.load(ws)
+    if (expected !== undefined && this.ws !== expected) throw new WorkspaceChangedError()
     return this.state()
   }
 
@@ -329,8 +337,8 @@ export class TailorQueue {
     this.hooks?.onLoad(record)
   }
 
-  async enqueue(input: EnqueueInput): Promise<EnqueueResult> {
-    await this.sync()
+  async enqueue(input: EnqueueInput, expected?: string): Promise<EnqueueResult> {
+    await this.sync(expected)
     const ws = this.ws!
     const skipped: EnqueueResult['skipped'] = []
     let added = 0
@@ -338,6 +346,8 @@ export class TailorQueue {
     const at = new Date(this.now()).toISOString()
     for (const id of input.jobIds) {
       const job = await this.deps.findJob(ws, id)
+      // Another workspace was loaded while this looked the job up: its queue is not ours to add to.
+      if (this.ws !== ws) throw new WorkspaceChangedError()
       if (!job) {
         skipped.push({ jobId: id, reason: 'This job is no longer saved.' })
         continue
@@ -372,8 +382,8 @@ export class TailorQueue {
     return { state: this.state(), added, skipped }
   }
 
-  async cancel(itemId: string): Promise<QueueState> {
-    await this.sync()
+  async cancel(itemId: string, expected?: string): Promise<QueueState> {
+    await this.sync(expected)
     const item = this.find(itemId)
     if (isActive(item)) this.cancelItem(item)
     this.changed()
@@ -408,8 +418,8 @@ export class TailorQueue {
     return n
   }
 
-  async retry(itemId: string): Promise<QueueState> {
-    await this.sync()
+  async retry(itemId: string, expected?: string): Promise<QueueState> {
+    await this.sync(expected)
     const item = this.find(itemId)
     if (item.status !== 'failed' && item.status !== 'cancelled') throw new Error('Only failed or cancelled jobs can be retried.')
     if (this.items.some((i) => i !== item && i.jobId === item.jobId && isActive(i)))
@@ -445,8 +455,8 @@ export class TailorQueue {
     return this.state()
   }
 
-  async setPaused(paused: boolean): Promise<QueueState> {
-    await this.sync()
+  async setPaused(paused: boolean, expected?: string): Promise<QueueState> {
+    await this.sync(expected)
     this.paused = paused
     this.changed()
     return this.state()
@@ -478,9 +488,10 @@ export class TailorQueue {
    * manage (the caller sends it as usual). A done unattended item can be re-run this way
    * (the Review page's "Re-run with my answers").
    */
-  async reply(runId: string, text: string): Promise<RunSummary | 'held' | null> {
+  async reply(runId: string, text: string, expected?: string): Promise<RunSummary | 'held' | null> {
     if (this.stopped) return null
     const ws = await this.deps.workspace().catch(() => null)
+    if (expected !== undefined && ws !== expected) throw new WorkspaceChangedError()
     if (!ws || ws !== this.ws) return null
     let item = this.items.find(
       (i) => i.runId === runId && (i.status === 'needs-reply' || (i.status === 'done' && i.unattended))

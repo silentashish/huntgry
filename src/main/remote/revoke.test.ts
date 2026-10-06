@@ -42,7 +42,7 @@ function gateway(): Gateway {
     defaultAgent: async () => 'claude',
     queue: {
       state: async () => q(),
-      setPaused: async (p: boolean) => {
+      setPaused: async (_w: string, p: boolean) => {
         paused = p
         return q()
       }

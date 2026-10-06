@@ -1,4 +1,4 @@
-import { chmodSync } from 'node:fs'
+import { chmodSync, existsSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,7 +10,7 @@ import { buildTranscript } from '@shared/transcript'
 import { COMMAND_TTL_SECONDS, LIMITS, type Envelope, type FileChunk, type RemoteCommandName, type RemoteQueueState, type RunPage, type StatusSummary } from '@shared/remote'
 import { RunManager, type RunContext } from '../cli/runner'
 import { readEvents, readRun } from '../cli/runs'
-import { TailorQueue, type QueueDeps } from '../queue/queue'
+import { queueFile, TailorQueue, type QueueDeps } from '../queue/queue'
 import { auditFile } from './audit'
 import { DeviceStore } from './devices'
 import { DurabilityError, Gateway, MAX_REMOTE_FILE_BYTES, SimulatedCrash, type GatewayServices } from './gateway'
@@ -32,6 +32,11 @@ let gateway: Gateway
 let services: GatewayServices
 let crashAt: GatewayServices['crashAt']
 let addedUrls: string[]
+/** Overrides the app's open workspace (the queue's view); `null` = the test workspace. */
+let openWs: string | null
+/** The workspace path each runs service call was given. */
+let runsCalls: string[]
+let onFindJob: (() => Promise<void>) | undefined
 
 const ctx = (): RunContext => ({
   workspace: ws,
@@ -45,8 +50,12 @@ const ctx = (): RunContext => ({
 
 function queueDeps(): QueueDeps {
   return {
-    workspace: async () => ws,
-    findJob: async (_ws, id) => jobs.get(id) ?? null,
+    // The workspace open in the app; a test may switch it (`openWs`) under a command.
+    workspace: async () => openWs ?? ws,
+    findJob: async (_ws, id) => {
+      await onFindJob?.()
+      return jobs.get(id) ?? null
+    },
     fetchDetails: async (_ws, id) => jobs.get(id)!,
     markTailored: async () => undefined,
     start: (params) => manager.start(params, ctx()),
@@ -75,33 +84,46 @@ beforeEach(async () => {
   manager = new RunManager({ onEvent: () => undefined, onRun: (r) => queue.onRun(r) })
   queue = new TailorQueue(queueDeps())
   crashAt = undefined
+  openWs = null
+  runsCalls = []
+  onFindJob = undefined
   services = {
     desktopName: 'Test Mac',
     appVersion: '0.1.0-test',
     workspace: async () => identity,
     agents: async () => [{ id: 'claude', ready: true }, { id: 'codex', ready: false }, { id: 'antigravity', ready: false }],
     defaultAgent: async () => 'claude',
+    // The same mapping as queueForRemote in queue/ipc.ts: the checked workspace goes to the queue.
     queue: {
-      state: () => queue.sync(),
-      setPaused: (p) => queue.setPaused(p),
-      cancel: (id) => queue.cancel(id),
-      retry: (id) => queue.retry(id),
-      enqueue: (input) => queue.enqueue(input),
-      reply: (id, text) => queue.reply(id, text)
+      state: (w) => queue.sync(w),
+      setPaused: (w, p) => queue.setPaused(p, w),
+      cancel: (w, id) => queue.cancel(id, w),
+      retry: (w, id) => queue.retry(id, w),
+      enqueue: (w, input) => queue.enqueue(input, w),
+      reply: (w, id, text) => queue.reply(id, text, w)
     },
     runs: {
-      list: async () => [],
-      get: async (id) => {
+      list: async (w) => {
+        runsCalls.push(w)
+        return []
+      },
+      get: async (w, id) => {
+        runsCalls.push(w)
         await manager.flush(id)
         const run = await currentRun(id)
-        return { run, items: buildTranscript(await readEvents(ws, id), run.agent) }
+        return { run, items: buildTranscript(await readEvents(w, id), run.agent) }
       },
-      reply: (id, text) => manager.reply(id, text, async () => ctx()),
-      stop: async (id) => {
+      reply: (w, id, text) => {
+        runsCalls.push(w)
+        return manager.reply(id, text, async () => ctx())
+      },
+      stop: async (w, id) => {
+        runsCalls.push(w)
         manager.stop(id)
         return currentRun(id)
       },
-      finish: async (id) => {
+      finish: async (w, id) => {
+        runsCalls.push(w)
         manager.finish(id)
         return currentRun(id)
       }
@@ -527,12 +549,12 @@ describe('Gateway: redelivery identity, revocation, storage failures and workspa
     const gate = new Promise<void>((r) => (release = r))
     const inside = new Promise<void>((r) => (reached = r))
     const setPaused = services.queue.setPaused
-    services.queue.setPaused = async (p) => {
+    services.queue.setPaused = async (w, p) => {
       if (p) {
         reached()
         await gate
       }
-      return setPaused(p)
+      return setPaused(w, p)
     }
     const record = devices.get(phone.id)!
     const first = handle(command(phone, 'queue.setPaused', { paused: true }, identity.id, { ts: at() }), record)
@@ -649,3 +671,58 @@ describe('Gateway: redelivery identity, revocation, storage failures and workspa
     expect(Buffer.from(b.data, 'base64').equals(Buffer.alloc(120, 2))).toBe(true)
   })
 })
+
+describe('Gateway: execution stays bound to the checked workspace', () => {
+  let other: string
+  beforeEach(async () => {
+    other = await mkdtemp(join(tmpdir(), 'huntgry-gw-other-'))
+    await workspaceIdentity(other)
+    await queue.setPaused(false)
+  })
+  afterEach(() => rm(other, { recursive: true, force: true }))
+
+  it('a switch that lands after the gateway check never pauses the other workspace’s queue', async () => {
+    // The gateway's own re-check still sees the checked workspace; the app switches right after it.
+    crashAt = (step) => {
+      if (step === 'after-start') openWs = other
+    }
+    const reply = await send('queue.setPaused', { paused: true })
+    expect(reply.result).toMatchObject({ ok: false, error: { code: 'invalid' } })
+    expect(reply.result.error?.message).toMatch(/workspace open on the Mac changed/)
+    // The queue never loaded the other workspace, let alone paused it.
+    expect(queue.workspace()).toBe(ws)
+    expect(queue.state().paused).toBe(false)
+    expect(existsSync(queueFile(other))).toBe(false)
+    // Recorded under the checked workspace's log as a failed outcome, not run.
+    expect((await auditLines()).at(-1)).toMatchObject({ name: 'queue.setPaused', ok: false })
+  })
+
+  it('a read does not answer with the other workspace’s queue', async () => {
+    openWs = other
+    const reply = await send('queue.get')
+    expect(reply.result).toMatchObject({ ok: false, error: { code: 'invalid' } })
+    expect(queue.workspace()).toBe(ws)
+  })
+
+  it('enqueue stops when the desktop loads another workspace while it looks jobs up', async () => {
+    jobs.set('url:a', job('url:a'))
+    jobs.set('url:b', job('url:b'))
+    let switched = false
+    onFindJob = async () => {
+      if (switched) return
+      switched = true
+      openWs = other
+      await queue.sync() // the desktop opens the other workspace mid-command
+    }
+    const reply = await send('queue.enqueue', { jobIds: ['url:a', 'url:b'], options: { coverLetter: false, dateStyle: 'right' } })
+    expect(reply.result).toMatchObject({ ok: false, error: { code: 'invalid' } })
+    expect(queue.workspace()).toBe(other)
+    expect(queue.state().items).toEqual([]) // nothing added to the other workspace's queue
+  })
+
+  it('passes the checked workspace path to every run service call', async () => {
+    await send('runs.list', {})
+    expect(runsCalls).toEqual([ws])
+  })
+})
+

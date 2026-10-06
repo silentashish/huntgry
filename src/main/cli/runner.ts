@@ -111,6 +111,11 @@ export class RunManager {
     return true
   }
 
+  /** The workspace a live run was started in (`null` when it has no process). */
+  liveWorkspace(id: string): string | null {
+    return this.live.get(id)?.ctx.workspace ?? null
+  }
+
   /** The in-memory summary of a live run (fresher than `run.json`). */
   liveRun(id: string): RunSummary | null {
     return this.live.get(id)?.run ?? null

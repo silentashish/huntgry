@@ -149,7 +149,7 @@ function services(): GatewayServices {
     defaultAgent: async () => 'claude',
     queue: {
       state: async () => q(),
-      setPaused: async (p) => {
+      setPaused: async (_w, p) => {
         paused = p
         return q()
       },

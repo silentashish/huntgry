@@ -29,6 +29,7 @@ import { MAX_TEXT } from '../cli/command'
 import { assertPublicUrl, type ResolveHost } from '../cli/public-url'
 import { requireRunId } from '../cli/runs'
 import { requireEnqueueInput, requireItemId } from '../queue/queue'
+import { WorkspaceChangedError } from '../workspace/changed'
 import type { AgentId } from '@shared/runner-types'
 import { AuditLog, type Known } from './audit'
 import type { DeviceRecord, DeviceStore } from './devices'
@@ -52,23 +53,28 @@ export interface GatewayServices {
   agents(): Promise<readonly Pick<AgentStatus, 'id' | 'ready'>[]>
   /** The agent new runs use when the phone names none (Settings). */
   defaultAgent(): Promise<AgentId>
+  /**
+   * Queue and runs take the workspace path the gateway checked as their first argument and act
+   * on that workspace only: they throw `WorkspaceChangedError` rather than resolve the open
+   * workspace again, so a switch while the command waited cannot redirect it.
+   */
   queue: {
-    state(): Promise<QueueState>
-    setPaused(paused: boolean): Promise<QueueState>
-    cancel(itemId: string): Promise<QueueState>
-    retry(itemId: string): Promise<QueueState>
+    state(workspace: string): Promise<QueueState>
+    setPaused(workspace: string, paused: boolean): Promise<QueueState>
+    cancel(workspace: string, itemId: string): Promise<QueueState>
+    retry(workspace: string, itemId: string): Promise<QueueState>
     /** Takes what `requireEnqueueInput` returned, exactly like `queue/ipc.ts`. */
-    enqueue(input: ReturnType<typeof requireEnqueueInput>): Promise<EnqueueResult>
+    enqueue(workspace: string, input: ReturnType<typeof requireEnqueueInput>): Promise<EnqueueResult>
     /** The queue holds a reply for one of its waiting runs; `null` for any other run. */
-    reply(runId: string, text: string): Promise<RunSummary | 'held' | null>
+    reply(workspace: string, runId: string, text: string): Promise<RunSummary | 'held' | null>
   }
   runs: {
-    list(): Promise<RunSummary[]>
-    get(runId: string): Promise<{ run: RunSummary; items: TranscriptItem[] }>
+    list(workspace: string): Promise<RunSummary[]>
+    get(workspace: string, runId: string): Promise<{ run: RunSummary; items: TranscriptItem[] }>
     /** Sends a reply to a run the queue does not manage (the Tailor page's path). */
-    reply(runId: string, text: string): Promise<RunSummary>
-    stop(runId: string): Promise<RunSummary>
-    finish(runId: string): Promise<RunSummary>
+    reply(workspace: string, runId: string, text: string): Promise<RunSummary>
+    stop(workspace: string, runId: string): Promise<RunSummary>
+    finish(workspace: string, runId: string): Promise<RunSummary>
   }
   jobs: {
     list(workspace: string): Promise<Job[]>
@@ -418,23 +424,34 @@ export class Gateway {
 
   /** Dispatches an allow-listed, validated command onto the services (the `case` per command the ADR describes). */
   private async execute(device: DeviceRecord, command: RemoteCommand, workspace: WorkspaceIdentity): Promise<unknown> {
+    try {
+      return await this.dispatch(device, command, workspace)
+    } catch (err) {
+      if (err instanceof WorkspaceChangedError) throw new ProtocolError('invalid', err.message)
+      throw err
+    }
+  }
+
+  /** Every service call gets `workspace.path` (checked against `Envelope.ws`), never the open workspace. */
+  private async dispatch(device: DeviceRecord, command: RemoteCommand, workspace: WorkspaceIdentity): Promise<unknown> {
     const s = this.services
+    const ws = workspace.path
     switch (command.name) {
       case 'status.get':
-        return projectStatus({ desktopName: s.desktopName, appVersion: s.appVersion, workspace, queue: await s.queue.state(), agents: await s.agents() })
+        return projectStatus({ desktopName: s.desktopName, appVersion: s.appVersion, workspace, queue: await s.queue.state(ws), agents: await s.agents() })
       case 'queue.get':
-        return projectQueue(await s.queue.state())
+        return projectQueue(await s.queue.state(ws))
       case 'queue.setPaused':
-        return projectQueue(await s.queue.setPaused(command.args.paused))
+        return projectQueue(await s.queue.setPaused(ws, command.args.paused))
       case 'queue.cancel':
-        return projectQueue(await s.queue.cancel(requireItemId(command.args.itemId)))
+        return projectQueue(await s.queue.cancel(ws, requireItemId(command.args.itemId)))
       case 'queue.retry':
-        return projectQueue(await s.queue.retry(requireItemId(command.args.itemId)))
+        return projectQueue(await s.queue.retry(ws, requireItemId(command.args.itemId)))
       case 'queue.enqueue': {
         // The package guard bounded jobIds, notes (≤ LIMITS.textBytes) and the enums; the queue's own validator runs too.
         if (command.args.options.notes !== undefined && command.args.options.notes.length > MAX_TEXT) throw new ProtocolError('invalid', 'The notes are too long.')
         const input = requireEnqueueInput(command.args, await s.defaultAgent())
-        const result = await s.queue.enqueue(input)
+        const result = await s.queue.enqueue(ws, input)
         // At most half the budget for the skipped list (100 jobs × long reasons would not fit); the queue gets the rest.
         const skipped: { jobId: string; reason: string }[] = []
         let skippedBytes = 0
@@ -456,10 +473,10 @@ export class Gateway {
         return projectJobsPage([job]).items[0]
       }
       case 'runs.list':
-        return projectRunsPage(await s.runs.list(), command.args.cursor)
+        return projectRunsPage(await s.runs.list(ws), command.args.cursor)
       case 'run.get': {
         const runId = requireRunId(command.args.runId)
-        const { run, items } = await s.runs.get(runId)
+        const { run, items } = await s.runs.get(ws, runId)
         return projectRunPage(run, s.transcripts() ? items : [], command.args.sinceSeq ?? 0)
       }
       case 'run.reply': {
@@ -467,15 +484,15 @@ export class Gateway {
         const text = command.args.text
         // The same rule as RUNNER_CHANNELS.reply: non-empty, at most MAX_TEXT, the queue first.
         if (!text.trim() || text.length > MAX_TEXT) throw new ProtocolError('invalid', 'Type a reply first.')
-        const viaQueue = await s.queue.reply(runId, text)
+        const viaQueue = await s.queue.reply(ws, runId, text)
         // Held by the queue until a slot is free (like a desktop reply): the run is unchanged for now.
-        if (viaQueue === 'held') return projectRun((await s.runs.get(runId)).run)
-        return projectRun(viaQueue ?? (await s.runs.reply(runId, text)))
+        if (viaQueue === 'held') return projectRun((await s.runs.get(ws, runId)).run)
+        return projectRun(viaQueue ?? (await s.runs.reply(ws, runId, text)))
       }
       case 'run.stop':
-        return projectRun(await s.runs.stop(requireRunId(command.args.runId)))
+        return projectRun(await s.runs.stop(ws, requireRunId(command.args.runId)))
       case 'run.finish':
-        return projectRun(await s.runs.finish(requireRunId(command.args.runId)))
+        return projectRun(await s.runs.finish(ws, requireRunId(command.args.runId)))
       case 'file.get':
         return this.fileChunk(workspace.path, command.args)
       case 'device.setNotifications':

@@ -13,6 +13,7 @@ import { claudeInstallKind, exclusive, installClaude, updateClaude } from './ins
 import { installSkill } from './install-skill'
 import { listRuns, OUTPUT_FILES, readEvents, readRun, requireRunId } from './runs'
 import { replyThroughQueue } from '../queue/ipc'
+import { WorkspaceChangedError } from '../workspace/changed'
 import { contextForRun, defaultAgent, manager, setDefaultAgent, startTailorRun, venvDir } from './start'
 
 /** Which skill release Huntgry installed (see `install-skill.ts`). */
@@ -43,31 +44,49 @@ async function outputPath(id: string, file?: string): Promise<string> {
   return join(folder, file)
 }
 
-/** Runs for the remote gateway (ADR-0001): the same helpers and rules as the handlers below, minus open / reveal. */
+/**
+ * A run of `workspace` (live or on disk). A live run started in another workspace is not this
+ * workspace's run, whatever its id: `WorkspaceChangedError`.
+ */
+async function runIn(workspace: string, id: string): Promise<RunSummary> {
+  const live = manager.liveRun(id)
+  if (!live) return readRun(workspace, id)
+  if (manager.liveWorkspace(id) !== workspace) throw new WorkspaceChangedError()
+  return { ...live, live: true }
+}
+
+/**
+ * Runs for the remote gateway (ADR-0001): the same helpers and rules as the handlers below,
+ * minus open / reveal. Every call takes the workspace the gateway checked and never resolves
+ * the open one again, so a switch while the command waited cannot redirect it.
+ */
 export const runsForRemote = {
-  list: async (): Promise<RunSummary[]> => {
-    const workspace = await requireCurrentWorkspace()
-    const runs = await listRuns(workspace.path)
-    return runs.map((r) => (manager.isLive(r.id) ? { ...manager.liveRun(r.id)!, live: true } : r))
+  list: async (workspace: string): Promise<RunSummary[]> => {
+    const runs = await listRuns(workspace)
+    return runs.map((r) => (manager.isLive(r.id) && manager.liveWorkspace(r.id) === workspace ? { ...manager.liveRun(r.id)!, live: true } : r))
   },
-  get: async (runId: string): Promise<{ run: RunSummary; items: TranscriptItem[] }> => {
-    const workspace = await requireCurrentWorkspace()
+  get: async (workspace: string, runId: string): Promise<{ run: RunSummary; items: TranscriptItem[] }> => {
     await manager.flush(runId)
-    const run = await currentRun(runId)
-    return { run, items: buildTranscript(await readEvents(workspace.path, runId), run.agent) }
+    const run = await runIn(workspace, runId)
+    return { run, items: buildTranscript(await readEvents(workspace, runId), run.agent) }
   },
-  reply: (runId: string, text: string): Promise<RunSummary> => manager.reply(runId, text, () => contextForRun(runId)),
-  stop: async (runId: string): Promise<RunSummary> => {
+  reply: async (workspace: string, runId: string, text: string): Promise<RunSummary> => {
+    await runIn(workspace, runId)
+    // A run with no process resumes in a context built for `workspace`; `context` refuses another open one.
+    return manager.reply(runId, text, () => contextForRun(runId, workspace))
+  },
+  stop: async (workspace: string, runId: string): Promise<RunSummary> => {
+    await runIn(workspace, runId)
     manager.stop(runId)
-    return currentRun(runId)
+    return runIn(workspace, runId)
   },
-  finish: async (runId: string): Promise<RunSummary> => {
+  finish: async (workspace: string, runId: string): Promise<RunSummary> => {
+    await runIn(workspace, runId)
     if (manager.isLive(runId)) {
       manager.finish(runId)
-      return currentRun(runId)
+      return runIn(workspace, runId)
     }
-    const workspace = await requireCurrentWorkspace()
-    return (await manager.endIdle(workspace.path, runId, 'finished')) ?? currentRun(runId)
+    return (await manager.endIdle(workspace, runId, 'finished')) ?? runIn(workspace, runId)
   }
 }
 

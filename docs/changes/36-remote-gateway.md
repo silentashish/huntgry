@@ -76,7 +76,8 @@ sequenceDiagram
 
 - **Allow-list.** Only `RemoteCommand` names reach a `switch` in `execute`, through the
   package's `requireCommandEnvelope`. An unknown name is `unsupported`. Pipeline and review
-  commands answer `unsupported` too, because #31 (pipeline, review queue) is not on `main`.
+  commands still answer `unsupported`. #31 (pipeline, review queue) is now on `main`, but
+  wiring the phone to it, with the review `revision` checks, is a separate change.
 - **Same validators.** `requireRunId`, `requireItemId` and `requireEnqueueInput` (with the
   Settings default agent as fallback) are the functions the `ipc.ts` handlers call.
   `run.reply` keeps the handler's "non-empty, ≤ `MAX_TEXT`" rule after the package's
@@ -126,11 +127,18 @@ sequenceDiagram
 - **The device is re-read at dispatch.** A frame that waited behind another one is checked
   against the store's current record (same sid and key), again after the fsyncs. A revoke,
   unpair or re-pair in between denies it.
-- **The workspace is re-checked right before execution.** The owner can switch workspace
-  during the audit fsync. A command bound to workspace A then fails with "The workspace open
-  on the Mac changed" instead of running on B. The queue and run services still resolve the
-  current workspace themselves, inside their own call. Passing the checked workspace into
-  them changes files #58 owns, so it is a follow-up (see below).
+- **Execution is bound to the checked workspace.** The owner can switch workspace during the
+  audit fsync. The gateway re-checks the workspace right before execution. It also passes
+  `workspace.path` to every service call: queue, runs, jobs and files.
+  - `queueForRemote` calls `TailorQueue` with that workspace as `expected`. `sync(expected)`
+    throws `WorkspaceChangedError` instead of loading another workspace, and the mutation
+    runs synchronously after it.
+  - `enqueue` stops if another workspace is loaded while it looks jobs up.
+  - `reply` refuses another open workspace.
+  - `runsForRemote` reads and acts on runs of that workspace only. A live run started in
+    another workspace is refused, and a resumed run's context is built for that workspace.
+  - A command bound to A therefore fails with "The workspace open on the Mac changed" and
+    never runs on B.
 - **Durable writes.** `devices.json` (the outgoing `seq` reservation), the desktop key,
   `relay.json` and `remote.json` are written with `writeDurable`: the temp file is fsynced,
   renamed, then the directory is fsynced. A failed reservation rejects, so nothing is sent
@@ -192,8 +200,9 @@ Unit tests (`src/main/remote/`):
   marking the phone for re-pair; a reused id with another seq, body or workspace is refused
   and does not run; another device's id is its own command; a removed, revoked-while-queued
   or re-paired device is denied; an audit, checkpoint or outcome write failure rejects
-  (no ack) and the redelivery runs once or answers interrupted; a workspace switch during
-  the fsync does not redirect the command; a file over 32 MiB is refused; **a simulated crash at each step**
+  (no ack) and the redelivery runs once or answers interrupted; a workspace switch during the fsync, or one landing after the gateway's
+  check, does not redirect the command (the queue never loads the other workspace, a read
+  gets no data from it, an enqueue adds nothing to it); a file over 32 MiB is refused; **a simulated crash at each step**
   (before the entry, after it, after execution, after the outcome) never runs a command
   twice and never loses one; a service error is `failed` with the generic message;
   `queue.enqueue` and `run.reply` through the real `TailorQueue` and `RunManager` with
@@ -252,13 +261,10 @@ sleep / wake on a real Mac. Both need the relay and pairing (#35, #37).
 - **#35** rebases onto `relay-http.ts` and implements those routes. The `{ ack }` client frame
   (#35's commit, cherry-picked here) is already sent by the desktop. A clear `from` device id
   on phone frames would let the session skip trial decryption.
-- **Workspace lease for remote commands** (#69): pass the workspace the
-  gateway checked into `queueForRemote` / `runsForRemote` after #58 merges, so the service
-  call itself cannot pick up a workspace switched in the last instant.
 - **#37** pairing: `pair.hello` / `pair.ok` over secretbox, approve dialog, device
   registration (`RegisterDeviceRequest`), the "credentials unreadable" recovery, TTL settings,
   and showing the last audit entries in Settings.
-- **#31** pipeline and review: replace the `unsupported` cases with calls into the pipeline
+- **#31** (merged) pipeline and review: replace the `unsupported` cases with calls into the pipeline
   and the review screen, including the `revision` snapshot and served-revision checks.
 - `run.transcript` events (live transcript to the phone) are typed and projected but not yet
   emitted; the phone pulls with `run.get` for now.

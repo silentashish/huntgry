@@ -39,14 +39,18 @@ export function replyThroughQueue(runId: string, text: string): Promise<RunSumma
   return queue.reply(runId, text)
 }
 
-/** The queue for the remote gateway (ADR-0001): the same instance and methods the renderer's handlers call. */
+/**
+ * The queue for the remote gateway (ADR-0001): the same instance and methods the renderer's
+ * handlers call, each bound to the workspace the gateway checked (`WorkspaceChangedError` when
+ * another one is open by the time the queue acts).
+ */
 export const queueForRemote = {
-  state: (): Promise<QueueState> => queue.sync(),
-  setPaused: (paused: boolean): Promise<QueueState> => queue.setPaused(paused),
-  cancel: (id: string): Promise<QueueState> => queue.cancel(id),
-  retry: (id: string): Promise<QueueState> => queue.retry(id),
-  enqueue: (input: EnqueueInput): Promise<EnqueueResult> => queue.enqueue(input),
-  reply: replyThroughQueue
+  state: (workspace: string): Promise<QueueState> => queue.sync(workspace),
+  setPaused: (workspace: string, paused: boolean): Promise<QueueState> => queue.setPaused(paused, workspace),
+  cancel: (workspace: string, id: string): Promise<QueueState> => queue.cancel(id, workspace),
+  retry: (workspace: string, id: string): Promise<QueueState> => queue.retry(id, workspace),
+  enqueue: (workspace: string, input: EnqueueInput): Promise<EnqueueResult> => queue.enqueue(input, workspace),
+  reply: (workspace: string, runId: string, text: string): Promise<RunSummary | 'held' | null> => queue.reply(runId, text, workspace)
 }
 
 /** Saves the queue as it is before the app stops the runs on quit (they reload as failed-retryable). */
