@@ -122,13 +122,11 @@ export class Client {
     return this.done
   }
 
-  /**
-   * Closes from the client side and waits for the room to have processed it. The close event
-   * on this side only fires after workerd's own timeout, so tests never await `closed` here.
-   */
+  /** Closes from the client side and waits for the relay's reciprocal close. */
   async close(): Promise<void> {
     if (!this.done) this.ws.close(1000, 'test done')
-    await sleep(150)
+    const closed = await Promise.race([this.closed, sleep(2000).then(() => null)])
+    if (!closed) throw new Error('the relay did not answer the close within 2 s')
   }
 }
 

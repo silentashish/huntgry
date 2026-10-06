@@ -215,7 +215,13 @@ export class Room extends DurableObject<Env> {
     }
   }
 
-  override async webSocketClose(ws: WebSocket): Promise<void> {
+  override async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+    // Complete the close handshake: the compatibility date predates web_socket_auto_reply_to_close.
+    try {
+      ws.close(code === 1005 || code === 1006 || code === 1015 ? 1000 : code, reason)
+    } catch {
+      // already closed by us
+    }
     const attachment = ws.deserializeAttachment() as Attachment | null
     if (attachment && !attachment.pending && attachment.kind === 'desktop' && this.socketsOf('desktop', DESKTOP, ws).length === 0) {
       await this.desktopOffline()
@@ -224,7 +230,7 @@ export class Room extends DurableObject<Env> {
   }
 
   override async webSocketError(ws: WebSocket): Promise<void> {
-    await this.webSocketClose(ws)
+    await this.webSocketClose(ws, 1011, 'socket error')
   }
 
   override async alarm(): Promise<void> {

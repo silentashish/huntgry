@@ -158,3 +158,19 @@ describe('GET /ws routes by the room in the auth frame', () => {
     await desktop.close()
   })
 })
+
+describe('close handshake', () => {
+  it.each([
+    ['/ws', false],
+    ['/rooms/:room/ws', true]
+  ])('answers a client-initiated close on %s with a clean close', async (_route, direct) => {
+    const f = await fixture(relay)
+    const phone = await relay.connectAs(f.roomId, { room: f.roomId, device: f.deviceId, token: f.relayToken }, { direct })
+    await phone.next()
+    const started = Date.now()
+    phone.ws.close(1000, 'bye')
+    const closed = await phone.closed
+    expect(closed.code).toBe(1000)
+    expect(Date.now() - started).toBeLessThan(1000)
+  })
+})
