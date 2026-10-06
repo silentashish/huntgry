@@ -27,6 +27,7 @@ import {
 } from '@shared/runner-types'
 import { api, errorText } from '../../api'
 import { RemoteCard } from './RemoteCard'
+import { PricingCard } from './PricingCard'
 import { StandingApprovalsCard } from './StandingApprovalsCard'
 
 const STATUS: Record<PreflightItem['status'], { color: string; label: string }> = {
@@ -157,6 +158,8 @@ export function SettingsPage() {
           <AgentsCard env={env} installing={installing} onLinkSkill={linkSkill} onSetDefault={setDefault} />
 
           <StandingApprovalsCard />
+
+          <PricingCard />
 
           <Card withBorder radius="md" padding="lg">
             <Title order={4} mb="sm">
