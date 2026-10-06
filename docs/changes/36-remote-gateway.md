@@ -158,7 +158,8 @@ sequenceDiagram
   so; the phone is refused by the Mac either way. Every relay `fetch` has a timeout. Any
   rotation clears that warning: Rotate in the relay form or Unpair everything (`rooms.ts`).
   Unpair everything reconnects even when the relay refuses the new room, then shows the
-  relay's error.
+  relay's error. A replaced room is deleted only after the new credentials are saved, so a
+  failed write never leaves `relay.json` naming a deleted room.
 - **Backoff survives a relay that opens and then refuses.** The retry counter resets only
   after a session outlives the 5 s auth grace, so repeated refusals back off to 60 s.
 - **A redelivered read runs again.** Reads keep no result in the log, and the relay redelivers
@@ -266,6 +267,16 @@ Manual (done for this PR, built app on an isolated `--user-data-dir`):
 
 Not done manually: the round trip against a deployed #35 relay with a Node test client, and
 sleep / wake on a real Mac. Both need the relay and pairing (#35, #37).
+
+### Also fixed here (found while making CI green after #31)
+
+- **`RunManager` applies a process exit's verdict after the run's pending writes.** Applied at
+  once, a summary queued before the exit could be broadcast as `failed` without the files the
+  turn had just built. The queue then retried a built unattended run instead of verifying it.
+  This was the intermittent CI failure of #31's verify-gate test. Covered by
+  `src/main/cli/runner-close-order.test.ts`.
+- **A #31 pipeline test edited `queue.json` before shutting the queue down,** so the queue's
+  last save could overwrite the edit. It now shuts down first.
 
 ## Follow-ups
 
