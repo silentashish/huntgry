@@ -174,10 +174,15 @@ describe('Workday: My Information', () => {
       const dom = page(name)
       const report = fillPage(dom.window.document, VALUES)
       const labels = report.fields.map((f) => f.label)
-      // Workday's dropdowns are buttons, never inputs: they are not even in the report.
-      for (const dropdown of ['How Did You Hear About Us?', 'Country', 'Phone Device Type', 'State']) {
-        expect(labels).not.toContain(dropdown)
+      // Workday's dropdowns are buttons with a listbox: reported as choices (#71: answered only from remembered
+      // answers, by pick.ts), and without any they are left exactly as they were.
+      const before = Array.from(dom.window.document.querySelectorAll('button[aria-haspopup="listbox"]')).map((b) => b.textContent)
+      const dropdowns = ['How Did You Hear About Us?', 'Country', 'Phone Device Type', ...(name.includes('legacy') ? [] : ['State'])]
+      for (const dropdown of dropdowns) {
+        expect(labels).toContain(dropdown)
+        expect(report.fields.find((f) => f.label === dropdown)).toMatchObject({ kind: 'combobox', outcome: 'skipped-unsupported' })
       }
+      expect(Array.from(dom.window.document.querySelectorAll('button[aria-haspopup="listbox"]')).map((b) => b.textContent)).toEqual(before)
       expect(report.fields.find((f) => f.label === 'Country Phone Code')).toMatchObject({
         kind: 'combobox',
         outcome: 'skipped-unsupported'

@@ -1,8 +1,10 @@
+import { NO_ANSWERS, normalizeText, resolveAnswer, type PageAnswers } from '../apply-facts'
 import type { AdapterStep, ApplyAts, FieldKey, FieldReport, FillReport, FillValues, PageScan, UploadState } from '../apply-types'
 import { EMBED_RULES, embedPathMatches } from '../apply-embeds'
 import { adapterFor, type Adapter, type UploadProbe } from './adapters'
 import { UPLOAD_ATTR, UPLOAD_GROUP_ATTR } from '../autofill-channels'
 import {
+  chosenOf,
   highlight,
   isControl,
   isRelevant,
@@ -13,6 +15,8 @@ import {
   valueMatches,
   type FormControl
 } from './dom'
+import { answerable, answerField, editedInGroup, strategyOf, writeAnswer, yesNoGroup, type PickRequest } from './answers'
+import { pick, pickedValue, widgetOf } from './pick'
 import { matchFileField, matchTextField, type Match } from './match'
 import { sleep } from './ready'
 import { defaultUploadAttached } from './upload-state'
@@ -21,9 +25,10 @@ import { editedByUser } from './user-edits'
 /**
  * The autofill engine: pure DOM code, run by the browser tab's preload and by
  * jsdom in tests. It fills text fields and marks file inputs for main to
- * upload over CDP. It never submits a form, presses a button or answers a
- * choice: selects, comboboxes, checkboxes, radios, consent and demographic
- * questions are only reported. (guard.test.ts enforces the "never submits".)
+ * upload over CDP, and answers the questions the user taught it (#71,
+ * answers.ts): typed fields, native selects and native radios, never a
+ * checkbox, never a widget that needs a click. It never submits a form or
+ * presses a button. (guard.test.ts enforces the "never submits".)
  */
 
 /** Upload marker values: `data-huntgry-upload="resume" | "cover"`. */
@@ -34,6 +39,8 @@ interface Planned {
   el: FormControl
   key: FieldKey | null
   score: number
+  /** The container the control was found in, when it is one of the adapter's `answerRoots`. */
+  root?: Element
   /** Set when the planner already knows the outcome (ambiguous, unsupported…). */
   outcome?: FieldReport['outcome']
   reason?: string
@@ -60,6 +67,70 @@ function controlsOf(root: Element): FormControl[] {
     if (out.length >= MAX_FIELDS) break
   }
   return out
+}
+
+/**
+ * A stable id per control for the panel's answers: kind plus `name` or `id`
+ * (else the label), numbered when several controls share it. Recomputed the
+ * same way on every fill, so it survives re-renders that keep the markup.
+ */
+function fieldIdsOf(controls: FormControl[]): Map<FormControl, string> {
+  const seen = new Map<string, number>()
+  const ids = new Map<FormControl, string>()
+  for (const el of controls) {
+    const base = `${kindOf(el)}:${(el.getAttribute('name') || el.id || `label:${labelOf(el)}`).slice(0, 160)}`
+    const n = (seen.get(base) ?? 0) + 1
+    seen.set(base, n)
+    ids.set(el, n === 1 ? base : `${base}#${n}`)
+  }
+  return ids
+}
+
+/** Controls the adapter marks as pickers or click-only: answers are only suggested for them. */
+function clickOnlyOf(adapter: Adapter, roots: Element[]): Set<Element> {
+  const out = new Set<Element>()
+  for (const root of roots)
+    for (const selector of [...(adapter.choices ?? []), ...(adapter.clickOnly ?? [])])
+      for (const el of Array.from(root.querySelectorAll(selector))) out.add(el)
+  return out
+}
+
+/** The adapter's extra answer-only containers (outside the form root), with their questions. */
+function answerRootsOf(adapter: Adapter, doc: Document, root: Element): Element[] {
+  return (adapter.answerRoots?.(doc) ?? []).filter((r) => r !== root && !root.contains(r) && !r.contains(root))
+}
+
+/**
+ * Dropdown buttons with a listbox (Workday): not form controls, but questions
+ * answered from memory (#71). Reported as comboboxes; never matched to contact values.
+ */
+function listboxButtons(root: Element, planned: Planned[]): Planned[] {
+  const seen = new Set(planned.map((p) => p.el as Element))
+  return Array.from(root.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="listbox"]'))
+    .filter((b) => !b.disabled && !seen.has(b))
+    .slice(0, 50)
+    .map((b) => ({
+      el: b as unknown as FormControl,
+      key: null,
+      score: 0,
+      outcome: 'skipped-unsupported' as const,
+      reason: 'A choice; pick it yourself.'
+    }))
+}
+
+/** Questions of the extra containers: only ever answered from memory, never matched to contact values. */
+function answerOnlyPlanned(roots: Element[]): Planned[] {
+  return roots.flatMap((root) =>
+    controlsOf(root)
+      .filter((el) => kindOf(el) !== 'file')
+      .map((el): Planned => {
+        const kind = kindOf(el)
+        const choice = kind === 'select' || kind === 'combobox' || kind === 'checkbox' || kind === 'radio'
+        return choice
+          ? { el, key: null, score: 0, root, outcome: 'skipped-unsupported', reason: 'A choice; pick it yourself.' }
+          : { el, key: null, score: 0, root, outcome: 'unmatched', reason: 'Huntgry does not answer this; fill it in.' }
+      })
+  )
 }
 
 /** Decides what each control gets: adapter fields first, then the generic matcher, one field per key. */
@@ -220,7 +291,20 @@ export interface FillOptions {
    * 'files-first'` and main asks again with `text: true` after the upload.
    */
   text?: boolean
+  /** Remembered facts and question answers (#71); without them only contact fields are filled. */
+  answers?: PageAnswers
+  /**
+   * Pick trusted remembered answers in widgets that only take a click (the
+   * Settings switch, sent by main). The picks are queued on the report
+   * (`pendingPicks`) and run by `pickAnswers` after this synchronous fill.
+   */
+  pick?: boolean
 }
+
+/** Picks a fill queued for `pickAnswers` (not part of the report sent to main). */
+const PENDING_PICKS = new WeakMap<FillReport, PickRequest[]>()
+
+export const pendingPicks = (report: FillReport): PickRequest[] => PENDING_PICKS.get(report) ?? []
 
 /** The upload widget around a file input (see `Adapter.uploadGroup`). */
 function defaultUploadGroup(input: HTMLInputElement): Element | null {
@@ -259,8 +343,16 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
     for (const old of Array.from(doc.querySelectorAll(`[${attr}]`))) old.removeAttribute(attr)
   }
   let first: Element | null = null
+  const extraRoots = answerRootsOf(adapter, doc, root)
+  const base = [...plan(adapter, root), ...answerOnlyPlanned(extraRoots)]
+  const planned = [...base, ...listboxButtons(root, base)]
+  const ids = fieldIdsOf(planned.map((p) => p.el))
+  const clickOnly = clickOnlyOf(adapter, [root, ...extraRoots])
+  const answers = options.answers ?? NO_ANSWERS
+  const picks: PickRequest[] = []
+  PENDING_PICKS.set(report, picks)
 
-  for (const p of plan(adapter, root)) {
+  for (const p of planned) {
     const kind = kindOf(p.el)
     const line: FieldReport = {
       key: p.key,
@@ -273,6 +365,12 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
       line.outcome = p.outcome
       line.reason = p.reason
       if (p.outcome !== 'skipped-unsupported') highlight(p.el, 'attention')
+      // A question the contact block does not cover: answered from what the user taught Huntgry (#71).
+      if (writeText && p.outcome !== 'ambiguous' && answerable(kind) && (kind !== 'checkbox' || yesNoGroup(p.el))) {
+        line.fieldId = ids.get(p.el)
+        const policy = options.pick ? 'pick' : 'suggest'
+        if (answerField(p.el, line, p.root ?? root, answers, clickOnly.has(p.el), policy, picks)) first ??= p.el
+      }
       report.fields.push(line)
       continue
     }
@@ -331,6 +429,37 @@ const keepUserEdit = (line: FieldReport, el: HTMLInputElement | HTMLTextAreaElem
 }
 
 /**
+ * A picked answer, checked again after the fill (hydration, a late re-render
+ * or a resume parser may wipe it): still shown, fine; changed by the person,
+ * kept; otherwise it goes to the user with the answer as a suggestion.
+ */
+function recheckPick(line: FieldReport, el: FormControl, root: ParentNode): void {
+  const value = line.value ?? ''
+  const widget = el.isConnected ? widgetOf(el) : null
+  const shown = widget ? pickedValue(widget) : ''
+  if (widget && normalizeText(shown) === normalizeText(value)) return
+  if (widget && editedInGroup(el, kindOf(el), root)) {
+    line.outcome = 'kept'
+    line.value = shown.slice(0, 200)
+    line.reason = 'You changed it after Huntgry picked it; left as is.'
+    return
+  }
+  line.outcome = 'rejected'
+  line.suggestion = value
+  line.suggestedBy = 'saved'
+  line.reason = widget
+    ? `The page cleared the picked answer "${value.slice(0, 80)}"; pick it yourself.`
+    : 'The field disappeared after Huntgry picked it.'
+  if (widget) highlight(widget.scope, 'attention')
+}
+
+const keepUserAnswer = (line: FieldReport, el: FormControl, root: ParentNode) => {
+  line.outcome = 'kept'
+  line.value = chosenOf(el, root).slice(0, 200)
+  line.reason = 'You changed it after Huntgry filled it; left as is.'
+}
+
+/**
  * Checks, a moment after a fill, that every field reported `filled` still
  * holds its value. A late re-render (React hydration) or a resume parser can
  * wipe or replace them: each such value is written once more, then read back
@@ -350,11 +479,40 @@ export async function verifyFill(
   const adapter = adapterFor(url, doc)
   const root = adapter.formRoot(doc)
   if (!root) return report
+  const extraRoots = answerRootsOf(adapter, doc, root)
+  const base = [...plan(adapter, root), ...answerOnlyPlanned(extraRoots)]
+  // The same list (and so the same field ids) as the fill, Workday dropdown buttons included.
+  const planned = [...base, ...listboxButtons(root, base)]
+  const clickOnly = clickOnlyOf(adapter, [root, ...extraRoots])
   const byKey = new Map<FieldKey, FormControl>()
-  for (const p of plan(adapter, root)) if (p.key && !p.outcome && !byKey.has(p.key)) byKey.set(p.key, p.el)
+  for (const p of planned) if (p.key && !p.outcome && !byKey.has(p.key)) byKey.set(p.key, p.el)
+  const byId = new Map([...fieldIdsOf(planned.map((p) => p.el))].map(([el, id]) => [id, el]))
+  const rootOf = new Map(planned.map((p) => [p.el, p.root ?? root]))
 
   const rewritten: Array<{ line: FieldReport; el: HTMLInputElement | HTMLTextAreaElement; value: string }> = []
+  const reanswered: Array<{ line: FieldReport; el: FormControl; value: string }> = []
   for (const line of report.fields) {
+    // A remembered answer Huntgry wrote (#71): the same check, keyed by the control's id.
+    if (!line.key && line.outcome === 'filled' && line.fieldId && line.value) {
+      const el = byId.get(line.fieldId)
+      // A picked widget: read it again from the page as it is now; never pressed again here.
+      if (el && (yesNoGroup(el) || ['click-only', 'never'].includes(strategyOf(kindOf(el), clickOnly.has(el))))) {
+        recheckPick(line, el, rootOf.get(el) ?? root)
+        continue
+      }
+      if (!el) {
+        line.outcome = 'rejected'
+        line.reason = 'The field disappeared after it was filled.'
+      } else if (chosenOf(el, rootOf.get(el) ?? root) !== line.value) {
+        const at = rootOf.get(el) ?? root
+        if (editedInGroup(el, kindOf(el), at)) keepUserAnswer(line, el, at)
+        else {
+          writeAnswer(el, strategyOf(kindOf(el), false), at, line.value)
+          reanswered.push({ line, el, value: line.value })
+        }
+      }
+      continue
+    }
     if (!line.key) continue
     if (line.outcome === 'to-upload' && (line.key === 'resume' || line.key === 'coverLetter')) {
       const el = byKey.get(line.key)
@@ -379,11 +537,23 @@ export async function verifyFill(
     setNativeValue(el, value, phone)
     rewritten.push({ line, el, value })
   }
-  if (rewritten.length === 0) return report
+  if (rewritten.length === 0 && reanswered.length === 0) return report
 
   // The one permitted rewrite counts only if it still holds a moment later.
   await sleep(doc, settleMs)
   if (pageUrl(doc).href !== report.url) return report
+  for (const { line, el, value } of reanswered) {
+    const at = rootOf.get(el) ?? root
+    if (editedInGroup(el, kindOf(el), at)) {
+      keepUserAnswer(line, el, at)
+    } else if (el.isConnected && chosenOf(el, at) === value) {
+      highlight(el, 'done')
+    } else {
+      line.outcome = 'rejected'
+      line.reason = 'The page cleared the saved answer after filling; answer it yourself.'
+      highlight(el, 'attention')
+    }
+  }
   for (const { line, el, value } of rewritten) {
     if (editedByUser(el)) {
       keepUserEdit(line, el)
@@ -418,4 +588,58 @@ export function uploadStateOf(doc: Document, key: UploadKey, fileName: string): 
 /** The adapter for the page as it is now (for the preload's waits). */
 export function currentAdapter(doc: Document): Adapter {
   return adapterFor(pageUrl(doc), doc)
+}
+
+/** Picks at most this many answers per fill (each waits for its menu)… */
+const MAX_PICKS = 25
+/**
+ * …within this time; later ones stay suggestions. Each pick's waits are capped to what is left, so with the
+ * session's readiness wait (≤ 3 s), the verify delay (1 s) and the settle (0.3 s) a fill stays under main's 15 s.
+ */
+const PICK_BUDGET_MS = 8000
+
+/**
+ * Runs the picks a fill queued (#71): each widget's remembered answer is
+ * chosen through pick.ts, which presses only inside that widget and reads the
+ * choice back. Picked lines become `filled`; a widget that already shows
+ * another answer is `kept`; a pick that did not stick goes to the user
+ * (`rejected`, with the suggestion). Mutates and returns `report`.
+ */
+export async function pickAnswers(report: FillReport, picks: readonly PickRequest[] = pendingPicks(report)): Promise<FillReport> {
+  const deadline = Date.now() + PICK_BUDGET_MS
+  for (const req of picks.slice(0, MAX_PICKS)) {
+    const left = deadline - Date.now()
+    if (left <= 0) break
+    const doc = req.el.ownerDocument
+    // The page and step as the adapter sees them: if a pick moves the page on, the safety net stops picking.
+    const pageState = () => `${doc.location?.href ?? doc.URL}|${currentAdapter(doc).stepTitle?.(doc) ?? ''}|${currentAdapter(doc).step?.(doc) ?? 'form'}`
+    const widget = req.el.isConnected ? widgetOf(req.el) : null
+    if (!widget) continue
+    const line = req.line
+    const result = await pick(widget, (options) => resolveAnswer(req.fact, req.value, 'select', options), {
+      // A pick waits twice (menu, read-back): each wait gets at most half of what is left, so the budget is a hard limit.
+      timeoutMs: Math.min(1500, Math.max(100, Math.floor(left / 2))),
+      touched: () => editedInGroup(req.el, kindOf(req.el), req.root),
+      pageState
+    })
+    if (result.status === 'filled') {
+      line.outcome = 'filled'
+      line.value = result.value.slice(0, 200)
+      line.reason = undefined
+      line.suggestion = undefined
+      line.suggestedBy = undefined
+      highlight(widget.scope, 'done')
+    } else if (result.status === 'kept') {
+      line.outcome = 'kept'
+      line.value = result.value.slice(0, 200)
+      line.reason = 'Already answered; left as is.'
+    } else {
+      line.outcome = 'rejected'
+      line.reason = `Huntgry could not pick "${(line.suggestion ?? '').slice(0, 80)}" (${result.reason.slice(0, 120)}); pick it yourself.`
+      highlight(widget.scope, 'attention')
+      // The safety net caught the page acting outside the field: no more picks in this fill.
+      if (result.halt) break
+    }
+  }
+  return report
 }

@@ -6,6 +6,8 @@
  * file paths and pages stay in main.
  */
 
+import type { FactKey } from './apply-facts'
+
 /**
  * Applicant tracking systems Huntgry knows; `generic` is the label/autocomplete
  * heuristic. Each has an adapter in `src/shared/autofill/adapters/` (an ATS
@@ -102,9 +104,24 @@ export interface FieldReport {
   kind: FieldKind
   required: boolean
   outcome: FillOutcome
-  /** What was written (text fields) or attached (file name). */
+  /** What was written (text fields, or the option chosen) or attached (file name). */
   value?: string
   reason?: string
+  /**
+   * Application answers (#71), on questions the profile's contact block does
+   * not cover. `fieldId` names the control in this page (for the panel's
+   * answer); `question` is the memory key (see `questionKey`); `fact` the
+   * personal fact it asks for; `options` the choices of a select or radio
+   * group (page text, bounded); `suggestion` an answer Huntgry knows but did
+   * not write: a widget that only takes a click (`saved`), or a model's
+   * mapping the user has not confirmed yet (`model`).
+   */
+  fieldId?: string
+  question?: string
+  fact?: FactKey
+  options?: string[]
+  suggestion?: string
+  suggestedBy?: 'saved' | 'model'
 }
 
 export interface FillReport {
@@ -193,13 +210,42 @@ export interface ApplyApi {
   /** Ends the session; the tab stays open. */
   cancel(sessionId: string): Promise<void>
   current(): Promise<ApplySession | null>
+  /**
+   * Answers a question of the page's report (#71) and fills it in the page.
+   * `value` must be one of the field's reported options for a select or radio
+   * group. With `remember`, the answer is saved (under userData, outside the
+   * workspace) and fills the same question on later applications.
+   */
+  answer(sessionId: string, fieldId: string, value: string, remember: boolean): Promise<ApplySession>
+  /** The saved application answers of the current workspace. */
+  answers(): Promise<SavedAnswers>
+  /** Forgets one saved fact or question answer; returns what is left. */
+  forgetAnswer(target: { fact: FactKey } | { question: string }): Promise<SavedAnswers>
+  /** Forgets every saved answer of the current workspace. */
+  forgetAllAnswers(): Promise<SavedAnswers>
+  /** Settings: "Pick dropdown answers automatically" (on by default). */
+  pickSetting(): Promise<boolean>
+  setPickSetting(on: boolean): Promise<boolean>
+}
+
+/** The saved application answers, as Settings lists them. */
+export interface SavedAnswers {
+  facts: Array<{ fact: FactKey; label: string; sensitive: boolean; value: string; updatedAt: string }>
+  /** Questions answered directly (no fact) that were remembered. */
+  questions: Array<{ question: string; label: string; value: string; updatedAt: string }>
 }
 
 export const APPLY_CHANNELS = {
   start: 'apply:start',
   fill: 'apply:fill',
   cancel: 'apply:cancel',
-  current: 'apply:current'
+  current: 'apply:current',
+  answer: 'apply:answer',
+  answers: 'apply:answers:list',
+  forgetAnswer: 'apply:answers:forget',
+  forgetAllAnswers: 'apply:answers:clear',
+  pickSetting: 'apply:pick-setting',
+  setPickSetting: 'apply:set-pick-setting'
 } as const
 
 export interface ApplyEvents {

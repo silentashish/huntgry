@@ -55,16 +55,24 @@ export function defaultSubmissionFile() {
 
 const withScript = (html, src) => html.replace('</body>', `<script src="${src}"></script></body>`)
 
+/**
+ * A react-select Gender question like the live boards' EEO section (#71): `react-select.js` gives it the menu
+ * behaviour (open on mousedown, choose on click), so remembered answers can be picked in it.
+ */
+const GENDER_QUESTION = `<div class="field-wrapper"><div class="select"><div class="select__container select__container--outside-label" data-mock-options="Male|Female|Decline to self-identify"><label id="question_gender-label" for="question_gender" class="label select__label select__label--outside-label">Gender</label><div class="select-shell"><div><div class="select-shell"><div class="select-shell"><div class="select-shell" id="react-select-question_gender-placeholder">Select...</div><div class="select-shell" data-value=""><input class="select__input" autocomplete="off" id="question_gender" tabindex="0" type="text" aria-autocomplete="list" aria-expanded="false" aria-haspopup="true" aria-labelledby="question_gender-label" role="combobox" value=""/></div></div></div></div></div><input tabindex="-1" aria-hidden="true" class="select-shell" name="gender" value=""/></div></div></div>`
+
 /** The mock Greenhouse form: fields get names and the form posts to the mock (the real one submits through React). */
 const greenhouseForm = (read) =>
   withScript(
     read('greenhouse-form.html')
+      .replace('<div class="application--submit">', `${GENDER_QUESTION}<div class="application--submit">`)
       .replace(/<form method="get" action="[^"]*"/, '<form method="post" enctype="multipart/form-data" action="/greenhouse/submit"')
       .replace(/<(input|textarea)( [^>]*?)? id="([^"]+)"/g, (m, tag, rest = '', id) =>
         / name="/.test(rest) ? m : `<${tag}${rest} name="${id}" id="${id}"`
       )
       // Without Greenhouse's scripts its dropdowns cannot be answered, so their hidden required mirrors must go.
-      .replace(/ required=""/g, ''),
+      .replace(/ required=""/g, '')
+      .replace('</body>', '<script src="/mock-ats/react-select.js"></script></body>'),
     '/mock-ats/greenhouse.js'
   )
 
@@ -182,7 +190,7 @@ export function createMockAts(options) {
   function special(req, res, url) {
     const host = `http://${req.headers.host ?? 'localhost'}`
     const path = url.pathname
-    if (path === '/mock-ats/greenhouse.js' || path === '/mock-ats/lever.js') {
+    if (path === '/mock-ats/greenhouse.js' || path === '/mock-ats/lever.js' || path === '/mock-ats/react-select.js') {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' })
       res.end(readFileSync(join(sitesDir, path.slice('/mock-ats/'.length)), 'utf8'))
       return true

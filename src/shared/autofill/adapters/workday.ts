@@ -139,6 +139,8 @@ export const workday: Adapter = {
   matches: (url, doc) => atsForHost(url.hostname) === 'workday' || doc.querySelector(MARKERS) !== null,
   formRoot: (doc) => doc.querySelector(aid('applyFlowPage')) ?? doc.querySelector('main') ?? doc.body,
   known: KNOWN,
+  // A React app: its radios ("previously worked here") and checkboxes only take a click (#71: suggested, never set).
+  clickOnly: ['input[type="radio"]', 'input[type="checkbox"]'],
   isConfirmation: (_url, doc) =>
     !doc.querySelector(ACTIVE_STEP) && !doc.querySelector(RESUME) && SUBMITTED.test(headingText(doc)),
   ready: (doc) => doc.querySelector(MARKERS) !== null && doc.querySelector(BUSY) === null,

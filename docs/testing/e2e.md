@@ -204,8 +204,11 @@ Behaviour switches, from `fake-agent/config.json` (written by `withFakeAgents` a
 | `exit-early` | exit 0 right after `init`, before any turn ends (a Claude run reads as *finished* with nothing built, a Codex one as "exited before the turn ended") |
 
 Markers: every spawn appends to `fake-agent/invocations.jsonl` (`{ agent, mode, pid, cwd, args,
-resume, session, at }`, `mode` one of `version`, `auth`, `run`) and every turn adds `turn-start` /
-`turn-end` lines. `fakeAgents(app)` reads them: `invocations()`, `runs()` (the agent processes,
+resume, session, at }`, `mode` one of `version`, `auth`, `run`, `oneshot`) and every turn adds `turn-start` /
+`turn-end` lines. `oneshot` is a one-shot structured call (`--json-schema`), as the Apply question mapping makes it
+(#71): `claude -p` with the prompt on stdin or `agy --print=<prompt>`. It answers one JSON result whose
+`structured_output.mappings` maps questions that mention "gender" to `gender`, and the others to null. Its marker
+also records the `prompt`, so a spec can check that no stored answer was sent. `fakeAgents(app)` reads them: `invocations()`, `runs()` (the agent processes,
 oldest first: which agent the app really started, with which arguments, resuming which session)
 and `turns()` (start/end per turn, for the "2 at a time" check).
 

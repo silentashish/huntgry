@@ -2,10 +2,12 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { JSDOM } from 'jsdom'
 import { describe, expect, it, vi } from 'vitest'
+import { factsFromProfile, questionKey, type PageAnswers } from '../apply-facts'
 import type { FieldReport, FillReport, FillValues } from '../apply-types'
 import { UPLOAD_ATTR } from '../autofill-channels'
 import { setNativeValue } from './dom'
-import { detectConfirmation, fillPage, scanPage } from './engine'
+import { detectConfirmation, fillPage, pendingPicks, pickAnswers, scanPage, verifyFill } from './engine'
+import { watchUserEdits } from './user-edits'
 import { identifierWords } from './match'
 
 const fixture = (name: string) => readFileSync(join(__dirname, 'fixtures', name), 'utf8')
@@ -338,5 +340,491 @@ describe('setNativeValue', () => {
     const report = fillPage(dom.window.document, VALUES)
     expect(field(report, 'Email address')).toMatchObject({ outcome: 'rejected' })
     expect(field(report, 'Email address').reason).toContain('ADA@EXAMPLE')
+  })
+})
+
+describe('application answers (#71)', () => {
+  const LEVER = 'https://jobs.lever.co/acme/00000000-0000-4000-8000-000000000001/apply'
+  const GENERIC = 'https://careers.example.com/apply'
+  const GREENHOUSE = 'https://job-boards.greenhouse.io/acme/jobs/1000001'
+  const select = (dom: JSDOM, selector: string) => dom.window.document.querySelector(selector) as HTMLSelectElement
+  const checked = (dom: JSDOM, name: string) =>
+    Array.from(dom.window.document.querySelectorAll<HTMLInputElement>('input[type="radio"]'))
+      .filter((r) => r.name === name && r.checked)
+      .map((r) => r.value)
+  const facts = (f: PageAnswers['facts']): PageAnswers => ({ facts: f, questions: {} })
+  const SPONSOR = 'cards[00000000-0000-4000-8000-0000000000c1][field1]'
+
+  it('chooses a Lever select option and a radio from saved facts, with no click, key or submit', () => {
+    const dom = page('lever-form.html', LEVER)
+    const check = forbidSubmit(dom)
+    const report = fillPage(dom.window.document, VALUES, {
+      answers: facts({ gender: 'Female', raceEthnicity: 'decline', needsSponsorship: 'no' })
+    })
+    expect(field(report, 'Gender')).toMatchObject({
+      kind: 'select',
+      outcome: 'filled',
+      value: 'Female',
+      fact: 'gender',
+      options: ['Male', 'Female', 'Decline to self-identify'],
+      fieldId: 'select:eeo[gender]'
+    })
+    expect(select(dom, 'select[name="eeo[gender]"]').value).toBe('Female')
+    expect(select(dom, 'select[name="eeo[gender]"]').style.outline).toContain('#2f9e44')
+    // "decline" picks the page's own decline option.
+    expect(field(report, 'Race')).toMatchObject({ outcome: 'filled', value: 'Decline to self-identify' })
+    expect(field(report, 'Will you require visa sponsorship?')).toMatchObject({
+      kind: 'radio',
+      outcome: 'filled',
+      value: 'No',
+      fact: 'needsSponsorship'
+    })
+    expect(checked(dom, SPONSOR)).toEqual(['No'])
+    // The marketing consent checkbox is never ticked.
+    expect(input(dom, 'input[name="consent[marketing]"]').checked).toBe(false)
+    check()
+  })
+
+  it('answers "authorized to work" and "sponsorship" from a US citizen profile with no prompt', () => {
+    const seeded = facts(factsFromProfile('US Citizen'))
+    const dom = page('generic-form.html', GENERIC)
+    const check = forbidSubmit(dom)
+    const report = fillPage(dom.window.document, VALUES, { answers: seeded })
+    expect(field(report, 'Are you authorized to work in the country?')).toMatchObject({ outcome: 'filled', value: 'Yes' })
+    expect(checked(dom, 'auth')).toEqual(['yes'])
+    // Consent, however it is worded, is never ticked; it is not even offered as a question.
+    expect(input(dom, 'input[name="consent"]').checked).toBe(false)
+    expect(field(report, 'I consent to the processing of my data.').fact).toBeUndefined()
+    const lever = page('lever-form.html', LEVER)
+    fillPage(lever.window.document, VALUES, { answers: seeded })
+    expect(checked(lever, SPONSOR)).toEqual(['No'])
+    check()
+  })
+
+  it('writes nothing when the saved answer fits none of the options', () => {
+    const dom = new JSDOM(
+      `<form><label>Email <input name="email" type="email"></label><label for="g">Gender</label>
+       <select id="g" name="g"><option value="">Select</option><option>Male</option><option>Female</option></select>
+       <input type="file" name="resume"><button type="submit">Send</button></form>`,
+      { url: GENERIC }
+    )
+    const report = fillPage(dom.window.document, VALUES, { answers: facts({ gender: 'decline' }) })
+    expect(field(report, 'Gender')).toMatchObject({ outcome: 'skipped-unsupported', fact: 'gender' })
+    expect(field(report, 'Gender').reason).toMatch(/not one of this question's options/)
+    expect(select(dom, '#g').value).toBe('')
+  })
+
+  it('only suggests for a Greenhouse react-select and never changes it', () => {
+    const dom = page('greenhouse-form.html', GREENHOUSE)
+    const check = forbidSubmit(dom)
+    const report = fillPage(dom.window.document, VALUES, { answers: facts({ workAuthorized: 'yes', needsSponsorship: 'no' }) })
+    expect(field(report, 'Are you legally authorized to work in the United States?')).toMatchObject({
+      kind: 'combobox',
+      outcome: 'skipped-unsupported',
+      fact: 'workAuthorized',
+      suggestion: 'Yes',
+      suggestedBy: 'saved'
+    })
+    expect(
+      field(report, 'Will you now or in the future require sponsorship for employment visa status (e.g. H-1B visa status)?')
+    ).toMatchObject({ suggestion: 'No', outcome: 'skipped-unsupported' })
+    expect(input(dom, '#question_1000007').value).toBe('')
+    check()
+  })
+
+  it('only suggests for Ashby radios (React radios take a click)', () => {
+    const dom = new JSDOM(
+      `<div class="ashby-application-form-container"><label for="_systemfield_name">Name</label><input id="_systemfield_name">
+       <fieldset><legend>Gender</legend><label><input type="radio" name="eeo_gender" value="m"> Male</label>
+       <label><input type="radio" name="eeo_gender" value="d"> Decline to self-identify</label></fieldset></div>`,
+      { url: 'https://jobs.ashbyhq.com/acme/00000000-0000-4000-8000-000000000001/application' }
+    )
+    // Ashby attaches files first; its questions are answered on the text pass.
+    const report = fillPage(dom.window.document, VALUES, { text: true, answers: facts({ gender: 'decline' }) })
+    expect(field(report, 'Gender')).toMatchObject({
+      kind: 'radio',
+      outcome: 'skipped-unsupported',
+      suggestion: 'Decline to self-identify',
+      suggestedBy: 'saved'
+    })
+    expect(checked(dom, 'eeo_gender')).toEqual([])
+  })
+
+  it('suggests on the captured Ashby form, EEO survey included, and never selects', () => {
+    const dom = new JSDOM(fixture('ashby-form.html'), { url: 'https://jobs.ashbyhq.com/acme/00000000-0000-4000-8000-000000000001/application' })
+    const check = forbidSubmit(dom)
+    const report = fillPage(dom.window.document, VALUES, { text: true, answers: facts({ gender: 'Female' }) })
+    expect(field(report, 'Gender')).toMatchObject({
+      kind: 'radio',
+      fact: 'gender',
+      outcome: 'skipped-unsupported',
+      suggestion: 'Female',
+      suggestedBy: 'saved'
+    })
+    expect(field(report, 'Gender').options).toContain('Female')
+    // The resume autofill pane stays out; nothing in the survey is checked.
+    expect(report.fields.some((f) => /autofill/i.test(f.label))).toBe(false)
+    expect(Array.from(dom.window.document.querySelectorAll<HTMLInputElement>('input[type="radio"]')).some((r) => r.checked)).toBe(false)
+    check()
+  })
+
+  it('leaves an inverse age question alone however the saved age fact reads', () => {
+    const dom = new JSDOM(
+      `<form><label>Email <input name="email" type="email"></label><label for="u">Are you under 18 years of age?</label>
+       <select id="u" name="u"><option value="">Select</option><option>Yes</option><option>No</option></select>
+       <input type="file" name="resume"><button type="submit">Send</button></form>`,
+      { url: GENERIC }
+    )
+    const report = fillPage(dom.window.document, VALUES, { answers: facts({ over18: 'yes' }) })
+    expect(field(report, 'Are you under 18 years of age?')).toMatchObject({ outcome: 'skipped-unsupported' })
+    expect(field(report, 'Are you under 18 years of age?').fact).toBeUndefined()
+    expect(select(dom, '#u').value).toBe('')
+  })
+
+  it('finds a long option again by the name it reported, even when another shares its start', () => {
+    const start = 'I am not a protected veteran, and I have read the definitions of every protected veteran category above, '
+    const long = `${start}so this applies to me.`
+    const other = `${start}but I want to discuss it.`
+    const dom = new JSDOM(
+      `<form><label>Email <input name="email" type="email"></label><label for="v">Veteran status</label>
+       <select id="v" name="v"><option value="">Select</option><option>${other}</option><option>${long}</option></select>
+       <input type="file" name="resume"><button type="submit">Send</button></form>`,
+      { url: GENERIC }
+    )
+    const first = fillPage(dom.window.document, VALUES)
+    const options = field(first, 'Veteran status').options!
+    expect(options).toHaveLength(2)
+    expect(options.every((o) => o.length <= 120)).toBe(true)
+    expect(new Set(options).size).toBe(2)
+    // The panel's pick (the reported name) is written and read back as the exact option.
+    const question = field(first, 'Veteran status').question!
+    const report = fillPage(dom.window.document, VALUES, {
+      answers: { facts: {}, questions: { [question]: { fact: null, value: options[1], confirmed: true } } }
+    })
+    expect(field(report, 'Veteran status')).toMatchObject({ outcome: 'filled', value: options[1] })
+    expect(select(dom, '#v').selectedOptions[0].text).toBe(long)
+  })
+
+  it('keeps a choice the page or the user already made', () => {
+    const dom = page('lever-form.html', LEVER)
+    select(dom, 'select[name="eeo[gender]"]').value = 'Male'
+    const report = fillPage(dom.window.document, VALUES, { answers: facts({ gender: 'Female' }) })
+    expect(field(report, 'Gender')).toMatchObject({ outcome: 'kept', value: 'Male' })
+    expect(select(dom, 'select[name="eeo[gender]"]').value).toBe('Male')
+  })
+
+  it('fills a textarea from a remembered question, and fills a typed fact', () => {
+    const dom = page('lever-form.html', LEVER)
+    const question = questionKey('What interests you about this role?', 'textarea')
+    const report = fillPage(dom.window.document, VALUES, {
+      answers: { facts: {}, questions: { [question]: { fact: null, value: 'The team.', confirmed: true } } }
+    })
+    expect(field(report, 'What interests you about this role?')).toMatchObject({ outcome: 'filled', value: 'The team.', question })
+    const gh = page('greenhouse-form.html', GREENHOUSE)
+    const second = fillPage(gh.window.document, VALUES, { answers: facts({ salaryExpectation: '$150k', noticePeriod: '2 weeks' }) })
+    expect(field(second, 'What are your salary expectations?')).toMatchObject({ outcome: 'filled', value: '$150k', fact: 'salaryExpectation' })
+    expect(field(second, 'What is your notice period?')).toMatchObject({ outcome: 'filled', value: '2 weeks' })
+  })
+
+  it("only suggests a model's mapping until the user confirms it", () => {
+    const options = ['Male', 'Female', 'Decline to self-identify']
+    const question = questionKey('Gender', 'select', options)
+    // The memory's entry wins over the catalog: a mapping only the model made is a suggestion.
+    const dom = page('lever-form.html', LEVER)
+    const report = fillPage(dom.window.document, VALUES, { answers: { facts: { gender: 'Female' }, questions: { [question]: { fact: 'gender', confirmed: false } } } })
+    expect(field(report, 'Gender')).toMatchObject({ outcome: 'skipped-unsupported', suggestion: 'Female', suggestedBy: 'model' })
+    expect(select(dom, 'select[name="eeo[gender]"]').value).toBe('')
+    const confirmed = page('lever-form.html', LEVER)
+    const after = fillPage(confirmed.window.document, VALUES, { answers: { facts: { gender: 'Female' }, questions: { [question]: { fact: 'gender', confirmed: true } } } })
+    expect(field(after, 'Gender')).toMatchObject({ outcome: 'filled', value: 'Female' })
+  })
+
+  it('restores a saved answer the page wiped after the fill', async () => {
+    const dom = page('lever-form.html', LEVER)
+    const doc = dom.window.document
+    const answers = facts({ gender: 'Female' })
+    const report = fillPage(doc, VALUES, { answers })
+    select(dom, 'select[name="eeo[gender]"]').value = ''
+    await verifyFill(doc, VALUES, report, { settleMs: 1 })
+    expect(field(report, 'Gender')).toMatchObject({ outcome: 'filled', value: 'Female' })
+    expect(select(dom, 'select[name="eeo[gender]"]').value).toBe('Female')
+  })
+})
+
+describe('picking remembered answers in click-only widgets (#71, owner decision)', () => {
+  const GREENHOUSE = 'https://job-boards.greenhouse.io/acme/jobs/1000001'
+  const ASHBY = 'https://jobs.ashbyhq.com/acme/00000000-0000-4000-8000-000000000001/application'
+  const WORKDAY = 'https://acme.wd1.myworkdayjobs.com/en-US/AcmeCareers/job/Remote-USA/Software-Engineer_JR-1001/apply'
+  const REACT_SELECT = readFileSync(join(__dirname, '../../../scripts/mock-ats/sites/react-select.js'), 'utf8')
+  const AUTHORIZED = 'Are you legally authorized to work in the United States?'
+  const facts = (f: PageAnswers['facts']): PageAnswers => ({ facts: f, questions: {} })
+
+  /** No submit, requestSubmit or key event; pointer and mouse events only. */
+  function forbidSubmitAndKeys(dom: JSDOM) {
+    const w = dom.window
+    const submit = vi.spyOn(w.HTMLFormElement.prototype, 'submit').mockImplementation(() => undefined)
+    const requestSubmit = vi.spyOn(w.HTMLFormElement.prototype, 'requestSubmit').mockImplementation(() => undefined)
+    const events: string[] = []
+    for (const type of ['submit', 'keydown', 'keypress', 'keyup']) w.document.addEventListener(type, () => events.push(type), true)
+    return () => {
+      expect(submit).not.toHaveBeenCalled()
+      expect(requestSubmit).not.toHaveBeenCalled()
+      expect(events).toEqual([])
+    }
+  }
+
+  /** The Greenhouse fixture with the mock's react-select behaviour on its authorization question. */
+  function greenhouse(): JSDOM {
+    const dom = new JSDOM(fixture('greenhouse-form.html'), { url: GREENHOUSE, runScripts: 'outside-only' })
+    const container = dom.window.document.getElementById('question_1000007')!.closest('.select__container') as HTMLElement
+    container.dataset.mockOptions = 'Yes|No'
+    dom.window.eval(REACT_SELECT)
+    return dom
+  }
+  const singleValue = (dom: JSDOM, id: string) =>
+    dom.window.document.getElementById(id)!.closest('.select__container')!.querySelector('.select__single-value')?.textContent ?? ''
+
+  it('picks a trusted answer in a Greenhouse react-select and reads it back', async () => {
+    const dom = greenhouse()
+    const check = forbidSubmitAndKeys(dom)
+    const report = fillPage(dom.window.document, VALUES, { answers: facts({ workAuthorized: 'yes' }), pick: true })
+    expect(pendingPicks(report)).toHaveLength(1)
+    await pickAnswers(report)
+    expect(field(report, AUTHORIZED)).toMatchObject({ outcome: 'filled', value: 'Yes', fact: 'workAuthorized' })
+    expect(field(report, AUTHORIZED).suggestion).toBeUndefined()
+    expect(singleValue(dom, 'question_1000007')).toBe('Yes')
+    // The menu closed; nothing else on the page was opened or pressed.
+    expect(dom.window.document.querySelector('.select__menu')).toBeNull()
+    check()
+  })
+
+  it('with the switch off, only suggests (nothing opened, nothing picked)', async () => {
+    const dom = greenhouse()
+    const report = fillPage(dom.window.document, VALUES, { answers: facts({ workAuthorized: 'yes' }), pick: false })
+    expect(pendingPicks(report)).toEqual([])
+    expect(field(report, AUTHORIZED)).toMatchObject({ outcome: 'skipped-unsupported', suggestion: 'Yes', suggestedBy: 'saved' })
+    expect(dom.window.document.querySelector('.select__menu')).toBeNull()
+  })
+
+  it("never picks a model's mapping the user has not confirmed", () => {
+    const dom = greenhouse()
+    const question = questionKey(AUTHORIZED, 'combobox')
+    const report = fillPage(dom.window.document, VALUES, {
+      answers: { facts: { workAuthorized: 'yes' }, questions: { [question]: { fact: 'workAuthorized', confirmed: false } } },
+      pick: true
+    })
+    expect(pendingPicks(report)).toEqual([])
+    expect(field(report, AUTHORIZED)).toMatchObject({ suggestion: 'Yes', suggestedBy: 'model' })
+  })
+
+  it('reports a pick that did not stick as needing the user, with the suggestion', async () => {
+    const dom = new JSDOM(fixture('greenhouse-form.html'), { url: GREENHOUSE })
+    const report = fillPage(dom.window.document, VALUES, { answers: facts({ workAuthorized: 'yes' }), pick: true })
+    // No menu ever opens on the static fixture.
+    await pickAnswers(report, pendingPicks(report))
+    expect(field(report, AUTHORIZED)).toMatchObject({ outcome: 'rejected', suggestion: 'Yes' })
+    expect(field(report, AUTHORIZED).reason).toMatch(/could not pick "Yes".*pick it yourself/)
+  })
+
+  it('presses the right Ashby yes/no button and checks the right React radio', async () => {
+    const dom = new JSDOM(fixture('ashby-form.html'), { url: ASHBY })
+    const doc = dom.window.document
+    const check = forbidSubmitAndKeys(dom)
+    // Ashby's yes/no buttons: pressing one marks it and sets the hidden checkbox.
+    for (const group of Array.from(doc.querySelectorAll('.ashby-application-form-input-yesno'))) {
+      for (const button of Array.from(group.querySelectorAll('button'))) {
+        button.addEventListener('click', () => {
+          for (const b of Array.from(group.querySelectorAll('button'))) b.setAttribute('aria-pressed', String(b === button))
+          ;(group.querySelector('input[type="checkbox"]') as HTMLInputElement).checked = button.dataset.option === 'yes'
+        })
+      }
+    }
+    const report = fillPage(doc, VALUES, { text: true, answers: facts({ workAuthorized: 'yes', gender: 'decline' }), pick: true })
+    await pickAnswers(report)
+    const auth = field(report, 'Are you authorized to work in the country where the job is located?')
+    expect(auth).toMatchObject({ kind: 'radio', outcome: 'filled', value: 'Yes', options: ['Yes', 'No'] })
+    const yes = doc.querySelector('button[data-option="yes"]')!
+    expect(yes.getAttribute('aria-pressed')).toBe('true')
+    expect((yes.parentElement!.querySelector('input[type="checkbox"]') as HTMLInputElement).checked).toBe(true)
+    const gender = field(report, 'Gender')
+    expect(gender).toMatchObject({ kind: 'radio', outcome: 'filled' })
+    const checked = Array.from(doc.querySelectorAll<HTMLInputElement>('input[type="radio"]')).filter((r) => r.checked)
+    expect(checked).toHaveLength(1)
+    expect(checked[0].labels?.[0]?.textContent).toBe(gender.value)
+    // Consent and acknowledgement checkboxes are never ticked.
+    expect(Array.from(doc.querySelectorAll<HTMLInputElement>('.ashby-application-form-input-checkbox-group input')).some((c) => c.checked)).toBe(false)
+    check()
+  })
+
+  it('never presses in a popup that is not tied to the dropdown, and leaves it to the user', async () => {
+    const dom = new JSDOM(fixture('workday-my-information.html'), { url: WORKDAY })
+    const doc = dom.window.document
+    const button = doc.getElementById('source--source')!
+    const pressed: string[] = []
+    button.addEventListener('click', () => {
+      // One popup appears, but nothing ties it to this button: it could be any other widget's.
+      doc.body.insertAdjacentHTML('beforeend', '<ul role="listbox"><li role="option" id="stray">LinkedIn</li></ul>')
+      doc.getElementById('stray')!.addEventListener('click', () => pressed.push('stray'))
+    })
+    const first = fillPage(doc, VALUES, { answers: facts({}), pick: true })
+    const question = field(first, 'How Did You Hear About Us?').question!
+    const report = fillPage(doc, VALUES, {
+      answers: { facts: {}, questions: { [question]: { fact: null, value: 'LinkedIn', confirmed: true } } },
+      pick: true
+    })
+    await pickAnswers(report)
+    expect(pressed).toEqual([])
+    expect(field(report, 'How Did You Hear About Us?')).toMatchObject({ outcome: 'rejected', suggestion: 'LinkedIn' })
+    expect(button.textContent).toBe('Select One')
+  })
+
+  it('never answers or picks a certification, even when a "Yes" was remembered for it', async () => {
+    const dom = new JSDOM(
+      `<div class="ashby-application-form-container"><label for="_systemfield_name">Name</label><input id="_systemfield_name">
+       <label for="cert">I certify that all information is accurate</label>
+       <div class="ashby-application-form-input-yesno"><button data-option="yes" aria-pressed="false">Yes</button>
+       <button data-option="no" aria-pressed="false">No</button><input type="checkbox" tabindex="-1" name="cert"></div></div>`,
+      { url: ASHBY }
+    )
+    const doc = dom.window.document
+    const question = questionKey('I certify that all information is accurate', 'radio', ['Yes', 'No'])
+    const report = fillPage(doc, VALUES, {
+      text: true,
+      answers: { facts: {}, questions: { [question]: { fact: null, value: 'Yes', confirmed: true } } },
+      pick: true
+    })
+    expect(pendingPicks(report)).toEqual([])
+    const line = report.fields.find((f) => f.label === 'I certify that all information is accurate')
+    expect(line?.question).toBeUndefined()
+    expect(line?.suggestion).toBeUndefined()
+    await pickAnswers(report)
+    expect((doc.querySelector('input[name="cert"]') as HTMLInputElement).checked).toBe(false)
+    expect(doc.querySelector('button[data-option="yes"]')!.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it.each(['Do you agree to receive recruiting emails?', 'Do you accept the terms of this application?'])(
+    'never picks a consent question asked as a question (%s), even with a remembered Yes',
+    async (label) => {
+      const dom = new JSDOM(
+        `<div class="ashby-application-form-container"><label for="_systemfield_name">Name</label><input id="_systemfield_name">
+         <label for="c1">${label}</label>
+         <div class="ashby-application-form-input-yesno"><button data-option="yes" aria-pressed="false">Yes</button>
+         <button data-option="no" aria-pressed="false">No</button><input type="checkbox" tabindex="-1" name="c1"></div></div>`,
+        { url: ASHBY }
+      )
+      const doc = dom.window.document
+      const question = questionKey(label, 'radio', ['Yes', 'No'])
+      const report = fillPage(doc, VALUES, {
+        text: true,
+        answers: { facts: {}, questions: { [question]: { fact: null, value: 'Yes', confirmed: true } } },
+        pick: true
+      })
+      expect(pendingPicks(report)).toEqual([])
+      await pickAnswers(report)
+      expect((doc.querySelector('input[name="c1"]') as HTMLInputElement).checked).toBe(false)
+      expect(doc.querySelector('button[data-option="yes"]')!.getAttribute('aria-pressed')).toBe('false')
+    }
+  )
+
+  it('never answers a question whose options read like consent, native radios included', () => {
+    const dom = new JSDOM(
+      `<form><label>Email <input name="email" type="email"></label><fieldset><legend>Marketing preferences</legend>
+       <label><input type="radio" name="m" value="a"> I agree</label><label><input type="radio" name="m" value="b"> I do not agree</label></fieldset>
+       <input type="file" name="resume"><button type="submit">Send</button></form>`,
+      { url: 'https://careers.example.com/apply' }
+    )
+    const question = questionKey('Marketing preferences', 'radio', ['I agree', 'I do not agree'])
+    const report = fillPage(dom.window.document, VALUES, {
+      answers: { facts: {}, questions: { [question]: { fact: null, value: 'I agree', confirmed: true } } },
+      pick: true
+    })
+    expect(field(report, 'Marketing preferences').question).toBeUndefined()
+    expect(Array.from(dom.window.document.querySelectorAll<HTMLInputElement>('input[type="radio"]')).some((r) => r.checked)).toBe(false)
+  })
+
+  it('stops picking for the rest of the fill once the safety net catches the page moving on', async () => {
+    const dom = greenhouse()
+    const doc = dom.window.document
+    const sponsor = doc.getElementById('question_1000009')!.closest('.select__container') as HTMLElement
+    sponsor.dataset.mockOptions = 'Yes|No'
+    delete (sponsor.dataset as Record<string, string>).mockWired
+    dom.window.eval('window.huntgryMockReactSelect()')
+    // Choosing the first answer makes the page navigate in place (a step change).
+    doc.addEventListener('click', (e) => {
+      if ((e.target as Element).getAttribute?.('role') === 'option' && (e.target as Element).id.includes('question_1000007')) {
+        dom.window.history.pushState({}, '', '/acme/jobs/1000001/step-2')
+      }
+    })
+    const report = fillPage(doc, VALUES, { answers: facts({ workAuthorized: 'yes', needsSponsorship: 'no' }), pick: true })
+    expect(pendingPicks(report)).toHaveLength(2)
+    await pickAnswers(report)
+    expect(field(report, AUTHORIZED)).toMatchObject({ outcome: 'rejected' })
+    expect(field(report, AUTHORIZED).reason).toMatch(/stopped: the page moved to another step/)
+    // The second dropdown was never opened.
+    expect(singleValue(dom, 'question_1000009')).toBe('')
+    expect(field(report, 'Will you now or in the future require sponsorship for employment visa status (e.g. H-1B visa status)?')).toMatchObject({
+      outcome: 'skipped-unsupported',
+      suggestion: 'No'
+    })
+  })
+
+  it('keeps a click-only field the person touched or is typing into', async () => {
+    const dom = greenhouse()
+    const doc = dom.window.document
+    watchUserEdits(doc, { isUserEvent: () => true })
+    const input = doc.getElementById('question_1000007') as HTMLInputElement
+    input.value = 'Ma'
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+    const report = fillPage(doc, VALUES, { answers: facts({ workAuthorized: 'yes' }), pick: true })
+    expect(pendingPicks(report)).toEqual([])
+    expect(field(report, AUTHORIZED)).toMatchObject({ outcome: 'kept', value: 'Ma' })
+    expect(input.value).toBe('Ma')
+    expect(doc.querySelector('.select__menu')).toBeNull()
+  })
+
+  it('reports a picked answer the page wiped afterwards as needing the user, with the suggestion', async () => {
+    const dom = new JSDOM(fixture('ashby-form.html'), { url: ASHBY })
+    const doc = dom.window.document
+    const report = fillPage(doc, VALUES, { text: true, answers: facts({ gender: 'Female' }), pick: true })
+    await pickAnswers(report)
+    expect(field(report, 'Gender')).toMatchObject({ outcome: 'filled', value: 'Female' })
+    // A late re-render clears it before the verify pass.
+    for (const r of Array.from(doc.querySelectorAll<HTMLInputElement>('input[type="radio"]'))) r.checked = false
+    await verifyFill(doc, VALUES, report, { settleMs: 1 })
+    expect(field(report, 'Gender')).toMatchObject({ outcome: 'rejected', suggestion: 'Female', suggestedBy: 'saved' })
+    expect(field(report, 'Gender').reason).toMatch(/cleared the picked answer "Female"/)
+  })
+
+  it('chooses a remembered option in a Workday dropdown (button and popup listbox)', async () => {
+    const dom = new JSDOM(fixture('workday-my-information.html'), { url: WORKDAY })
+    const doc = dom.window.document
+    const check = forbidSubmitAndKeys(dom)
+    const button = doc.getElementById('source--source')!
+    // Workday renders the options in a popup at the end of <body>; here it names its button (aria-labelledby), the
+    // tie pick.ts requires before it presses anything in a popup.
+    button.addEventListener('click', () => {
+      doc.body.insertAdjacentHTML(
+        'beforeend',
+        '<div data-automation-id="activeListContainer"><ul role="listbox" aria-labelledby="source--source"><li role="option"><div>Job board</div></li><li role="option"><div>LinkedIn</div></li></ul></div>'
+      )
+      for (const li of Array.from(doc.querySelectorAll('[role="option"]'))) {
+        li.addEventListener('click', () => {
+          button.textContent = li.textContent
+          doc.querySelector('[data-automation-id="activeListContainer"]')!.remove()
+        })
+      }
+    })
+    const first = fillPage(doc, VALUES, { answers: facts({}), pick: true })
+    const question = field(first, 'How Did You Hear About Us?').question!
+    const report = fillPage(doc, VALUES, {
+      answers: { facts: {}, questions: { [question]: { fact: null, value: 'LinkedIn', confirmed: true } } },
+      pick: true
+    })
+    await pickAnswers(report)
+    expect(field(report, 'How Did You Hear About Us?')).toMatchObject({ kind: 'combobox', outcome: 'filled', value: 'LinkedIn' })
+    expect(button.textContent).toBe('LinkedIn')
+    // Other dropdowns, with nothing remembered, were never opened.
+    expect(doc.querySelectorAll('[data-automation-id="activeListContainer"]')).toHaveLength(0)
+    check()
   })
 })

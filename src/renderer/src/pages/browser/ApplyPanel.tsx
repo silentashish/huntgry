@@ -3,7 +3,8 @@ import { Alert, Badge, Box, Button, CloseButton, Divider, Group, Loader, ScrollA
 import { IconCheck, IconInfoCircle, IconRefresh, IconSend } from '@tabler/icons-react'
 import { ATS_LABEL, type ApplySession } from '@shared/apply-types'
 import { api, errorText } from '../../api'
-import { groupReport, OUTCOME_META, STATUS_META, stepLabel } from './apply-report'
+import { AnswerControl } from './AnswerControl'
+import { badgeOf, canAnswer, groupReport, STATUS_META, stepLabel, suggestionNote } from './apply-report'
 
 /**
  * Auto-apply beside the page: what was detected, filled and uploaded, what is
@@ -197,7 +198,7 @@ export function ApplyPanel({ activeTabId }: { activeTabId: string | null }) {
                 {group.title} ({group.fields.length})
               </Text>
               {group.fields.map((f, i) => {
-                const meta = OUTCOME_META[f.outcome]
+                const meta = badgeOf(f)
                 return (
                   <Box key={`${f.label}-${i}`} py={2}>
                     <Group gap={6} wrap="nowrap" justify="space-between">
@@ -220,6 +221,19 @@ export function ApplyPanel({ activeTabId }: { activeTabId: string | null }) {
                           ? f.value
                           : f.reason}
                       </Text>
+                    )}
+                    {suggestionNote(f) && (
+                      <Text size="xs" c="blue" lineClamp={3}>
+                        {suggestionNote(f)}
+                      </Text>
+                    )}
+                    {canAnswer(f) && (
+                      <AnswerControl
+                        key={`${f.fieldId}|${f.question}|${f.suggestion ?? ''}`}
+                        sessionId={s.id}
+                        field={f}
+                        disabled={s.status === 'filling'}
+                      />
                     )}
                   </Box>
                 )
