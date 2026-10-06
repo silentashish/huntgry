@@ -22,6 +22,7 @@ import { DeviceStore } from './devices'
 import { Gateway, type GatewayServices } from './gateway'
 import { projectQueue, projectRun, projectStatus } from './project'
 import { revokeDevice } from './revoke'
+import { RoomControl } from './rooms'
 import { RemoteSession, type SocketLike } from './session'
 import { workspaceIdentity } from './workspace'
 
@@ -95,7 +96,7 @@ async function currentState(): Promise<RemoteState> {
     devices: devices.list().map((d) => ({ id: d.id, name: d.name, pairedAt: d.pairedAt, lastSeen: d.lastSeen, needsRepair: d.needsRepair, categories: d.categories }))
   }
   if (lastCredentials.status === 'unreadable') state.error = lastCredentials.error
-  else if (revokeWarning) state.error = revokeWarning
+  else if (rooms.revokeWarning()) state.error = rooms.revokeWarning()!
   else if (s.error && settings.enabled) state.error = s.error
   if (lastCredentials.status === 'ok') {
     state.relayUrl = lastCredentials.credentials.relayUrl
@@ -142,8 +143,14 @@ async function createRoom(relayUrl: string, adminToken: string, previous: RelayC
 
 const RELAY_TIMEOUT_MS = 10_000
 
-/** Set when the relay did not confirm a revocation; the phone is refused on this Mac regardless. */
-let revokeWarning: string | null = null
+/** Rotate / Unpair everything, and the warning an unconfirmed relay revocation leaves until one runs. */
+const rooms = new RoomControl({
+  createRoom,
+  writeCredentials: (c) => credentials.write(c),
+  rotateKeyPair: () => devices.rotateKeyPair(),
+  stopSession: () => session.stop(),
+  apply
+})
 
 /** Removes the device here first, then tells the phone and the relay with a deadline (see revoke.ts). */
 async function revoke(id: string, reason: string): Promise<void> {
@@ -162,7 +169,7 @@ async function revoke(id: string, reason: string): Promise<void> {
     reason
   )
   if (outcome.removed && !outcome.relayRevoked) {
-    revokeWarning = 'A removed phone is refused by this Mac, but the relay did not confirm deleting its token. Use Unpair everything once the relay is reachable to rotate the room.'
+    rooms.relayDidNotConfirmRevoke()
   }
 }
 
@@ -179,9 +186,7 @@ const api: RemoteApi = {
     const relayUrl = normalizeRelayUrl(p.relayUrl)
     if (typeof p.adminToken !== 'string' || !p.adminToken.trim() || p.adminToken.length > 512) throw new Error('Enter the relay admin token.')
     const previous = lastCredentials.status === 'ok' ? lastCredentials.credentials : null
-    const next = await createRoom(relayUrl, p.adminToken.trim(), previous)
-    await credentials.write(next)
-    if (previous) await devices.rotateKeyPair()
+    await rooms.replaceRoom(relayUrl, p.adminToken.trim(), previous)
     const current = (await loadSettings(settingsFile())).remote ?? {}
     await saveSettings(settingsFile(), { remote: { ...current, enabled: true } })
     return apply()
@@ -203,15 +208,9 @@ const api: RemoteApi = {
   },
   unpairAll: async () => {
     await Promise.all(devices.list().map((d) => revoke(d.id, 'All phones were unpaired in Settings.')))
-    await devices.rotateKeyPair()
-    if (lastCredentials.status === 'ok') {
-      const c = lastCredentials.credentials
-      session.stop()
-      await credentials.write(await createRoom(c.relayUrl, c.adminToken, c))
-      // The old room (and every token in it) is gone with the rotation.
-      revokeWarning = null
-    }
-    return apply()
+    // Reconnects whatever the relay answers; a refused new room is thrown to Settings after that.
+    await rooms.rotateAll(lastCredentials.status === 'ok' ? lastCredentials.credentials : null)
+    return currentState()
   }
 }
 
