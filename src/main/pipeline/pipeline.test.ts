@@ -958,6 +958,31 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect((await pipeline.lastSummary())!.counts).toMatchObject({ unreviewed: 0, approved: 1 })
   })
 
+  it('fixes stale review states when another workspace\'s queue is loaded, not only at startup (#72)', async () => {
+    jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
+    await pipeline.start(input(['url:a'], { concurrency: 1 }))
+    await until((p) => p?.status === 'finished' && finished.length > 0)
+    const item = queue.state().items[0]
+    await updateReview(ws, item.applicationId!, (c) => ({ ...c!, state: 'approved' }))
+    await pipeline.shutdown()
+    await queue.shutdown()
+    // The app starts in another workspace, then the user opens this one.
+    const saved = ws
+    ws = await mkdtemp(join(tmpdir(), 'huntgry-pipeline-other-'))
+    try {
+      queue = new TailorQueue(queueDeps())
+      pipeline = new Pipeline(pipelineDeps())
+      await pipeline.init(0)
+      expect(queue.state().items).toEqual([])
+      await rm(ws, { recursive: true, force: true })
+    } finally {
+      ws = saved
+    }
+    await queue.sync()
+    await until((_p, q) => q.items[0]?.outcome === 'approved')
+    expect(pipeline.state()!.counts).toMatchObject({ unreviewed: 0, approved: 1 })
+  })
+
   it('validates the start input', () => {
     const ok = { jobIds: ['url:a'], options: { coverLetter: true, dateStyle: 'right' } }
     expect(requirePipelineStartInput(ok)).toMatchObject({ agent: 'claude', concurrency: 2, resumeAfterRestart: true, skipTailored: true, stallMinutes: 20 })

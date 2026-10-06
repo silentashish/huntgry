@@ -158,7 +158,7 @@ export class Pipeline {
    */
   async init(graceMs = 5000): Promise<void> {
     await this.deps.queue.sync()
-    // Items saved before #72 (or by a decision made while the app was closed) may carry an old state.
+    // The load started a review sync (onLoad); wait for it before resuming anything.
     await this.syncReviews()
     const r = this.record
     if (!r) return
@@ -181,6 +181,9 @@ export class Pipeline {
     this.marking.clear()
     this.ensureTimer()
     this.changed()
+    // Every load (startup, a workspace switch or import): its items may carry review states decided
+    // while it was not loaded (#72).
+    void this.syncReviews().catch((err: unknown) => console.error('Syncing review states into the queue failed:', err))
   }
 
   /** Before quit: release the keep-awake and stop ticking (the queue saves itself). */
