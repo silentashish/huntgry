@@ -1,7 +1,8 @@
 /**
  * Test harness: bundles the Worker with esbuild, runs it under Miniflare (workerd, SQLite
  * Durable Objects, real alarms) and talks to it from Node with HTTP and WebSocket clients.
- * Outbound `fetch` from the Worker (the Expo push API) lands in `relay.pushes`.
+ * Outbound `fetch` from the Worker (the Expo push API) lands in `relay.pushes`, and calls to
+ * Expo's receipts endpoint in `relay.receipts`.
  */
 import { createHash, randomBytes } from 'node:crypto'
 import { dirname, resolve } from 'node:path'
@@ -54,6 +55,8 @@ export interface RelayOptions {
   bindings?: Record<string, string>
   /** What the fake Expo endpoint answers; default: one `ok` ticket. */
   pushReply?: (call: PushCall) => unknown
+  /** What the fake receipts endpoint answers for the ticket ids asked; default: every id `ok`. */
+  receiptReply?: (ids: string[]) => unknown
 }
 
 export interface Closed {
@@ -132,6 +135,8 @@ export class Client {
 
 export class Relay {
   readonly pushes: PushCall[] = []
+  /** The ticket ids of each call to the receipts endpoint. */
+  readonly receipts: string[][] = []
   private constructor(
     readonly mf: Miniflare,
     readonly options: RelayOptions
@@ -146,7 +151,14 @@ export class Relay {
       durableObjects: { ROOM: { className: 'Room', useSQLite: true } },
       bindings: { ADMIN_TOKEN, ...options.bindings },
       outboundService: async (request: MfRequest) => {
-        const call: PushCall = { url: request.url, body: JSON.parse(await request.text()) }
+        const body = JSON.parse(await request.text())
+        if (request.url.endsWith('/getReceipts')) {
+          const ids = (body as { ids: string[] }).ids
+          relay.receipts.push(ids)
+          const reply = options.receiptReply ? options.receiptReply(ids) : { data: Object.fromEntries(ids.map((id) => [id, { status: 'ok' }])) }
+          return new MfResponse(JSON.stringify(reply), { headers: { 'content-type': 'application/json' } })
+        }
+        const call: PushCall = { url: request.url, body }
         relay.pushes.push(call)
         const reply = options.pushReply ? options.pushReply(call) : { data: [{ status: 'ok' }] }
         return new MfResponse(JSON.stringify(reply), { headers: { 'content-type': 'application/json' } })

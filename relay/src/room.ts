@@ -16,6 +16,7 @@
  *             deleted only by an ack of its `ref`, by its `ttl`, or by the 50-frame cap on phones
  *   notices   `{ expired, ref }` notices waiting for a sender that is not connected
  *   pushes    last push time per device and category (coalescing)
+ *   receipts  Expo ticket ids of accepted pushes, until their receipt is read (DeviceNotRegistered)
  */
 import { DurableObject } from 'cloudflare:workers'
 import {
@@ -35,7 +36,7 @@ import {
 } from '@huntgry/remote-protocol'
 import { bearerOf, matchesHash } from './auth'
 import { configOf, type Config, type Env } from './env'
-import { EXPO_PUSH_TOKEN, pushMessage, sendExpoPush } from './push'
+import { EXPO_PUSH_TOKEN, RECEIPT_IDS_PER_CALL, RECEIPT_MAX_AGE_MS, fetchReceipts, pushMessage, sendExpoPush } from './push'
 import { countFrame, type RateWindow } from './rate'
 
 /** Frames the relay holds per phone; beyond it the oldest events go, results never (ADR). */
@@ -46,6 +47,8 @@ export const FRAMES_PER_MINUTE = 60
 export const DEFAULT_TTL_SECONDS = COMMAND_TTL_SECONDS.default
 /** A pairing registration may not be valid for longer than this (the QR expires in 2 min). */
 export const MAX_PAIRING_SECONDS = 10 * 60
+/** Ticket ids waiting for their receipt, per room; the oldest go first beyond it. */
+const MAX_PENDING_RECEIPTS = 1000
 /** Expired notices kept per sender while it is away. */
 const MAX_NOTICES_PER_OWNER = 100
 
@@ -86,6 +89,8 @@ CREATE INDEX IF NOT EXISTS inbox_owner ON inbox (owner, seq);
 CREATE INDEX IF NOT EXISTS inbox_expires ON inbox (expires);
 CREATE TABLE IF NOT EXISTS notices (seq INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, notice TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pushes (device TEXT NOT NULL, category TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (device, category));
+CREATE TABLE IF NOT EXISTS receipts (ticket TEXT PRIMARY KEY, device TEXT NOT NULL, token TEXT NOT NULL, sent_at INTEGER NOT NULL, check_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS receipts_check ON receipts (check_at);
 `
 
 const json = (value: unknown, status = 200): Response =>
@@ -260,6 +265,7 @@ export class Room extends DurableObject<Env> {
       if (attachment && !attachment.pending && attachment.kind === 'pairing' && this.pairingExp(attachment.id) <= now) ws.close(CLOSE.pairingExpired, 'pairing expired')
     }
     this.sql('DELETE FROM pairings WHERE exp <= ?', now)
+    await this.checkReceipts(now)
     await this.scheduleAlarm()
   }
 
@@ -482,10 +488,45 @@ export class Room extends DurableObject<Env> {
     if (last !== undefined && now - last < this.config.pushCoalesceMs) return
     this.sql('INSERT OR REPLACE INTO pushes (device, category, at) VALUES (?, ?, ?)', deviceId, category, now)
     this.ctx.waitUntil(
-      sendExpoPush(this.config.expoPushUrl, pushMessage(token, category, text)).then((outcome) => {
-        if (outcome === 'DeviceNotRegistered') this.sql('UPDATE devices SET push_token = NULL WHERE id = ? AND push_token = ?', deviceId, token)
+      sendExpoPush(this.config.expoPushUrl, pushMessage(token, category, text)).then(async ({ outcome, ticketId }) => {
+        if (outcome === 'DeviceNotRegistered') this.clearPushToken(deviceId, token)
+        // A failed attempt does not count for coalescing, so the next hint may try again.
+        else if (outcome === 'failed') this.sql('DELETE FROM pushes WHERE device = ? AND category = ? AND at = ?', deviceId, category, now)
+        else if (ticketId) {
+          const sentAt = Date.now()
+          this.sql('INSERT OR REPLACE INTO receipts (ticket, device, token, sent_at, check_at) VALUES (?, ?, ?, ?, ?)', ticketId, deviceId, token, sentAt, sentAt + this.config.pushReceiptDelayMs)
+          this.sql('DELETE FROM receipts WHERE ticket NOT IN (SELECT ticket FROM receipts ORDER BY sent_at DESC LIMIT ?)', MAX_PENDING_RECEIPTS)
+          await this.scheduleAlarm()
+        }
       })
     )
+  }
+
+  /**
+   * Reads the receipts that are due (an `ok` ticket only means Expo accepted the message; APNs /
+   * FCM report a dead token later, in the receipt). `DeviceNotRegistered` clears the token, but
+   * only if it is still the one that push went to. A ticket without a receipt yet, or a failed
+   * call, is asked again one delay later, until Expo's one-day retention has passed.
+   */
+  private async checkReceipts(now: number): Promise<void> {
+    const due = this.sql<{ ticket: string; device: string; token: string; sent_at: number }>(
+      'SELECT ticket, device, token, sent_at FROM receipts WHERE check_at <= ? ORDER BY check_at ASC LIMIT ?',
+      now,
+      RECEIPT_IDS_PER_CALL
+    )
+    if (due.length === 0) return
+    const receipts = await fetchReceipts(this.config.expoReceiptsUrl, due.map((r) => r.ticket))
+    for (const row of due) {
+      const outcome = receipts?.get(row.ticket)
+      if (outcome === 'DeviceNotRegistered') this.clearPushToken(row.device, row.token)
+      if (outcome !== undefined || now - row.sent_at >= RECEIPT_MAX_AGE_MS) this.sql('DELETE FROM receipts WHERE ticket = ?', row.ticket)
+      else this.sql('UPDATE receipts SET check_at = ? WHERE ticket = ?', now + this.config.pushReceiptDelayMs, row.ticket)
+    }
+  }
+
+  private clearPushToken(deviceId: string, token: string): void {
+    this.sql('UPDATE devices SET push_token = NULL WHERE id = ? AND push_token = ?', deviceId, token)
+    this.sql('DELETE FROM receipts WHERE device = ? AND token = ?', deviceId, token)
   }
 
   // ── Revocation ───────────────────────────────────────────────────────────────────────────
@@ -495,6 +536,7 @@ export class Room extends DurableObject<Env> {
     this.sql('DELETE FROM inbox WHERE owner = ? OR sender = ?', deviceId, deviceId)
     this.sql('DELETE FROM notices WHERE owner = ?', deviceId)
     this.sql('DELETE FROM pushes WHERE device = ?', deviceId)
+    this.sql('DELETE FROM receipts WHERE device = ?', deviceId)
     for (const ws of this.socketsOf('device', deviceId)) ws.close(CLOSE.revoked, 'device revoked')
   }
 
@@ -541,7 +583,7 @@ export class Room extends DurableObject<Env> {
 
   /**
    * One alarm for everything time-based: auth deadlines, pairing expiry, the desktop heartbeat
-   * check and the next frame expiry. No sockets and nothing queued means no alarm, so an idle room never wakes.
+   * check, the next frame expiry and the next push receipt to read. No sockets and nothing queued means no alarm, so an idle room never wakes.
    */
   private async scheduleAlarm(): Promise<void> {
     let next = Infinity
@@ -558,6 +600,8 @@ export class Room extends DurableObject<Env> {
     if (desktopConnected) next = Math.min(next, Number(this.meta('desktopLastSeen') ?? Date.now()) + 2 * this.config.heartbeatMs)
     const soonest = this.sql<{ t: number | null }>('SELECT MIN(expires) AS t FROM inbox')[0]?.t
     if (soonest !== null && soonest !== undefined) next = Math.min(next, soonest)
+    const receipt = this.sql<{ t: number | null }>('SELECT MIN(check_at) AS t FROM receipts')[0]?.t
+    if (receipt !== null && receipt !== undefined) next = Math.min(next, receipt)
     if (next === Infinity) {
       await this.ctx.storage.deleteAlarm()
       return

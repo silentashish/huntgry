@@ -5,9 +5,22 @@ import { Relay, fixture, frame, sleep, type Fixture } from './harness'
 
 /** Push token lifecycle, push on pushHint only when the phone has no socket, coalescing, revocation. */
 let relay: Relay
+const flakySeen = new Set<string>()
 beforeAll(async () => {
   relay = await Relay.start({
-    pushReply: (call) => ({ data: call.body.map((m) => (m.to.includes('dead') ? { status: 'error', message: 'gone', details: { error: 'DeviceNotRegistered' } } : { status: 'ok' })) })
+    bindings: { PUSH_RECEIPT_DELAY_SECONDS: '1' },
+    // A ticket error for "dead" tokens; an ok ticket with an id otherwise (the id names the token).
+    pushReply: (call) => ({
+      data: call.body.map((m) =>
+        m.to.includes('[dead')
+          ? { status: 'error', message: 'gone', details: { error: 'DeviceNotRegistered' } }
+          : m.to.includes('[flaky') && !flakySeen.has(m.to) && flakySeen.add(m.to)
+            ? { status: 'error', message: 'slow down', details: { error: 'MessageRateExceeded' } } // fails once per token
+            : { status: 'ok', id: `ticket-${m.to}-${Date.now()}` }
+      )
+    }),
+    // The receipt, fetched later, reports "late-dead" tokens as gone.
+    receiptReply: (ids) => ({ data: Object.fromEntries(ids.map((id) => [id, id.includes('late-dead') ? { status: 'error', message: 'gone', details: { error: 'DeviceNotRegistered' } } : { status: 'ok' }])) })
   })
 }, 60_000)
 afterAll(() => relay.dispose())
@@ -145,6 +158,66 @@ describe('push', () => {
     desktop.send(frame(f.deviceId, 'd2', { pushHint: 'needs-reply' }))
     await sleep(300)
     expect(relay.pushes.length).toBe(before + 1)
+    await desktop.close()
+  })
+})
+
+describe('push failures', () => {
+  it('do not count for coalescing: the next hint in the category tries again', async () => {
+    const f = await fixture(relay)
+    await registered(f, 'ExponentPushToken[flaky-token]')
+    const desktop = await f.desktop()
+    const before = relay.pushes.length
+    desktop.send(frame(f.deviceId, 'f1', { pushHint: 'failed' }))
+    await waitForPushes(before + 1)
+    await sleep(200)
+    desktop.send(frame(f.deviceId, 'f2', { pushHint: 'failed' }))
+    await waitForPushes(before + 2)
+    expect(relay.pushes).toHaveLength(before + 2)
+    // That one succeeded, so the window holds again.
+    await sleep(200)
+    desktop.send(frame(f.deviceId, 'f3', { pushHint: 'failed' }))
+    await sleep(400)
+    expect(relay.pushes).toHaveLength(before + 2)
+    await desktop.close()
+  })
+})
+
+describe('push receipts', () => {
+  it('deletes the token when the receipt fetched after an ok ticket says DeviceNotRegistered', async () => {
+    const f = await fixture(relay)
+    await registered(f, 'ExponentPushToken[late-dead]')
+    const desktop = await f.desktop()
+    const before = relay.pushes.length
+    const receiptsBefore = relay.receipts.length
+    desktop.send(frame(f.deviceId, 'l1', { pushHint: 'failed' }))
+    await waitForPushes(before + 1)
+    expect(relay.pushes).toHaveLength(before + 1)
+
+    const start = Date.now()
+    while (!relay.receipts.slice(receiptsBefore).some((ids) => ids.some((id) => id.includes('late-dead'))) && Date.now() - start < 5000) await sleep(50)
+    expect(relay.receipts.slice(receiptsBefore).flat().filter((id) => id.includes('late-dead'))).toHaveLength(1)
+    await sleep(200)
+
+    // Another category is not coalesced away, so only the cleared token explains no push.
+    desktop.send(frame(f.deviceId, 'l2', { pushHint: 'needs-reply' }))
+    await sleep(400)
+    expect(relay.pushes).toHaveLength(before + 1)
+    await desktop.close()
+  })
+
+  it('keeps a token whose receipt is ok, and asks for each ticket once', async () => {
+    const f = await fixture(relay)
+    await registered(f, 'ExponentPushToken[alive-token]')
+    const desktop = await f.desktop()
+    const before = relay.pushes.length
+    desktop.send(frame(f.deviceId, 'a1', { pushHint: 'failed' }))
+    await waitForPushes(before + 1)
+    await sleep(2500)
+    expect(relay.receipts.flat().filter((id) => id.includes('alive-token'))).toHaveLength(1)
+    desktop.send(frame(f.deviceId, 'a2', { pushHint: 'needs-reply' }))
+    await waitForPushes(before + 2)
+    expect(relay.pushes).toHaveLength(before + 2)
     await desktop.close()
   })
 })

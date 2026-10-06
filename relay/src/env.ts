@@ -14,13 +14,19 @@ export interface Env {
   PUSH_COALESCE_SECONDS?: string
   /** Expo push endpoint; tests point it at a fake. */
   EXPO_PUSH_URL?: string
+  /** Expo receipts endpoint. */
+  EXPO_RECEIPTS_URL?: string
+  /** How long after a push its receipt is looked up (Expo suggests about 15 min). Default 900. */
+  PUSH_RECEIPT_DELAY_SECONDS?: string
 }
 
 export const DEFAULTS = {
   heartbeatSeconds: 30,
   authTimeoutMs: 5000,
   pushCoalesceSeconds: 5 * 60,
-  expoPushUrl: 'https://exp.host/--/api/v2/push/send'
+  expoPushUrl: 'https://exp.host/--/api/v2/push/send',
+  expoReceiptsUrl: 'https://exp.host/--/api/v2/push/getReceipts',
+  pushReceiptDelaySeconds: 15 * 60
 } as const
 
 export interface Config {
@@ -28,6 +34,8 @@ export interface Config {
   authTimeoutMs: number
   pushCoalesceMs: number
   expoPushUrl: string
+  expoReceiptsUrl: string
+  pushReceiptDelayMs: number
 }
 
 function positive(raw: string | undefined, fallback: number): number {
@@ -40,6 +48,8 @@ export function configOf(env: Env): Config {
     heartbeatMs: positive(env.HEARTBEAT_SECONDS, DEFAULTS.heartbeatSeconds) * 1000,
     authTimeoutMs: positive(env.AUTH_TIMEOUT_MS, DEFAULTS.authTimeoutMs),
     pushCoalesceMs: positive(env.PUSH_COALESCE_SECONDS, DEFAULTS.pushCoalesceSeconds) * 1000,
-    expoPushUrl: env.EXPO_PUSH_URL || DEFAULTS.expoPushUrl
+    expoPushUrl: env.EXPO_PUSH_URL || DEFAULTS.expoPushUrl,
+    expoReceiptsUrl: env.EXPO_RECEIPTS_URL || DEFAULTS.expoReceiptsUrl,
+    pushReceiptDelayMs: positive(env.PUSH_RECEIPT_DELAY_SECONDS, DEFAULTS.pushReceiptDelaySeconds) * 1000
   }
 }
