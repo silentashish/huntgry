@@ -344,6 +344,8 @@ export class TailorQueue {
     let added = 0
     if (input.concurrency !== undefined) this.concurrency = requireConcurrency(input.concurrency)
     const at = new Date(this.now()).toISOString()
+    // One id per request: its runs can be totalled on the Dashboard (#44).
+    const batchId = `b-${newRunId(new Date(this.now()))}`
     for (const id of input.jobIds) {
       const job = await this.deps.findJob(ws, id)
       // Another workspace was loaded while this looked the job up: its queue is not ours to add to.
@@ -372,7 +374,8 @@ export class TailorQueue {
         createdAt: at,
         updatedAt: at,
         ...(input.unattended ? { unattended: true as const, retries: 0 } : {}),
-        ...(input.pipelineId ? { pipelineId: input.pipelineId } : {})
+        ...(input.pipelineId ? { pipelineId: input.pipelineId } : {}),
+        batchId
       })
       added++
     }
@@ -964,7 +967,8 @@ export class TailorQueue {
       }
       if (!job.descriptionComplete) throw new Error(`Only part of the posting could be read. ${PASTE_HINT}`)
     }
-    return paramsForJob(job, item.options, item.unattended === true)
+    const params = paramsForJob(job, item.options, item.unattended === true)
+    return item.batchId ? { ...params, batchId: item.batchId } : params
   }
 
   private fail(item: QueueItem, error: string): void {

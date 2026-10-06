@@ -75,6 +75,8 @@ export interface QueueItem {
   nudged?: true
   /** ISO time the agent process first started (budget: started jobs). */
   startedAt?: string
+  /** Shared by every item of one bulk request ("Tailor all", a pipeline); recorded on the run so the batch can be totalled (#44). */
+  batchId?: string
 }
 
 export interface QueueState {
