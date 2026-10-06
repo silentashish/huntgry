@@ -63,11 +63,25 @@ const mechanical = job({
 })
 
 describe('needsSponsorshipFrom', () => {
-  it.each(['Needs H-1B sponsorship', 'F-1 OPT, will need sponsorship', 'Not a US citizen, needs sponsorship', 'STEM OPT until 2027'])(
+  it.each([
+    'Needs H-1B sponsorship',
+    'F-1 OPT, will need sponsorship',
+    'Not a US citizen, needs sponsorship',
+    'STEM OPT until 2027',
+    'On H-1B today; will require sponsorship for a transfer'
+  ])(
     '"%s" → needs a sponsor',
     (text) => expect(needsSponsorshipFrom(text)).toBe(true)
   )
-  it.each(['US citizen', 'Green card holder, no sponsorship needed', 'Authorized to work in the US without sponsorship', ''])(
+  it.each([
+    'US citizen',
+    'Green card holder, no sponsorship needed',
+    'Authorized to work in the US without sponsorship',
+    // A visa status next to an explicit "no sponsorship needed" is not a need (review on #75).
+    'Authorized to work on H-4 EAD, no sponsorship needed',
+    'TN visa holder. Sponsorship is not required.',
+    ''
+  ])(
     '"%s" → does not',
     (text) => expect(needsSponsorshipFrom(text)).toBe(false)
   )

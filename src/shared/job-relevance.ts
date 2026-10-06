@@ -42,20 +42,27 @@ export function shortTitle(text: string): string {
 /** A clause that says no visa is needed: a citizen, a green card, "no sponsorship needed", "authorized … without". */
 const NO_NEED =
   /\b(?:no|not|without|never|don'?t|doesn'?t|won'?t)\b.{0,30}\b(?:sponsor\w*|visa)\b|\bsponsorship\b.{0,15}\bnot\b|\bcitizen|\bgreen\s*card\b|\bpermanent\s+resident|\bauthori[sz]ed\b.{0,40}\bwithout\b/i
-/** A clause that mentions a visa or sponsorship need: H-1B, F-1, OPT, CPT, TN, L-1, O-1, H-4. */
+/** A clause that says a sponsor is needed: "needs H-1B sponsorship", "will require a visa", "sponsorship required". */
+const EXPLICIT_NEED =
+  /\b(?:need|needs|needing|require|requires|requiring)\b.{0,30}\b(?:sponsor\w*|h-?1b|visa)\b|\bsponsorship\s+(?:is\s+)?(?:needed|required)\b/i
+/** A clause that only mentions a visa status: H-1B, F-1, OPT, CPT, TN, L-1, O-1, H-4. */
 const NEED = /sponsor|\bh-?1b\b|\bvisa\b|\b(?:stem\s+)?opt\b|\bf-?1\b|\bcpt\b|\bh-?4\b|\bl-?1\b|\bo-?1\b|\btn\b/i
 
 /**
  * Whether work-authorization text says the person needs a visa sponsor:
- * "needs H-1B sponsorship", "F-1 OPT, will need sponsorship" → `true`;
- * "US citizen", "Green card holder, no sponsorship needed" → `false`.
- * Read clause by clause, so "Not a US citizen, needs sponsorship" still needs one.
+ * "needs H-1B sponsorship", "F-1 OPT, will need sponsorship", "STEM OPT" → `true`;
+ * "US citizen", "Green card holder, no sponsorship needed", "H-4 EAD, no sponsorship needed" → `false`.
+ * Read clause by clause: an explicit need wins ("Not a US citizen, needs sponsorship"), then an
+ * explicit "no sponsorship needed", and only then a bare visa status counts as a need.
  */
 export function needsSponsorshipFrom(text: string): boolean {
-  return text
+  const clauses = text
     .split(/[.;,\n]|\s\band\b\s/i)
     .map((c) => c.trim())
-    .some((c) => c && !NO_NEED.test(c) && NEED.test(c))
+    .filter(Boolean)
+  if (clauses.some((c) => !NO_NEED.test(c) && EXPLICIT_NEED.test(c))) return true
+  if (clauses.some((c) => NO_NEED.test(c))) return false
+  return clauses.some((c) => NEED.test(c))
 }
 
 export function profileSignals(profile: MasterProfile, now = new Date()): ProfileSignals {
