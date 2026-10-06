@@ -1,4 +1,4 @@
-import { chmod, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawnedChildren } from '../fixtures/app'
 import { expect, test } from '../fixtures/servers/fixture'
@@ -196,10 +196,13 @@ test.describe('relevant jobs, Refresh and filters (#73)', () => {
     // The saved relevant jobs are listed at once; the boards answer in the background.
     await expect(jobs.segment('Relevant')).toBeChecked()
     await expect(jobs.jobTitle('Staff Backend Engineer')).toBeVisible()
-    await expect(jobs.report('hiring.cafe: 2 jobs')).toBeVisible()
+    // Leaving and reopening Jobs while the boards load joins the running refresh instead of starting another.
+    await shell.goTo('dashboard')
+    await shell.goTo('jobs')
     await expect(jobs.lastRefreshed).toHaveText('Relevant jobs updated just now')
     await expect(jobs.jobTitle('Backend Engineer')).toBeVisible()
     expect(searchStates(mock.requests)).toHaveLength(1)
+    expect(mock.requests.filter((r) => r.startsWith('/jobs?'))).toHaveLength(1)
 
     await shell.goTo('dashboard')
     await shell.goTo('jobs')
@@ -207,6 +210,23 @@ test.describe('relevant jobs, Refresh and filters (#73)', () => {
     await expect(jobs.jobTitle('Backend Engineer')).toBeVisible()
     await expect(app.window.getByText(/^Refreshing relevant jobs/)).toHaveCount(0)
     expect(searchStates(mock.requests)).toHaveLength(1)
+  })
+
+  test('with no saved jobs, the auto-refresh toggle is still there', async ({ app, mock }) => {
+    await rm(join(app.workspace!, '.huntgry/jobs'), { recursive: true, force: true })
+    await new Shell(app.window).goTo('jobs')
+    const jobs = new JobsPage(app.window)
+    await expect(app.window.getByText(/^No saved jobs yet/)).toBeVisible()
+    await expect(jobs.autoRefresh).not.toBeChecked()
+    await jobs.toggleAutoRefresh(true)
+    await expect
+      .poll(async () => JSON.parse(await readFile(join(app.workspace!, '.huntgry/jobs-prefs.json'), 'utf8')).autoRefresh)
+      .toBe(true)
+    await jobs.toggleAutoRefresh(false)
+    await expect
+      .poll(async () => JSON.parse(await readFile(join(app.workspace!, '.huntgry/jobs-prefs.json'), 'utf8')).autoRefresh)
+      .toBe(false)
+    expect(mock.requests).toEqual([])
   })
 
   test('without a headline or a role, Jobs opens on All and says how to get relevant jobs', async ({ app, mock }) => {

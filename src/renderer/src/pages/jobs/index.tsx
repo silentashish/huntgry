@@ -108,7 +108,9 @@ export function JobsPage() {
     setError(null)
     if (!auto) setReport(null)
     try {
-      const res = await api.jobs.refresh({ sources: auto ? ['hiring.cafe', 'indeed'] : sources })
+      const res = await api.jobs.refresh(auto ? { sources: ['hiring.cafe', 'indeed'], auto: true } : { sources })
+      // An automatic refresh that main found not due (another window, or the page reopened, refreshed already).
+      if (!res) return
       upsert(res.jobs)
       setReport(res.sources)
       setPrefsState((p) => ({
@@ -219,6 +221,15 @@ export function JobsPage() {
   const queueItemOf = (j: Job) => queued.get(j.id) ?? j.aliases?.map((a) => queued.get(a)).find(Boolean)
 
   const open = (jobs ?? []).find((j) => j.id === openId) ?? null
+
+  const filtersBar = (p: JobsPrefs) => (
+    <JobFiltersBar
+      filters={filters}
+      onChange={(f) => savePrefs({ filters: f })}
+      autoRefresh={p.autoRefresh}
+      onAutoRefresh={(on) => savePrefs({ autoRefresh: on })}
+    />
+  )
 
   return (
     <Stack gap="md">
@@ -390,11 +401,15 @@ export function JobsPage() {
       {jobs === null || prefs === null || signals === null ? (
         <Loader />
       ) : jobs.length === 0 ? (
-        <Card withBorder radius="md" padding="xl">
-          <Text c="dimmed" ta="center">
-            No saved jobs yet. Search the boards above, add a posting by URL, or paste one.
-          </Text>
-        </Card>
+        <>
+          {/* Shown with no saved jobs too: auto-refresh is on by default and must be possible to turn off. */}
+          {filtersBar(prefs)}
+          <Card withBorder radius="md" padding="xl">
+            <Text c="dimmed" ta="center">
+              No saved jobs yet. Search the boards above, add a posting by URL, or paste one.
+            </Text>
+          </Card>
+        </>
       ) : (
         <>
           <Group gap="sm">
@@ -424,12 +439,7 @@ export function JobsPage() {
               ]}
             />
           </Group>
-          <JobFiltersBar
-            filters={filters}
-            onChange={(f) => savePrefs({ filters: f })}
-            autoRefresh={prefs.autoRefresh}
-            onAutoRefresh={(on) => savePrefs({ autoRefresh: on })}
-          />
+          {filtersBar(prefs)}
           <Group gap="md">
             <Checkbox
               size="xs"
