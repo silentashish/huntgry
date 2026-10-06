@@ -31,8 +31,8 @@ The parser folded some of these into the description text and dropped the rest. 
 | Filters | `src/shared/job-filters.ts` | `matchesFilters`, a pure function over saved jobs: sponsorship *Any / Hide "no sponsorship" / Only sponsors*, workplace (Remote / Hybrid / Onsite), seniority, posted within 1–30 days, and a minimum yearly salary. `sponsorshipFromText` gives a three-state reading of a posting. Fallbacks cover jobs without the fields: seniority from the title ("Senior", "Staff", "Junior"), workplace from `remote`, pay parsed from the salary text. `matchesLocation` moved here from the hiring.cafe adapter so relevance can use it as well. |
 | Relevance | `src/shared/job-relevance.ts` | `profileSignals(profile)` returns the target titles (headline, then the two most recent roles, shortened), the skills with evidence (knowledge graph, gaps excluded), the location, years of experience, and whether the person needs a visa sponsor (from Work authorization and Gaps). `scoreJob` scores a job out of 100 (title 35, skills 35, seniority 10, location 10, recency 10) and returns readable reasons. `relevantJobs` keeps the matched jobs that score at least 40 and are not excluded (dismissed, or "no sponsorship" when a sponsor is needed). `relevantQuery` builds the board search used by Refresh. |
 | Preferences | `src/shared/jobs-prefs.ts`, `src/main/jobs/prefs.ts` | `.huntgry/jobs-prefs.json` per workspace holds the filters, the auto-refresh toggle (**on** by default), the last search's ids and the last refresh time. The renderer may change only the filters and the toggle (`normalizePrefsPatch` refuses anything else), and the file is normalized on read. Writes are serialized per workspace, so a filter change and a finishing search cannot overwrite each other. |
-| Service / IPC | `src/main/jobs/{service,ipc}.ts`, `src/preload/jobs.ts` | `searchJobs` records the ids it returned, so "Last search" survives leaving the page. `refreshRelevant` reads the master profile in main, runs the profile-derived search and records `lastRefreshAt`, even when a board was blocked (so a blocked board is not retried on every open). New channels `jobs:refresh`, `jobs:prefs` and `jobs:set-prefs`, with inputs validated in main (`validateSources`, `normalizePrefsPatch`). |
-| Jobs page | `src/renderer/src/pages/jobs/{index.tsx,view.ts,JobFiltersBar.tsx,labels.ts}` | Opens on **Relevant (n)**, scored from the saved jobs at once, with the reasons under each card. With no headline or role it opens on **All** and shows a hint linking to the master profile. A **Refresh** button: with no keywords it searches for the profile's headline near its location, otherwise it re-runs the typed search. A "Relevant jobs updated 5 min ago" line. A filter row with the auto-refresh toggle. "Sponsors visa" / "No sponsorship" badges. A "Last search (n)" segment (or "Last refresh (n)") that survives navigation. |
+| Service / IPC | `src/main/jobs/{service,ipc}.ts`, `src/preload/jobs.ts` | `searchJobs` records the ids it returned, so "Last search" survives leaving the page. `refreshRelevant` reads the master profile in main, runs the profile-derived search and records `lastRefreshAt`, even when a board was blocked (so a blocked board is not retried on every open). One refresh runs per workspace at a time, and a second request joins it. The automatic refresh on open (`auto: true`) is decided in main against the saved preferences and returns `null` when not due, so reopening Jobs during a refresh, or opening a second window, cannot start a second pair of board loads. New channels `jobs:refresh`, `jobs:prefs` and `jobs:set-prefs`, with inputs validated in main (`validateSources`, `normalizePrefsPatch`). |
+| Jobs page | `src/renderer/src/pages/jobs/{index.tsx,view.ts,JobFiltersBar.tsx,labels.ts}` | Opens on **Relevant (n)**, scored from the saved jobs at once, with the reasons under each card. With no headline or role it opens on **All** and shows a hint linking to the master profile. A **Refresh** button: with no keywords it searches for the profile's headline near its location, otherwise it re-runs the typed search. A "Relevant jobs updated 5 min ago" line. A filter row with the auto-refresh toggle, shown even when no job is saved yet. "Sponsors visa" / "No sponsorship" badges. A "Last search (n)" segment (or "Last refresh (n)") that survives navigation. |
 | e2e | `e2e/tests/jobs.spec.ts`, `e2e/pages/jobs.ts`, `e2e/fixtures/servers/pages.ts`, `e2e/fixtures/workspaces/mocks/.huntgry/jobs-prefs.json` | See *How to test*. The `mocks` workspace turns auto-refresh off, so opening Jobs never loads the mock boards by itself. |
 
 ### Opening Jobs, Refresh and auto-refresh
@@ -125,6 +125,13 @@ classDiagram
   did.
 - **Rejected: localStorage for the filters.** Workspace files are the app's pattern, and they follow the workspace,
   not the machine.
+- **Auto-refresh is decided and deduplicated in main, not per page instance** (review on #75). `lastRefreshAt` is
+  written only when the boards finish. A per-page guard would let a reopened page start a second refresh while the
+  first one was still loading.
+- **A clearance counts as "no sponsorship" only when required.** "Must hold / obtain", "active clearance" and
+  "clearance required" count; a sentence that waives it ("no clearance required", "a plus", "preferred") does not.
+  For the profile, an explicit "no sponsorship needed" outweighs a bare visa status ("H-4 EAD"), while an explicit
+  "needs sponsorship" outweighs both.
 - **The last refresh time is recorded even when a board is blocked.** Otherwise a board stuck behind Cloudflare would
   get a new load on every open. The user can still click Refresh.
 
@@ -145,7 +152,7 @@ classDiagram
 - e2e (`e2e/tests/jobs.spec.ts`, CI): Jobs opens on Relevant ranked from the saved jobs with no board request.
   Refresh with an empty keyword box searches "Backend Engineer" near Portland and lists the new jobs. *Only sponsors*
   keeps only the sponsoring mock hit, and the filter and "Last search (4)" survive navigating away. Auto-refresh,
-  once turned on, refreshes once on the next open and not again within 12 h. A profile without headline or roles opens
+  once turned on, refreshes once on the next open (each board loaded once even when Jobs is left and reopened during the refresh) and not again within 12 h. With no saved job the auto-refresh toggle is still there. A profile without headline or roles opens
   on All with the hint. The existing specs now switch to All.
 - In the app: open Jobs with a filled profile. It shows Relevant at once and, if the last refresh is older than 12 h,
   reads the boards in the background ("Refreshing relevant jobs…", then "Relevant jobs updated just now"). Set *Visa
