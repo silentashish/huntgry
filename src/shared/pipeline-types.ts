@@ -155,7 +155,8 @@ export interface PipelineSummary {
   counts: PipelineCounts
   costUsd: number
   stopReason?: string
-  items: { jobId: string; title: string; outcome: PipelineItemOutcome; applicationId?: string; error?: string }[]
+  /** `runId`: the run that built the result; a review recorded for another run never counts for it (#72). */
+  items: { jobId: string; title: string; outcome: PipelineItemOutcome; applicationId?: string; runId?: string; error?: string }[]
   skipped: PipelineSkip[]
 }
 

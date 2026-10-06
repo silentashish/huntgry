@@ -886,6 +886,9 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     await updateReview(ws, a.applicationId!, (c) => ({ ...c!, state: 'approved', runId: 'older-run' }))
     await pipeline.syncReviews()
     expect(queue.state().items.find((i) => i.id === a.id)!.outcome).toBe('unreviewed')
+    // Nor the Dashboard's summary: it still counts the result as waiting.
+    expect((await pipeline.lastSummary())!.counts).toMatchObject({ unreviewed: 2, approved: 0 })
+    expect(finished[0].items.find((i) => i.jobId === 'url:a')!.runId).toBe(a.runId)
     await updateReview(ws, a.applicationId!, (c) => ({ ...c!, state: 'unreviewed', runId: a.runId! }))
 
     const emitted = states.length
@@ -948,6 +951,11 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(badges).toEqual([])
     await queue.flush()
     expect(JSON.parse(await readFile(queueFile(ws), 'utf8')).items[0].outcome).toBe('approved')
+    // A summary written before #72 has no run ids: the queue item's run stands in for it.
+    const file = JSON.parse(await readFile(summaryFile(ws), 'utf8'))
+    for (const i of file.items) delete i.runId
+    await writeFile(summaryFile(ws), JSON.stringify(file))
+    expect((await pipeline.lastSummary())!.counts).toMatchObject({ unreviewed: 0, approved: 1 })
   })
 
   it('validates the start input', () => {

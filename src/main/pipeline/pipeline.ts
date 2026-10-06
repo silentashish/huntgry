@@ -483,7 +483,9 @@ export class Pipeline {
   /**
    * The last finished pipeline's summary, with each result's review state read live from the
    * review store (#72): what was approved or discarded since it finished no longer counts as
-   * ready for review. The file itself is written once, when the pipeline finishes.
+   * ready for review. Only a review of the result's own run counts (a later run may reuse the
+   * folder); summaries written before #72 have no run id and take it from the queue item, if it
+   * is still there, else keep what they say. The file itself is written once, at finish.
    */
   async lastSummary(): Promise<PipelineSummary | null> {
     const ws = await this.deps.workspace()
@@ -497,8 +499,11 @@ export class Pipeline {
     const items = await Promise.all(
       summary.items.map(async (i) => {
         if (!i.applicationId || !REVIEW_OUTCOMES.has(i.outcome)) return i
+        const runId =
+          i.runId ?? this.deps.queue.state().items.find((q) => q.status === 'done' && q.jobId === i.jobId && q.applicationId === i.applicationId)?.runId
+        if (!runId) return i
         const review = await getReview(ws, i.applicationId).catch(() => undefined)
-        return review ? { ...i, outcome: review.state } : i
+        return review?.runId === runId ? { ...i, outcome: review.state } : i
       })
     )
     const counts = { ...summary.counts, unreviewed: 0, needsAttention: 0, approved: 0, discarded: 0 }
@@ -960,6 +965,7 @@ export class Pipeline {
                 ? 'cancelled'
                 : 'failed',
         ...(i.applicationId ? { applicationId: i.applicationId } : {}),
+        ...(i.runId ? { runId: i.runId } : {}),
         ...(i.error ? { error: i.error } : {})
       })),
       skipped: r.skipped
