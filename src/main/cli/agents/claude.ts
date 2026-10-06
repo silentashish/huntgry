@@ -1,7 +1,8 @@
 import { join } from 'node:path'
 import { buildClaudeArgs, userMessageLine } from '../command'
 import { explainClaudeError } from '../version'
-import { isObj, type AgentAdapter } from './types'
+import type { TokenUsage } from '@shared/runner-types'
+import { isObj, num, usageOf, type AgentAdapter, type Json, type TurnEndSignal } from './types'
 
 /**
  * Claude Code: `claude -p` in stream-json mode, one process kept alive between
@@ -41,7 +42,12 @@ export const claude: AgentAdapter = {
     }
     // Hook chatter carries nothing for the user.
     if (event.type === 'system' && event.subtype !== 'init') return { type: 'drop' }
-    if (event.type === 'system' && typeof event.session_id === 'string') return { type: 'init', sessionId: event.session_id }
+    if (event.type === 'system' && typeof event.session_id === 'string')
+      return {
+        type: 'init',
+        sessionId: event.session_id,
+        ...(typeof event.model === 'string' && event.model ? { model: event.model } : {})
+      }
     if (event.type === 'result') {
       // A failed turn (usage limit, max turns, …) carries its reason in `result`; the process exits afterwards.
       const failed = event.is_error === true || (typeof event.subtype === 'string' && event.subtype.startsWith('error'))
@@ -50,10 +56,54 @@ export const claude: AgentAdapter = {
         type: 'turn-end',
         sessionId: typeof event.session_id === 'string' ? event.session_id : undefined,
         costUsd: typeof event.total_cost_usd === 'number' ? event.total_cost_usd : undefined,
+        ...claudeUsage(event),
         error: failed ? (text ?? `Claude ended the turn with ${String(event.subtype ?? 'an error')}`) : undefined
       }
     }
     return { type: 'keep' }
   },
   explainFailure: explainClaudeError
+}
+
+/**
+ * A `result` event's tokens (#44). `usage` is the turn's own, already split into uncached input,
+ * cache reads and cache writes (the 1-hour part under `cache_creation`); thinking is part of
+ * `output_tokens`. `modelUsage` and `total_cost_usd` are the session's running totals.
+ */
+export function claudeUsage(event: Json): Pick<TurnEndSignal, 'usage' | 'usageScope' | 'models' | 'apiMs' | 'durationMs'> {
+  const out: Pick<TurnEndSignal, 'usage' | 'usageScope' | 'models' | 'apiMs' | 'durationMs'> = {}
+  if (isObj(event.usage)) {
+    const u = event.usage
+    const details = isObj(u.output_tokens_details) ? u.output_tokens_details : {}
+    const creation = isObj(u.cache_creation) ? u.cache_creation : {}
+    out.usage = usageOf({
+      inputTokens: num(u.input_tokens),
+      cacheReadTokens: num(u.cache_read_input_tokens),
+      cacheWriteTokens: num(u.cache_creation_input_tokens),
+      cacheWrite1hTokens: num(creation.ephemeral_1h_input_tokens),
+      outputTokens: num(u.output_tokens),
+      reasoningTokens: num(details.thinking_tokens)
+    })
+    out.usageScope = 'turn'
+  }
+  if (isObj(event.modelUsage)) {
+    const models: Record<string, { usage: TokenUsage; costUsd?: number }> = {}
+    for (const [model, m] of Object.entries(event.modelUsage)) {
+      if (!isObj(m) || !model) continue
+      models[model] = {
+        usage: usageOf({
+          inputTokens: num(m.inputTokens),
+          cacheReadTokens: num(m.cacheReadInputTokens),
+          cacheWriteTokens: num(m.cacheCreationInputTokens),
+          outputTokens: num(m.outputTokens),
+          reasoningTokens: num(m.thinkingTokens)
+        }),
+        ...(typeof m.costUSD === 'number' && Number.isFinite(m.costUSD) ? { costUsd: m.costUSD } : {})
+      }
+    }
+    if (Object.keys(models).length > 0) out.models = models
+  }
+  if (num(event.duration_api_ms) > 0) out.apiMs = num(event.duration_api_ms)
+  if (num(event.duration_ms) > 0) out.durationMs = num(event.duration_ms)
+  return out
 }

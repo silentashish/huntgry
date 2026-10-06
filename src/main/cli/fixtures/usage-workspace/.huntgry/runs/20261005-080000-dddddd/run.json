@@ -1,0 +1,39 @@
+{
+  "id": "20261005-080000-dddddd",
+  "title": "Engineer \u00b7 Acme (dddddd)",
+  "params": {
+    "jobDescription": "x",
+    "company": "Acme",
+    "role": "Engineer",
+    "coverLetter": false,
+    "dateStyle": "right"
+  },
+  "agent": "codex",
+  "status": "stopped",
+  "sessionId": "s",
+  "createdAt": "2026-10-05T08:00:00.000Z",
+  "updatedAt": "2026-10-05T08:01:00.000Z",
+  "outputFolder": null,
+  "outputFiles": [],
+  "costUsd": 0,
+  "live": false,
+  "model": null,
+  "metrics": [
+    {
+      "turn": 1,
+      "startedAt": "2026-10-05T08:00:00.000Z",
+      "endedAt": "2026-10-05T08:01:00Z",
+      "activeMs": 60000,
+      "model": null,
+      "usage": {
+        "inputTokens": 500,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 20,
+        "reasoningTokens": 0
+      },
+      "estimatedCostUsd": null,
+      "ok": false
+    }
+  ]
+}

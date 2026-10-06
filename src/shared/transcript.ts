@@ -1,4 +1,4 @@
-import type { AgentId, TokenUsage, TranscriptItem } from './runner-types'
+import type { AgentId, TokenCount, TranscriptItem } from './runner-types'
 
 /**
  * Folds the raw events of a run into what the Tailor page shows. Events are
@@ -42,6 +42,7 @@ export function buildTranscript(events: readonly unknown[], agent: AgentId = 'cl
 
 function buildClaudeTranscript(events: readonly unknown[]): TranscriptItem[] {
   const items: TranscriptItem[] = []
+  let turn = 0
   const tools = new Map<string, Extract<TranscriptItem, { kind: 'tool' }>>()
   let n = 0
   const nextId = () => `i${n++}`
@@ -50,7 +51,10 @@ function buildClaudeTranscript(events: readonly unknown[]): TranscriptItem[] {
     if (!isObj(ev)) continue
     const type = ev.type
 
-    if (foldHuntgry(ev, items, nextId)) continue
+    if (foldHuntgry(ev, items, nextId)) {
+      if (ev.subtype === 'user_message') turn++
+      continue
+    }
 
     if (type === 'assistant' && isObj(ev.message) && Array.isArray(ev.message.content)) {
       // Only top-level turns; sub-agent chatter (parent_tool_use_id set) stays in the log.
@@ -101,6 +105,7 @@ function buildClaudeTranscript(events: readonly unknown[]): TranscriptItem[] {
       items.push({
         kind: 'result',
         id: nextId(),
+        turn,
         ok: ev.is_error !== true && ev.subtype === 'success',
         text: str(ev.result) || str(ev.subtype),
         costUsd: typeof ev.total_cost_usd === 'number' ? ev.total_cost_usd : 0,
@@ -116,12 +121,12 @@ function buildClaudeTranscript(events: readonly unknown[]): TranscriptItem[] {
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
-function usageOf(u: unknown): TokenUsage {
+function usageOf(u: unknown): TokenCount {
   return isObj(u) ? { inputTokens: num(u.input_tokens), outputTokens: num(u.output_tokens) } : { inputTokens: 0, outputTokens: 0 }
 }
 
 /** `12.3k in · 400 out`. */
-export function formatUsage(u: TokenUsage): string {
+export function formatUsage(u: TokenCount): string {
   const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k` : String(n))
   return `${k(u.inputTokens)} tokens in · ${k(u.outputTokens)} out`
 }
@@ -209,6 +214,7 @@ function buildCodexTranscript(events: readonly unknown[]): TranscriptItem[] {
       items.push({
         kind: 'result',
         id: nextId(),
+        turn,
         ok,
         text: ok ? lastMessage : err || 'The turn failed.',
         costUsd: 0,
@@ -278,6 +284,7 @@ function buildAntigravityTranscript(events: readonly unknown[]): TranscriptItem[
       items.push({
         kind: 'result',
         id: nextId(),
+        turn,
         ok,
         text: ok ? str(r.response) : str(r.error) || str(r.status) || 'The turn failed.',
         costUsd: 0,

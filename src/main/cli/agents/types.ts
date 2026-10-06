@@ -1,4 +1,5 @@
 import type { AgentId, RunRateLimit, TokenUsage } from '@shared/runner-types'
+import { ZERO_USAGE } from '@shared/pricing'
 import type { SandboxPaths } from '../command'
 
 /**
@@ -28,12 +29,36 @@ export type AgentSignal =
   | { type: 'drop' }
   /** Stored for the transcript. `content`: something the user sees (a message, a command, an edit). */
   | { type: 'keep'; content?: boolean }
-  /** The session id to resume with is known. */
-  | { type: 'init'; sessionId: string }
+  /** The session id to resume with is known (and the model, when the CLI says). */
+  | { type: 'init'; sessionId: string; model?: string }
   /** The turn ended: the agent waits for the user. `error` = the turn failed. */
-  | { type: 'turn-end'; sessionId?: string; costUsd?: number; usage?: TokenUsage; error?: string }
+  | TurnEndSignal
   /** Claude's `rate_limit_event`: stored on the run (not shown), read by the unattended pipeline. */
   | { type: 'rate-limit'; status: RunRateLimit['status']; resetsAt?: number; rateLimitType?: string; utilization?: number }
+
+/**
+ * The end of a turn, with what the CLI reported about it, normalized to `TokenUsage` (#44).
+ * Some counters are the session's running totals, not the turn's: the `RunManager` takes the
+ * difference with the previous turn (see `metrics.ts`).
+ */
+export interface TurnEndSignal {
+  type: 'turn-end'
+  sessionId?: string
+  /** Claude's `total_cost_usd`: the session's cost so far (not the turn's). */
+  costUsd?: number
+  usage?: TokenUsage
+  /** `usage` is the turn's own (`turn`, the default) or the session's running total (`session`, Codex). */
+  usageScope?: 'turn' | 'session'
+  /** Per model, the session's running totals (Claude `modelUsage`). */
+  models?: Record<string, { usage: TokenUsage; costUsd?: number }>
+  /** The model the CLI says it ran, when it says so. */
+  model?: string
+  /** Claude's `duration_api_ms`: time spent in API calls. */
+  apiMs?: number
+  /** The CLI's own wall time of the turn (Claude `duration_ms`, agy `duration_seconds`); the backfill's active time. */
+  durationMs?: number
+  error?: string
+}
 
 export interface AgentAdapter {
   id: AgentId
@@ -59,4 +84,11 @@ export interface AgentAdapter {
 }
 
 export const isObj = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v)
-export const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+export const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0)
+
+/** A `TokenUsage` with the given counts (the rest zero). */
+export function usageOf(parts: Partial<TokenUsage>): TokenUsage {
+  const u: TokenUsage = { ...ZERO_USAGE, ...parts }
+  if (!u.cacheWrite1hTokens) delete u.cacheWrite1hTokens
+  return u
+}

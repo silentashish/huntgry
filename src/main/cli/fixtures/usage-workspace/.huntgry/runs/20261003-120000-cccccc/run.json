@@ -1,0 +1,41 @@
+{
+  "id": "20261003-120000-cccccc",
+  "title": "Engineer \u00b7 Acme (cccccc)",
+  "params": {
+    "jobDescription": "x",
+    "company": "Acme",
+    "role": "Engineer",
+    "coverLetter": false,
+    "dateStyle": "right"
+  },
+  "agent": "antigravity",
+  "status": "finished",
+  "sessionId": "s",
+  "createdAt": "2026-10-03T12:00:00.000Z",
+  "updatedAt": "2026-10-03T12:10:00.000Z",
+  "outputFolder": "engineer/acme/3",
+  "outputFiles": [
+    "resume.pdf"
+  ],
+  "costUsd": 0,
+  "live": false,
+  "model": "Claude Opus 4.6 (Thinking)",
+  "metrics": [
+    {
+      "turn": 1,
+      "startedAt": "2026-10-03T12:00:00.000Z",
+      "endedAt": "2026-10-03T12:00:07.500000Z",
+      "activeMs": 7500,
+      "model": "Claude Opus 4.6 (Thinking)",
+      "usage": {
+        "inputTokens": 12345,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 410,
+        "reasoningTokens": 10
+      },
+      "estimatedCostUsd": null,
+      "ok": true
+    }
+  ]
+}

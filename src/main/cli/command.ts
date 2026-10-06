@@ -271,6 +271,7 @@ export function requireStartParams(input: unknown): StartRunParams {
     params.agent = p.agent
   }
   if (p.unattended === true) params.unattended = true
+  if (typeof p.batchId === 'string' && /^b-[\w-]{1,80}$/.test(p.batchId)) params.batchId = p.batchId
   if (params.jobUrl && !/^https?:\/\//i.test(params.jobUrl))
     throw new Error('The job URL must start with http:// or https://.')
   if (!params.jobDescription?.trim() && !params.jobUrl)

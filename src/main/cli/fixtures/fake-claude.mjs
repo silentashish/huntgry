@@ -16,8 +16,10 @@
 // Every mode is also honoured on a reply, so the second turn of a session can differ from the first
 // ("ASK" then "WRITE_NOTES" via the reply text); "SECOND:" in a reply is stripped, so a reply can say "SECOND:VERIFY_FAIL".
 // Closing stdin ends the process with code 0.
+// Like the real CLI, `total_cost_usd` and `modelUsage` are the session's running totals (a resumed
+// session continues them, kept in <cwd>/.fake-claude-<session>.json); `usage` is the turn's own.
 // FAKE_CLAUDE_UNKNOWN=--flag in the env: behaves like an older CLI that rejects that flag.
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const unknown = process.env.FAKE_CLAUDE_UNKNOWN
@@ -30,9 +32,34 @@ const resumeIdx = process.argv.indexOf('--resume')
 const session = resumeIdx > 0 ? process.argv[resumeIdx + 1] : 'sess-fake-1'
 const out = (e) => process.stdout.write(`${JSON.stringify(e)}\n`)
 let turn = 0
+const MODEL = 'claude-haiku-4-5-20251001'
+const countsFile = `${process.cwd()}/.fake-claude-${session}.json`
+let counts = { cost: 0, input: 0, output: 0 }
+if (resumeIdx > 0) {
+  try {
+    counts = JSON.parse(readFileSync(countsFile, 'utf8'))
+  } catch {
+    // A new session as far as the fake knows.
+  }
+}
+/** A `result` event: this turn's `usage` and the session's running totals. */
+const result = (fields, cost, input, output) => {
+  counts = { cost: counts.cost + cost, input: counts.input + input, output: counts.output + output }
+  writeFileSync(countsFile, JSON.stringify(counts))
+  return {
+    type: 'result',
+    session_id: session,
+    duration_ms: 5,
+    permission_denials: [],
+    ...fields,
+    total_cost_usd: counts.cost,
+    usage: { input_tokens: input, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: output },
+    modelUsage: { [MODEL]: { inputTokens: counts.input, outputTokens: counts.output, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: counts.cost } }
+  }
+}
 
 out({ type: 'system', subtype: 'hook_started', session_id: session })
-out({ type: 'system', subtype: 'init', session_id: session, cwd: process.cwd(), model: 'fake' })
+out({ type: 'system', subtype: 'init', session_id: session, cwd: process.cwd(), model: MODEL })
 
 for await (const line of createInterface({ input: process.stdin })) {
   if (!line.trim()) continue
@@ -55,7 +82,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (text.includes('USAGE_LIMIT')) {
     const epoch = Number(/USAGE_LIMIT:(\d+)/.exec(text)?.[1] ?? Math.floor(Date.now() / 1000) + 60)
     out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: epoch, rateLimitType: 'five_hour', utilization: 1 }, uuid: 'u1', session_id: session })
-    out({ type: 'result', subtype: 'success', is_error: true, api_error_status: 429, result: "You've hit your session limit · resets 3:45pm", session_id: session, total_cost_usd: 0, duration_ms: 5, permission_denials: [] })
+    out(result({ subtype: 'success', is_error: true, api_error_status: 429, result: "You've hit your session limit · resets 3:45pm" }, 0, 0, 0))
     process.stderr.write("You've hit your session limit · resets 3:45pm\n")
     process.exit(1)
   }
@@ -102,7 +129,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     writeFileSync(`${dir}/resume.pdf`, '%PDF-1.4 fake')
     writeFileSync(`${dir}/build-report.json`, '{"ok": false, "verify": {"results": [{"check": "page_count", "passed": false, "hard": true}]}}')
     notes(dir)
-    out({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'API Error: 500 Internal server error', session_id: session, total_cost_usd: 0.01, duration_ms: 5, permission_denials: [] })
+    out(result({ subtype: 'error_during_execution', is_error: true, result: 'API Error: 500 Internal server error' }, 0.01, 1000, 100))
     process.stderr.write('API Error: 500 Internal server error\n')
     process.exit(1)
   }
@@ -115,6 +142,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   process.stdout.write(reply.slice(0, 10))
   await new Promise((r) => setTimeout(r, 5))
   process.stdout.write(`${reply.slice(10)}\n`)
-  out({ type: 'result', subtype: 'success', is_error: false, result: 'done', session_id: session, total_cost_usd: 0.01, duration_ms: 5, permission_denials: [] })
+  // 1000 input + 1800 output tokens of Haiku 4.5 = $0.01, so the estimate matches the reported cost.
+  out(result({ subtype: 'success', is_error: false, result: 'done' }, 0.01, 1000, 1800))
 }
 process.exit(0)

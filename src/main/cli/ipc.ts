@@ -1,9 +1,11 @@
-import { app, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { isAgentId, RUNNER_CHANNELS, type AgentId, type RunSummary, type TranscriptItem } from '@shared/runner-types'
 import { buildTranscript } from '@shared/transcript'
-import { requireCurrentWorkspace } from '../current-workspace'
+import { usageCsv } from '@shared/usage'
+import { requireCurrentWorkspace, settingsFile } from '../current-workspace'
 import { emit } from '../events'
 import { MAX_TEXT } from './command'
 import { installAgentSkill } from './agents/skills'
@@ -15,6 +17,7 @@ import { listRuns, OUTPUT_FILES, readEvents, readRun, requireRunId } from './run
 import { replyThroughQueue } from '../queue/ipc'
 import { WorkspaceChangedError } from '../workspace/changed'
 import { contextForRun, defaultAgent, manager, setDefaultAgent, startTailorRun, venvDir } from './start'
+import { loadPrices, pricingState, removePrice, requireUsageFilter, resetPrices, setPrice, usageSummary, withMetrics, withPrices } from './usage'
 
 /** Which skill release Huntgry installed (see `install-skill.ts`). */
 const skillRecordPath = (): string => join(app.getPath('userData'), 'skill-install.json')
@@ -29,7 +32,9 @@ function requireAgent(agent: unknown): AgentId {
 
 async function currentRun(id: string): Promise<RunSummary> {
   const workspace = await requireCurrentWorkspace()
-  return manager.liveRun(id) ? { ...manager.liveRun(id)!, live: true } : readRun(workspace.path, id)
+  const run = manager.liveRun(id) ? { ...manager.liveRun(id)!, live: true } : await readRun(workspace.path, id)
+  // Metrics of a run recorded before #44 are rebuilt from its events; estimates at today's prices.
+  return withPrices(await withMetrics(workspace.path, run))
 }
 
 /** Absolute path of one output file of a run, confined to the workspace. */
@@ -94,6 +99,8 @@ export const runsForRemote = {
 
 /** Environment checks and tailoring runs of the resume-tailor skill. */
 export function registerRunnerIpc(): void {
+  // Settings → Pricing applies from the first run on.
+  loadPrices(settingsFile()).catch((err) => console.error('Loading prices failed:', err))
   ipcMain.handle(RUNNER_CHANNELS.environment, async () => {
     const workspace = await requireCurrentWorkspace().catch(() => null)
     return checkEnvironment({
@@ -141,7 +148,11 @@ export function registerRunnerIpc(): void {
   ipcMain.handle(RUNNER_CHANNELS.listRuns, async () => {
     const workspace = await requireCurrentWorkspace()
     const runs = await listRuns(workspace.path)
-    return runs.map((r) => (manager.isLive(r.id) ? { ...manager.liveRun(r.id)!, live: true } : r))
+    return Promise.all(
+      runs.map(async (r) =>
+        withPrices(await withMetrics(workspace.path, manager.isLive(r.id) ? { ...manager.liveRun(r.id)!, live: true } : r))
+      )
+    )
   })
 
   ipcMain.handle(RUNNER_CHANNELS.getRun, async (_e, id: unknown) => {
@@ -197,4 +208,35 @@ export function registerRunnerIpc(): void {
     if (file) shell.showItemInFolder(await outputPath(runId, file))
     else await shell.openPath(await outputPath(runId))
   })
+
+  const liveRun = (id: string) => (manager.liveRun(id) ? { ...manager.liveRun(id)!, live: true } : null)
+
+  ipcMain.handle(RUNNER_CHANNELS.usageSummary, async (_e, filter: unknown) => {
+    const workspace = await requireCurrentWorkspace()
+    return usageSummary(workspace.path, requireUsageFilter(filter), liveRun)
+  })
+
+  ipcMain.handle(RUNNER_CHANNELS.exportUsage, async (e, filter: unknown) => {
+    const workspace = await requireCurrentWorkspace()
+    const summary = await usageSummary(workspace.path, requireUsageFilter(filter), liveRun)
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const options = {
+      title: 'Export run usage',
+      defaultPath: `huntgry-usage-${summary.generatedAt.slice(0, 10)}.csv`,
+      filters: [{ name: 'CSV', extensions: ['csv'] }]
+    }
+    const res = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+    if (res.canceled || !res.filePath) return null
+    await writeFile(res.filePath, usageCsv(summary.runs), 'utf8')
+    return { path: res.filePath }
+  })
+
+  const pricesChanged = <T>(state: T) => {
+    emit('runner:prices', pricingState())
+    return state
+  }
+  ipcMain.handle(RUNNER_CHANNELS.prices, () => pricingState())
+  ipcMain.handle(RUNNER_CHANNELS.setPrice, async (_e, price: unknown) => pricesChanged(await setPrice(settingsFile(), price)))
+  ipcMain.handle(RUNNER_CHANNELS.removePrice, async (_e, id: unknown) => pricesChanged(await removePrice(settingsFile(), id)))
+  ipcMain.handle(RUNNER_CHANNELS.resetPrices, async () => pricesChanged(await resetPrices(settingsFile())))
 }

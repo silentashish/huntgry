@@ -104,7 +104,8 @@ describe('Codex adapter', () => {
     expect(c.signal({ type: 'thread.started', thread_id: 't1' })).toEqual({ type: 'init', sessionId: 't1' })
     expect(c.signal({ type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 2 } })).toEqual({
       type: 'turn-end',
-      usage: { inputTokens: 10, outputTokens: 2 }
+      usage: { inputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 2, reasoningTokens: 0 },
+      usageScope: 'session'
     })
     expect(c.signal({ type: 'turn.failed', error: { message: 'nope' } })).toEqual({ type: 'turn-end', error: 'nope' })
     expect(c.signal({ type: 'item.completed', item: {} })).toEqual({ type: 'keep' })
@@ -164,7 +165,13 @@ describe('Antigravity adapter', () => {
     expect(a.signal(result)).toMatchObject({ type: 'turn-end', error: expect.stringContaining('Individual quota reached') })
     expect(
       a.signal({ event: 'result', result: { status: 'SUCCESS', conversation_id: 'c', usage: { input_tokens: 5, output_tokens: 1 } } })
-    ).toEqual({ type: 'turn-end', sessionId: 'c', usage: { inputTokens: 5, outputTokens: 1 }, error: undefined })
+    ).toEqual({
+      type: 'turn-end',
+      sessionId: 'c',
+      usage: { inputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 1, reasoningTokens: 0 },
+      usageScope: 'turn',
+      error: undefined
+    })
   })
 
   it('explains AGY_ERROR lines, including a used-up quota', async () => {

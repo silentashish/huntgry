@@ -29,6 +29,7 @@ export const EVENT_CHANNELS: readonly EventChannel[] = [
   'runner:event',
   'runner:run',
   'runner:install-log',
+  'runner:prices',
   'applications:changed',
   'browser:state',
   'queue:changed',

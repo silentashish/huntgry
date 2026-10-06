@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { isObj, num, type AgentAdapter, type AgentInvocation } from './types'
+import type { TokenUsage } from '@shared/runner-types'
+import { isObj, num, usageOf, type AgentAdapter, type AgentInvocation, type Json } from './types'
 
 /**
  * OpenAI Codex CLI: `codex exec --json`, one process per turn (exec has no
@@ -68,6 +69,24 @@ export async function codexModel(home: string): Promise<string | undefined> {
   }
 }
 
+/**
+ * `turn.completed.usage` → `TokenUsage` (#44). Codex reports the thread's running totals (a
+ * resumed thread continues them), so the `RunManager` takes the difference per turn. Its
+ * `input_tokens` include the cached ones (and, like the OpenAI API, cache writes), and
+ * `output_tokens` include `reasoning_output_tokens`.
+ */
+export function codexUsage(u: Json): TokenUsage {
+  const cached = num(u.cached_input_tokens)
+  const written = num(u.cache_write_input_tokens)
+  return usageOf({
+    inputTokens: Math.max(0, num(u.input_tokens) - cached - written),
+    cacheReadTokens: cached,
+    cacheWriteTokens: written,
+    outputTokens: num(u.output_tokens),
+    reasoningTokens: num(u.reasoning_output_tokens)
+  })
+}
+
 export const codex: AgentAdapter = {
   id: 'codex',
   label: 'Codex',
@@ -82,8 +101,7 @@ export const codex: AgentAdapter = {
     if (event.type === 'thread.started' && typeof event.thread_id === 'string')
       return { type: 'init', sessionId: event.thread_id }
     if (event.type === 'turn.completed') {
-      const u = isObj(event.usage) ? event.usage : {}
-      return { type: 'turn-end', usage: { inputTokens: num(u.input_tokens), outputTokens: num(u.output_tokens) } }
+      return { type: 'turn-end', usage: codexUsage(isObj(event.usage) ? event.usage : {}), usageScope: 'session' }
     }
     if (event.type === 'turn.failed') {
       const err = isObj(event.error) ? event.error.message : undefined
