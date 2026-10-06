@@ -2,9 +2,10 @@ import { useState } from 'react'
 import { ActionIcon, Alert, Badge, Button, Card, Group, Select, Stack, Text, Title, Tooltip } from '@mantine/core'
 import { IconPlayerPause, IconPlayerPlay, IconRefresh, IconTrash, IconX } from '@tabler/icons-react'
 import { MAX_CONCURRENCY, type QueueItem, type QueueItemStatus, type QueueState } from '@shared/queue-types'
-import { AGENT_IDS, AGENT_LABEL, type AgentId } from '@shared/runner-types'
+import { AGENT_IDS, AGENT_LABEL, type AgentId, type RunSummary } from '@shared/runner-types'
 import { api, errorText } from '../../api'
 import { useNow } from '../../components/queue/usePipeline'
+import { runBadge } from '../../components/usage/format'
 import { AGENT_COLOR, FAILURE_LABEL, OUTCOME_LABEL, QUEUE_STATUS_LABEL } from './status'
 
 interface Props {
@@ -15,12 +16,14 @@ interface Props {
   onReview?(applicationId: string): void
   /** Title of the card ("Tailoring queue" by default). */
   title?: string
+  /** The runs of the items, by id, for their time · tokens · cost badge (#44). */
+  runs?: ReadonlyMap<string, RunSummary>
 }
 
 const COUNTED: QueueItemStatus[] = ['queued', 'running', 'needs-reply', 'done', 'failed']
 
 /** The bulk tailoring queue: one row per job, with its run's status and what can be done with it. */
-export function QueuePanel({ queue, onChange, onOpenRun, onReview, title = 'Tailoring queue' }: Props) {
+export function QueuePanel({ queue, onChange, onOpenRun, onReview, title = 'Tailoring queue', runs }: Props) {
   const [error, setError] = useState<string | null>(null)
 
   async function act(call: () => Promise<QueueState>) {
@@ -102,7 +105,14 @@ export function QueuePanel({ queue, onChange, onOpenRun, onReview, title = 'Tail
 
         <Stack gap={6}>
           {queue.items.map((item) => (
-            <QueueRow key={item.id} item={item} onAct={act} onOpenRun={onOpenRun} onReview={onReview} />
+            <QueueRow
+              key={item.id}
+              item={item}
+              run={item.runId ? runs?.get(item.runId) : undefined}
+              onAct={act}
+              onOpenRun={onOpenRun}
+              onReview={onReview}
+            />
           ))}
         </Stack>
       </Stack>
@@ -112,13 +122,15 @@ export function QueuePanel({ queue, onChange, onOpenRun, onReview, title = 'Tail
 
 interface RowProps {
   item: QueueItem
+  /** The item's run, when known: its badge shows time · tokens · est. cost. */
+  run?: RunSummary
   onAct(call: () => Promise<QueueState>): void
   onOpenRun(runId: string): void
   onReview?(applicationId: string): void
 }
 
 /** One queue item: status, agent, result badges, error text and its actions. Shared with the pipeline panel. */
-export function QueueRow({ item, onAct, onOpenRun, onReview }: RowProps) {
+export function QueueRow({ item, run, onAct, onOpenRun, onReview }: RowProps) {
   const label = QUEUE_STATUS_LABEL[item.status]
   const active = ['queued', 'preparing', 'running', 'needs-reply'].includes(item.status)
   const now = useNow(1000)
@@ -175,6 +187,11 @@ export function QueueRow({ item, onAct, onOpenRun, onReview }: RowProps) {
           <Text size="sm" fw={500} truncate>
             {item.title}
           </Text>
+          {run && runBadge(run) && (
+            <Text size="xs" c="dimmed" style={{ flexShrink: 0 }} data-testid="queue-run-usage">
+              {runBadge(run)}
+            </Text>
+          )}
         </Group>
         {item.pendingReply && (
           <Text size="xs" c="dimmed" mt={2}>

@@ -2,6 +2,7 @@ import { Badge, Button, Group, NavLink, ScrollArea, Stack, Text } from '@mantine
 import { IconPlus } from '@tabler/icons-react'
 import type { RunSummary } from '@shared/runner-types'
 import { AGENT_LABEL } from '@shared/runner-types'
+import { runBadge } from '../../components/usage/format'
 import { AGENT_COLOR, runStatusLabel, STATUS_LABEL } from './status'
 
 interface Props {
@@ -60,6 +61,11 @@ export function RunList({ runs, selected, onSelect }: Props) {
                     {runStatusLabel(r.status, r.agent)}
                   </Badge>
                 </Group>
+                {runBadge(r) && (
+                  <Text size="xs" c="dimmed" data-testid="run-usage">
+                    {runBadge(r)}
+                  </Text>
+                )}
               </Stack>
             }
             style={{ borderRadius: 'var(--mantine-radius-md)' }}

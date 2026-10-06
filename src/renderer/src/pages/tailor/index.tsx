@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Grid, Loader, Stack, Title } from '@mantine/core'
 import type { RunDetail, RunnerEnvironment, RunSummary, StartRunParams } from '@shared/runner-types'
 import { appendLive } from '@shared/transcript'
@@ -30,6 +30,7 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
   const otherItems = queue && pipeline ? queue.items.filter((i) => i.pipelineId !== pipeline.id) : (queue?.items ?? [])
   /** Run whose events are being read from disk, with the live events that arrived meanwhile. */
   const loading = useRef<{ id: string; buffer: { seq: number; event: unknown }[] } | null>(null)
+  const runsById = useMemo(() => new Map(runs.map((r) => [r.id, r])), [runs])
 
   useEffect(() => {
     api.runner.listRuns().then(setRuns, (err) => setError(errorText(err)))
@@ -77,6 +78,11 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
     }
   }, [])
 
+  // Opened on one run (the Dashboard links to the runs behind its figures).
+  useEffect(() => {
+    if (params?.runId) void open(params.runId)
+  }, [params?.runId, open])
+
   async function start(p: StartRunParams) {
     setStarting(true)
     setError(null)
@@ -107,10 +113,17 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
           onPipelineChange={setPipeline}
           onOpenRun={(id) => void open(id)}
           onReview={review}
+          runs={runsById}
         />
       )}
       {queue && ((params?.view === 'queue' && !pipeline) || otherItems.length > 0) && (
-        <QueuePanel queue={{ ...queue, items: otherItems }} onChange={setQueue} onOpenRun={(id) => void open(id)} onReview={review} />
+        <QueuePanel
+          queue={{ ...queue, items: otherItems }}
+          onChange={setQueue}
+          onOpenRun={(id) => void open(id)}
+          onReview={review}
+          runs={runsById}
+        />
       )}
       <Grid gap="lg">
         <Grid.Col span={{ base: 12, md: 3 }}>

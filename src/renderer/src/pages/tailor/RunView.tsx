@@ -23,7 +23,8 @@ import { api, errorText } from '../../api'
 import { APPLY_HINT, applyBlocker } from '../../components/apply/blocker'
 import { useApply } from '../../components/apply/useApply'
 import { useNavigation } from '../../navigation'
-import { AGENT_COLOR, runCost, runStatusLabel, STATUS_LABEL } from './status'
+import { RunMetrics } from '../../components/usage/RunMetrics'
+import { AGENT_COLOR, runStatusLabel, STATUS_LABEL } from './status'
 import { Transcript } from './Transcript'
 
 interface Props {
@@ -128,7 +129,7 @@ export function RunView({ run, events, heldReply = false }: Props) {
             </Group>
           </Group>
           <Text size="xs" c="dimmed">
-            {runCost(run)} · started{' '}
+            Started{' '}
             {new Date(run.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
           </Text>
           {(run.outputFolder || canEnd) && (
@@ -213,6 +214,8 @@ export function RunView({ run, events, heldReply = false }: Props) {
         </Stack>
       </Card>
 
+      <RunMetrics run={run} />
+
       {run.error && run.status === 'failed' && (
         <Alert color="red" variant="light" title={`${agent} stopped with an error`}>
           <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
@@ -227,7 +230,7 @@ export function RunView({ run, events, heldReply = false }: Props) {
         </Alert>
       )}
 
-      <Transcript items={items} />
+      <Transcript items={items} metrics={run.metrics} />
 
       {working && (
         <Group gap="xs" c="dimmed">
