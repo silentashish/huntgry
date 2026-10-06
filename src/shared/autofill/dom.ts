@@ -142,3 +142,93 @@ export function highlight(el: Element, tone: keyof typeof OUTLINE): void {
   style.setProperty('outline', `2px solid ${OUTLINE[tone]}`)
   style.setProperty('outline-offset', '1px')
 }
+
+/** The radios of `radio`'s group inside `root` (by `name`; a radio without one is its own group). */
+export function radioGroup(radio: HTMLInputElement, root: ParentNode): HTMLInputElement[] {
+  const name = radio.getAttribute('name')
+  if (!name) return [radio]
+  return Array.from(root.querySelectorAll<HTMLInputElement>('input[type="radio"]')).filter(
+    (r) => r.getAttribute('name') === name && isRelevant(r)
+  )
+}
+
+/** A radio's own option text ("Yes"), from its label without the control, else its value. */
+export function radioLabel(radio: HTMLInputElement): string {
+  const label = radio.labels?.[0] ?? radio.closest('label')
+  const text = label ? clean(labelText(label as HTMLLabelElement)) : ''
+  return (text || radio.value || '').slice(0, 120)
+}
+
+/** Placeholder options: no value, or "Select…", "Choose", "--". */
+const PLACEHOLDER = /^(select|choose|please (select|choose)|pick|-+|—)\b|^\s*$/i
+
+function isPlaceholder(option: HTMLOptionElement): boolean {
+  return option.value === '' || PLACEHOLDER.test(option.text.trim())
+}
+
+/** The choices a select or radio group offers, as the page words them (at most 30, 120 characters each). */
+export function optionsOf(el: FormControl, root: ParentNode): string[] {
+  const kind = kindOf(el)
+  let options: string[] = []
+  if (kind === 'select') {
+    options = Array.from((el as HTMLSelectElement).options)
+      .filter((o) => !o.disabled && !isPlaceholder(o))
+      .map((o) => clean(o.text).slice(0, 120))
+  } else if (kind === 'radio') {
+    options = radioGroup(el as HTMLInputElement, root).map(radioLabel)
+  }
+  return [...new Set(options.filter(Boolean))].slice(0, 30)
+}
+
+/** What a select or radio group shows now (the option text), or '' when nothing is chosen. */
+export function chosenOf(el: FormControl, root: ParentNode): string {
+  const kind = kindOf(el)
+  if (kind === 'select') {
+    const option = (el as HTMLSelectElement).selectedOptions?.[0]
+    return option && !isPlaceholder(option) ? clean(option.text) : ''
+  }
+  if (kind === 'radio') {
+    const checked = radioGroup(el as HTMLInputElement, root).find((r) => r.checked)
+    return checked ? radioLabel(checked) : ''
+  }
+  return el.value.trim()
+}
+
+/**
+ * Chooses the option whose text is `optionText` the way a person's choice
+ * looks to the page's framework: the select's native `value` setter, then
+ * `input` and `change`. No click, no key. Returns whether it shows the option.
+ */
+export function setSelectValue(select: HTMLSelectElement, optionText: string): boolean {
+  const view = select.ownerDocument.defaultView
+  const option = Array.from(select.options).find((o) => clean(o.text) === optionText)
+  if (!view || !option) return false
+  const setter = Object.getOwnPropertyDescriptor(view.HTMLSelectElement.prototype, 'value')?.set
+  asHuntgry(() => {
+    if (setter) setter.call(select, option.value)
+    else select.value = option.value
+    select.dispatchEvent(new view.Event('input', { bubbles: true }))
+    select.dispatchEvent(new view.Event('change', { bubbles: true }))
+  })
+  return select.selectedOptions?.[0] === option
+}
+
+/**
+ * Checks the radio of `radio`'s group whose label is `optionText`: the native
+ * `checked` setter, then `input` and `change`. No click. Only for pages that
+ * listen to `change` (plain HTML, Lever); React radios take a click and are
+ * click-only (see answers.ts). Returns whether the radio is checked.
+ */
+export function checkRadio(radio: HTMLInputElement, root: ParentNode, optionText: string): boolean {
+  const view = radio.ownerDocument.defaultView
+  const target = radioGroup(radio, root).find((r) => radioLabel(r) === optionText)
+  if (!view || !target) return false
+  const setter = Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'checked')?.set
+  asHuntgry(() => {
+    if (setter) setter.call(target, true)
+    else target.checked = true
+    target.dispatchEvent(new view.Event('input', { bubbles: true }))
+    target.dispatchEvent(new view.Event('change', { bubbles: true }))
+  })
+  return target.checked
+}

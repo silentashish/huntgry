@@ -2,10 +2,11 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { JSDOM } from 'jsdom'
 import { describe, expect, it, vi } from 'vitest'
+import { factsFromProfile, questionKey, type PageAnswers } from '../apply-facts'
 import type { FieldReport, FillReport, FillValues } from '../apply-types'
 import { UPLOAD_ATTR } from '../autofill-channels'
 import { setNativeValue } from './dom'
-import { detectConfirmation, fillPage, scanPage } from './engine'
+import { detectConfirmation, fillPage, scanPage, verifyFill } from './engine'
 import { identifierWords } from './match'
 
 const fixture = (name: string) => readFileSync(join(__dirname, 'fixtures', name), 'utf8')
@@ -338,5 +339,158 @@ describe('setNativeValue', () => {
     const report = fillPage(dom.window.document, VALUES)
     expect(field(report, 'Email address')).toMatchObject({ outcome: 'rejected' })
     expect(field(report, 'Email address').reason).toContain('ADA@EXAMPLE')
+  })
+})
+
+describe('application answers (#71)', () => {
+  const LEVER = 'https://jobs.lever.co/acme/00000000-0000-4000-8000-000000000001/apply'
+  const GENERIC = 'https://careers.example.com/apply'
+  const GREENHOUSE = 'https://job-boards.greenhouse.io/acme/jobs/1000001'
+  const select = (dom: JSDOM, selector: string) => dom.window.document.querySelector(selector) as HTMLSelectElement
+  const checked = (dom: JSDOM, name: string) =>
+    Array.from(dom.window.document.querySelectorAll<HTMLInputElement>('input[type="radio"]'))
+      .filter((r) => r.name === name && r.checked)
+      .map((r) => r.value)
+  const facts = (f: PageAnswers['facts']): PageAnswers => ({ facts: f, questions: {} })
+  const SPONSOR = 'cards[00000000-0000-4000-8000-0000000000c1][field1]'
+
+  it('chooses a Lever select option and a radio from saved facts, with no click, key or submit', () => {
+    const dom = page('lever-form.html', LEVER)
+    const check = forbidSubmit(dom)
+    const report = fillPage(dom.window.document, VALUES, {
+      answers: facts({ gender: 'Female', raceEthnicity: 'decline', needsSponsorship: 'no' })
+    })
+    expect(field(report, 'Gender')).toMatchObject({
+      kind: 'select',
+      outcome: 'filled',
+      value: 'Female',
+      fact: 'gender',
+      options: ['Male', 'Female', 'Decline to self-identify'],
+      fieldId: 'select:eeo[gender]'
+    })
+    expect(select(dom, 'select[name="eeo[gender]"]').value).toBe('Female')
+    expect(select(dom, 'select[name="eeo[gender]"]').style.outline).toContain('#2f9e44')
+    // "decline" picks the page's own decline option.
+    expect(field(report, 'Race')).toMatchObject({ outcome: 'filled', value: 'Decline to self-identify' })
+    expect(field(report, 'Will you require visa sponsorship?')).toMatchObject({
+      kind: 'radio',
+      outcome: 'filled',
+      value: 'No',
+      fact: 'needsSponsorship'
+    })
+    expect(checked(dom, SPONSOR)).toEqual(['No'])
+    // The marketing consent checkbox is never ticked.
+    expect(input(dom, 'input[name="consent[marketing]"]').checked).toBe(false)
+    check()
+  })
+
+  it('answers "authorized to work" and "sponsorship" from a US citizen profile with no prompt', () => {
+    const seeded = facts(factsFromProfile('US Citizen'))
+    const dom = page('generic-form.html', GENERIC)
+    const check = forbidSubmit(dom)
+    const report = fillPage(dom.window.document, VALUES, { answers: seeded })
+    expect(field(report, 'Are you authorized to work in the country?')).toMatchObject({ outcome: 'filled', value: 'Yes' })
+    expect(checked(dom, 'auth')).toEqual(['yes'])
+    // Consent, however it is worded, is never ticked; it is not even offered as a question.
+    expect(input(dom, 'input[name="consent"]').checked).toBe(false)
+    expect(field(report, 'I consent to the processing of my data.').fact).toBeUndefined()
+    const lever = page('lever-form.html', LEVER)
+    fillPage(lever.window.document, VALUES, { answers: seeded })
+    expect(checked(lever, SPONSOR)).toEqual(['No'])
+    check()
+  })
+
+  it('writes nothing when the saved answer fits none of the options', () => {
+    const dom = new JSDOM(
+      `<form><label>Email <input name="email" type="email"></label><label for="g">Gender</label>
+       <select id="g" name="g"><option value="">Select</option><option>Male</option><option>Female</option></select>
+       <input type="file" name="resume"><button type="submit">Send</button></form>`,
+      { url: GENERIC }
+    )
+    const report = fillPage(dom.window.document, VALUES, { answers: facts({ gender: 'decline' }) })
+    expect(field(report, 'Gender')).toMatchObject({ outcome: 'skipped-unsupported', fact: 'gender' })
+    expect(field(report, 'Gender').reason).toMatch(/not one of this question's options/)
+    expect(select(dom, '#g').value).toBe('')
+  })
+
+  it('only suggests for a Greenhouse react-select and never changes it', () => {
+    const dom = page('greenhouse-form.html', GREENHOUSE)
+    const check = forbidSubmit(dom)
+    const report = fillPage(dom.window.document, VALUES, { answers: facts({ workAuthorized: 'yes', needsSponsorship: 'no' }) })
+    expect(field(report, 'Are you legally authorized to work in the United States?')).toMatchObject({
+      kind: 'combobox',
+      outcome: 'skipped-unsupported',
+      fact: 'workAuthorized',
+      suggestion: 'Yes',
+      suggestedBy: 'saved'
+    })
+    expect(
+      field(report, 'Will you now or in the future require sponsorship for employment visa status (e.g. H-1B visa status)?')
+    ).toMatchObject({ suggestion: 'No', outcome: 'skipped-unsupported' })
+    expect(input(dom, '#question_1000007').value).toBe('')
+    check()
+  })
+
+  it('only suggests for Ashby radios (React radios take a click)', () => {
+    const dom = new JSDOM(
+      `<div class="ashby-application-form-container"><label for="_systemfield_name">Name</label><input id="_systemfield_name">
+       <fieldset><legend>Gender</legend><label><input type="radio" name="eeo_gender" value="m"> Male</label>
+       <label><input type="radio" name="eeo_gender" value="d"> Decline to self-identify</label></fieldset></div>`,
+      { url: 'https://jobs.ashbyhq.com/acme/00000000-0000-4000-8000-000000000001/application' }
+    )
+    // Ashby attaches files first; its questions are answered on the text pass.
+    const report = fillPage(dom.window.document, VALUES, { text: true, answers: facts({ gender: 'decline' }) })
+    expect(field(report, 'Gender')).toMatchObject({
+      kind: 'radio',
+      outcome: 'skipped-unsupported',
+      suggestion: 'Decline to self-identify',
+      suggestedBy: 'saved'
+    })
+    expect(checked(dom, 'eeo_gender')).toEqual([])
+  })
+
+  it('keeps a choice the page or the user already made', () => {
+    const dom = page('lever-form.html', LEVER)
+    select(dom, 'select[name="eeo[gender]"]').value = 'Male'
+    const report = fillPage(dom.window.document, VALUES, { answers: facts({ gender: 'Female' }) })
+    expect(field(report, 'Gender')).toMatchObject({ outcome: 'kept', value: 'Male' })
+    expect(select(dom, 'select[name="eeo[gender]"]').value).toBe('Male')
+  })
+
+  it('fills a textarea from a remembered question, and fills a typed fact', () => {
+    const dom = page('lever-form.html', LEVER)
+    const question = questionKey('What interests you about this role?', 'textarea')
+    const report = fillPage(dom.window.document, VALUES, {
+      answers: { facts: {}, questions: { [question]: { fact: null, value: 'The team.', confirmed: true } } }
+    })
+    expect(field(report, 'What interests you about this role?')).toMatchObject({ outcome: 'filled', value: 'The team.', question })
+    const gh = page('greenhouse-form.html', GREENHOUSE)
+    const second = fillPage(gh.window.document, VALUES, { answers: facts({ salaryExpectation: '$150k', noticePeriod: '2 weeks' }) })
+    expect(field(second, 'What are your salary expectations?')).toMatchObject({ outcome: 'filled', value: '$150k', fact: 'salaryExpectation' })
+    expect(field(second, 'What is your notice period?')).toMatchObject({ outcome: 'filled', value: '2 weeks' })
+  })
+
+  it("only suggests a model's mapping until the user confirms it", () => {
+    const options = ['Male', 'Female', 'Decline to self-identify']
+    const question = questionKey('Gender', 'select', options)
+    // The memory's entry wins over the catalog: a mapping only the model made is a suggestion.
+    const dom = page('lever-form.html', LEVER)
+    const report = fillPage(dom.window.document, VALUES, { answers: { facts: { gender: 'Female' }, questions: { [question]: { fact: 'gender', confirmed: false } } } })
+    expect(field(report, 'Gender')).toMatchObject({ outcome: 'skipped-unsupported', suggestion: 'Female', suggestedBy: 'model' })
+    expect(select(dom, 'select[name="eeo[gender]"]').value).toBe('')
+    const confirmed = page('lever-form.html', LEVER)
+    const after = fillPage(confirmed.window.document, VALUES, { answers: { facts: { gender: 'Female' }, questions: { [question]: { fact: 'gender', confirmed: true } } } })
+    expect(field(after, 'Gender')).toMatchObject({ outcome: 'filled', value: 'Female' })
+  })
+
+  it('restores a saved answer the page wiped after the fill', async () => {
+    const dom = page('lever-form.html', LEVER)
+    const doc = dom.window.document
+    const answers = facts({ gender: 'Female' })
+    const report = fillPage(doc, VALUES, { answers })
+    select(dom, 'select[name="eeo[gender]"]').value = ''
+    await verifyFill(doc, VALUES, report, { settleMs: 1 })
+    expect(field(report, 'Gender')).toMatchObject({ outcome: 'filled', value: 'Female' })
+    expect(select(dom, 'select[name="eeo[gender]"]').value).toBe('Female')
   })
 })

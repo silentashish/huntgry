@@ -1,8 +1,10 @@
+import { NO_ANSWERS, type PageAnswers } from '../apply-facts'
 import type { AdapterStep, ApplyAts, FieldKey, FieldReport, FillReport, FillValues, PageScan, UploadState } from '../apply-types'
 import { EMBED_RULES, embedPathMatches } from '../apply-embeds'
 import { adapterFor, type Adapter, type UploadProbe } from './adapters'
 import { UPLOAD_ATTR, UPLOAD_GROUP_ATTR } from '../autofill-channels'
 import {
+  chosenOf,
   highlight,
   isControl,
   isRelevant,
@@ -13,6 +15,7 @@ import {
   valueMatches,
   type FormControl
 } from './dom'
+import { answerable, answerField, editedInGroup, strategyOf, writeAnswer } from './answers'
 import { matchFileField, matchTextField, type Match } from './match'
 import { sleep } from './ready'
 import { defaultUploadAttached } from './upload-state'
@@ -21,9 +24,10 @@ import { editedByUser } from './user-edits'
 /**
  * The autofill engine: pure DOM code, run by the browser tab's preload and by
  * jsdom in tests. It fills text fields and marks file inputs for main to
- * upload over CDP. It never submits a form, presses a button or answers a
- * choice: selects, comboboxes, checkboxes, radios, consent and demographic
- * questions are only reported. (guard.test.ts enforces the "never submits".)
+ * upload over CDP, and answers the questions the user taught it (#71,
+ * answers.ts): typed fields, native selects and native radios, never a
+ * checkbox, never a widget that needs a click. It never submits a form or
+ * presses a button. (guard.test.ts enforces the "never submits".)
  */
 
 /** Upload marker values: `data-huntgry-upload="resume" | "cover"`. */
@@ -59,6 +63,31 @@ function controlsOf(root: Element): FormControl[] {
     out.push(el)
     if (out.length >= MAX_FIELDS) break
   }
+  return out
+}
+
+/**
+ * A stable id per control for the panel's answers: kind plus `name` or `id`
+ * (else the label), numbered when several controls share it. Recomputed the
+ * same way on every fill, so it survives re-renders that keep the markup.
+ */
+function fieldIdsOf(controls: FormControl[]): Map<FormControl, string> {
+  const seen = new Map<string, number>()
+  const ids = new Map<FormControl, string>()
+  for (const el of controls) {
+    const base = `${kindOf(el)}:${(el.getAttribute('name') || el.id || `label:${labelOf(el)}`).slice(0, 160)}`
+    const n = (seen.get(base) ?? 0) + 1
+    seen.set(base, n)
+    ids.set(el, n === 1 ? base : `${base}#${n}`)
+  }
+  return ids
+}
+
+/** Controls the adapter marks as pickers or click-only: answers are only suggested for them. */
+function clickOnlyOf(adapter: Adapter, root: Element): Set<Element> {
+  const out = new Set<Element>()
+  for (const selector of [...(adapter.choices ?? []), ...(adapter.clickOnly ?? [])])
+    for (const el of Array.from(root.querySelectorAll(selector))) out.add(el)
   return out
 }
 
@@ -220,6 +249,8 @@ export interface FillOptions {
    * 'files-first'` and main asks again with `text: true` after the upload.
    */
   text?: boolean
+  /** Remembered facts and question answers (#71); without them only contact fields are filled. */
+  answers?: PageAnswers
 }
 
 /** The upload widget around a file input (see `Adapter.uploadGroup`). */
@@ -259,8 +290,12 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
     for (const old of Array.from(doc.querySelectorAll(`[${attr}]`))) old.removeAttribute(attr)
   }
   let first: Element | null = null
+  const planned = plan(adapter, root)
+  const ids = fieldIdsOf(planned.map((p) => p.el))
+  const clickOnly = clickOnlyOf(adapter, root)
+  const answers = options.answers ?? NO_ANSWERS
 
-  for (const p of plan(adapter, root)) {
+  for (const p of planned) {
     const kind = kindOf(p.el)
     const line: FieldReport = {
       key: p.key,
@@ -273,6 +308,11 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
       line.outcome = p.outcome
       line.reason = p.reason
       if (p.outcome !== 'skipped-unsupported') highlight(p.el, 'attention')
+      // A question the contact block does not cover: answered from what the user taught Huntgry (#71).
+      if (writeText && p.outcome !== 'ambiguous' && answerable(kind) && kind !== 'checkbox') {
+        line.fieldId = ids.get(p.el)
+        if (answerField(p.el, line, root, answers, clickOnly.has(p.el))) first ??= p.el
+      }
       report.fields.push(line)
       continue
     }
@@ -330,6 +370,12 @@ const keepUserEdit = (line: FieldReport, el: HTMLInputElement | HTMLTextAreaElem
   line.reason = 'You changed it after Huntgry filled it; left as is.'
 }
 
+const keepUserAnswer = (line: FieldReport, el: FormControl, root: ParentNode) => {
+  line.outcome = 'kept'
+  line.value = chosenOf(el, root).slice(0, 200)
+  line.reason = 'You changed it after Huntgry filled it; left as is.'
+}
+
 /**
  * Checks, a moment after a fill, that every field reported `filled` still
  * holds its value. A late re-render (React hydration) or a resume parser can
@@ -350,11 +396,29 @@ export async function verifyFill(
   const adapter = adapterFor(url, doc)
   const root = adapter.formRoot(doc)
   if (!root) return report
+  const planned = plan(adapter, root)
   const byKey = new Map<FieldKey, FormControl>()
-  for (const p of plan(adapter, root)) if (p.key && !p.outcome && !byKey.has(p.key)) byKey.set(p.key, p.el)
+  for (const p of planned) if (p.key && !p.outcome && !byKey.has(p.key)) byKey.set(p.key, p.el)
+  const byId = new Map([...fieldIdsOf(planned.map((p) => p.el))].map(([el, id]) => [id, el]))
 
   const rewritten: Array<{ line: FieldReport; el: HTMLInputElement | HTMLTextAreaElement; value: string }> = []
+  const reanswered: Array<{ line: FieldReport; el: FormControl; value: string }> = []
   for (const line of report.fields) {
+    // A remembered answer Huntgry wrote (#71): the same check, keyed by the control's id.
+    if (!line.key && line.outcome === 'filled' && line.fieldId && line.value) {
+      const el = byId.get(line.fieldId)
+      if (!el) {
+        line.outcome = 'rejected'
+        line.reason = 'The field disappeared after it was filled.'
+      } else if (chosenOf(el, root) !== line.value) {
+        if (editedInGroup(el, kindOf(el), root)) keepUserAnswer(line, el, root)
+        else {
+          writeAnswer(el, strategyOf(kindOf(el), false), root, line.value)
+          reanswered.push({ line, el, value: line.value })
+        }
+      }
+      continue
+    }
     if (!line.key) continue
     if (line.outcome === 'to-upload' && (line.key === 'resume' || line.key === 'coverLetter')) {
       const el = byKey.get(line.key)
@@ -379,11 +443,22 @@ export async function verifyFill(
     setNativeValue(el, value, phone)
     rewritten.push({ line, el, value })
   }
-  if (rewritten.length === 0) return report
+  if (rewritten.length === 0 && reanswered.length === 0) return report
 
   // The one permitted rewrite counts only if it still holds a moment later.
   await sleep(doc, settleMs)
   if (pageUrl(doc).href !== report.url) return report
+  for (const { line, el, value } of reanswered) {
+    if (editedInGroup(el, kindOf(el), root)) {
+      keepUserAnswer(line, el, root)
+    } else if (el.isConnected && chosenOf(el, root) === value) {
+      highlight(el, 'done')
+    } else {
+      line.outcome = 'rejected'
+      line.reason = 'The page cleared the saved answer after filling; answer it yourself.'
+      highlight(el, 'attention')
+    }
+  }
   for (const { line, el, value } of rewritten) {
     if (editedByUser(el)) {
       keepUserEdit(line, el)
