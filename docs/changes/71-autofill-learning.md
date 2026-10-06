@@ -136,10 +136,16 @@ it already fills.
     `submit` event, and every click, mouse or pointer event whose `composedPath()` target is outside the widget and
     its own listboxes. This catches a page that turns the option into a submit button inside its own click listener,
     a label re-pointed at an outside checkbox at click time, and a handler re-sending the click to another control;
-  - before the pick it snapshots every checkbox outside the widget and the page state (URL and the adapter's step).
-    A blocked event, a changed checkbox (put back) or a step change fails the pick with `halt`. The field goes to
-    the user ("Needs you", with the suggestion), and the fill stops picking;
-  - the listeners are removed in `finally`. A real click outside the field is ignored for the second or two a pick
+  - it also cancels a click whose target, or the control of the label it lands on (resolved at dispatch time), is a
+    checkbox or radio the pick is not answering, even inside the widget;
+  - before the pick it snapshots every checkbox and radio except the ones the pick answers (the group's radios,
+    Ashby's yes/no mirror), and the page state (URL and the adapter's step). A blocked event, a changed toggle (put
+    back) or a step change fails the pick with `halt`. The field goes to the user ("Needs you", with the suggestion),
+    and the fill stops picking;
+  - the latch and the page state are checked before every dispatched event and right after the menu opens, so
+    nothing is pressed on a page that moved on;
+  - cleanup that runs page handlers (closing the menu by blur) happens with the net still up. The listeners are
+    removed last, after a microtask and a task. A real click outside the field is ignored for the second or two a pick
     takes.
 - **Events:** pointerdown, mousedown, pointerup, mouseup and click on the control and then on the option element.
   Never a keyboard event, so nothing can press Enter in a form. A menu left open is closed by blurring the control.
@@ -154,8 +160,9 @@ it already fills.
   mid-press, and a single untied listbox. Review round 3 added: a submit arranged in a click listener, a label tied
   to a consent checkbox at click time, an option in a button named Next through `aria-labelledby`, another field's
   listbox inside a region the control names, consent-worded options, and the net itself (a click re-sent outside,
-  an outside checkbox ticked, a step change, and the listeners removed afterwards). No key or submit event fires in
-  any of them.
+  an outside checkbox ticked, a step change, and the listeners removed afterwards). Review round 4 added: a submit
+  from the blur that closes the menu, a label retargeted at click time to a consent checkbox inside the widget, and a
+  step change while the menu opens. No key or submit event fires in any of them.
 - **User edits:** a click-only field the person touched, or a combobox they are typing into, is `kept`. Edits are
   checked again before each press and after the menu opens.
 - **After the fill:** the verify pass (and the one after an upload) re-reads every picked widget from the current page.
@@ -222,6 +229,14 @@ it already fills.
   model." Each suggestion line says whether it comes from saved answers or from the AI.
 - **Settings → Saved application answers:** facts (sensitive values masked until **Show**) and directly answered
   questions, with **Forget** and **Forget all**.
+
+### Known limits
+
+Picking is DOM-level protection against accidental submits and stray clicks on normal ATS pages. It is not a sandbox
+against a deliberately hostile page: such a page runs its own scripts and can always act on its own. The guards
+above make Huntgry's own synthetic presses fail closed when a page behaves unexpectedly, and the e2e and unit tests
+cover the variants found in review. Anyone who prefers no synthetic presses at all can turn off "Pick dropdown
+answers automatically" in Settings; answers are then only suggested in the Apply panel.
 
 ## Design decisions and alternatives rejected
 
