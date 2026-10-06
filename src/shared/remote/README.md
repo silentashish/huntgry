@@ -15,6 +15,7 @@ imports nothing from the rest of `src/shared`, and uses no Node, DOM or React Na
 | `guards.ts` | Envelope, command, relay-frame guards (hand-written, no schema library), `requireJobUrl` / `isPrivateHostname`, `negotiateProtocol`, `ttlFor`. |
 | `dto.ts` | Field-by-field validation of every desktop → phone body: `requireStatusSummary`, `requireRemoteRun`, `requireQueueItem` / `requireQueueState`, `requireTranscriptItem` / `requireTranscriptPage` / `requireRunPage`, `requirePipelineState` / `requirePipelineSummary`, `requireReviewItem` / `requireReviewDetail`, `requireRemoteJob` / `requireJobsPage` / `requireRunsPage`, `requireFileChunk`, `requireEventBody`. The projector runs them before encrypting, the phone before rendering. |
 | `crypto.ts` | `tweetnacl` helpers: keypairs, `deriveSessionKey` (`nacl.box.before`), `sealEnvelope` / `openEnvelope` (box), `sealJson` / `openJson` (secretbox for pairing), nonces, base64 / hex, `equalBytes`. |
+| `relay-http.ts` | The relay's HTTPS side: `RELAY_PATHS` (`/rooms`, `/rooms/{id}`, `…/devices`, `…/devices/{id}`, `…/pairings`, `/ws`), the bearer-token rule (admin token on `POST /rooms`, owner secret elsewhere), the request / response bodies (`CreateRoomRequest` / `CreateRoomResponse`, `RegisterDeviceRequest`, `RegisterPairingRequest`) and their guards. Hashes are hex SHA-256 of the secret string as presented. |
 | `text.ts` | The only host APIs the package touches: `TextEncoder` / `TextDecoder` and the WHATWG `URL` parser. |
 | `crypto.fixture.json` | Pinned keys, session key and ciphertexts so the phone and the desktop cannot drift. |
 
@@ -46,6 +47,12 @@ try {
   reply({ kind: 'result', re: frame.ref, ok: false, error: errorOf(e), body: null })
 }
 ```
+
+**Acknowledging without sending.** A `RelayFrame` always carries a box (`nonce`, `ct`), so a
+receiver that has nothing to send back acknowledges with the clear client frame
+`{ ack: ref }` (`RelayClientFrame`): the relay deletes that frame from the receiver's inbox
+exactly as it does for `RelayFrame.ack`. The phone acks results and events this way; the
+desktop acks a command in the same frame as its result (`ack: env.id`).
 
 `errorOf` forwards the message of a `ProtocolError` only; any other exception (filesystem,
 network, process errors, which may quote workspace paths) becomes `failed` with

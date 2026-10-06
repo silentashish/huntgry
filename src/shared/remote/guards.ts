@@ -481,6 +481,10 @@ export function requireRelayClientFrame(value: unknown): RelayClientFrame {
     if (!/^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]{1,128}\]$/.test(token)) invalid('pushToken is not an Expo push token.')
     return { pushToken: token }
   }
+  if ('ack' in f) {
+    rejectUnknownKeys(f, ['ack'], 'RelayClientFrame')
+    return { ack: requireId(f.ack, 'ack') }
+  }
   rejectUnknownKeys(f, ['auth'], 'RelayClientFrame')
   const a = requireRecord(f.auth, 'auth')
   const room = requireId(a.room, 'auth.room')

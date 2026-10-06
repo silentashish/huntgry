@@ -10,6 +10,7 @@ import { stopAllRuns } from './cli/ipc'
 import { initPipeline, stopPipeline } from './pipeline/ipc'
 import { setReviewAuthorityRoot } from './review/authority'
 import { stopQueue } from './queue/ipc'
+import { startRemote, stopRemote } from './remote/ipc'
 import { registerIpcHandlers } from './ipc'
 
 // Menus, the About panel and userData use this name. Packaged builds take the
@@ -93,6 +94,8 @@ app.whenReady().then(() => {
   createWindow()
   // Resumes an unattended pipeline interrupted by a restart, keeps the Mac awake while it has work.
   initPipeline()
+  // The relay session (ADR-0001): outbound only, off until enabled in Settings.
+  void startRemote()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -110,9 +113,11 @@ app.on('before-quit', (event) => {
   if (runsStopped) return
   event.preventDefault()
   // The queue stops following its runs first, so they reload as interrupted, not cancelled.
+  // The remote session closes after the queue and the runs, so a phone's last command is not cut mid-way.
   void stopPipeline()
     .then(stopQueue)
     .then(stopAllRuns)
+    .then(stopRemote)
     .catch((err: unknown) => console.error('Stopping runs before quit failed:', err))
     .finally(() => {
       runsStopped = true

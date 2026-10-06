@@ -1,7 +1,8 @@
 import { app, ipcMain, shell } from 'electron'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
-import { isAgentId, RUNNER_CHANNELS, type AgentId, type RunSummary } from '@shared/runner-types'
+import { isAgentId, RUNNER_CHANNELS, type AgentId, type RunSummary, type TranscriptItem } from '@shared/runner-types'
+import { buildTranscript } from '@shared/transcript'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
 import { MAX_TEXT } from './command'
@@ -10,8 +11,9 @@ import { findClaude, findSkillDir } from './env'
 import { checkEnvironment, installPythonDeps } from './environment'
 import { claudeInstallKind, exclusive, installClaude, updateClaude } from './install-claude'
 import { installSkill } from './install-skill'
-import { listRuns, OUTPUT_FILES, readEvents, readRun, RUN_ID_PATTERN } from './runs'
+import { listRuns, OUTPUT_FILES, readEvents, readRun, requireRunId } from './runs'
 import { replyThroughQueue } from '../queue/ipc'
+import { WorkspaceChangedError } from '../workspace/changed'
 import { contextForRun, defaultAgent, manager, setDefaultAgent, startTailorRun, venvDir } from './start'
 
 /** Which skill release Huntgry installed (see `install-skill.ts`). */
@@ -23,11 +25,6 @@ export { stopAllRuns } from './start'
 function requireAgent(agent: unknown): AgentId {
   if (!isAgentId(agent)) throw new Error('Unknown agent.')
   return agent
-}
-
-function requireRunId(id: unknown): string {
-  if (typeof id !== 'string' || !RUN_ID_PATTERN.test(id)) throw new Error('Invalid run id.')
-  return id
 }
 
 async function currentRun(id: string): Promise<RunSummary> {
@@ -45,6 +42,54 @@ async function outputPath(id: string, file?: string): Promise<string> {
   if (file === undefined) return folder
   if (!(OUTPUT_FILES as readonly string[]).includes(file)) throw new Error('Unknown output file.')
   return join(folder, file)
+}
+
+/**
+ * A run of `workspace` (live or on disk). A live run started in another workspace is not this
+ * workspace's run, whatever its id: `WorkspaceChangedError`.
+ */
+async function runIn(workspace: string, id: string): Promise<RunSummary> {
+  const live = manager.liveRun(id)
+  if (!live) return readRun(workspace, id)
+  if (manager.liveWorkspace(id) !== workspace) throw new WorkspaceChangedError()
+  return { ...live, live: true }
+}
+
+/**
+ * Runs for the remote gateway (ADR-0001): the same helpers and rules as the handlers below,
+ * minus open / reveal. Every call takes the workspace the gateway checked and never resolves
+ * the open one again, so a switch while the command waited cannot redirect it.
+ */
+export const runsForRemote = {
+  list: async (workspace: string): Promise<RunSummary[]> => {
+    const runs = await listRuns(workspace)
+    return runs.map((r) => (manager.isLive(r.id) && manager.liveWorkspace(r.id) === workspace ? { ...manager.liveRun(r.id)!, live: true } : r))
+  },
+  get: async (workspace: string, runId: string): Promise<{ run: RunSummary; items: TranscriptItem[] }> => {
+    await manager.flush(runId)
+    const run = await runIn(workspace, runId)
+    return { run, items: buildTranscript(await readEvents(workspace, runId), run.agent) }
+  },
+  reply: async (workspace: string, runId: string, text: string): Promise<RunSummary> => {
+    const run = await runIn(workspace, runId)
+    // Same rule as RUNNER_CHANNELS.reply (the gateway checks it first): an unattended run continues only through the queue.
+    if (run.unattended || run.params.unattended) throw new Error('This unattended run cannot be continued now. Try again in a moment.')
+    // A run with no process resumes in a context built for `workspace`; `context` refuses another open one.
+    return manager.reply(runId, text, () => contextForRun(runId, workspace))
+  },
+  stop: async (workspace: string, runId: string): Promise<RunSummary> => {
+    await runIn(workspace, runId)
+    manager.stop(runId)
+    return runIn(workspace, runId)
+  },
+  finish: async (workspace: string, runId: string): Promise<RunSummary> => {
+    await runIn(workspace, runId)
+    if (manager.isLive(runId)) {
+      manager.finish(runId)
+      return runIn(workspace, runId)
+    }
+    return (await manager.endIdle(workspace, runId, 'finished')) ?? runIn(workspace, runId)
+  }
 }
 
 /** Environment checks and tailoring runs of the resume-tailor skill. */

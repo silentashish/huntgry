@@ -568,13 +568,14 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(done!.counts.unreviewed).toBe(2)
     expect(queue.state().items.every((i) => i.interruptedOnce && i.status === 'done')).toBe(true)
 
-    // A second interruption of the same items fails them.
+    // A second interruption of the same items fails them. Shut down first: the queue's last save
+    // (still in flight after `finished`) would otherwise land on top of the edited file.
+    await pipeline.shutdown()
+    await queue.shutdown()
     const raw = JSON.parse(await readFile(queueFile(ws), 'utf8'))
     raw.items = raw.items.map((i: Record<string, unknown>) => ({ ...i, status: 'running', outcome: undefined }))
     raw.pipeline.status = 'running'
     await writeFile(queueFile(ws), JSON.stringify(raw))
-    await pipeline.shutdown()
-    await queue.shutdown()
     queue = new TailorQueue(queueDeps())
     pipeline = new Pipeline(pipelineDeps())
     await pipeline.init(0)

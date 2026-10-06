@@ -9,6 +9,7 @@ import { registerPipelineIpc } from './pipeline/ipc'
 import { registerProfileIpc } from './profile/ipc'
 import { registerQueueIpc } from './queue/ipc'
 import { registerReviewIpc } from './review/ipc'
+import { registerRemoteIpc } from './remote/ipc'
 import { registerWorkspaceIpc } from './workspace/ipc'
 
 /**
@@ -28,4 +29,5 @@ export function registerIpcHandlers(): void {
   registerApplyIpc()
   registerReviewIpc()
   registerPipelineIpc()
+  registerRemoteIpc()
 }

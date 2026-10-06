@@ -9,6 +9,7 @@ import type { ApplyEvents } from './apply-types'
 import type { BrowserEvents } from './browser-types'
 import type { PipelineEvents } from './pipeline-types'
 import type { QueueEvents } from './queue-types'
+import type { RemoteEvents } from './remote-types'
 import type { RunnerEvents } from './runner-types'
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
@@ -18,7 +19,8 @@ export interface HuntgryEvents
     BrowserEvents,
     QueueEvents,
     ApplyEvents,
-    PipelineEvents {}
+    PipelineEvents,
+    RemoteEvents {}
 
 export type EventChannel = keyof HuntgryEvents
 
@@ -32,7 +34,8 @@ export const EVENT_CHANNELS: readonly EventChannel[] = [
   'queue:changed',
   'apply:session',
   'pipeline:changed',
-  'pipeline:finished'
+  'pipeline:finished',
+  'remote:state'
 ]
 
 /** Subscribe to a main-process event. Returns the unsubscribe function. */

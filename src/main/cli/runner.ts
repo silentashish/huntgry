@@ -111,6 +111,11 @@ export class RunManager {
     return true
   }
 
+  /** The workspace a live run was started in (`null` when it has no process). */
+  liveWorkspace(id: string): string | null {
+    return this.live.get(id)?.ctx.workspace ?? null
+  }
+
   /** The in-memory summary of a live run (fresher than `run.json`). */
   liveRun(id: string): RunSummary | null {
     return this.live.get(id)?.run ?? null
@@ -341,46 +346,73 @@ export class RunManager {
     child.on('close', (code, signal) => {
       for (const line of lines.flush()) this.handleLine(entry, line)
       this.live.delete(run.id)
-      const r = entry.run
-      r.live = false
-      const { adapter } = entry
-      const exec = adapter.turnMode === 'exec'
-      if (entry.stopping) {
-        r.status = 'stopped'
-      } else if (entry.releasing && r.status === 'waiting') {
-        // Released between turns: still waiting, resumable.
-      } else if (entry.aborted) {
-        r.status = 'failed'
-        r.error = entry.aborted
-      } else if (entry.finishing || (code === 0 && !exec && !entry.turnError)) {
-        r.status = 'finished'
-      } else if (!entry.turnEnded || entry.turnError) {
-        // An exec agent that exits cleanly after its turn is between turns ("waiting"), not finished.
-        r.status = 'failed'
-        const stderr = entry.stderr.trim()
-        const hint = adapter.explainFailure(stderr, entry.ctx.claudeVersion ?? null)
-        const exited =
-          code === 0 && exec ? `${adapter.binary} exited before the turn ended` : `${adapter.binary} exited with ${signal ?? `code ${code}`}`
-        r.error = [...new Set([hint, entry.turnError, stderr || exited].filter(Boolean))].join('\n\n')
+      entry.run.live = false
+      // The exit's verdict waits for the writes already queued, the ended turn's folder scan among
+      // them. Applied at once, a summary queued before the exit was broadcast as failed (or
+      // finished) without the files the turn had just built, and the queue judged the run on it
+      // (a built unattended run retried instead of verified). Now every summary reads as it would
+      // have if the exit came a moment later. The flags are taken now, as the process ended.
+      const exit = {
+        stopping: entry.stopping,
+        releasing: entry.releasing,
+        aborted: entry.aborted,
+        finishing: entry.finishing,
+        turnEnded: entry.turnEnded,
+        turnError: entry.turnError
       }
-      // A process that exits after its turn (status "waiting") can still be resumed: keep "waiting".
-      if (r.status === 'failed' || r.status === 'stopped') {
-        this.record(
-          entry,
-          notice(
-            r.status === 'failed' ? 'error' : 'info',
-            r.status === 'failed' ? `${adapter.label} stopped: ${r.error}` : 'Stopped.'
-          )
-        )
-      }
-      this.touch(entry)
-      const settled = entry.queue.then(() => {
-        this.settling.delete(settled)
-        if (this.settledById.get(run.id) === settled) this.settledById.delete(run.id)
-      })
+      const verdict = entry.queue.then(() => this.applyExit(entry, code, signal, exit))
+      entry.queue = verdict
+      // `applyExit` queues the notice and the summary; settled once those are on disk too.
+      const settled = verdict
+        .then(() => entry.queue)
+        .then(() => {
+          this.settling.delete(settled)
+          if (this.settledById.get(run.id) === settled) this.settledById.delete(run.id)
+        })
       this.settling.add(settled)
       this.settledById.set(run.id, settled)
     })
+  }
+
+  /** The status a process exit leaves the run in, its notice, and the summary (see the `close` handler). */
+  private applyExit(
+    entry: Live,
+    code: number | null,
+    signal: NodeJS.Signals | null,
+    exit: Pick<Live, 'stopping' | 'releasing' | 'aborted' | 'finishing' | 'turnEnded' | 'turnError'>
+  ): void {
+    const r = entry.run
+    const { adapter } = entry
+    const exec = adapter.turnMode === 'exec'
+    if (exit.stopping) {
+      r.status = 'stopped'
+    } else if (exit.releasing && r.status === 'waiting') {
+      // Released between turns: still waiting, resumable.
+    } else if (exit.aborted) {
+      r.status = 'failed'
+      r.error = exit.aborted
+    } else if (exit.finishing || (code === 0 && !exec && !exit.turnError)) {
+      r.status = 'finished'
+    } else if (!exit.turnEnded || exit.turnError) {
+      // An exec agent that exits cleanly after its turn is between turns ("waiting"), not finished.
+      r.status = 'failed'
+      const stderr = entry.stderr.trim()
+      const hint = adapter.explainFailure(stderr, entry.ctx.claudeVersion ?? null)
+      const exited =
+        code === 0 && exec ? `${adapter.binary} exited before the turn ended` : `${adapter.binary} exited with ${signal ?? `code ${code}`}`
+      r.error = [...new Set([hint, exit.turnError, stderr || exited].filter(Boolean))].join('\n\n')
+    }
+    // A process that exits after its turn (status "waiting") can still be resumed: keep "waiting".
+    if (r.status === 'failed' || r.status === 'stopped') {
+      this.record(
+        entry,
+        notice(
+          r.status === 'failed' ? 'error' : 'info',
+          r.status === 'failed' ? `${adapter.label} stopped: ${r.error}` : 'Stopped.'
+        )
+      )
+    }
+    this.touch(entry)
   }
 
   /** Records the user's `text` and sends `sent` (the text, or the first message with context) to the agent. */

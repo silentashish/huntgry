@@ -26,6 +26,7 @@ import {
   type RunnerEnvironment
 } from '@shared/runner-types'
 import { api, errorText } from '../../api'
+import { RemoteCard } from './RemoteCard'
 import { StandingApprovalsCard } from './StandingApprovalsCard'
 
 const STATUS: Record<PreflightItem['status'], { color: string; label: string }> = {
@@ -318,6 +319,8 @@ brew install poppler`}</Code>
           </Card>
         </>
       )}
+
+      <RemoteCard />
     </Stack>
   )
 }
