@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActionBar,
   Alert,
@@ -18,7 +18,10 @@ import {
   TextInput,
   Title
 } from '@mantine/core'
-import { IconClipboardText, IconLink, IconSearch, IconSparkles } from '@tabler/icons-react'
+import { IconClipboardText, IconLink, IconRefresh, IconSearch, IconSparkles } from '@tabler/icons-react'
+import { DEFAULT_FILTERS, sponsorshipOf, type JobFilters } from '@shared/job-filters'
+import { hasRelevanceSignals, profileSignals, relevantJobs, type JobScore, type ProfileSignals } from '@shared/job-relevance'
+import { autoRefreshDue, DEFAULT_JOBS_PREFS, type JobsPrefs } from '@shared/jobs-prefs'
 import {
   canFetchDetails,
   tailorPrefillFor,
@@ -28,20 +31,25 @@ import {
   type SearchSource,
   type SourceResult
 } from '@shared/jobs-types'
+import { emptyProfile } from '@shared/master-profile'
 import { api, errorText } from '../../api'
 import { useQueue } from '../../components/queue/useQueue'
 import { useNavigation } from '../../navigation'
 import { QUEUE_STATUS_LABEL } from '../tailor/status'
 import { BulkTailorModal } from './BulkTailorModal'
 import { JobDrawer } from './JobDrawer'
-import { ago, SOURCE_LABEL } from './labels'
+import { JobFiltersBar } from './JobFiltersBar'
+import { ago, since, SOURCE_LABEL } from './labels'
 import { PasteModal } from './PasteModal'
 import { mergeJobs } from './merge'
 import { activeQueueItems, selectable, selectAll, selectAllState, selectedJobs, toggle } from './selection'
+import { defaultShow, visibleJobs, type Show } from './view'
 
-type Show = 'search' | 'all' | 'new' | 'tailored' | 'dismissed'
-
-/** Job search across hiring.cafe and Indeed, jobs added by URL or pasted; a job can be sent to the Tailor page. */
+/**
+ * Job search across hiring.cafe and Indeed, jobs added by URL or pasted; a job can be sent to the Tailor page.
+ * Opens on the jobs relevant to the master profile, rendered from saved jobs at once; a profile refresh of the
+ * boards runs in the background when the last one is over 12 hours old (and auto-refresh is on), or on Refresh.
+ */
 export function JobsPage() {
   const { navigate } = useNavigation()
   const [jobs, setJobs] = useState<Job[] | null>(null)
@@ -57,10 +65,14 @@ export function JobsPage() {
   const [pasteOpen, setPasteOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
-  const [show, setShow] = useState<Show>('all')
+  /** `null` until the user picks a segment: then the default (Relevant when the profile allows) applies. */
+  const [pickedShow, setShow] = useState<Show | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
-  /** Jobs returned by the last search, shown by default right after it. */
-  const [lastIds, setLastIds] = useState<Set<string> | null>(null)
+  /** Saved per workspace: filters, auto-refresh, the last search's ids (so "Last search" survives leaving the page). */
+  const [prefs, setPrefsState] = useState<JobsPrefs | null>(null)
+  /** What the master profile says to match jobs on; `null` while loading (an unreadable profile gives no signals). */
+  const [signals, setSignals] = useState<ProfileSignals | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
   /** Jobs ticked for "Tailor all". */
   const [selection, setSelection] = useState<Set<string>>(new Set())
   const [bulkOpen, setBulkOpen] = useState(false)
@@ -69,9 +81,59 @@ export function JobsPage() {
   useEffect(() => {
     api.jobs.list().then(setJobs, (err) => setError(errorText(err)))
     api.jobs.recentSearches().then(setRecent, () => undefined)
+    api.jobs.prefs().then(setPrefsState, () => setPrefsState(DEFAULT_JOBS_PREFS))
+    api.profile.read().then(
+      (doc) => setSignals(profileSignals(doc.profile)),
+      () => setSignals(profileSignals(emptyProfile()))
+    )
   }, [])
 
   const upsert = (list: Job[]) => setJobs((cur) => mergeJobs(cur ?? [], list))
+  const canRelevant = signals !== null && hasRelevanceSignals(signals)
+  const show: Show = pickedShow ?? defaultShow(canRelevant)
+  const filters = prefs?.filters ?? DEFAULT_FILTERS
+  const lastIds = useMemo(() => (prefs?.lastSearch ? new Set(prefs.lastSearch.ids) : null), [prefs?.lastSearch])
+
+  function savePrefs(patch: { filters?: JobFilters; autoRefresh?: boolean }) {
+    setPrefsState((p) => ({ ...(p ?? DEFAULT_JOBS_PREFS), ...patch }))
+    api.jobs.setPrefs(patch).catch((err) => setError(errorText(err)))
+  }
+
+  /**
+   * Searches the boards with the profile-derived query (its headline near its location), then reloads the
+   * saved list. `auto`: the background refresh on open, which leaves the shown segment alone.
+   */
+  async function refresh(auto = false) {
+    setRefreshing(true)
+    setError(null)
+    if (!auto) setReport(null)
+    try {
+      const res = await api.jobs.refresh({ sources: auto ? ['hiring.cafe', 'indeed'] : sources })
+      upsert(res.jobs)
+      setReport(res.sources)
+      setPrefsState((p) => ({
+        ...(p ?? DEFAULT_JOBS_PREFS),
+        lastRefreshAt: res.at,
+        lastSearch: { query: res.query, at: res.at, ids: res.jobs.map((j) => j.id), relevant: true }
+      }))
+      if (!auto) setShow('relevant')
+      api.jobs.list().then(setJobs, () => undefined)
+      api.jobs.recentSearches().then(setRecent, () => undefined)
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  // Once the saved jobs, the preferences and the profile are in: refresh in the background when it is due.
+  const autoChecked = useRef(false)
+  useEffect(() => {
+    if (autoChecked.current || jobs === null || prefs === null || signals === null) return
+    autoChecked.current = true
+    if (canRelevant && autoRefreshDue(prefs)) void refresh(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, when everything it reads has loaded
+  }, [jobs, prefs, signals])
 
   async function search(q?: JobQuery) {
     const query: JobQuery = q ?? { keywords, location, remoteOnly, sources }
@@ -88,7 +150,10 @@ export function JobsPage() {
       const res = await api.jobs.search(query)
       upsert(res.jobs)
       setReport(res.sources)
-      setLastIds(new Set(res.jobs.map((j) => j.id)))
+      setPrefsState((p) => ({
+        ...(p ?? DEFAULT_JOBS_PREFS),
+        lastSearch: { query, at: new Date().toISOString(), ids: res.jobs.map((j) => j.id), relevant: false }
+      }))
       setShow('search')
       setFilter('')
       api.jobs.recentSearches().then(setRecent, () => undefined)
@@ -138,19 +203,15 @@ export function JobsPage() {
     navigate('tailor', tailorPrefillFor(current))
   }
 
-  const shown = useMemo(() => {
-    const q = filter.trim().toLowerCase()
-    return (jobs ?? []).filter((j) => {
-      if (show === 'search' && !lastIds?.has(j.id)) return false
-      if (show === 'dismissed' ? !j.dismissed : j.dismissed) return false
-      if (show === 'new' && j.tailoredAt) return false
-      if (show === 'tailored' && !j.tailoredAt) return false
-      return !q || [j.title, j.company, j.location, j.tags.join(' ')].some((s) => s.toLowerCase().includes(q))
-    })
-  }, [jobs, filter, show, lastIds])
+  const relevant = useMemo(() => (signals && jobs ? relevantJobs(jobs, signals) : []), [jobs, signals])
+  const scoreOf = useMemo(() => new Map<string, JobScore>(relevant.map((r) => [r.job.id, r.score])), [relevant])
+  const shown = useMemo(
+    () => visibleJobs({ jobs: jobs ?? [], show, relevant, lastIds, filters, text: filter }),
+    [jobs, show, relevant, lastIds, filters, filter]
+  )
 
   // A new search or filter is a new list: start the selection over.
-  useEffect(() => setSelection(new Set()), [filter, show, lastIds])
+  useEffect(() => setSelection(new Set()), [filter, show, lastIds, filters])
 
   const selected = selectedJobs(selection, shown)
   const allState = selectAllState(selection, shown)
@@ -163,9 +224,30 @@ export function JobsPage() {
     <Stack gap="md">
       <Group justify="space-between">
         <Title order={2}>Jobs</Title>
-        <Button variant="light" leftSection={<IconClipboardText size={16} />} onClick={() => setPasteOpen(true)}>
-          Paste a job
-        </Button>
+        <Group gap="sm">
+          {prefs && canRelevant && (
+            <Text size="xs" c="dimmed">
+              Relevant jobs updated {since(prefs.lastRefreshAt)}
+            </Text>
+          )}
+          <Button
+            variant="light"
+            leftSection={<IconRefresh size={16} />}
+            loading={refreshing}
+            disabled={searching || sources.length === 0 || (!keywords.trim() && !canRelevant)}
+            title={
+              keywords.trim()
+                ? 'Search the boards again for the keywords above'
+                : 'Search the boards for jobs like your master profile'
+            }
+            onClick={() => (keywords.trim() ? void search() : void refresh())}
+          >
+            Refresh
+          </Button>
+          <Button variant="light" leftSection={<IconClipboardText size={16} />} onClick={() => setPasteOpen(true)}>
+            Paste a job
+          </Button>
+        </Group>
       </Group>
 
       <Card withBorder radius="md" padding="md">
@@ -193,7 +275,7 @@ export function JobsPage() {
                 disabled={remoteOnly}
                 onChange={(e) => setLocation(e.currentTarget.value)}
               />
-              <Button type="submit" loading={searching} disabled={!keywords.trim() || sources.length === 0}>
+              <Button type="submit" loading={searching} disabled={!keywords.trim() || sources.length === 0 || refreshing}>
                 Search
               </Button>
             </Group>
@@ -228,7 +310,9 @@ export function JobsPage() {
               )}
             </Group>
             <Text size="xs" c="dimmed">
-              Huntgry opens the board's search page once, in the background, only when you click Search.
+              Huntgry opens the board's search page in the background when you click Search or Refresh, and for
+              relevant jobs at most every 12 hours when auto-refresh is on. With no keywords, Refresh searches for
+              your master profile's headline near its location.
             </Text>
           </Stack>
         </form>
@@ -241,6 +325,26 @@ export function JobsPage() {
             Reading {sources.map((s) => SOURCE_LABEL[s]).join(' and ')}… this takes a few seconds per board.
           </Text>
         </Group>
+      )}
+      {refreshing && (
+        <Group gap="xs">
+          <Loader size="xs" />
+          <Text size="sm" c="dimmed">
+            Refreshing relevant jobs from the boards… the saved ones are listed meanwhile.
+          </Text>
+        </Group>
+      )}
+
+      {signals && !canRelevant && (
+        <Alert variant="light" color="blue" title="See the jobs that fit you">
+          <Text size="sm">
+            Add a headline or a role to your{' '}
+            <Anchor component="button" type="button" size="sm" onClick={() => navigate('profile', { section: 'contact' })}>
+              master profile
+            </Anchor>{' '}
+            and the Jobs page opens on the jobs relevant to it, ranked by title, skills, seniority and location.
+          </Text>
+        </Alert>
       )}
 
       {report && (
@@ -283,7 +387,7 @@ export function JobsPage() {
         </Button>
       </Group>
 
-      {jobs === null ? (
+      {jobs === null || prefs === null || signals === null ? (
         <Loader />
       ) : jobs.length === 0 ? (
         <Card withBorder radius="md" padding="xl">
@@ -304,7 +408,15 @@ export function JobsPage() {
               value={show}
               onChange={(v) => setShow(v as Show)}
               data={[
-                ...(lastIds ? [{ value: 'search', label: `Last search (${lastIds.size})` }] : []),
+                ...(canRelevant ? [{ value: 'relevant', label: `Relevant (${relevant.length})` }] : []),
+                ...(lastIds
+                  ? [
+                      {
+                        value: 'search',
+                        label: `${prefs.lastSearch?.relevant ? 'Last refresh' : 'Last search'} (${lastIds.size})`
+                      }
+                    ]
+                  : []),
                 { value: 'all', label: 'All' },
                 { value: 'new', label: 'Not tailored' },
                 { value: 'tailored', label: 'Tailored' },
@@ -312,6 +424,12 @@ export function JobsPage() {
               ]}
             />
           </Group>
+          <JobFiltersBar
+            filters={filters}
+            onChange={(f) => savePrefs({ filters: f })}
+            autoRefresh={prefs.autoRefresh}
+            onAutoRefresh={(on) => savePrefs({ autoRefresh: on })}
+          />
           <Group gap="md">
             <Checkbox
               size="xs"
@@ -330,6 +448,13 @@ export function JobsPage() {
               {shown.length} of {jobs.length} saved jobs
             </Text>
           </Group>
+          {show === 'relevant' && shown.length === 0 && (
+            <Text size="sm" c="dimmed" ta="center" py="md">
+              {relevant.length === 0
+                ? 'No saved job matches your master profile yet. Refresh to search the boards for it.'
+                : 'No relevant job passes these filters.'}
+            </Text>
+          )}
           <Stack gap="xs">
             {shown.map((j) => (
               <Card
@@ -360,6 +485,11 @@ export function JobsPage() {
                     <Text size="xs" c="dimmed" lineClamp={2}>
                       {j.description}
                     </Text>
+                    {show === 'relevant' && scoreOf.get(j.id) && (
+                      <Text size="xs" c="teal" truncate>
+                        {scoreOf.get(j.id)!.reasons.join(' · ')}
+                      </Text>
+                    )}
                   </Stack>
                   <Stack gap={4} align="flex-end" style={{ flexShrink: 0 }}>
                     <Badge size="sm" variant="light">
@@ -368,6 +498,16 @@ export function JobsPage() {
                     {j.remote && (
                       <Badge size="sm" variant="light" color="teal">
                         Remote
+                      </Badge>
+                    )}
+                    {sponsorshipOf(j) === true && (
+                      <Badge size="sm" variant="light" color="grape">
+                        Sponsors visa
+                      </Badge>
+                    )}
+                    {sponsorshipOf(j) === false && (
+                      <Badge size="sm" variant="light" color="orange">
+                        No sponsorship
                       </Badge>
                     )}
                     {queueItemOf(j) && (
