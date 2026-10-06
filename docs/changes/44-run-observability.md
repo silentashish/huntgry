@@ -138,8 +138,28 @@ with a 1-hour cache write) equals the CLI's `costUSD` to the 7th decimal (unit t
   is written to the agent (`send`) to the turn's end signal, or to the process exit when the turn
   never ended (stop, crash, watchdog abort). The time a run waits at the approval step is never in
   it. The CLI's own duration is kept as detail (`apiMs` for Claude).
-- **Waiting for you** = wall time since the run started (until its last update, or now while it
-  waits) minus active time.
+- **Waiting for you** = wall time since the run started minus active time, measured up to the start
+  of the turn that is running (`run.turnStartedAt`, so it stops growing while the agent works), to
+  now while the run waits (the strip refreshes every second), or to its last update once it ended.
+
+### Turns that never end
+
+A turn stopped or crashed before its end signal still records its active time, with
+`ok: false` and `usageIncomplete: true`. Its tokens are what the CLI had reported per API request
+until then: Claude's `assistant.message.usage`, repeated on every block of the same message and
+therefore counted once per message id (sub-agents included). Streamed `output_tokens` are only
+what was sent so far, so this is a lower bound; the UI shows such costs as "≥ $x", and a turn
+with nothing reported (Codex and agy report no per-request usage) as "usage unknown", never as
+free. The Dashboard says how many turns are incomplete. Since the CLI's running totals may report
+those requests again at the next turn's end, the tokens given to the interrupted turn are kept in
+`cliCounters.interrupted` and subtracted from the next turn's share.
+
+### Model per process
+
+Each process starts from the model of its own invocation: the `-m` Huntgry passes to Codex, the
+model agy's settings name when it starts. A resume after a model change is priced with the new
+model; Codex with no model passed is unknown, not the last turn's. Only Claude, which names its
+model in `init`, keeps the last turn's model until its `init` arrives.
 - **Backfilled runs** (recorded before #44): tokens, models and costs are exact (the raw lines
   hold them). Active time is the CLI's own `duration_ms` / `duration_seconds` where it gave one,
   otherwise the time until the next message, capped at one hour, so it is approximate; such runs
@@ -181,6 +201,13 @@ compare runs, agents and models. Claude's own `costUSD` is shown next to it as "
 - **Long-context tiers not modelled.** The tier depends on each request's size; a turn's tokens are
   a sum over many requests. Noted in Settings; a long-prompt turn on Gemini Pro / GPT-6 is
   underestimated.
+- **Turns split by model in the breakdown.** A Claude turn with a sub-agent on another model counts
+  in each model's row with that model's tokens and price; its active time goes to the turn's main
+  model only (so the rows add up to the total time), and tokens the split does not cover stay with
+  that model. The model filter and its choices include sub-agent models; filtering on one selects
+  the runs that used it, with their whole totals.
+- **An edited bundled price keeps its aliases.** Settings overrides are merged with the bundled
+  entry's aliases (agy names models by display name), so editing a price never unprices a run.
 - **One card on the Dashboard, not a new page.** The filters, breakdown, chart, batches and export
   fit in one card next to the applications they explain; a page can come when there is more.
 - **Test ids for the figures.** The KPI and strip values are bare text next to a label with no
@@ -206,7 +233,9 @@ npm test && npm run typecheck && npx electron-vite build
   numbers**, the agent × model table and the days add up to the totals, filters and batch totals,
   CSV.
 - `runner.test.ts` (metrics): waiting for the reply is not active time, the running total is split
-  per turn, a stopped turn records its time, a failed turn its tokens, Codex per-turn tokens and
+  per turn, a stopped turn records its time, a turn stopped mid-way keeps Claude's per-request
+  usage once per request, a resumed Codex turn is priced with its new `-m` model, the running
+  turn's start is recorded, a failed turn its tokens, Codex per-turn tokens and
   `-m` model, agy's settings model, an unknown model is `null`, an old run is backfilled before a
   resumed turn, the batch id lands in `run.json`.
 - `queue.test.ts`: one batch id per request, recorded on the runs.
