@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto'
 import { matchesLocation } from '@shared/job-filters'
 import { profileSignals, relevantQuery } from '@shared/job-relevance'
+import { autoRefreshDue } from '@shared/jobs-prefs'
 import type { Job, JobQuery, RefreshResult, SearchResult, SearchSource, SourceResult } from '@shared/jobs-types'
 import type { MasterProfile } from '@shared/master-profile'
 import { boardOrigin } from './board-url'
 import type { LoadResult } from './loader'
 import { HIRINGCAFE_EXTRACT, hiringCafeSearchUrl, parseHiringCafeHits } from './sources/hiringcafe'
 import { INDEED_EXTRACT, indeedSearchUrl, parseIndeedCards } from './sources/indeed'
-import { recordLastSearch } from './prefs'
+import { readPrefs, recordLastSearch } from './prefs'
 import { parsePosting, POSTING_EXTRACT, type PageData } from './sources/posting'
 import { findCanonical, listJobs, readJob, recordSearch, saveJob, saveJobs, writeJobFile } from './store'
 
@@ -107,23 +108,46 @@ export async function searchJobs(
   return { jobs: canonical, sources }
 }
 
+/** The profile refresh running for each workspace; a second request joins it instead of loading the boards again. */
+const refreshing = new Map<string, Promise<RefreshResult>>()
+
 /**
  * Searches the boards for jobs like the master profile: its headline (or
  * latest role) near its location, or remote only when the profile says
  * "Remote". Saves the results and records the refresh time, whatever the
  * boards answered, so a blocked board is not retried on every open.
+ *
+ * One refresh per workspace at a time: leaving Jobs and opening it again
+ * while the boards load joins the running refresh. `auto` (the refresh on
+ * opening Jobs) is decided here, against the saved preferences, and gives
+ * `null` when it is not due.
  */
 export async function refreshRelevant(
   workspace: string,
   profile: MasterProfile,
   sources: SearchSource[],
   load: Loader,
-  now: () => Date = () => new Date()
-): Promise<RefreshResult> {
-  const query = relevantQuery(profileSignals(profile, now()), sources)
-  if (!query) throw new Error('Add a headline or a role to your master profile to find relevant jobs.')
-  const res = await searchJobs(workspace, query, load, { relevant: true, now })
-  return { ...res, query, at: now().toISOString() }
+  opts: { auto?: boolean; now?: () => Date } = {}
+): Promise<RefreshResult | null> {
+  const now = opts.now ?? (() => new Date())
+  const running = refreshing.get(workspace)
+  if (running) return running
+  if (opts.auto && !autoRefreshDue(await readPrefs(workspace), now())) return null
+  // Another request may have started one while the preferences were read.
+  const started = refreshing.get(workspace)
+  if (started) return started
+  const run = (async (): Promise<RefreshResult> => {
+    const query = relevantQuery(profileSignals(profile, now()), sources)
+    if (!query) throw new Error('Add a headline or a role to your master profile to find relevant jobs.')
+    const res = await searchJobs(workspace, query, load, { relevant: true, now })
+    return { ...res, query, at: now().toISOString() }
+  })()
+  refreshing.set(workspace, run)
+  try {
+    return await run
+  } finally {
+    if (refreshing.get(workspace) === run) refreshing.delete(workspace)
+  }
 }
 
 /** Fetches a posting page and saves it as a job. */

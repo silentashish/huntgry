@@ -633,7 +633,7 @@ describe('service with a stub loader', () => {
     profile.contact.headline = 'Platform Engineer | Infrastructure'
     profile.contact.location = 'Remote'
     const at = new Date('2026-10-06T12:00:00Z')
-    const res = await refreshRelevant(ws, profile, ['hiring.cafe', 'indeed'], recording, () => at)
+    const res = (await refreshRelevant(ws, profile, ['hiring.cafe', 'indeed'], recording, { now: () => at }))!
     expect(res.query).toEqual({ keywords: 'Platform Engineer', location: '', remoteOnly: true, sources: ['hiring.cafe', 'indeed'] })
     const state = JSON.parse(new URL(urls[0]).searchParams.get('searchState')!)
     // Only the keys our own code has verified are sent; visa, salary and experience are filtered locally.
@@ -648,6 +648,44 @@ describe('service with a stub loader', () => {
 
     // Without a headline or a role there is nothing to search for.
     await expect(refreshRelevant(ws, emptyProfile(), ['hiring.cafe'], recording)).rejects.toThrow(/headline or a role/)
+  })
+
+  it('joins a refresh already running, and runs an automatic one only when it is due (review on #75)', async () => {
+    const hc = await fixture('hiringcafe-next-data.json')
+    let loads = 0
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const slow = async (): Promise<LoadResult> => {
+      loads++
+      await gate
+      return { status: 'ok', data: { hits: hc.props.pageProps.ssrHits } }
+    }
+    const profile = emptyProfile()
+    profile.contact.headline = 'Platform Engineer'
+    const t0 = new Date('2026-10-06T12:00:00Z')
+    // Jobs opens (stale: never refreshed), is left while the board loads, and is opened again.
+    const first = refreshRelevant(ws, profile, ['hiring.cafe'], slow, { auto: true, now: () => t0 })
+    const second = refreshRelevant(ws, profile, ['hiring.cafe'], slow, { auto: true, now: () => t0 })
+    const manual = refreshRelevant(ws, profile, ['hiring.cafe'], slow, { now: () => t0 })
+    await new Promise((r) => setTimeout(r, 20))
+    release()
+    const [a, b, c] = await Promise.all([first, second, manual])
+    expect(loads).toBe(1)
+    expect(b).toBe(a)
+    expect(c).toBe(a)
+
+    // Fresh now: an automatic refresh within 12 h does nothing; after 12 h it runs again; Refresh always runs.
+    const later = (h: number) => () => new Date(t0.getTime() + h * 3_600_000)
+    expect(await refreshRelevant(ws, profile, ['hiring.cafe'], slow, { auto: true, now: later(1) })).toBeNull()
+    expect(loads).toBe(1)
+    expect(await refreshRelevant(ws, profile, ['hiring.cafe'], slow, { now: later(1) })).not.toBeNull()
+    expect(loads).toBe(2)
+    expect(await refreshRelevant(ws, profile, ['hiring.cafe'], slow, { auto: true, now: later(14) })).not.toBeNull()
+    expect(loads).toBe(3)
+    // Turned off: never automatic.
+    await updatePrefs(ws, { autoRefresh: false })
+    expect(await refreshRelevant(ws, profile, ['hiring.cafe'], slow, { auto: true, now: later(40) })).toBeNull()
+    expect(loads).toBe(3)
   })
 })
 

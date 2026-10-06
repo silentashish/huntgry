@@ -49,9 +49,10 @@ export function registerJobsIpc(): void {
   })
   ipcMain.handle(JOBS_CHANNELS.recentSearches, async () => recentSearches(await workspace()))
   ipcMain.handle(JOBS_CHANNELS.refresh, async (_e, input: unknown) => {
-    const sources = validateSources((input as { sources?: unknown } | null)?.sources)
+    const i = (typeof input === 'object' && input !== null ? input : {}) as { sources?: unknown; auto?: unknown }
+    const sources = validateSources(i.sources)
     const { profile } = await readProfile(await currentProfilePath())
-    return refreshRelevant(await workspace(), profile, sources, loadAndExtract)
+    return refreshRelevant(await workspace(), profile, sources, loadAndExtract, { auto: i.auto === true })
   })
   ipcMain.handle(JOBS_CHANNELS.prefs, async () => readPrefs(await workspace()))
   ipcMain.handle(JOBS_CHANNELS.setPrefs, async (_e, patch: unknown) =>

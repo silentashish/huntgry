@@ -112,9 +112,11 @@ export interface JobsApi {
   recentSearches(): Promise<SavedSearch[]>
   /**
    * Searches the boards for jobs like the master profile (its headline or latest role, and its location),
-   * saves them and records the time in the Jobs preferences.
+   * saves them and records the time in the Jobs preferences. A refresh already running for the workspace is
+   * joined, not repeated. `auto`: the refresh on opening Jobs, which runs only when it is due (auto-refresh on,
+   * last refresh 12 h old) and resolves to `null` otherwise.
    */
-  refresh(input: { sources: SearchSource[] }): Promise<RefreshResult>
+  refresh(input: { sources: SearchSource[]; auto?: boolean }): Promise<RefreshResult | null>
   /** The workspace's Jobs preferences: filters, auto-refresh, last search and last refresh. */
   prefs(): Promise<JobsPrefs>
   /** Saves filters and the auto-refresh toggle (validated in main); returns the whole preferences. */
