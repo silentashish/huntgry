@@ -13,7 +13,7 @@ export interface UsageFilter {
   /** Runs created in the last 7 / 30 days, or all of them. */
   range?: UsageRange
   agents?: AgentId[]
-  /** Model ids as recorded (a run counts when any of its turns used one of them). */
+  /** Model ids as recorded (a run counts when any of its turns used one of them, sub-agents included). */
   models?: string[]
   statuses?: RunStatus[]
   /** Only the runs of one "Tailor all" request / pipeline. */
@@ -41,6 +41,8 @@ export interface UsageRunRow {
   /** Sum of its priced turns; `null` when no turn could be priced. */
   estimatedCostUsd: number | null
   unpricedTurns: number
+  /** Turns that never ended (stop, crash): tokens and cost are a lower bound. */
+  incompleteTurns: number
   /** What the CLI reported (Claude). */
   reportedCostUsd: number | null
   /** Metrics rebuilt from `events.jsonl` (approximate active time). */
@@ -56,6 +58,8 @@ export interface UsageTotals {
   estimatedCostUsd: number
   /** Turns whose model has no price; `estimatedCostUsd` leaves them out. */
   unpricedTurns: number
+  /** Turns that never ended: their tokens and cost are a lower bound. */
+  incompleteTurns: number
 }
 
 export interface UsageGroup extends UsageTotals {

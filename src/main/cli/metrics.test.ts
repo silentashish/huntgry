@@ -224,6 +224,16 @@ describe('pricing', () => {
     expect(priceRun({ metrics: [turn], totals: undefined }, MODEL_PRICES).totals).toMatchObject({ estimatedCostUsd: 0, pricedTurns: 0, unpricedTurns: 1 })
   })
 
+  it('an edited bundled model keeps its aliases (agy names Gemini 3.1 Pro by its display name)', () => {
+    const edited = requireModelPrice({ id: 'gemini-3.1-pro-preview', input: 3, cachedInput: 0.3, output: 15 })
+    expect(edited.aliases).toBeUndefined()
+    const table = effectivePrices({ models: [edited] })
+    const price = findPrice('Gemini 3.1 Pro (High)', table)
+    expect(price).toMatchObject({ id: 'gemini-3.1-pro-preview', input: 3, custom: true })
+    const turn = { model: 'Gemini 3.1 Pro (High)', usage: usage({ inputTokens: 1e6 }) }
+    expect(estimateTurn(turn, table)).toBe(3)
+  })
+
   it('checks prices from the renderer', () => {
     expect(() => requireModelPrice({ id: '', input: 1, cachedInput: 1, output: 1 })).toThrow(/model id/)
     expect(() => requireModelPrice({ id: 'm', input: -1, cachedInput: 1, output: 1 })).toThrow(/input/)
@@ -248,6 +258,38 @@ describe('backfill from events.jsonl', () => {
     for (const m of metrics) expect(m.estimatedCostUsd).toBeCloseTo(0.0259246, 9)
   })
 
+  it('an interrupted Claude turn keeps the per-request usage (deduplicated), and the next turn does not count it again', async () => {
+    const events = (await jsonl('read-file-turn.jsonl')).filter((e) => e.type !== 'result')
+    const result = (await jsonl('read-file-turn.jsonl')).find((e) => e.type === 'result')!
+    const H = 'claude-haiku-4-5-20251001'
+    // Turn 1 is stopped before its result; turn 2 ends, and Claude's running totals still hold turn 1's requests.
+    const second = JSON.parse(JSON.stringify(result)) as Record<string, any>
+    second.usage = { input_tokens: 5, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0, output_tokens: 244 }
+    second.modelUsage[H] = { ...second.modelUsage[H], inputTokens: 18 + 5, outputTokens: 209 + 40, cacheReadInputTokens: 32976 + 1000, cacheCreationInputTokens: 10782 }
+    const { metrics, counters } = backfillMetrics(
+      { agent: 'claude', createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:10:00Z' },
+      [
+        { type: 'huntgry', subtype: 'user_message', text: 'go', ts: '2026-10-01T00:00:00Z' },
+        ...events,
+        { type: 'huntgry', subtype: 'user_message', text: 'go on', ts: '2026-10-01T00:05:00Z' },
+        second
+      ],
+      null
+    )
+    expect(metrics[0]).toMatchObject({
+      ok: false,
+      usageIncomplete: true,
+      model: H,
+      // Each request counted once although Claude repeats its usage on every block: 10 + 8 input, 3 + 2 output.
+      usage: { inputTokens: 18, cacheReadTokens: 32976, cacheWriteTokens: 10782, cacheWrite1hTokens: 10782, outputTokens: 5 }
+    })
+    expect(metrics[0].estimatedCostUsd).toBeGreaterThan(0)
+    // Turn 2's share of the running totals, minus what turn 1 was already given.
+    expect(metrics[1].usage).toMatchObject({ inputTokens: 5, cacheReadTokens: 1000, cacheWriteTokens: 0, outputTokens: 244 })
+    expect(metrics[1].usageIncomplete).toBeUndefined()
+    expect(counters.interrupted).toBeUndefined()
+  })
+
   it('a turn that never ended (crash) still counts its time until the next message', () => {
     const { metrics } = backfillMetrics(
       { agent: 'codex', createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T01:00:00Z' },
@@ -258,9 +300,9 @@ describe('backfill from events.jsonl', () => {
       ],
       'gpt-6.1-sol'
     )
-    expect(metrics.map((m) => [m.turn, m.ok, m.activeMs])).toEqual([
-      [1, false, 120_000],
-      [2, true, 3_480_000]
+    expect(metrics.map((m) => [m.turn, m.ok, m.activeMs, m.usageIncomplete])).toEqual([
+      [1, false, 120_000, true],
+      [2, true, 3_480_000, undefined]
     ])
     expect(metrics[1].model).toBe('gpt-6.1-sol')
   })
@@ -333,6 +375,94 @@ describe('usage summary over fixture run.json files', () => {
     expect(batch.activeMs).toBe(members.reduce((a, r) => a + r.activeMs, 0))
     const only = await usageSummary(ws, { batchId: batch.batchId }, () => null, NOW)
     expect(only.totals.estimatedCostUsd).toBeCloseTo(batch.estimatedCostUsd, 12)
+  })
+
+  it('splits a turn with a sub-agent model into its models, without counting time twice; filters by the sub-agent model', () => {
+    const OPUS = 'claude-opus-5-5'
+    const HAIKU = 'claude-haiku-4-5-20251001'
+    const opus = usage({ inputTokens: 1000, outputTokens: 500 })
+    const haiku = usage({ inputTokens: 4000, outputTokens: 200 })
+    const t: TurnMetrics = {
+      turn: 1,
+      startedAt: '2026-10-05T10:00:00.000Z',
+      endedAt: '2026-10-05T10:01:00.000Z',
+      activeMs: 60_000,
+      model: OPUS,
+      usage: usage({ inputTokens: 5000, outputTokens: 700 }),
+      models: [
+        { model: OPUS, usage: opus },
+        { model: HAIKU, usage: haiku }
+      ],
+      estimatedCostUsd: null,
+      ok: true
+    }
+    const run = priceRun(
+      {
+        id: '20261005-100000-abcdef',
+        title: 'two models',
+        params: { coverLetter: false, dateStyle: 'right' },
+        agent: 'claude',
+        status: 'finished',
+        sessionId: null,
+        createdAt: '2026-10-05T10:00:00.000Z',
+        updatedAt: '2026-10-05T10:01:00.000Z',
+        outputFolder: null,
+        outputFiles: [],
+        costUsd: 0,
+        live: false,
+        model: OPUS,
+        metrics: [t]
+      } as RunSummary,
+      MODEL_PRICES
+    )
+    const s = summarizeUsage([run], {}, NOW)
+    const opusCost = (1000 * 4 + 500 * 20) / 1e6
+    const haikuCost = (4000 * 1 + 200 * 5) / 1e6
+    expect(s.totals.estimatedCostUsd).toBeCloseTo(opusCost + haikuCost, 12)
+    expect(s.byAgentModel.map((g) => [g.model, g.activeMs, g.usage.inputTokens])).toEqual([
+      [OPUS, 60_000, 1000],
+      [HAIKU, 0, 4000]
+    ])
+    expect(s.byAgentModel[0].estimatedCostUsd).toBeCloseTo(opusCost, 12)
+    expect(s.byAgentModel[1].estimatedCostUsd).toBeCloseTo(haikuCost, 12)
+    expect(s.byAgentModel.reduce((a, g) => a + g.activeMs, 0)).toBe(s.totals.activeMs)
+    expect(s.byAgentModel.reduce((a, g) => a + totalTokens(g.usage), 0)).toBe(totalTokens(s.totals.usage))
+    expect(s.models).toEqual([HAIKU, OPUS])
+    expect(summarizeUsage([run], { models: [HAIKU] }, NOW).totals.runs).toBe(1)
+  })
+
+  it('waiting time: frozen while a turn runs, growing while the run waits', () => {
+    const base = {
+      id: '20261006-100000-abcdef',
+      title: 'w',
+      params: { coverLetter: false, dateStyle: 'right' as const },
+      agent: 'claude' as const,
+      sessionId: null,
+      createdAt: '2026-10-06T10:00:00.000Z',
+      updatedAt: '2026-10-06T10:00:00.000Z',
+      outputFolder: null,
+      outputFiles: [],
+      costUsd: 0,
+      live: true
+    }
+    const now = Date.parse('2026-10-06T10:05:00.000Z')
+    // Five minutes into the first turn: nothing waited.
+    expect(summarizeUsage([{ ...base, status: 'running', turnStartedAt: base.createdAt, metrics: [] }], {}, now).runs[0].waitingMs).toBe(0)
+    // A 1-minute turn, a 3-minute wait for the reply, then a second turn running for a minute.
+    const first: TurnMetrics = {
+      turn: 1,
+      startedAt: base.createdAt,
+      endedAt: '2026-10-06T10:01:00.000Z',
+      activeMs: 60_000,
+      model: null,
+      usage: usage({}),
+      estimatedCostUsd: 0,
+      ok: true
+    }
+    const resumed = { ...base, status: 'running' as const, turnStartedAt: '2026-10-06T10:04:00.000Z', metrics: [first] }
+    expect(summarizeUsage([resumed], {}, now).runs[0].waitingMs).toBe(180_000)
+    // Waiting now: until now.
+    expect(summarizeUsage([{ ...base, status: 'waiting', metrics: [first] }], {}, now).runs[0].waitingMs).toBe(240_000)
   })
 
   it('a live run counts with its in-memory numbers', async () => {

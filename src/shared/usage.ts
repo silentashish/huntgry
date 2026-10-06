@@ -1,5 +1,5 @@
-import { addUsage, totalTokens, ZERO_USAGE } from './pricing'
-import type { RunSummary, TurnMetrics } from './runner-types'
+import { addUsage, estimateCost, MODEL_PRICES, totalTokens, ZERO_USAGE, type ModelPrice } from './pricing'
+import type { RunSummary, TokenUsage, TurnMetrics } from './runner-types'
 import type { UsageBatch, UsageDay, UsageFilter, UsageGroup, UsageRunRow, UsageSummary, UsageTotals } from './usage-types'
 
 /**
@@ -12,15 +12,76 @@ const DAY = 24 * 3600_000
 const RANGE_DAYS = { '7d': 7, '30d': 30 } as const
 
 function emptyTotals(): UsageTotals {
-  return { runs: 0, turns: 0, activeMs: 0, usage: { ...ZERO_USAGE }, estimatedCostUsd: 0, unpricedTurns: 0 }
+  return { runs: 0, turns: 0, activeMs: 0, usage: { ...ZERO_USAGE }, estimatedCostUsd: 0, unpricedTurns: 0, incompleteTurns: 0 }
 }
 
 function addTurn(t: UsageTotals, m: TurnMetrics): void {
   t.turns++
   t.activeMs += m.activeMs
   t.usage = addUsage(t.usage, m.usage)
+  if (m.usageIncomplete) t.incompleteTurns++
   if (m.estimatedCostUsd === null) t.unpricedTurns++
   else t.estimatedCostUsd += m.estimatedCostUsd
+}
+
+const FIELDS = ['inputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'reasoningTokens'] as const
+
+/** `a − b` per field, never below 0. */
+function less(a: TokenUsage, b: TokenUsage): TokenUsage {
+  const out = { ...ZERO_USAGE }
+  for (const f of FIELDS) out[f] = Math.max(0, a[f] - b[f])
+  return out
+}
+
+/** The models of a run: each turn's, the ones Claude split a turn into (sub-agents), and the run's last. */
+function modelsOf(run: RunSummary): string[] {
+  return [run.model, ...(run.metrics ?? []).flatMap((m) => [m.model, ...(m.models ?? []).map((x) => x.model)])].filter(
+    (m): m is string => !!m
+  )
+}
+
+/**
+ * One turn's shares per model, for the agent × model table: each model a turn used (Claude
+ * sub-agents) with its own tokens and price. The turn's active time goes to its own model only, so
+ * it is never counted twice; tokens the split does not cover stay with that model. A turn that is
+ * not priced as a whole (a model without a price) adds no cost to any model, as in the totals.
+ */
+function turnShares(m: TurnMetrics, table: readonly ModelPrice[]): { model: string | null; turn: TurnMetrics }[] {
+  const shares = m.models ?? []
+  if (shares.length <= 1 && (shares.length === 0 || shares[0].model === m.model)) return [{ model: m.model, turn: m }]
+  const primary = shares.find((x) => x.model === m.model) ?? shares[0]
+  const covered = shares.reduce((a, x) => addUsage(a, x.usage), { ...ZERO_USAGE })
+  const rest = less(m.usage, covered)
+  return shares.map((x) => {
+    const own = x === primary
+    const price = estimateCost(x.model, x.usage, table)
+    return {
+      model: x.model,
+      turn: {
+        ...m,
+        model: x.model,
+        activeMs: own ? m.activeMs : 0,
+        usage: own ? addUsage(x.usage, rest) : x.usage,
+        estimatedCostUsd: m.estimatedCostUsd === null ? (price === null ? null : 0) : (price ?? 0)
+      }
+    }
+  })
+}
+
+/** Wall time since the run started minus its active time; while a turn runs, the wait stopped at its start. */
+export function waitingMsOf(
+  run: Pick<RunSummary, 'createdAt' | 'updatedAt' | 'status' | 'turnStartedAt'>,
+  activeMs: number,
+  now: number
+): number {
+  const end =
+    run.status === 'running' && run.turnStartedAt
+      ? Date.parse(run.turnStartedAt)
+      : run.status === 'running' || run.status === 'waiting'
+        ? now
+        : Date.parse(run.updatedAt)
+  const wall = end - Date.parse(run.createdAt)
+  return Number.isFinite(wall) ? Math.max(0, wall - activeMs) : 0
 }
 
 /** Local `YYYY-MM-DD`. */
@@ -40,7 +101,7 @@ function matches(run: RunSummary, f: UsageFilter): boolean {
   if (f.statuses?.length && !f.statuses.includes(run.status)) return false
   if (f.batchId && runBatchId(run) !== f.batchId) return false
   if (f.models?.length) {
-    const used = new Set([...(run.metrics ?? []).map((m) => m.model ?? ''), run.model ?? ''])
+    const used = new Set(modelsOf(run))
     if (!f.models.some((m) => used.has(m))) return false
   }
   return true
@@ -52,8 +113,6 @@ export function runRow(run: RunSummary, now: number): UsageRunRow {
   for (const m of metrics) addTurn(t, m)
   let reported: number | null = null
   for (const m of metrics) if (m.reportedCostUsd !== undefined) reported = (reported ?? 0) + m.reportedCostUsd
-  const end = run.status === 'running' || run.status === 'waiting' ? now : Date.parse(run.updatedAt)
-  const wall = Math.max(0, end - Date.parse(run.createdAt))
   return {
     id: run.id,
     title: run.title,
@@ -66,16 +125,22 @@ export function runRow(run: RunSummary, now: number): UsageRunRow {
     built: run.outputFiles.includes('resume.pdf'),
     turns: metrics.length,
     activeMs: t.activeMs,
-    waitingMs: Number.isFinite(wall) ? Math.max(0, wall - t.activeMs) : 0,
+    waitingMs: waitingMsOf(run, t.activeMs, now),
     usage: t.usage,
     estimatedCostUsd: metrics.length > 0 && t.unpricedTurns === metrics.length && totalTokens(t.usage) > 0 ? null : t.estimatedCostUsd,
     unpricedTurns: t.unpricedTurns,
+    incompleteTurns: t.incompleteTurns,
     reportedCostUsd: reported,
     backfilled: run.backfilled === true
   }
 }
 
-export function summarizeUsage(allRuns: readonly RunSummary[], filter: UsageFilter = {}, now = Date.now()): UsageSummary {
+export function summarizeUsage(
+  allRuns: readonly RunSummary[],
+  filter: UsageFilter = {},
+  now = Date.now(),
+  table: readonly ModelPrice[] = MODEL_PRICES
+): UsageSummary {
   const days = filter.range && filter.range !== 'all' ? RANGE_DAYS[filter.range] : null
   const since = days === null ? -Infinity : now - days * DAY
   const runs = allRuns.filter((r) => Date.parse(r.createdAt) >= since && matches(r, filter))
@@ -106,15 +171,17 @@ export function summarizeUsage(allRuns: readonly RunSummary[], filter: UsageFilt
     for (const m of run.metrics ?? []) {
       addTurn(totals, m)
       if (run.status === 'failed' && m.estimatedCostUsd !== null) totals.failedCostUsd += m.estimatedCostUsd
-      const key = `${run.agent}\u0000${m.model ?? ''}`
-      let g = groups.get(key)
-      if (!g) {
-        g = { ...emptyTotals(), agent: run.agent, model: m.model, ids: new Set() }
-        groups.set(key, g)
+      for (const share of turnShares(m, table)) {
+        const key = `${run.agent}\u0000${share.model ?? ''}`
+        let g = groups.get(key)
+        if (!g) {
+          g = { ...emptyTotals(), agent: run.agent, model: share.model, ids: new Set() }
+          groups.set(key, g)
+        }
+        addTurn(g, share.turn)
+        g.ids.add(run.id)
+        g.runs = g.ids.size
       }
-      addTurn(g, m)
-      g.ids.add(run.id)
-      g.runs = g.ids.size
       const day = localDay(m.startedAt)
       const d = byDay.get(day) ?? { day, tokens: 0, estimatedCostUsd: 0, activeMs: 0 }
       d.tokens += totalTokens(m.usage)
@@ -126,9 +193,7 @@ export function summarizeUsage(allRuns: readonly RunSummary[], filter: UsageFilt
   }
 
   const strip = <T extends { ids: Set<string> }>({ ids: _ids, ...rest }: T): Omit<T, 'ids'> => rest
-  const models = [
-    ...new Set(allRuns.flatMap((r) => [...(r.metrics ?? []).map((m) => m.model), r.model]).filter((m): m is string => !!m))
-  ].sort()
+  const models = [...new Set(allRuns.flatMap(modelsOf))].sort()
   return {
     totals,
     byAgentModel: [...groups.values()]
@@ -172,6 +237,7 @@ export const USAGE_CSV_HEADER = [
   'reasoning_tokens',
   'estimated_cost_usd',
   'unpriced_turns',
+  'incomplete_turns',
   'reported_cost_usd',
   'backfilled'
 ] as const
@@ -199,6 +265,7 @@ export function usageCsv(rows: readonly UsageRunRow[]): string {
       r.usage.reasoningTokens,
       r.estimatedCostUsd === null ? null : r.estimatedCostUsd.toFixed(6),
       r.unpricedTurns,
+      r.incompleteTurns,
       r.reportedCostUsd === null ? null : r.reportedCostUsd.toFixed(6),
       r.backfilled
     ]

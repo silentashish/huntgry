@@ -132,5 +132,5 @@ export async function usageSummary(
   const runs = await Promise.all(
     (await listRuns(workspace)).map(async (r) => withPrices(await withMetrics(workspace, live(r.id) ?? r)))
   )
-  return summarizeUsage(runs, filter, now)
+  return summarizeUsage(runs, filter, now, prices)
 }
