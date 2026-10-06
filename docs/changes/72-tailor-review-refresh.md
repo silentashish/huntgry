@@ -114,6 +114,17 @@ stateDiagram-v2
 - **Rejected: clear `outcome` on approval.** `counts()` treated a missing outcome as unreviewed,
   and the row would lose the information that the result was approved.
 
+## Screenshots
+
+The same seeded workspace drives both builds through the e2e harness: a finished pipeline with one Unreviewed result, plus an earlier pipeline's Unreviewed row. One result is approved and the other discarded on the Review page.
+
+| | Before (main) | After (this change) |
+| --- | --- | --- |
+| Tailor, after Approve and Discard | ![before](72-images/before-tailor-after-decisions.png) | ![after](72-images/after-tailor-after-decisions.png) |
+| Dashboard, last pipeline card | ![before](72-images/before-dashboard-card.png) | ![after](72-images/after-dashboard-card.png) |
+
+After Approve only, the pipeline row says Approved while the earlier row still waits: ![after approve](72-images/after-tailor-after-approve.png)
+
 ## How to test
 
 - Unit
