@@ -157,8 +157,18 @@ const RULES: Array<[FactKey, (q: string) => boolean]> = [
  * answered, written or picked from memory, whatever was remembered for it.
  */
 export function isConsentQuestion(question: string): boolean {
-  return NEVER.test(normalizeText(question))
+  const q = normalizeText(question)
+  return NEVER.test(q) || CONSENT.test(q)
 }
+
+/**
+ * Consent in any phrasing, questions included ("Do you agree to receive
+ * recruiting emails?", "Do you accept the terms?"): agreeing, accepting,
+ * consenting, certifying, attesting, opting in, subscribing, or receiving
+ * marketing / recruiting messages.
+ */
+const CONSENT =
+  /\b(agree\w*|accept\w*|consent\w*|acknowledg\w*|certif\w*|attest\w*|opt (in|out)|optin|subscrib\w*|unsubscrib\w*|authori[sz]e (us|the company|\w+ to)|receive (\w+ )?(emails?|messages?|texts?|sms|calls?|communications?|newsletters?|updates|marketing|offers))\b/
 
 /** The fact a question asks for, from its text alone, or null. Deterministic; consent-like text never matches. */
 export function matchFact(question: string): FactKey | null {

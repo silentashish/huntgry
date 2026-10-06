@@ -134,6 +134,8 @@ export function answerField(
   const strategy = buttons ? 'click-only' : strategyOf(kind, clickOnly)
   if (strategy === 'never') return false
   const options = buttons ?? (kind === 'select' || kind === 'radio' ? optionsOf(el, root) : [])
+  // Options that read like consent ("I agree", "I accept"): the whole question is consent, never answered.
+  if (options.some(isConsentQuestion)) return false
   line.question = questionKey(line.label, kind, options)
   if (options.length) line.options = options
   const found = lookup(answers, line.question, line.label)

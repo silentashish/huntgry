@@ -702,6 +702,72 @@ describe('picking remembered answers in click-only widgets (#71, owner decision)
     expect(doc.querySelector('button[data-option="yes"]')!.getAttribute('aria-pressed')).toBe('false')
   })
 
+  it.each(['Do you agree to receive recruiting emails?', 'Do you accept the terms of this application?'])(
+    'never picks a consent question asked as a question (%s), even with a remembered Yes',
+    async (label) => {
+      const dom = new JSDOM(
+        `<div class="ashby-application-form-container"><label for="_systemfield_name">Name</label><input id="_systemfield_name">
+         <label for="c1">${label}</label>
+         <div class="ashby-application-form-input-yesno"><button data-option="yes" aria-pressed="false">Yes</button>
+         <button data-option="no" aria-pressed="false">No</button><input type="checkbox" tabindex="-1" name="c1"></div></div>`,
+        { url: ASHBY }
+      )
+      const doc = dom.window.document
+      const question = questionKey(label, 'radio', ['Yes', 'No'])
+      const report = fillPage(doc, VALUES, {
+        text: true,
+        answers: { facts: {}, questions: { [question]: { fact: null, value: 'Yes', confirmed: true } } },
+        pick: true
+      })
+      expect(pendingPicks(report)).toEqual([])
+      await pickAnswers(report)
+      expect((doc.querySelector('input[name="c1"]') as HTMLInputElement).checked).toBe(false)
+      expect(doc.querySelector('button[data-option="yes"]')!.getAttribute('aria-pressed')).toBe('false')
+    }
+  )
+
+  it('never answers a question whose options read like consent, native radios included', () => {
+    const dom = new JSDOM(
+      `<form><label>Email <input name="email" type="email"></label><fieldset><legend>Marketing preferences</legend>
+       <label><input type="radio" name="m" value="a"> I agree</label><label><input type="radio" name="m" value="b"> I do not agree</label></fieldset>
+       <input type="file" name="resume"><button type="submit">Send</button></form>`,
+      { url: 'https://careers.example.com/apply' }
+    )
+    const question = questionKey('Marketing preferences', 'radio', ['I agree', 'I do not agree'])
+    const report = fillPage(dom.window.document, VALUES, {
+      answers: { facts: {}, questions: { [question]: { fact: null, value: 'I agree', confirmed: true } } },
+      pick: true
+    })
+    expect(field(report, 'Marketing preferences').question).toBeUndefined()
+    expect(Array.from(dom.window.document.querySelectorAll<HTMLInputElement>('input[type="radio"]')).some((r) => r.checked)).toBe(false)
+  })
+
+  it('stops picking for the rest of the fill once the safety net catches the page moving on', async () => {
+    const dom = greenhouse()
+    const doc = dom.window.document
+    const sponsor = doc.getElementById('question_1000009')!.closest('.select__container') as HTMLElement
+    sponsor.dataset.mockOptions = 'Yes|No'
+    delete (sponsor.dataset as Record<string, string>).mockWired
+    dom.window.eval('window.huntgryMockReactSelect()')
+    // Choosing the first answer makes the page navigate in place (a step change).
+    doc.addEventListener('click', (e) => {
+      if ((e.target as Element).getAttribute?.('role') === 'option' && (e.target as Element).id.includes('question_1000007')) {
+        dom.window.history.pushState({}, '', '/acme/jobs/1000001/step-2')
+      }
+    })
+    const report = fillPage(doc, VALUES, { answers: facts({ workAuthorized: 'yes', needsSponsorship: 'no' }), pick: true })
+    expect(pendingPicks(report)).toHaveLength(2)
+    await pickAnswers(report)
+    expect(field(report, AUTHORIZED)).toMatchObject({ outcome: 'rejected' })
+    expect(field(report, AUTHORIZED).reason).toMatch(/stopped: the page moved to another step/)
+    // The second dropdown was never opened.
+    expect(singleValue(dom, 'question_1000009')).toBe('')
+    expect(field(report, 'Will you now or in the future require sponsorship for employment visa status (e.g. H-1B visa status)?')).toMatchObject({
+      outcome: 'skipped-unsupported',
+      suggestion: 'No'
+    })
+  })
+
   it('keeps a click-only field the person touched or is typing into', async () => {
     const dom = greenhouse()
     const doc = dom.window.document
