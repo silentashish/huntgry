@@ -241,7 +241,12 @@ function labelRefusal(label: HTMLLabelElement, within: (node: Element) => boolea
  * sequence (make it a submit button, move it, disable it), and the sequence
  * stops there.
  */
-function press(target: HTMLElement, widget: PickWidget, listboxes: () => readonly Element[] = () => []): void {
+function press(
+  target: HTMLElement,
+  widget: PickWidget,
+  listboxes: () => readonly Element[] = () => [],
+  abort: () => string | null = () => null
+): void {
   const view = target.ownerDocument.defaultView
   if (!view) throw new Error('The page has no window.')
   const init = { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1, view }
@@ -256,6 +261,9 @@ function press(target: HTMLElement, widget: PickWidget, listboxes: () => readonl
   ]
   asHuntgry(() => {
     for (const make of events) {
+      // The safety net's latch (a blocked event, a page or step change) stops the press before any further event.
+      const stopped = abort()
+      if (stopped) throw new Error(`Huntgry stopped: ${stopped}.`)
       const refused = refusal(target, widget, listboxes())
       if (refused) throw new Error(`Huntgry does not press ${refused}.`)
       target.dispatchEvent(make())
@@ -317,15 +325,23 @@ const defaultPageState = (doc: Document) => () =>
  *   widget and its own listboxes: a label activating an outside checkbox, a
  *   button turned into a submit button at click time, a handler re-sending
  *   the click elsewhere;
- * - it snapshots every checkbox of the page outside the widget and the page
- *   state (URL and step) first; a changed checkbox is put back, and any of
- *   these makes the pick fail with `halt`, so the fill stops picking.
- * The listeners are removed in `finally`.
+ * - it also cancels a click whose target, or the control of the label it
+ *   lands on (resolved at dispatch time), is a checkbox or radio this pick is
+ *   not answering, even inside the widget;
+ * - it snapshots every checkbox and radio of the page except the ones this
+ *   pick answers (the group's radios, Ashby's yes/no mirror), and the page
+ *   state (URL and step). A changed one is put back; that, a blocked event or
+ *   a page change makes the pick fail with `halt`, so the fill stops picking;
+ * - the latch and the page state are checked before every dispatched event
+ *   and after the menu opens, so nothing is pressed on a page that moved on;
+ * - cleanup that runs page handlers (closing the menu by blur) happens while
+ *   the net is up; the listeners are removed last, after a microtask and a
+ *   task.
  */
 async function withSafetyNet(
   widget: PickWidget,
   pageState: () => string,
-  run: () => Promise<PickResult>
+  run: (abort: () => string | null) => Promise<PickResult>
 ): Promise<PickResult> {
   const doc = widget.scope.ownerDocument
   const view = doc.defaultView
@@ -337,9 +353,13 @@ async function withSafetyNet(
     if (widget.scope.contains(el)) return true
     return widget.type === 'listbox' && ownListboxes(widget).some((box) => box.contains(el))
   }
-  // Every checkbox of the page (the form's, those tied to it with `form=`, and any other), outside the widget.
-  const checkboxes = Array.from(doc.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).filter((c) => !widget.scope.contains(c))
-  const ticked = checkboxes.map((c) => c.checked)
+  // Controls the pick itself may change: the radios of the group being answered, Ashby's yes/no mirror checkbox.
+  const own = new Set<Element>(
+    widget.type === 'radios' ? widget.options : widget.type === 'buttons' ? Array.from(widget.scope.querySelectorAll('input[type="checkbox"]')) : []
+  )
+  // Every other checkbox and radio of the page, inside the widget or not, is snapshotted and put back if it changes.
+  const toggles = Array.from(doc.querySelectorAll<HTMLInputElement>('input[type="checkbox"], input[type="radio"]')).filter((c) => !own.has(c))
+  const states = toggles.map((c) => c.checked)
   const state = pageState()
   let caught: string | null = null
   const block = (event: Event, why: string) => {
@@ -347,51 +367,64 @@ async function withSafetyNet(
     event.stopImmediatePropagation()
     caught ??= why
   }
+  /** What a click on `el` would activate right now (a label's control is resolved at dispatch time). */
+  const activates = (el: Element | null): Element | null => {
+    const label = el?.closest('label')
+    return (label as HTMLLabelElement | null)?.control ?? (el && tag(el) === 'input' ? el : null)
+  }
   const onSubmit = (event: Event) => block(event, 'the page tried to submit the form')
   const onPointer = (event: Event) => {
-    const target = (event.composedPath?.()[0] ?? event.target) as Node | null
-    if (!inWidget(target)) block(event, 'a click reached something outside the field')
+    const node = (event.composedPath?.()[0] ?? event.target) as Node | null
+    const el = node && (node.nodeType === 1 ? (node as Element) : node.parentElement)
+    if (!inWidget(node)) return block(event, 'a click reached something outside the field')
+    const control = activates(el)
+    // A checkbox or radio this pick is not answering, clicked directly or through a label, even inside the widget.
+    if (control && tag(control) === 'input' && ['checkbox', 'radio'].includes((control as HTMLInputElement).type) && !own.has(control)) {
+      block(event, 'a click reached a checkbox or radio that is not this question’s')
+    }
   }
+  const abort = () => caught ?? (pageState() !== state ? 'the page moved to another step' : null)
   view.addEventListener('submit', onSubmit, true)
   for (const type of NET_POINTER_EVENTS) view.addEventListener(type, onPointer, true)
-  let result: PickResult
   try {
-    result = await run()
-  } catch (err) {
-    result = { status: 'failed', reason: err instanceof Error ? err.message : String(err) }
+    let result: PickResult
+    try {
+      result = await run(abort)
+    } catch (err) {
+      result = { status: 'failed', reason: err instanceof Error ? err.message : String(err) }
+    }
+    toggles.forEach((c, i) => {
+      if (c.checked === states[i]) return
+      c.checked = states[i]
+      caught ??= 'a checkbox or radio that is not this question’s changed (put back)'
+    })
+    const stopped = abort()
+    if (stopped) {
+      // Cleanup that runs page handlers (blur) happens with the net still up.
+      closeMenu(widget)
+      return { status: 'failed', reason: `Huntgry stopped: ${stopped}.`, halt: true }
+    }
+    return result
   } finally {
+    // Removed last, after a microtask and a task: anything the cleanup scheduled still meets the net.
+    await Promise.resolve()
+    await new Promise<void>((resolve) => view.setTimeout(resolve, 0))
     view.removeEventListener('submit', onSubmit, true)
     for (const type of NET_POINTER_EVENTS) view.removeEventListener(type, onPointer, true)
   }
-  checkboxes.forEach((c, i) => {
-    if (c.checked === ticked[i]) return
-    c.checked = ticked[i]
-    caught ??= 'a checkbox outside the field changed (put back)'
-  })
-  if (pageState() !== state) caught ??= 'the page moved to another step'
-  if (caught) {
-    closeMenu(widget)
-    return { status: 'failed', reason: `Huntgry stopped: ${caught}.`, halt: true }
-  }
-  return result
 }
 
-/**
- * Picks, in `widget`, the option `choose` names (it gets the option texts and
- * returns one of them, or null for none), then reads it back. A widget that
- * already shows an answer, or that the person touched, is left alone
- * (`kept`), unless it already shows that answer.
- */
 export function pick(widget: PickWidget, choose: (options: string[]) => string | null, options: PickOptions = {}): Promise<PickResult> {
-  return withSafetyNet(widget, options.pageState ?? defaultPageState(widget.scope.ownerDocument), () =>
-    pickInside(widget, choose, options)
+  return withSafetyNet(widget, options.pageState ?? defaultPageState(widget.scope.ownerDocument), (abort) =>
+    pickInside(widget, choose, options, abort)
   )
 }
 
 async function pickInside(
   widget: PickWidget,
   choose: (options: string[]) => string | null,
-  { timeoutMs = 1500, touched = () => false }: PickOptions
+  { timeoutMs = 1500, touched = () => false }: PickOptions,
+  abort: () => string | null = () => null
 ): Promise<PickResult> {
   const doc = widget.scope.ownerDocument
   const current = pickedValue(widget)
@@ -405,7 +438,7 @@ async function pickInside(
       if (!chosen) return { status: 'failed', reason: 'None of the options fits your saved answer.' }
       if (current) return same(current, chosen) ? { status: 'filled', value: current } : { status: 'kept', value: current }
       if (touched()) return keep()
-      press(options[texts.indexOf(chosen)], widget)
+      press(options[texts.indexOf(chosen)], widget, () => [], abort)
       await waitUntil(doc, () => same(pickedValue(widget), chosen), timeoutMs)
       return same(pickedValue(widget), chosen) ? { status: 'filled', value: chosen } : { status: 'failed', reason: 'The site did not take the pick.' }
     }
@@ -415,7 +448,7 @@ async function pickInside(
       return chosen ? { status: 'filled', value: current } : { status: 'kept', value: current }
     }
     if (touched()) return keep()
-    press(widget.opener, widget)
+    press(widget.opener, widget, () => [], abort)
     let boxes: Element[] = []
     await waitUntil(
       doc,
@@ -425,6 +458,12 @@ async function pickInside(
       },
       timeoutMs
     )
+    // The page may have moved on (or the net caught something) while the menu rendered: stop before any option.
+    const stopped = abort()
+    if (stopped) {
+      closeMenu(widget)
+      return { status: 'failed', reason: `Huntgry stopped: ${stopped}.` }
+    }
     // The person may have typed or chosen while the menu rendered.
     if (touched() || pickedValue(widget)) {
       closeMenu(widget)
@@ -444,7 +483,7 @@ async function pickInside(
         reason: options.length ? 'None of the options fits your saved answer.' : 'No list of options tied to this field opened.'
       }
     }
-    press(options[texts.indexOf(chosen)], widget, () => ownListboxes(widget))
+    press(options[texts.indexOf(chosen)], widget, () => ownListboxes(widget), abort)
     await waitUntil(doc, () => same(pickedValue(widget), chosen), timeoutMs)
     if (same(pickedValue(widget), chosen)) return { status: 'filled', value: chosen }
     closeMenu(widget)

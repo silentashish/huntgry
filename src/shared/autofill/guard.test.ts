@@ -361,4 +361,51 @@ describe("pick.ts presses only inside the field's widget", () => {
     expect(await pick(widget, (o) => o[0] ?? null, { timeoutMs: 200 })).toMatchObject({ status: 'failed', reason: expect.stringMatching(/consent/) })
     expect(clicked).not.toContain('yes')
   })
+
+  it('keeps the net up through cleanup: a submit from the blur that closes the menu is cancelled', async () => {
+    const { doc, widget, fired, requestSubmit } = page(
+      '<div role="listbox" id="g-listbox"><div role="option" id="opt">Female</div></div><button type="button" id="elsewhere">Elsewhere</button>'
+    )
+    requestSubmit.mockRestore()
+    const g = doc.getElementById('g') as HTMLInputElement
+    g.focus()
+    // Closing the menu (blur) asks the form to submit; the option's click is forwarded outside (blocked), and the
+    // shown value still reads Female, so the pick's own read-back would pass.
+    g.addEventListener('blur', () => (doc.getElementById('f') as HTMLFormElement).requestSubmit())
+    doc.addEventListener('click', (e) => {
+      if ((e.target as Element).id !== 'opt') return
+      doc.getElementById('elsewhere')!.dispatchEvent(new doc.defaultView!.MouseEvent('click', { bubbles: true }))
+      doc.querySelector('.select__single-value')!.textContent = 'Female'
+    })
+    const submitted: string[] = []
+    doc.getElementById('f')!.addEventListener('submit', () => submitted.push('submit'))
+    expect(await pick(widget, female, { timeoutMs: 200 })).toMatchObject({ status: 'failed', halt: true })
+    expect(submitted).toEqual([])
+    expect(fired).toEqual([])
+  })
+
+  it('cancels a label retargeted at click time to a consent checkbox inside the widget, and puts it back', async () => {
+    const { doc, widget } = page('<div role="listbox" id="g-listbox"><label role="option" id="opt">Female</label></div>')
+    doc.querySelector('.select__container')!.insertAdjacentHTML('beforeend', '<input type="checkbox" id="consent">')
+    doc.addEventListener('click', (e) => {
+      if ((e.target as Element).id !== 'opt') return
+      ;(e.target as HTMLLabelElement).htmlFor = 'consent'
+      doc.querySelector('.select__single-value')!.textContent = 'Female'
+    }, true)
+    const result = await pick(widget, female, { timeoutMs: 200 })
+    expect(result).toMatchObject({ status: 'failed', halt: true })
+    expect((doc.getElementById('consent') as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('stops before any option when the page changes step while the menu opens', async () => {
+    const { doc, widget, clicked } = page('<div role="listbox" id="g-listbox"><div role="option" id="opt">Female</div></div>')
+    const handled: string[] = []
+    doc.getElementById('g')!.addEventListener('mousedown', () => {
+      doc.getElementById('opt')?.addEventListener('click', () => handled.push('opt'))
+      doc.defaultView!.history.pushState({}, '', '/apply/step-2')
+    })
+    expect(await pick(widget, female, { timeoutMs: 200 })).toMatchObject({ status: 'failed', halt: true })
+    expect(handled).toEqual([])
+    expect(clicked).not.toContain('opt')
+  })
 })
