@@ -100,8 +100,8 @@ export function RemoteCard() {
                   {state.relayUrl ? 'Rotate' : 'Save'}
                 </Button>
               </Group>
-              <Switch label="Show details in notifications (visible to the relay, Expo and Apple/Google)" checked={state.notificationDetails} onChange={(e) => void run(() => api.remote.setNotificationDetails(e.currentTarget.checked))} />
-              <Switch label="Show transcripts on the phone" checked={state.transcripts} onChange={(e) => void run(() => api.remote.setTranscripts(e.currentTarget.checked))} />
+              <Switch label="Show details in notifications (visible to the relay, Expo and Apple/Google)" checked={state.notificationDetails} disabled={busy} onChange={(e) => void run(() => api.remote.setNotificationDetails(e.currentTarget.checked))} />
+              <Switch label="Show transcripts on the phone" checked={state.transcripts} disabled={busy} onChange={(e) => void run(() => api.remote.setTranscripts(e.currentTarget.checked))} />
               {state.devices.length > 0 ? (
                 <Table>
                   <Table.Thead>
