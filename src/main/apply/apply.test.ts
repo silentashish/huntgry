@@ -1256,12 +1256,12 @@ describe('application answers (#71)', () => {
   function answers(seeds: PageAnswers['facts'] = {}, map?: AnswersDeps['map']) {
     const calls: MapQuestion[][] = []
     const deps: AnswersDeps = {
-      load: async () => pageAnswers(await readAnswers(ws), seeds),
-      remember: async (a) => void (await rememberAnswer(ws, a)),
-      rememberMappings: async (m) => void (await rememberMappings(ws, m)),
+      load: async (workspace) => pageAnswers(await readAnswers(workspace), seeds),
+      remember: async (workspace, a) => void (await rememberAnswer(workspace, a)),
+      rememberMappings: async (workspace, m) => void (await rememberMappings(workspace, m)),
       map:
         map ??
-        (async (questions) => {
+        (async (_workspace, questions) => {
           calls.push(questions)
           return questions.map((q) => ({ id: q.id, fact: /identify|gender/i.test(q.question) ? ('gender' as const) : null }))
         })
@@ -1269,10 +1269,10 @@ describe('application answers (#71)', () => {
     return { deps, calls }
   }
 
-  async function open(deps: AnswersDeps, html: string, id = ID) {
+  async function open(deps: AnswersDeps, html: string, id = ID, extra: Partial<ApplyDeps> = {}) {
     await application({ 'job-description.md': `Engineer\n${POSTING}\n`, 'resume.pdf': '%PDF' }, id)
     const tab = new FakeTab('', `${POSTING}/apply`)
-    const { service } = setup(tab, undefined, { answers: deps })
+    const { service } = setup(tab, undefined, { answers: deps, ...extra })
     await service.start(id)
     tab.load(html, `${POSTING}/apply`)
     await until(service, 'filled')
@@ -1346,6 +1346,82 @@ describe('application answers (#71)', () => {
     expect((await readAnswers(ws)).facts.gender).toBeUndefined()
     // The upload lines of the first fill stay in the report.
     expect(line(service, 'Resume/CV').outcome).toBe('uploaded')
+  })
+
+  it('keeps answers in the workspace the session started in, even after a switch', async () => {
+    const other = await mkdtemp(join(tmpdir(), 'huntgry-apply-b-'))
+    let current = ws
+    let releaseMap: () => void = () => undefined
+    const mapped = new Promise<void>((r) => (releaseMap = r))
+    const { deps } = answers({}, async (_workspace, questions) => {
+      await mapped
+      return questions.map((q) => ({ id: q.id, fact: /identify/i.test(q.question) ? ('gender' as const) : null }))
+    })
+    const seen: string[] = []
+    const tracked: AnswersDeps = {
+      ...deps,
+      load: (w) => (seen.push(`load ${w}`), deps.load(w)),
+      remember: (w, a) => (seen.push(`remember ${w}`), deps.remember(w, a)),
+      rememberMappings: (w, m) => (seen.push(`mappings ${w}`), deps.rememberMappings(w, m))
+    }
+    // workspace B holds an answer that must never reach A's application.
+    await rememberAnswer(other, { question: 'x', label: 'Gender', fact: 'gender', value: 'Male' })
+    const { tab, service } = await open(tracked, IDENTIFY, ID, { workspace: async () => current })
+    current = other
+    const gender = line(service, 'Gender')
+    expect(gender).toBeUndefined()
+    const race = line(service, 'Race')
+    await service.answer(service.current()!.id, race.fieldId!, 'Decline to self-identify', true)
+    releaseMap()
+    await vi.waitFor(() => expect(seen.some((e) => e.startsWith('mappings'))).toBe(true))
+    expect(seen.every((e) => e.endsWith(ws))).toBe(true)
+    expect((await readAnswers(ws)).facts.raceEthnicity?.value).toBe('decline')
+    expect((await readAnswers(other)).facts.raceEthnicity).toBeUndefined()
+    expect(Object.keys((await readAnswers(other)).questions)).toEqual(['x'])
+    expect(select(tab).value).toBe('')
+    await rm(other, { recursive: true, force: true })
+  })
+
+  it('makes at most one model call per page: over the limit, late-rendered or after a failure', async () => {
+    const many = (n: number, from = 0) =>
+      Array.from({ length: n }, (_, i) => `<p><label for="c${i + from}">Custom question ${i + from}</label><input id="c${i + from}" name="c${i + from}"></p>`).join('')
+    const page = (extra: string) =>
+      `<form><label>Email <input name="email" type="email"></label>${extra}<input type="file" name="resume"><button type="submit">Send</button></form>`
+    const sizes: number[] = []
+    const { deps } = answers({}, async (_w, questions) => {
+      sizes.push(questions.length)
+      throw new Error('quota')
+    })
+    await application({ 'job-description.md': `Engineer\n${POSTING}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', `${POSTING}/apply`)
+    const { service } = setup(tab, undefined, { answers: deps })
+    await service.start(ID)
+    tab.load(page(many(41)), `${POSTING}/apply`)
+    await until(service, 'filled')
+    await vi.waitFor(() => expect(sizes).toEqual([40]))
+    // Fill again on the same page, now with more questions rendered: no second call.
+    tab.dom = new JSDOM(page(many(45)), { url: `${POSTING}/apply` })
+    await service.fill(service.current()!.id)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(sizes).toEqual([40])
+  })
+
+  it('reuses the exact option confirmed for a question whose options a fact alone cannot pick', async () => {
+    const AUTH = (n: number) =>
+      `<form><label>Email <input name="email" type="email"></label><fieldset><legend>Are you legally authorized to work in the United States?</legend>
+       <label><input type="radio" name="auth${n}" value="a"> Yes, I am</label><label><input type="radio" name="auth${n}" value="b"> Yes, with a visa</label>
+       <label><input type="radio" name="auth${n}" value="c"> No</label></fieldset><input type="file" name="resume"><button type="submit">Send</button></form>`
+    const checked = (tab: FakeTab) => Array.from(tab.dom.window.document.querySelectorAll<HTMLInputElement>('input[type="radio"]')).find((r) => r.checked)?.value
+    const { deps } = answers()
+    const first = await open(deps, AUTH(1))
+    const q = line(first.service, 'Are you legally authorized to work in the United States?')
+    expect(q).toMatchObject({ fact: 'workAuthorized', outcome: 'skipped-unsupported' })
+    await first.service.answer(first.service.current()!.id, q.fieldId!, 'Yes, with a visa', true)
+    expect(checked(first.tab)).toBe('b')
+    // Another posting, same question and options (other element names): filled with the same option, no prompt.
+    const second = await open(deps, AUTH(2), 'software-engineer/acme/lv-2')
+    expect(line(second.service, 'Are you legally authorized to work in the United States?')).toMatchObject({ outcome: 'filled', value: 'Yes, with a visa' })
+    expect(checked(second.tab)).toBe('b')
   })
 
   it('a missing or failing model leaves the fill complete and the questions with the user', async () => {

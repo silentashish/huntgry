@@ -49,6 +49,8 @@ export interface StoredQuestion {
   fact: FactKey | null
   /** A direct answer (questions without a fact). */
   value?: string
+  /** For a fact question: the exact option the user chose, reused when this question (same options) comes back. */
+  option?: string
   /** Who mapped it: the user, or a model (a suggestion until the user confirms). */
   source: 'user' | 'model'
   confirmed: boolean
@@ -81,10 +83,13 @@ function normalize(raw: unknown): Answers {
       if (typeof v !== 'object' || v === null || key.length > 300) continue
       const q = v as Record<string, unknown>
       const value = text(q.value, 500)
+      const option = text(q.option, 500)
+      const fact = isFactKey(q.fact) ? q.fact : null
       out.questions[key] = {
         label: text(q.label, 300) ?? '',
-        fact: isFactKey(q.fact) ? q.fact : null,
+        fact,
         ...(value ? { value } : {}),
+        ...(option && fact && q.source === 'user' ? { option } : {}),
         source: q.source === 'user' ? 'user' : 'model',
         confirmed: q.confirmed === true && q.source === 'user',
         updatedAt: text(q.updatedAt, 40) ?? ''
@@ -147,7 +152,15 @@ export function rememberAnswer(workspace: string, answer: UserAnswer, now = new 
     const questions = { ...a.questions }
     if (answer.fact) {
       facts[answer.fact] = { value: canonicalAnswer(answer.fact, answer.value), updatedAt: at }
-      questions[answer.question] = { label: answer.label, fact: answer.fact, source: 'user', confirmed: true, updatedAt: at }
+      // The exact option too: the fact alone may fit several options of this question ("Yes, I am" / "Yes, with a visa").
+      questions[answer.question] = {
+        label: answer.label,
+        fact: answer.fact,
+        option: answer.value.trim().slice(0, 500),
+        source: 'user',
+        confirmed: true,
+        updatedAt: at
+      }
     } else {
       questions[answer.question] = {
         label: answer.label,
@@ -179,11 +192,19 @@ export function rememberMappings(
   })
 }
 
+/** Forgets a fact, and the exact options remembered for questions about it (they say the same thing). */
 export function forgetFact(workspace: string, fact: FactKey): Promise<Answers> {
   return update(workspace, (a) => {
     const facts = { ...a.facts }
     delete facts[fact]
-    return { ...a, facts }
+    const questions = Object.fromEntries(
+      Object.entries(a.questions).map(([key, q]) => {
+        if (q.fact !== fact || q.option === undefined) return [key, q]
+        const { option: _forgotten, ...rest } = q
+        return [key, rest]
+      })
+    )
+    return { facts, questions }
   })
 }
 
@@ -219,7 +240,12 @@ export function pageAnswers(answers: Answers, seeds: Partial<Record<FactKey, str
   }
   const questions: PageAnswers['questions'] = {}
   for (const [key, q] of Object.entries(answers.questions)) {
-    questions[key] = { fact: q.fact, confirmed: q.confirmed, ...(q.value && q.source === 'user' ? { value: q.value } : {}) }
+    questions[key] = {
+      fact: q.fact,
+      confirmed: q.confirmed,
+      ...(q.value && q.source === 'user' ? { value: q.value } : {}),
+      ...(q.option && q.source === 'user' ? { option: q.option } : {})
+    }
   }
   return { facts, questions }
 }

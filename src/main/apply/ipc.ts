@@ -1,4 +1,5 @@
 import { app, ipcMain, type WebContents } from 'electron'
+import { join } from 'node:path'
 import { factsFromProfile, isFactKey, type FactKey } from '@shared/apply-facts'
 import { APPLY_CHANNELS } from '@shared/apply-types'
 import { fillValuesFrom } from '@shared/apply-values'
@@ -8,6 +9,7 @@ import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
 import { currentProfilePath } from '../profile/ipc'
 import { readProfile } from '../profile/store'
+import { inspectWorkspace } from '../workspace/inspect'
 import {
   clearAnswers,
   forgetFact,
@@ -74,21 +76,36 @@ function pageOf(wc: WebContents): ApplyPage {
 
 const workspacePath = async () => (await requireCurrentWorkspace()).path
 
-/** Remembered answers live under userData (answers-store.ts); the model gets question text only. */
+/** Facts the workspace's master profile states (work authorization); none when it cannot be read. */
+async function profileSeeds(ws: string): Promise<Partial<Record<FactKey, string>>> {
+  try {
+    const inspection = await inspectWorkspace(ws)
+    if (!inspection.masterProfile) return {}
+    const doc = await readProfile(join(inspection.path, inspection.masterProfile))
+    return factsFromProfile(doc.profile.contact.workAuthorization)
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Remembered answers live under userData (answers-store.ts); the model gets question text only. The service passes
+ * the workspace its session started in, so a workspace switch mid-session cannot mix two people's answers.
+ */
 const answers: AnswersDeps = {
-  load: async () => {
-    const ws = await workspacePath()
-    const [stored, doc] = await Promise.all([readAnswers(ws), readProfile(await currentProfilePath())])
-    return pageAnswers(stored, factsFromProfile(doc.profile.contact.workAuthorization))
+  load: async (ws) => {
+    // The profile seeds come from that workspace's own master profile, not whichever workspace is open now.
+    const [stored, seeds] = await Promise.all([readAnswers(ws), profileSeeds(ws)])
+    return pageAnswers(stored, seeds)
   },
-  remember: async (answer) => {
-    await rememberAnswer(await workspacePath(), answer)
+  remember: async (ws, answer) => {
+    await rememberAnswer(ws, answer)
   },
-  rememberMappings: async (mappings) => {
-    await rememberMappings(await workspacePath(), mappings)
+  rememberMappings: async (ws, mappings) => {
+    await rememberMappings(ws, mappings)
   },
-  map: async (questions) => {
-    const cli = await availableMapper(await workspacePath())
+  map: async (ws, questions) => {
+    const cli = await availableMapper(ws)
     if (!cli) throw new Error('No model available to map questions.')
     return mapQuestions(questions, cli)
   }

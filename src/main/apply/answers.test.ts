@@ -61,7 +61,7 @@ describe('answers store', () => {
       { question: 'q-model', label: 'Your gender identity', fact: 'gender' }
     ])
     const page = pageAnswers(await readAnswers(ws))
-    expect(page.questions['q-user']).toEqual({ fact: 'gender', confirmed: true })
+    expect(page.questions['q-user']).toEqual({ fact: 'gender', confirmed: true, option: 'Female' })
     expect(page.questions['q-model']).toEqual({ fact: 'gender', confirmed: false })
     expect(page.facts).toEqual({ gender: 'Female' })
   })
@@ -78,7 +78,11 @@ describe('answers store', () => {
   it('forgets one fact, one question, or everything (the file is gone)', async () => {
     await rememberAnswer(ws, { question: 'q1', label: 'Gender', fact: 'gender', value: 'Male' })
     await rememberAnswer(ws, { question: 'q2', label: 'Why?', fact: null, value: 'Because.' })
-    expect((await forgetFact(ws, 'gender')).facts.gender).toBeUndefined()
+    const forgotten = await forgetFact(ws, 'gender')
+    expect(forgotten.facts.gender).toBeUndefined()
+    // The exact option remembered for the gender question goes with it.
+    expect(forgotten.questions.q1).toMatchObject({ fact: 'gender', confirmed: true })
+    expect(forgotten.questions.q1.option).toBeUndefined()
     expect((await forgetQuestion(ws, 'q2')).questions.q2).toBeUndefined()
     expect((await readAnswers(ws)).questions.q1).toBeDefined()
     await clearAnswers(ws)

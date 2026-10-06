@@ -52,16 +52,19 @@ export interface ApplyPage {
 /**
  * Application answers (#71): the memory under userData and the model that
  * maps unknown questions. Values never go to the model, only labels/options.
+ * Every call names the workspace the session started in: switching
+ * workspaces mid-session must never move one person's answers into
+ * another's memory, nor show them on the other's application.
  */
 export interface AnswersDeps {
   /** What the page gets with each fill: confirmed facts (stored over the profile's) and the question memory. */
-  load(): Promise<PageAnswers>
+  load(workspace: string): Promise<PageAnswers>
   /** The user's answer, to remember: the fact for a question that asks one, else the answer itself. */
-  remember(answer: { question: string; label: string; fact: FactKey | null; value: string }): Promise<void>
+  remember(workspace: string, answer: { question: string; label: string; fact: FactKey | null; value: string }): Promise<void>
   /** A model's mappings, stored unconfirmed. */
-  rememberMappings(mappings: Array<{ question: string; label: string; fact: FactKey | null }>): Promise<void>
+  rememberMappings(workspace: string, mappings: Array<{ question: string; label: string; fact: FactKey | null }>): Promise<void>
   /** One model call for the questions nothing knows yet; rejects when no model is available or it fails. */
-  map(questions: MapQuestion[]): Promise<Mapping[]>
+  map(workspace: string, questions: MapQuestion[]): Promise<Mapping[]>
 }
 
 export interface ApplyDeps {
@@ -96,8 +99,12 @@ interface Context {
   answers: PageAnswers
   /** Answers the user gave in the panel without Remember: this session only, by question key. */
   once: Record<string, string>
-  /** Question keys already sent to the model this session, so a page costs at most one call. */
+  /** The workspace the session started in; every answer read and write goes there (#71). */
+  workspace: string
+  /** Question keys already sent to the model this session (never sent twice). */
   asked: Set<string>
+  /** Pages (URL plus step title) that already had their one model call, made or failed. */
+  mappedSteps: Set<string>
   resumePath: string
   coverPath: string | null
   /** Listeners of the session's tab (replaced when a popup takes over). */
@@ -191,7 +198,7 @@ export class ApplyService {
     })
     const coverPath = await resolveApplicationFile(workspace, applicationId, 'cover.pdf').catch(() => null)
     const values = await this.deps.values()
-    const answers = (await this.deps.answers?.load().catch(() => null)) ?? NO_ANSWERS
+    const answers = (await this.deps.answers?.load(workspace).catch(() => null)) ?? NO_ANSWERS
     const applyUrl = applyUrlFor(record.jobUrl)
 
     this.end()
@@ -204,7 +211,9 @@ export class ApplyService {
       values,
       answers,
       once: {},
+      workspace,
       asked: new Set(),
+      mappedSteps: new Set(),
       resumePath,
       coverPath,
       unsubscribe: [],
@@ -548,12 +557,19 @@ export class ApplyService {
       if (!unknown.has(f.question)) unknown.set(f.question, f)
     }
     if (unknown.size === 0) return
+    // One call per page and step, made or failed: questions over the limit, or rendered later, stay with the user.
+    const step = stepKey(report.url, report.stepTitle ?? null)
+    if (ctx.mappedSteps.has(step)) return
+    ctx.mappedSteps.add(step)
     const asked = [...unknown.values()].slice(0, MAX_MAPPED)
     for (const f of asked) ctx.asked.add(f.question!)
     const byId = new Map(asked.map((f, i) => [`q${i + 1}`, f]))
     let mappings: Mapping[]
     try {
-      mappings = await answers.map([...byId].map(([id, f]) => ({ id, question: f.label, kind: f.kind, options: f.options ?? [] })))
+      mappings = await answers.map(
+        ctx.workspace,
+        [...byId].map(([id, f]) => ({ id, question: f.label, kind: f.kind, options: f.options ?? [] }))
+      )
     } catch {
       return
     }
@@ -562,7 +578,8 @@ export class ApplyService {
       .filter((m) => byId.has(m.id))
       .map((m) => ({ question: byId.get(m.id)!.question!, label: byId.get(m.id)!.label, fact: m.fact }))
     if (learned.length === 0) return
-    await answers.rememberMappings(learned).catch(() => undefined)
+    // Stored in the session's own workspace, even if the user switched workspaces meanwhile.
+    await answers.rememberMappings(ctx.workspace, learned).catch(() => undefined)
     for (const l of learned) ctx.answers.questions[l.question] ??= { fact: l.fact, confirmed: false }
     const current = this.session?.report
     if (this.ctx !== ctx || !current || current.url !== report.url) return
@@ -596,8 +613,8 @@ export class ApplyService {
       throw new Error('Pick one of the options the page offers.')
     }
     if (remember && this.deps.answers) {
-      await this.deps.answers.remember({ question: field.question, label: field.label, fact: field.fact ?? null, value: answer })
-      ctx.answers = (await this.deps.answers.load().catch(() => null)) ?? ctx.answers
+      await this.deps.answers.remember(ctx.workspace, { question: field.question, label: field.label, fact: field.fact ?? null, value: answer })
+      ctx.answers = (await this.deps.answers.load(ctx.workspace).catch(() => null)) ?? ctx.answers
     }
     if (this.ctx !== ctx) throw new Error('This apply session has ended. Press Apply again.')
     // This page takes the exact option the user picked (a saved fact may match several of its options).
