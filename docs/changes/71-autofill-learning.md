@@ -38,7 +38,10 @@ flowchart TD
   G -- no --> M[After the fill: one model call per page<br/>labels and options only]
   M --> N[Mappings stored unconfirmed] --> S
   W -- text / native select / native radio --> X[Written with native setters plus input and change<br/>outlined green, reported filled]
-  W -- click-only widget --> S
+  W -- click-only widget, switch on --> K[pick.ts: press only inside the widget<br/>pointer and mouse events, read back]
+  K -- took --> X
+  K -- did not stick --> S
+  W -- click-only widget, switch off --> S
   W -- checkbox --> Z[Never]
   S --> P
   P -- user answers, Remember on --> R[(userData answers.json)]
@@ -83,16 +86,53 @@ flowchart TD
   - native `<select>`: `setSelectValue`, which uses the native `value` setter, then `input` and `change`;
   - native radios: `checkRadio`, which uses the native `checked` setter, then `input` and `change`;
   - checkboxes: **never**;
-  - comboboxes, adapter `choices` and the new adapter `clickOnly` selectors (Ashby's and Workday's React radios and
-    checkboxes): `CLICK_ONLY_POLICY = 'suggest'`. The panel shows the remembered answer and the user picks it in the
+  - comboboxes, Workday dropdown buttons, Ashby yes/no button groups, adapter `choices` and the new adapter `clickOnly`
+    selectors (Ashby's and Workday's React radios and checkboxes): click-only. With the Settings switch on (the
+    default), a trusted answer is **picked** by `pick.ts` (see "Picking in click-only widgets" below). Off, the panel
+    shows the remembered answer and the user picks it in the
     page.
 - **`Adapter.answerRoots`**: containers outside `formRoot` whose questions are only answered or suggested, never
   matched to contact values or uploads. Ashby uses it for its EEO survey, which is a second form container. When a
   fieldset has no legend, its question label names the radio group.
 - `verifyFill` also checks the answers it wrote (by `fieldId`) and restores one that the page wiped. A user's edit is
   kept.
-- The page's preload passes the answers through. `guard.test.ts` is **unchanged** and still passes: no click, no
-  submit, no key or mouse event, no `new Event('click')`.
+- The page's preload passes the answers and the switch through.
+
+### Picking in click-only widgets (owner decision, 2026-10-06)
+
+The owner reversed open question 1: autofill picks remembered answers in widgets that only take a click, on the steps
+it already fills.
+
+- **Widgets:** Greenhouse react-select comboboxes, Ashby yes/no button groups (a hidden checkbox between two
+  `button[aria-pressed]`, now reported as a radio question with its buttons as options) and Ashby React radios, and
+  Workday dropdown buttons (`button[aria-haspopup=listbox]`, now reported as comboboxes) with their popup listbox.
+- **Trusted answers only:** a catalog match with a stored fact, or a question mapping the user confirmed. A model-only
+  mapping stays a suggestion and is never picked.
+- **One switch:** Settings > Saved application answers > "Pick dropdown answers automatically". It is **on by
+  default** (the owner asked for it) and stored as `pickDropdowns` in the app settings. Main reads it before every
+  fill and sends it as `pick`. Off gives the suggestion-only behaviour.
+- **One module:** `src/shared/autofill/pick.ts` is the only code that dispatches synthetic events. `fillPage` queues
+  the picks on the report, and `PageSession.fill` runs them through `pickAnswers` before the verify pass: at most 25,
+  within 8 s, well inside main's 15 s wait.
+- **How a press is bounded** (`refusal`, checked before every press):
+  - the target must be inside the field's own widget: its control, its button group or radio group, or the listbox
+    that control owns. A listbox counts as owned when it is referenced by `aria-controls` / `aria-owns`, is inside
+    the widget, has an `aria-labelledby` naming the control, or, for popups rendered elsewhere (Workday), is the
+    **single** listbox that appeared after the press;
+  - it is refused when it is a link, a `type=submit` control, a button that would submit its form, a button outside
+    the widget, a disabled element, or anything labelled Submit / Apply / Next / Continue / Save / Review.
+- **Events:** pointerdown, mousedown, pointerup, mouseup and click on the control and then on the option element.
+  Never a keyboard event, so nothing can press Enter in a form. A menu left open is closed by blurring the control.
+- **Read back:** react-select's single value, the Workday button's text, the pressed button (`aria-pressed`) or the
+  checked radio. A widget that already shows another answer is `kept`. A pick that did not stick is reported as
+  `rejected` ("Needs you"), with the suggestion.
+- **Guard:** `guard.test.ts` keeps its scan for every other file. It allowlists exactly `pick.ts` for mouse and pointer
+  event constructors; submit, requestSubmit, `.click()`, keyboard and submit events stay forbidden there too. New guard
+  tests show that `pick` refuses out-of-widget targets, links, submit buttons, flow-labelled options, a submit button
+  posing as an option, and listboxes it cannot tie to the widget. No key or submit event fires in any of them.
+- **Never:** consent, certification and acknowledgement checkboxes are still never ticked.
+- **Still not filled:** the Workday steps that #65 never fills (Application Questions, Voluntary Disclosures). Picking
+  applies only to the steps autofill already fills, and those steps stay a follow-up.
 
 ### Memory (`src/main/apply/answers-store.ts`)
 
@@ -150,11 +190,13 @@ flowchart TD
 
 ## Design decisions and alternatives rejected
 
-- **No clicking (#24 stands; open question 1, default).** A react-select option, an Ashby yes/no button or a Workday
-  dropdown can only be chosen with a click or key events. Those widgets get a suggestion instead.
-  *Future switch:* allowing synthetic picking means adding a second `ClickOnlyPolicy` value and handling it in
-  `answerField`. The engine, the adapters and the panel need nothing else. `guard.test.ts` would have to change in
-  that PR, deliberately.
+- **Picking in click-only widgets (open question 1: the default was "no", the owner changed it to "yes").** The first
+  version only suggested in these widgets. The owner then decided that autofill picks trusted answers there, behind
+  a Settings switch that is on by default. "Never submit" (#24) still holds. All synthetic input goes through one
+  bounded module (above); the rest of the engine still never presses anything.
+  - *Rejected:* keyboard selection (typing then pressing Enter), because Enter can submit a form.
+  - *Rejected:* `new Event('click')` workarounds outside `pick.ts`.
+  - *Rejected:* picking model-only mappings.
 - **Ashby and Workday radios count as click-only.** React's change event for radios and checkboxes listens to
   `click`. Setting `checked` may look answered while React's state stays empty, so the submission drops the answer.
   Lever (server-rendered) and plain HTML forms listen to `change`, so they are written.
@@ -207,9 +249,16 @@ flowchart TD
   - `apply.test.ts` runs the service: answers sent with the fill, a US-citizen profile answering sponsorship, one model
     call per page, suggest, then confirm, then the next posting fills with no call, `apply:answer` checks, and a
     failing model.
-- **E2E (CI):** `e2e/tests/apply-answers.spec.ts`. Answer Gender once on the mock Lever form, check the answer is
-  stored under userData, then see the second mock Lever application fill it with no new model call. Settings shows it
-  masked. No submission is recorded.
+- **Picking (unit):** `autofill.test.ts` picks in the Greenhouse react-select fixture (with the mock's react-select
+  behaviour), in Ashby yes/no buttons and React radios, and in a Workday dropdown with a popup listbox. It also checks
+  that the switch off gives suggestions, that an unconfirmed model mapping is not picked, and that a pick that does not
+  stick is reported. No submit, requestSubmit or key event fires. `guard.test.ts` covers the refusals.
+- **E2E (CI):** `e2e/tests/apply-answers.spec.ts`.
+  - Answer Gender once on the mock Lever form and check the answer is stored under userData. The second mock Lever
+    application fills it with no new model call; Settings shows it masked.
+  - Answer the mock Greenhouse react-select Gender once: Huntgry picks it in the page, and the second Greenhouse
+    application picks it on its own. The switch is on in Settings.
+  - No submission is recorded in either case.
 - **Manually:** apply to a Lever posting with an EEO section and answer Gender in the panel with Remember. Apply to
   another Lever posting: Gender is filled and outlined green. On Greenhouse, the authorization dropdown shows "From
   your saved answers: Yes. Pick it in the page."
@@ -219,11 +268,11 @@ flowchart TD
 - **Knowledge graph:** show learned non-sensitive facts as read-only `fact` nodes linked to the person, with an "Edit
   in saved answers" link. The graph stays derived and reads the store through a new IPC. Sensitive facts never
   appear there.
-- **Ashby radios and checkboxes:** verify live whether a `change`-only selection survives submit. Ashby yes/no buttons
-  and Greenhouse react-select stay suggestion-only unless the owner relaxes the click rule; that is the
-  `CLICK_ONLY_POLICY` switch above.
-- **Workday Application Questions and Voluntary Disclosures steps,** for text and native controls only. This means
-  revisiting #65 decision 3.
+- **Live check of picking** on real Greenhouse, Ashby and Workday pages. The behaviour is modelled on captured markup
+  and react-select v5. The read-back reports a widget that ignored the pick, but a live run should confirm that the
+  sites' state takes it.
+- **Workday Application Questions and Voluntary Disclosures steps.** These need a change to #65 decision 3: today only
+  the steps autofill already fills are picked in.
 - **Model-drafted answers to essay questions** ("Why do you want to work here?"), previewed and never auto-written
   (#24 phase 3).
 - **A Settings toggle** "Use AI to match unknown questions" (default on), and showing the mapping call's cost.
