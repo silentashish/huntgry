@@ -35,15 +35,21 @@ export interface ReportGroup {
   fields: FieldReport[]
 }
 
+/**
+ * A choice Huntgry can learn (#71): it asks for a known fact or carries a suggestion. It needs the user once, so it
+ * is listed under "Needs you" with its answer control, not among the plain choices.
+ */
+const learnable = (f: FieldReport) => f.outcome === 'skipped-unsupported' && (f.fact !== undefined || f.suggestion !== undefined)
+
 /** "Needs you" (required first), "Filled", "Your choice"; empty groups are left out. */
 export function groupReport(report: FillReport | null): ReportGroup[] {
   if (!report) return []
   const needs = report.fields
-    .filter((f) => !DONE.has(f.outcome) && f.outcome !== 'skipped-unsupported')
+    .filter((f) => !DONE.has(f.outcome) && (f.outcome !== 'skipped-unsupported' || learnable(f)))
     .sort((a, b) => Number(b.required) - Number(a.required))
   const done = report.fields.filter((f) => DONE.has(f.outcome))
   const choices = report.fields
-    .filter((f) => f.outcome === 'skipped-unsupported')
+    .filter((f) => f.outcome === 'skipped-unsupported' && !learnable(f))
     .sort((a, b) => Number(b.required) - Number(a.required))
   return [
     { title: 'Needs you', fields: needs },

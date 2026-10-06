@@ -60,6 +60,19 @@ describe('answers in the panel (#71)', () => {
     ...extra
   })
 
+  it('lists a choice Huntgry can learn (a fact or a suggestion) under "Needs you", other choices under "Your choice"', () => {
+    const groups = groupReport({
+      ats: 'lever',
+      url: 'https://x.example',
+      hasSubmitButton: true,
+      fields: [q({ label: 'Gender', fact: 'gender' }), q({ label: 'Authorized', suggestion: 'Yes', suggestedBy: 'saved' }), q({ label: 'Country' })]
+    })
+    expect(groups.map((g) => [g.title, g.fields.map((f) => f.label)])).toEqual([
+      ['Needs you', ['Gender', 'Authorized']],
+      ['Your choice', ['Country']]
+    ])
+  })
+
   it('offers an answer for reported questions that are still open', () => {
     expect(canAnswer(q({}))).toBe(true)
     expect(canAnswer(q({ outcome: 'filled' }))).toBe(false)
