@@ -125,7 +125,7 @@ test.describe('relevant jobs, Refresh and filters (#73)', () => {
     // Both seeded jobs fit "Backend Engineer" with Go: the closer title first.
     await expect(jobs.segment('Relevant')).toHaveAccessibleName('Relevant (2)')
     await expect.poll(() => jobs.listedTitles()).toEqual(['Staff Backend Engineer', 'Infrastructure Engineer'])
-    await expect(app.window.getByText(/^Title: Backend Engineer · Skills: Go/)).toBeVisible()
+    await expect(app.window.getByText(/^Title: Backend Engineer · Skills: .*\bGo\b.* · Remote$/)).toBeVisible()
     await expect(jobs.lastRefreshed).toHaveText('Relevant jobs updated never')
     expect(mock.requests).toEqual([])
   })

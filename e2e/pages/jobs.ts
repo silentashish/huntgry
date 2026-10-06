@@ -24,7 +24,7 @@ export class JobsPage {
   readonly lastRefreshed: Locator
   /** The sponsorship filter (a Mantine Select: a combobox). */
   readonly sponsorshipFilter: Locator
-  /** The auto-refresh toggle (a Mantine Switch: `role="switch"`, its input visually hidden). */
+  /** The auto-refresh toggle (a Mantine Switch: `role="switch"`; its input lies over the label). */
   readonly autoRefresh: Locator
   /** The hint shown instead of the Relevant segment when the profile has no headline or role. */
   readonly relevantHint: Locator
@@ -64,9 +64,9 @@ export class JobsPage {
     await expect(this.segment(name)).toBeChecked()
   }
 
-  /** Flips auto-refresh by clicking the switch's label (the input itself is visually hidden). */
+  /** Flips auto-refresh. Mantine's switch input covers its label and takes the click itself. */
   async toggleAutoRefresh(on: boolean): Promise<void> {
-    await this.page.getByText('Auto-refresh relevant jobs', { exact: true }).click()
+    await this.autoRefresh.click()
     await expect(this.autoRefresh).toBeChecked({ checked: on })
   }
 
