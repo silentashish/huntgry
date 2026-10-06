@@ -104,6 +104,24 @@ function resumeId() {
 
 const out = (e) => process.stdout.write(`${JSON.stringify(e)}\n`)
 let turn = 0
+
+/**
+ * Like the real CLIs, Claude's cost / modelUsage and Codex's usage are the session's running
+ * totals, continued by a resume: kept in FAKE_AGENT_HOME between processes (in memory without one).
+ */
+const countersFile = home ? join(home, `counters-${agent}-${session.replace(/[^\w-]/g, '_')}.json`) : null
+let counters = { input: 0, output: 0, cost: 0 }
+try {
+  if (resume && countersFile) counters = JSON.parse(readFileSync(countersFile, 'utf8'))
+} catch {
+  // A session the fake has not seen: start from zero.
+}
+function count(input, output, cost) {
+  counters = { input: counters.input + input, output: counters.output + output, cost: counters.cost + cost }
+  if (countersFile && existsSync(home)) writeFileSync(countersFile, JSON.stringify(counters))
+  return counters
+}
+const CLAUDE_MODEL = 'claude-haiku-4-5-20251001'
 let step = 0
 let messageN = 0
 
@@ -117,7 +135,7 @@ const protocol = {
         subtype: 'init',
         session_id: session,
         cwd: process.cwd(),
-        model: 'fake-claude',
+        model: CLAUDE_MODEL,
         tools: ['Read', 'Bash', 'TodoWrite'],
         permissionMode: 'acceptEdits'
       })
@@ -140,13 +158,19 @@ const protocol = {
       })
     },
     result(text, ms) {
+      // 2300 input + 2000 output tokens of Haiku 4.5 = $0.0123 a turn: the estimate matches the CLI's figure.
+      const total = count(2300, 2000, 0.0123)
       out({
         type: 'result',
         subtype: 'success',
         is_error: false,
         result: text,
         session_id: session,
-        total_cost_usd: 0.0123,
+        total_cost_usd: total.cost,
+        usage: { input_tokens: 2300, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 2000 },
+        modelUsage: {
+          [CLAUDE_MODEL]: { inputTokens: total.input, outputTokens: total.output, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: total.cost }
+        },
         duration_ms: ms,
         num_turns: turn,
         permission_denials: []
@@ -175,7 +199,8 @@ const protocol = {
       })
     },
     result() {
-      out({ type: 'turn.completed', usage: { input_tokens: 1200, cached_input_tokens: 0, output_tokens: 80 } })
+      const total = count(1200, 80, 0)
+      out({ type: 'turn.completed', usage: { input_tokens: total.input, cached_input_tokens: 0, output_tokens: total.output } })
     },
     fail() {
       out({ type: 'turn.failed', error: { message: 'boom: simulated agent failure' } })
