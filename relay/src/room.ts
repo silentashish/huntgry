@@ -36,6 +36,7 @@ import {
 import { bearerOf, matchesHash } from './auth'
 import { configOf, type Config, type Env } from './env'
 import { EXPO_PUSH_TOKEN, pushMessage, sendExpoPush } from './push'
+import { countFrame, type RateWindow } from './rate'
 
 /** Frames the relay holds per phone; beyond it the oldest events go, results never (ADR). */
 export const MAX_UNACKED_PER_PHONE = 50
@@ -62,7 +63,8 @@ export const CLOSE = {
 
 export const DESKTOP = 'desktop'
 
-type Attachment = { pending: true; deadline: number } | { pending: false; kind: 'desktop' | 'device' | 'pairing'; id: string }
+/** Serialised with the socket so it survives hibernation; `rate` is the connection's frame window. */
+type Attachment = ({ pending: true; deadline: number } | { pending: false; kind: 'desktop' | 'device' | 'pairing'; id: string }) & { rate?: RateWindow }
 type SocketKind = Extract<Attachment, { pending: false }>['kind']
 
 interface InboxRow extends Record<string, SqlStorageValue> {
@@ -91,8 +93,6 @@ const json = (value: unknown, status = 200): Response =>
 
 export class Room extends DurableObject<Env> {
   private readonly config: Config
-  /** Per-connection frame counters; lost on hibernation, which only happens to idle sockets. */
-  private readonly rates = new WeakMap<WebSocket, { windowStart: number; count: number }>()
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -184,9 +184,12 @@ export class Room extends DurableObject<Env> {
 
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== 'string') return ws.close(CLOSE.policy, 'text frames only')
-    if (!this.withinRate(ws)) return ws.close(CLOSE.policy, 'rate limited')
     const attachment = ws.deserializeAttachment() as Attachment | null
     if (!attachment) return ws.close(CLOSE.policy, 'no session')
+    const rate = countFrame(attachment.rate, Date.now(), FRAMES_PER_MINUTE)
+    if (!rate.ok) return ws.close(CLOSE.policy, 'rate limited')
+    attachment.rate = rate.window
+    ws.serializeAttachment(attachment)
 
     const bytes = utf8Bytes(message)
     let value: unknown
@@ -287,7 +290,7 @@ export class Room extends DurableObject<Env> {
 
     // One live socket per identity: a reconnect replaces the previous one.
     for (const other of this.socketsOf(session.kind, session.id, ws)) other.close(CLOSE.replaced, 'replaced by a new connection')
-    ws.serializeAttachment(session)
+    ws.serializeAttachment({ ...session, rate: (ws.deserializeAttachment() as Attachment | null)?.rate })
 
     const now = Date.now()
     if (session.kind === 'desktop') {
@@ -534,17 +537,6 @@ export class Room extends DurableObject<Env> {
     } catch {
       // The socket is closing; the notice is not worth keeping.
     }
-  }
-
-  private withinRate(ws: WebSocket): boolean {
-    const now = Date.now()
-    const state = this.rates.get(ws)
-    if (!state || now - state.windowStart >= 60_000) {
-      this.rates.set(ws, { windowStart: now, count: 1 })
-      return true
-    }
-    state.count += 1
-    return state.count <= FRAMES_PER_MINUTE
   }
 
   /**
