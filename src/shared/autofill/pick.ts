@@ -13,12 +13,17 @@ import { asHuntgry } from './user-edits'
  * forbids keyboard and submit events here). Every press goes through `press`,
  * which first checks the target with `refusal`:
  * - it must be inside the field's own widget: its control, its button group
- *   or radio group, or the listbox that control owns (by `aria-controls` /
- *   `aria-owns` / `aria-labelledby`, inside the widget, or the one listbox
- *   that appeared when the control was pressed);
- * - never a link, a submit button (`type=submit`, or a button that would
- *   submit its form), a button outside the widget, a disabled element, or
- *   anything labelled Submit / Apply / Next / Continue / Save / Review.
+ *   or radio group, or a listbox the control demonstrably owns (named by its
+ *   `aria-controls` / `aria-owns`, inside the widget, or naming the control
+ *   in `aria-labelledby`); an untied popup is never used;
+ * - nothing the press reaches or activates may be a link, a submit / image /
+ *   reset control, a button that would submit its form, a checkbox, a label
+ *   for a control outside the widget (or for a checkbox or button), a button
+ *   enclosing the widget, a disabled element, or anything labelled Submit /
+ *   Apply / Next / Continue / Save / Review (the target and every wrapper it
+ *   bubbles through inside the widget);
+ * - the check runs again before every event of a press, so a page handler
+ *   that turns the target into a submit button mid-sequence stops it.
  * Only pointer and mouse events are sent (pointerdown, mousedown, pointerup,
  * mouseup, click); never a key, so nothing can press Enter in a form. The
  * value is read back afterwards; a pick that did not stick is reported.
@@ -75,10 +80,13 @@ export function widgetOf(el: Element): PickWidget | null {
   }
   const input = el as HTMLInputElement
   if (t === 'input' && input.type === 'checkbox') {
-    // A yes/no button group with a hidden checkbox (Ashby).
-    const scope = el.closest('[class*="yesno"]') ?? el.parentElement
-    const options = scope ? Array.from(scope.querySelectorAll<HTMLElement>('button[aria-pressed], button[data-option]')) : []
-    return scope && options.length >= 2 ? { type: 'buttons', scope, options } : null
+    // Only Ashby's yes/no screening widget: a hidden (tabindex -1) checkbox in a `yesno` group of exactly a Yes and a
+    // No button. Any other checkbox (consent, certification) is never a question Huntgry answers.
+    const scope = el.closest('[class*="yesno"]')
+    if (!scope || el.getAttribute('tabindex') !== '-1') return null
+    const options = Array.from(scope.querySelectorAll<HTMLElement>('button'))
+    const words = options.map((b) => (b.getAttribute('data-option') ?? text(b)).toLowerCase())
+    return options.length === 2 && words[0] === 'yes' && words[1] === 'no' ? { type: 'buttons', scope, options } : null
   }
   if (t === 'input' && input.type === 'radio') {
     const scope = el.closest('fieldset, [role="radiogroup"]') ?? ownScope(el)
@@ -87,8 +95,12 @@ export function widgetOf(el: Element): PickWidget | null {
   return null
 }
 
-/** Listboxes that belong to the widget's control (see the module comment). */
-function ownListboxes(widget: Extract<PickWidget, { type: 'listbox' }>, before: ReadonlySet<Element>): Element[] {
+/**
+ * Listboxes that demonstrably belong to the widget's control: named by its `aria-controls` / `aria-owns`, inside the
+ * widget, or naming the control in their `aria-labelledby`. A listbox with no such tie is never used, however it
+ * appeared: the pick then fails and stays a suggestion.
+ */
+export function ownListboxes(widget: Extract<PickWidget, { type: 'listbox' }>): Element[] {
   const doc = widget.opener.ownerDocument
   const ids = `${widget.opener.getAttribute('aria-controls') ?? ''} ${widget.opener.getAttribute('aria-owns') ?? ''}`
     .split(/\s+/)
@@ -103,11 +115,6 @@ function ownListboxes(widget: Extract<PickWidget, { type: 'listbox' }>, before: 
   if (widget.opener.id) {
     for (const box of all) if ((box.getAttribute('aria-labelledby') ?? '').split(/\s+/).includes(widget.opener.id)) owned.add(box)
   }
-  if (owned.size === 0) {
-    // A popup rendered elsewhere (Workday): only the single listbox that appeared after the press, and only one.
-    const fresh = all.filter((box) => !before.has(box))
-    if (fresh.length === 1) owned.add(fresh[0])
-  }
   return [...owned]
 }
 
@@ -121,49 +128,98 @@ function listboxOptions(boxes: Element[]): HTMLElement[] {
   return out
 }
 
+/** Input types whose activation submits, resets, uploads or ticks: never pressed, nor a label pointing at one. */
+const NEVER_ACTIVATED = new Set(['submit', 'image', 'reset', 'button', 'file', 'checkbox'])
+
 /**
  * Why `target` must not be pressed for `widget`, or null when it may be.
  * `listboxes` are the widget's own listboxes (listbox widgets, once open).
+ * It checks everything the press can reach or activate: the target, every
+ * ancestor the events bubble through (a click inside a button activates the
+ * button, a click on a label activates its control), and labels' controls.
  */
 export function refusal(target: Element, widget: PickWidget, listboxes: readonly Element[] = []): string | null {
-  const inside = widget.scope.contains(target) || listboxes.some((box) => box.contains(target))
-  if (!inside) return 'outside the field’s widget'
-  if (target.closest('a[href]')) return 'a link'
-  if ((target as HTMLButtonElement).disabled || target.closest('[aria-disabled="true"]')) return 'disabled'
-  const button = target.closest('button, input[type="submit"], input[type="button"], input[type="image"], [role="button"]')
-  if (button) {
-    if (!widget.scope.contains(button) && !listboxes.some((box) => box.contains(button))) return 'a button outside the widget'
-    if (button.getAttribute('type')?.toLowerCase() === 'submit') return 'a submit button'
-    const b = button as HTMLButtonElement
-    if (b.type === 'submit' && b.form) return 'a button that would submit the form'
+  if (!target.isConnected) return 'something no longer on the page'
+  const within = (node: Element) => widget.scope.contains(node) || listboxes.some((box) => box.contains(node))
+  if (!within(target)) return 'outside the field’s widget'
+  let inWidget = true
+  for (let el: Element | null = target; el && tag(el) !== 'body'; el = el.parentElement) {
+    const why = inWidget ? elementRefusal(el, el === target, widget, within) : enclosingRefusal(el, within)
+    if (why) return why
+    if (el === widget.scope || listboxes.includes(el)) inWidget = false
   }
-  if (target.getAttribute('type')?.toLowerCase() === 'submit') return 'a submit control'
-  // The words on what is pressed. A combobox input is named by its question (which may say "continue"), so only
-  // its own shown text counts; options, buttons and radios count their label and value too.
-  const words =
-    widget.type === 'listbox' && target === widget.opener
-      ? tag(target) === 'button'
-        ? text(target)
-        : ''
-      : `${target.getAttribute('aria-label') ?? ''} ${(target as HTMLInputElement).value ?? ''} ${text(target)}`
-  if (FLOW_WORDS.test(words.slice(0, 200))) return 'labelled like a submit or navigation button'
   return null
 }
 
-/** Presses `target` with pointer and mouse events only, after `refusal` allowed it. */
-function press(target: HTMLElement, widget: PickWidget, listboxes: readonly Element[] = []): void {
-  const refused = refusal(target, widget, listboxes)
-  if (refused) throw new Error(`Huntgry does not press ${refused}.`)
+/** An element on the path inside the widget (the target, its option, button or label wrappers). */
+function elementRefusal(el: Element, isTarget: boolean, widget: PickWidget, within: (node: Element) => boolean): string | null {
+  const t = tag(el)
+  if (t === 'a' && el.hasAttribute('href')) return 'a link'
+  if ((el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true') return 'something disabled'
+  const type = (el.getAttribute('type') ?? '').toLowerCase()
+  if (type === 'submit' || type === 'image' || type === 'reset') return 'a submit control'
+  if (t === 'button' && (el as HTMLButtonElement).type === 'submit' && (el as HTMLButtonElement).form) return 'a button that would submit the form'
+  if (t === 'input' && NEVER_ACTIVATED.has((el as HTMLInputElement).type)) return 'a checkbox or button input'
+  if (t === 'label') {
+    const why = labelRefusal(el as HTMLLabelElement, within)
+    if (why) return why
+  }
+  // What a person reads as this element's name. A combobox input is named by its question (which may say
+  // "continue"), so the opener counts only its shown text; everything else its label, title, value and text.
+  const opener = widget.type === 'listbox' && el === widget.opener
+  const named = isTarget || t === 'button' || t === 'label' || ['button', 'option', 'menuitem', 'link'].includes(el.getAttribute('role') ?? '')
+  const words = opener
+    ? t === 'button'
+      ? text(el)
+      : ''
+    : `${el.getAttribute('aria-label') ?? ''} ${el.getAttribute('title') ?? ''} ${el.getAttribute('value') ?? ''} ${named ? text(el) : ''}`
+  if (FLOW_WORDS.test(words.slice(0, 200))) return 'something labelled like a submit or navigation button'
+  return null
+}
+
+/** An ancestor around the whole widget: the press bubbles there, so it must not be anything a click activates. */
+function enclosingRefusal(el: Element, within: (node: Element) => boolean): string | null {
+  const t = tag(el)
+  if (t === 'a' && el.hasAttribute('href')) return 'something inside a link'
+  if (t === 'button' || t === 'input' || el.getAttribute('role') === 'button') return 'something inside a button'
+  if (t === 'label') return labelRefusal(el as HTMLLabelElement, within)
+  return null
+}
+
+/** A label activates its control: only a control of this widget that is not a checkbox, button or upload. */
+function labelRefusal(label: HTMLLabelElement, within: (node: Element) => boolean): string | null {
+  const control = label.control
+  if (!control) return null
+  if (!within(control)) return 'a label for a control outside the widget'
+  if (tag(control) === 'button' || NEVER_ACTIVATED.has((control as HTMLInputElement).type)) return 'a label for a checkbox or button'
+  return null
+}
+
+/**
+ * Presses `target` with pointer and mouse events only. `refusal` is checked
+ * again before every event: a page handler may change the target during the
+ * sequence (make it a submit button, move it, disable it), and the sequence
+ * stops there.
+ */
+function press(target: HTMLElement, widget: PickWidget, listboxes: () => readonly Element[] = () => []): void {
   const view = target.ownerDocument.defaultView
   if (!view) throw new Error('The page has no window.')
   const init = { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1, view }
+  const up = { ...init, buttons: 0 }
   const Pointer = view.PointerEvent ?? view.MouseEvent
+  const events: Array<() => Event> = [
+    () => new Pointer('pointerdown', { ...init, pointerType: 'mouse', isPrimary: true } as PointerEventInit),
+    () => new view.MouseEvent('mousedown', init),
+    () => new Pointer('pointerup', { ...up, pointerType: 'mouse', isPrimary: true } as PointerEventInit),
+    () => new view.MouseEvent('mouseup', up),
+    () => new view.MouseEvent('click', up)
+  ]
   asHuntgry(() => {
-    target.dispatchEvent(new Pointer('pointerdown', { ...init, pointerType: 'mouse', isPrimary: true } as PointerEventInit))
-    target.dispatchEvent(new view.MouseEvent('mousedown', init))
-    target.dispatchEvent(new Pointer('pointerup', { ...init, buttons: 0, pointerType: 'mouse', isPrimary: true } as PointerEventInit))
-    target.dispatchEvent(new view.MouseEvent('mouseup', { ...init, buttons: 0 }))
-    target.dispatchEvent(new view.MouseEvent('click', { ...init, buttons: 0 }))
+    for (const make of events) {
+      const refused = refusal(target, widget, listboxes())
+      if (refused) throw new Error(`Huntgry does not press ${refused}.`)
+      target.dispatchEvent(make())
+    }
   })
 }
 
@@ -179,6 +235,8 @@ export function pickedValue(widget: PickWidget): string {
   }
   const single = widget.scope.querySelector('[class*="single-value"], [class*="singleValue"]')
   if (single) return text(single)
+  // Text typed into the combobox (a search in progress) is the user's: it counts as an answer to keep.
+  if (tag(widget.opener) === 'input') return (widget.opener as HTMLInputElement).value.trim()
   if (tag(widget.opener) === 'button') {
     const shown = text(widget.opener)
     return PLACEHOLDER.test(shown) ? '' : shown
@@ -198,20 +256,24 @@ function closeMenu(widget: PickWidget): void {
 export interface PickOptions {
   /** How long the menu may take to render, and the choice to show. */
   timeoutMs?: number
+  /** Whether the person changed the field: checked before every press (also after the menu wait); then kept. */
+  touched?: () => boolean
 }
 
 /**
  * Picks, in `widget`, the option `choose` names (it gets the option texts and
  * returns one of them, or null for none), then reads it back. A widget that
- * already shows an answer is left alone (`kept`), unless it is that answer.
+ * already shows an answer, or that the person touched, is left alone
+ * (`kept`), unless it already shows that answer.
  */
 export async function pick(
   widget: PickWidget,
   choose: (options: string[]) => string | null,
-  { timeoutMs = 1500 }: PickOptions = {}
+  { timeoutMs = 1500, touched = () => false }: PickOptions = {}
 ): Promise<PickResult> {
   const doc = widget.scope.ownerDocument
   const current = pickedValue(widget)
+  const keep = (): PickResult => ({ status: 'kept', value: pickedValue(widget) })
   try {
     if (widget.type === 'radios' || widget.type === 'buttons') {
       const options: HTMLElement[] = widget.options
@@ -219,6 +281,7 @@ export async function pick(
       const chosen = choose(texts)
       if (!chosen) return { status: 'failed', reason: 'None of the options fits your saved answer.' }
       if (current) return same(current, chosen) ? { status: 'filled', value: current } : { status: 'kept', value: current }
+      if (touched()) return keep()
       press(options[texts.indexOf(chosen)], widget)
       await waitUntil(doc, () => same(pickedValue(widget), chosen), timeoutMs)
       return same(pickedValue(widget), chosen) ? { status: 'filled', value: chosen } : { status: 'failed', reason: 'The site did not take the pick.' }
@@ -228,30 +291,39 @@ export async function pick(
       const chosen = choose([current])
       return chosen ? { status: 'filled', value: current } : { status: 'kept', value: current }
     }
-    const before = new Set(Array.from(doc.querySelectorAll('[role="listbox"]')))
+    if (touched()) return keep()
     press(widget.opener, widget)
     let boxes: Element[] = []
     await waitUntil(
       doc,
       () => {
-        boxes = ownListboxes(widget, before)
+        boxes = ownListboxes(widget)
         return listboxOptions(boxes).length > 0
       },
       timeoutMs
     )
+    // The person may have typed or chosen while the menu rendered.
+    if (touched() || pickedValue(widget)) {
+      closeMenu(widget)
+      return keep()
+    }
     const options = listboxOptions(boxes)
     const texts = options.map(text)
     const chosen = choose(texts)
     if (!chosen) {
       closeMenu(widget)
-      return { status: 'failed', reason: options.length ? 'None of the options fits your saved answer.' : 'The list did not open.' }
+      return {
+        status: 'failed',
+        reason: options.length ? 'None of the options fits your saved answer.' : 'No list of options tied to this field opened.'
+      }
     }
-    press(options[texts.indexOf(chosen)], widget, boxes)
+    press(options[texts.indexOf(chosen)], widget, () => ownListboxes(widget))
     await waitUntil(doc, () => same(pickedValue(widget), chosen), timeoutMs)
     if (same(pickedValue(widget), chosen)) return { status: 'filled', value: chosen }
     closeMenu(widget)
     return { status: 'failed', reason: 'The site did not take the pick.' }
   } catch (err) {
+    closeMenu(widget)
     return { status: 'failed', reason: err instanceof Error ? err.message : String(err) }
   }
 }

@@ -154,7 +154,7 @@ describe('preload bundles', () => {
 
 describe("pick.ts presses only inside the field's widget", () => {
   /** A form with a react-select-like Gender question, its Submit button, and a page that can misbehave on open. */
-  function page(menu: string) {
+  function page(menu: string, { tie = true } = {}) {
     const dom = new JSDOM(
       `<form id="f"><div class="select__container"><label id="g-label">Gender</label>
          <input role="combobox" id="g" aria-labelledby="g-label"><div class="select__single-value"></div>
@@ -170,12 +170,15 @@ describe("pick.ts presses only inside the field's widget", () => {
     const requestSubmit = vi.spyOn(w.HTMLFormElement.prototype, 'requestSubmit').mockImplementation(() => undefined)
     doc.addEventListener('submit', (e) => e.preventDefault())
     doc.getElementById('g')!.addEventListener('mousedown', () => {
-      doc.getElementById('g')!.setAttribute('aria-controls', 'g-listbox')
+      if (tie) doc.getElementById('g')!.setAttribute('aria-controls', 'g-listbox')
       doc.body.insertAdjacentHTML('beforeend', menu)
     })
     const widget = widgetOf(doc.getElementById('g')!)!
-    return { doc, widget, fired, submit, requestSubmit }
+    const clicked: string[] = []
+    doc.addEventListener('click', (e) => clicked.push((e.target as Element).id || (e.target as Element).tagName), true)
+    return { doc, widget, fired, submit, requestSubmit, clicked }
   }
+  const female = (options: string[]) => options.find((o) => o === 'Female') ?? null
 
   it('refuses targets outside the widget, links, submit buttons and flow-labelled controls', () => {
     const { doc, widget } = page('')
@@ -216,5 +219,59 @@ describe("pick.ts presses only inside the field's widget", () => {
     expect(result).toMatchObject({ status: 'failed' })
     expect(clicks.every((t) => widget.scope.contains(t))).toBe(true)
     expect(fired).toEqual([])
+  })
+
+  it('never presses a label whose control is an outside submit image or a consent checkbox', async () => {
+    const image = page(
+      '<div role="listbox" id="g-listbox"><label role="option" for="image">Female</label></div><input id="image" type="image" form="f" alt="Send">'
+    )
+    expect(await pick(image.widget, female, { timeoutMs: 200 })).toMatchObject({ status: 'failed' })
+    expect(image.fired).toEqual([])
+    // Only the field's own control was pressed (to open it); never the label or the image input.
+    expect(image.clicked).toEqual(['g'])
+    const consent = page(
+      '<div role="listbox" id="g-listbox"><label role="option" for="consent">Female</label></div><input id="consent" type="checkbox" name="consent">'
+    )
+    expect(await pick(consent.widget, female, { timeoutMs: 200 })).toMatchObject({ status: 'failed' })
+    expect((consent.doc.getElementById('consent') as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('never presses an option nested in a button labelled Next (or any flow word)', async () => {
+    const { doc, widget, clicked } = page(
+      '<div role="listbox" id="g-listbox"><button type="button" id="next" aria-label="Next"><span role="option" id="opt">Female</span></button></div>'
+    )
+    const navigated: string[] = []
+    doc.addEventListener('mousedown', () => doc.getElementById('next')?.addEventListener('click', () => navigated.push('next')), { once: true })
+    expect(await pick(widget, female, { timeoutMs: 200 })).toMatchObject({ status: 'failed' })
+    expect(navigated).toEqual([])
+    expect(clicked).not.toContain('opt')
+  })
+
+  it('stops a press when the page turns the option into a submit button, or moves it, mid-sequence', async () => {
+    const turned = page('<div role="listbox" id="g-listbox"><button role="option" type="button" form="f" id="opt">Female</button></div>')
+    turned.doc.addEventListener('mousedown', (e) => {
+      if ((e.target as Element).id === 'opt') (e.target as HTMLButtonElement).type = 'submit'
+    }, true)
+    expect(await pick(turned.widget, female, { timeoutMs: 200 })).toMatchObject({ status: 'failed' })
+    expect(turned.fired).toEqual([])
+    expect(turned.submit).not.toHaveBeenCalled()
+    expect(turned.clicked).not.toContain('opt')
+
+    const moved = page('<div role="listbox" id="g-listbox"><div role="option" id="opt">Female</div></div>')
+    moved.doc.addEventListener('pointerdown', (e) => {
+      if ((e.target as Element).id === 'opt') moved.doc.getElementById('submit')!.append(e.target as Element)
+    }, true)
+    expect(await pick(moved.widget, female, { timeoutMs: 200 })).toMatchObject({ status: 'failed' })
+    expect(moved.clicked).not.toContain('opt')
+    expect(moved.fired).toEqual([])
+  })
+
+  it('does not use a single new listbox that nothing ties to the field', async () => {
+    const { doc, widget, clicked } = page('<div role="listbox"><div role="option" id="stray">Female</div></div>', { tie: false })
+    const handled: string[] = []
+    doc.addEventListener('mousedown', () => doc.getElementById('stray')?.addEventListener('click', () => handled.push('stray')), { once: true })
+    expect(await pick(widget, female, { timeoutMs: 150 })).toMatchObject({ status: 'failed' })
+    expect(handled).toEqual([])
+    expect(clicked).not.toContain('stray')
   })
 })
