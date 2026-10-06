@@ -352,6 +352,10 @@ export interface RunnerApi {
   /** Drops the user's price for a model (a bundled one goes back to its bundled price). */
   removePrice(id: string): Promise<PricingState>
   resetPrices(): Promise<PricingState>
+  /** Fetches current prices from a public list (LiteLLM, else OpenRouter); throws and keeps the prices on failure. */
+  syncPrices(): Promise<PricingState>
+  /** Forgets the synced prices. */
+  clearSyncedPrices(): Promise<PricingState>
 }
 
 export const RUNNER_CHANNELS = {
@@ -375,7 +379,9 @@ export const RUNNER_CHANNELS = {
   prices: 'runner:prices',
   setPrice: 'runner:set-price',
   removePrice: 'runner:remove-price',
-  resetPrices: 'runner:reset-prices'
+  resetPrices: 'runner:reset-prices',
+  syncPrices: 'runner:sync-prices',
+  clearSyncedPrices: 'runner:clear-synced-prices'
 } as const
 
 /** Payloads of the runner's main → renderer events. */

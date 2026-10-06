@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { effectivePrices, MODEL_PRICES, priceRun, requireModelPrice, runTotals, type ModelPrice, type PricingOverrides } from '@shared/pricing'
+import { effectivePrices, MODEL_PRICES, priceRun, requireModelPrice, runTotals, type ModelPrice, type PricingOverrides, type SyncedPrices } from '@shared/pricing'
 import { isAgentId, type RunStatus, type RunSummary } from '@shared/runner-types'
 import { summarizeUsage } from '@shared/usage'
 import { USAGE_RANGES, type PricingState, type UsageFilter, type UsageRange, type UsageSummary } from '@shared/usage-types'
@@ -23,38 +23,83 @@ export function currentPrices(): readonly ModelPrice[] {
   return prices
 }
 
+/** The last sync, for "Last synced … from …". */
+let lastSync: PricingState['synced'] = null
+
+/** Entries from the settings file that are still valid prices (the file is hand-editable). */
+function validPrices(v: unknown): ModelPrice[] {
+  if (!Array.isArray(v)) return []
+  return v.flatMap((m) => {
+    try {
+      return [requireModelPrice(m)]
+    } catch {
+      return []
+    }
+  })
+}
+
+/** The stored layers, checked: the user's edits and the last sync. */
+async function storedPricing(settingsFile: string): Promise<PricingOverrides> {
+  const stored = (await loadSettings(settingsFile)).pricing
+  const synced = stored?.synced
+  return {
+    models: validPrices(stored?.models),
+    ...(synced && typeof synced.syncedAt === 'string' && typeof synced.source === 'string'
+      ? { synced: { syncedAt: synced.syncedAt, source: synced.source, models: validPrices(synced.models) } }
+      : {})
+  }
+}
+
+function apply(o: PricingOverrides): void {
+  prices = effectivePrices(o)
+  lastSync = o.synced ? { syncedAt: o.synced.syncedAt, source: o.synced.source, models: o.synced.models.length } : null
+}
+
 export async function loadPrices(settingsFile: string): Promise<readonly ModelPrice[]> {
-  prices = effectivePrices((await loadSettings(settingsFile)).pricing)
+  apply(await storedPricing(settingsFile))
   return prices
 }
 
 export function pricingState(): PricingState {
-  return { prices: [...prices], bundledIds: MODEL_PRICES.map((m) => m.id) }
+  return { prices: [...prices], bundledIds: MODEL_PRICES.map((m) => m.id), synced: lastSync }
 }
 
 async function savePricing(settingsFile: string, change: (o: PricingOverrides) => PricingOverrides): Promise<PricingState> {
-  const current = (await loadSettings(settingsFile)).pricing ?? { models: [] }
-  const next = change({ models: Array.isArray(current.models) ? current.models : [] })
+  const next = change(await storedPricing(settingsFile))
   await saveSettings(settingsFile, { pricing: next })
-  prices = effectivePrices(next)
+  apply(next)
   return pricingState()
 }
 
 /** Adds or replaces the user's price for a model. */
 export function setPrice(settingsFile: string, input: unknown): Promise<PricingState> {
   const price = requireModelPrice(input)
-  return savePricing(settingsFile, (o) => ({ models: [...o.models.filter((m) => m.id !== price.id), price] }))
+  return savePricing(settingsFile, (o) => ({ ...o, models: [...o.models.filter((m) => m.id !== price.id), price] }))
 }
 
 /** Drops the user's price for `id` (a bundled model goes back to its bundled price). */
 export function removePrice(settingsFile: string, id: unknown): Promise<PricingState> {
   if (typeof id !== 'string') throw new Error('Unknown model.')
-  return savePricing(settingsFile, (o) => ({ models: o.models.filter((m) => m.id !== id) }))
+  return savePricing(settingsFile, (o) => ({ ...o, models: o.models.filter((m) => m.id !== id) }))
 }
 
-/** Back to the bundled table. */
+/** Drops the user's edits (synced prices, if any, then apply over the bundled table). */
 export function resetPrices(settingsFile: string): Promise<PricingState> {
-  return savePricing(settingsFile, () => ({ models: [] }))
+  return savePricing(settingsFile, (o) => ({ ...o, models: [] }))
+}
+
+/**
+ * Settings → Pricing → Sync prices: fetches the public price list (see `price-sync.ts`) and stores
+ * it as its own layer. On any failure it throws and leaves the stored prices as they were.
+ */
+export async function syncPrices(settingsFile: string, fetchPrices: () => Promise<SyncedPrices>): Promise<PricingState> {
+  const synced = await fetchPrices()
+  return savePricing(settingsFile, (o) => ({ ...o, synced }))
+}
+
+/** Drops the synced layer: the bundled table (and the user's edits) again. */
+export function clearSyncedPrices(settingsFile: string): Promise<PricingState> {
+  return savePricing(settingsFile, (o) => ({ models: o.models }))
 }
 
 /** A run with its estimates at the current prices. */

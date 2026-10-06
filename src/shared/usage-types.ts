@@ -110,4 +110,6 @@ export interface PricingState {
   prices: ModelPrice[]
   /** Bundled ids, so the page can offer "Reset" per changed model. */
   bundledIds: string[]
+  /** The last "Sync prices" in use, `null` when none: when, from where, how many models. */
+  synced: { syncedAt: string; source: string; models: number } | null
 }

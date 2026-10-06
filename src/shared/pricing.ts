@@ -32,6 +32,8 @@ export interface ModelPrice {
   asOf: string
   /** Set on prices the user edited or added in Settings. */
   custom?: true
+  /** Set on prices that came from Settings → Pricing → Sync prices. */
+  synced?: true
 }
 
 const ANTHROPIC = 'https://platform.claude.com/docs/en/about-claude/pricing'
@@ -106,20 +108,42 @@ export const MODEL_PRICES: readonly ModelPrice[] = [
 
 /** Prices the user changed or added (Settings → Pricing), stored in the app settings. */
 export interface PricingOverrides {
+  /** The user's own edits and additions: they win over everything. */
+  models: ModelPrice[]
+  /** The last "Sync prices": wins over the bundled table, loses to the user's edits. */
+  synced?: SyncedPrices
+}
+
+/** Prices fetched from a public price list (LiteLLM, else OpenRouter), only on the user's click. */
+export interface SyncedPrices {
+  /** ISO time of the sync. */
+  syncedAt: string
+  /** The URL the prices came from. */
+  source: string
   models: ModelPrice[]
 }
 
 /** The bundled table with the user's entries replacing same-id ones and added at the end. */
 export function effectivePrices(overrides?: PricingOverrides | null): ModelPrice[] {
-  const custom = new Map((overrides?.models ?? []).map((m) => [m.id, { ...m, custom: true as const }]))
-  // An edited bundled model keeps the names it is known by (agy's `Gemini 3.1 Pro` …), whatever the edit sent.
-  const merged = MODEL_PRICES.map((m) => {
-    const c = custom.get(m.id)
+  return [
+    { models: (overrides?.synced?.models ?? []).map((m) => ({ ...m, synced: true as const })) },
+    { models: (overrides?.models ?? []).map((m) => ({ ...m, custom: true as const })) }
+  ].reduce<ModelPrice[]>((table, layer) => applyLayer(table, layer.models), [...MODEL_PRICES])
+}
+
+/**
+ * `layer` over `table`: same-id entries are replaced (keeping the names the replaced entry was
+ * known by: agy's `Gemini 3.1 Pro` …, whatever the layer sent), new ids are added at the end.
+ */
+function applyLayer(table: ModelPrice[], layer: readonly ModelPrice[]): ModelPrice[] {
+  const byId = new Map(layer.map((m) => [m.id, m]))
+  const merged = table.map((m) => {
+    const c = byId.get(m.id)
     if (!c) return m
     const aliases = [...new Set([...(m.aliases ?? []), ...(c.aliases ?? [])])]
     return { ...c, ...(aliases.length ? { aliases } : {}) }
   })
-  for (const m of custom.values()) if (!MODEL_PRICES.some((b) => b.id === m.id)) merged.push(m)
+  for (const m of byId.values()) if (!table.some((b) => b.id === m.id)) merged.push(m)
   return merged
 }
 

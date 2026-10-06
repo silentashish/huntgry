@@ -16,8 +16,9 @@ import { installSkill } from './install-skill'
 import { listRuns, OUTPUT_FILES, readEvents, readRun, requireRunId } from './runs'
 import { replyThroughQueue } from '../queue/ipc'
 import { WorkspaceChangedError } from '../workspace/changed'
+import { fetchSyncedPrices } from './price-sync'
 import { contextForRun, defaultAgent, manager, setDefaultAgent, startTailorRun, venvDir } from './start'
-import { loadPrices, pricingState, removePrice, requireUsageFilter, resetPrices, setPrice, usageSummary, withMetrics, withPrices } from './usage'
+import { clearSyncedPrices, loadPrices, pricingState, syncPrices, removePrice, requireUsageFilter, resetPrices, setPrice, usageSummary, withMetrics, withPrices } from './usage'
 
 /** Which skill release Huntgry installed (see `install-skill.ts`). */
 const skillRecordPath = (): string => join(app.getPath('userData'), 'skill-install.json')
@@ -239,4 +240,7 @@ export function registerRunnerIpc(): void {
   ipcMain.handle(RUNNER_CHANNELS.setPrice, async (_e, price: unknown) => pricesChanged(await setPrice(settingsFile(), price)))
   ipcMain.handle(RUNNER_CHANNELS.removePrice, async (_e, id: unknown) => pricesChanged(await removePrice(settingsFile(), id)))
   ipcMain.handle(RUNNER_CHANNELS.resetPrices, async () => pricesChanged(await resetPrices(settingsFile())))
+  // Only on the user's click, from main (the renderer never fetches); a failure keeps the prices.
+  ipcMain.handle(RUNNER_CHANNELS.syncPrices, async () => pricesChanged(await syncPrices(settingsFile(), () => fetchSyncedPrices())))
+  ipcMain.handle(RUNNER_CHANNELS.clearSyncedPrices, async () => pricesChanged(await clearSyncedPrices(settingsFile())))
 }

@@ -22,5 +22,7 @@ export const runner: RunnerApi = {
   prices: () => ipcRenderer.invoke(RUNNER_CHANNELS.prices),
   setPrice: (price) => ipcRenderer.invoke(RUNNER_CHANNELS.setPrice, price),
   removePrice: (id) => ipcRenderer.invoke(RUNNER_CHANNELS.removePrice, id),
-  resetPrices: () => ipcRenderer.invoke(RUNNER_CHANNELS.resetPrices)
+  resetPrices: () => ipcRenderer.invoke(RUNNER_CHANNELS.resetPrices),
+  syncPrices: () => ipcRenderer.invoke(RUNNER_CHANNELS.syncPrices),
+  clearSyncedPrices: () => ipcRenderer.invoke(RUNNER_CHANNELS.clearSyncedPrices)
 }
