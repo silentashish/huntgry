@@ -41,6 +41,8 @@ describe('sponsorshipFromText', () => {
     'Candidates must be authorized to work in the US without sponsorship.',
     'US citizens only.',
     'Must be a U.S. citizen with an active Secret clearance.',
+    'Candidates must be able to obtain a security clearance.',
+    'An active TS/SCI clearance is required.',
     'This position is not eligible for visa sponsorship.',
     'No visa sponsorship is available.',
     'The company does not offer H-1B sponsorship.'
@@ -59,6 +61,13 @@ describe('sponsorshipFromText', () => {
     expect(sponsorshipFromText('Build services in Go on AWS. Great benefits.')).toBeNull()
     expect(sponsorshipFromText('')).toBeNull()
     expect(sponsorshipFromText('Visa sponsorship is available for EU roles; we cannot sponsor in the US.')).toBe(false)
+  })
+
+  it('does not read a waived or optional clearance as a refusal (review on #75)', () => {
+    expect(sponsorshipFromText('No security clearance is required. Visa sponsorship is available.')).toBe(true)
+    expect(sponsorshipFromText('Security clearance not required.')).toBeNull()
+    expect(sponsorshipFromText('A secret clearance is a plus but not required.')).toBeNull()
+    expect(sponsorshipFromText('Experience with clearance workflows in finance.')).toBeNull()
   })
 
   it("trusts the board's true but not its false (often just \"not mentioned\")", () => {

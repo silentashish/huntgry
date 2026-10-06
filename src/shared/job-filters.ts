@@ -70,7 +70,7 @@ export function activeFilterCount(f: JobFilters): number {
   ].filter(Boolean).length
 }
 
-/** Phrases by which a posting says it will not sponsor a visa, or wants citizens / a clearance. */
+/** Phrases by which a posting says it will not sponsor a visa, or wants citizens only. */
 const NO_SPONSORSHIP = [
   /\b(?:unable|not able|cannot|can ?not|can't|won't|will not|do not|does not|don't|doesn't|is not|are not)\b[^.;\n]{0,40}\bsponsor/i,
   /\bwithout\b[^.;\n]{0,40}\bsponsorship\b/i,
@@ -79,9 +79,24 @@ const NO_SPONSORSHIP = [
   /\bnot\s+(?:eligible|available)\s+for\s+(?:visa\s+)?sponsorship\b/i,
   /\b(?:u\.?s\.?|united states)\s+citizens?\s+only\b/i,
   /\bmust\s+be\s+(?:an?\s+)?(?:u\.?s\.?|united states)\s+citizens?\b/i,
-  /\b(?:u\.?s\.?\s+)?citizenship\s+(?:is\s+)?required\b/i,
-  /\b(?:security|secret|top secret|ts\/sci)\s+clearance\b/i
+  /\b(?:u\.?s\.?\s+)?citizenship\s+(?:is\s+)?required\b/i
 ]
+
+/** A sentence that asks for a security clearance (which in practice means citizens only). */
+const CLEARANCE_REQUIRED = [
+  /\b(?:must|required to|need to|will)\s+(?:have|hold|possess|obtain|maintain|be able to obtain)\b[^.;\n]{0,40}\bclearance\b/i,
+  /\b(?:active|current)\s+(?:dod\s+)?(?:security\s+|secret\s+|top secret\s+|ts\/sci\s+)?clearance\b/i,
+  /\bclearance\s+(?:is\s+)?required\b/i,
+  /\brequires?\s+(?:an?\s+)?(?:active\s+)?(?:security\s+|secret\s+|top secret\s+|ts\/sci\s+)?clearance\b/i
+]
+/** "No clearance is required", "clearance not needed", "clearance preferred": not a requirement. */
+const CLEARANCE_WAIVED = /\b(?:no|not|n't|without|optional|preferred|a plus|nice to have)\b/i
+
+function requiresClearance(text: string): boolean {
+  return text
+    .split(/(?<=[.!?;])\s+|\n+/)
+    .some((s) => /\bclearance\b/i.test(s) && !CLEARANCE_WAIVED.test(s) && CLEARANCE_REQUIRED.some((re) => re.test(s)))
+}
 
 /** Phrases by which a posting offers sponsorship. */
 const SPONSORSHIP = [
@@ -97,7 +112,7 @@ const SPONSORSHIP = [
  * offers sponsorship, `null` when it does not say. A refusal wins over an offer.
  */
 export function sponsorshipFromText(text: string): boolean | null {
-  if (NO_SPONSORSHIP.some((re) => re.test(text))) return false
+  if (NO_SPONSORSHIP.some((re) => re.test(text)) || requiresClearance(text)) return false
   if (SPONSORSHIP.some((re) => re.test(text))) return true
   return null
 }
