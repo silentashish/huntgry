@@ -2,7 +2,8 @@
  * Mock behaviour of a react-select v5 dropdown, as Greenhouse's job board renders its questions (Gender, yes/no):
  * a `role=combobox` input inside `.select__container`; mousedown on the control focuses it and opens the menu
  * (`.select__menu` > `role=listbox` > `role=option` elements, the input's `aria-controls` pointing at the listbox);
- * clicking an option shows it in `.select__single-value`, puts it in the hidden input and closes the menu; blur
+ * pressing in the menu does not blur the input (mousedown is cancelled, as react-select does); clicking an option
+ * shows it in `.select__single-value`, puts it in the hidden input and closes the menu; blur
  * closes it too. Keys do nothing here. Options come from the container's `data-mock-options` ("Male|Female|…").
  * Used by the mock Greenhouse site (scripts/mock-ats/server.mjs) and by the jsdom tests of src/shared/autofill.
  */
@@ -45,6 +46,9 @@
         list.append(option)
       })
       menu.append(list)
+      // Like react-select's onMenuMouseDown: a press in the menu keeps focus on the input, so its blur cannot close
+      // the menu between a real mousedown and the click that selects the option.
+      menu.addEventListener('mousedown', (event) => event.preventDefault())
       container.append(menu)
       input.setAttribute('aria-expanded', 'true')
       input.setAttribute('aria-controls', listboxId)
