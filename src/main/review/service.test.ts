@@ -284,6 +284,34 @@ describe('review service', () => {
     expect(await approvalDrift(ws, ID)).toMatch(/changed since you approved/)
   })
 
+  it('keeps verify.py\'s report of a report-less result through approve and discard, so the approval still holds', async () => {
+    const verify = { ok: true, report: 'page_count: pass' }
+    for (const id of [ID, 'a/b/2']) {
+      await application(id)
+      await rm(join(ws, id, 'build-report.json'))
+      await updateReview(ws, id, () => ({ state: 'unreviewed', runId: RUN, at: '2026-09-30T01:00:00.000Z', verify }))
+    }
+    const d = await reviewDetail(ws, ID)
+    expect(d.verify).toEqual(verify)
+    expect((await approveReview(deps, { applicationId: ID, revision: d.revision, approvedReframingIds: [] }, 'desktop')).ok).toBe(true)
+    expect(await recorded()).toMatchObject({ state: 'approved', verify })
+    expect((await reviewDetail(ws, ID)).verify).toEqual(verify)
+    // Apply's check: the files and the report are what was approved.
+    expect(await approvalDrift(ws, ID)).toBeNull()
+    const d2 = await reviewDetail(ws, 'a/b/2')
+    expect((await discardReview(deps, { applicationId: 'a/b/2', revision: d2.revision }, 'desktop')).ok).toBe(true)
+    expect(await recorded('a/b/2')).toMatchObject({ state: 'discarded', verify })
+  })
+
+  it('a re-run does not keep the report of the previous build', async () => {
+    await application()
+    await rm(join(ws, ID, 'build-report.json'))
+    await updateReview(ws, ID, () => ({ state: 'unreviewed', runId: RUN, at: '2026-09-30T01:00:00.000Z', verify: { ok: true, report: 'old' } }))
+    const d = await reviewDetail(ws, ID)
+    expect((await rerunReview(deps, { applicationId: ID, revision: d.revision, answers: 'x' }, 'desktop')).ok).toBe(true)
+    expect((await recorded())?.verify).toBeUndefined()
+  })
+
   it('a re-run whose reply fails puts back the previous state', async () => {
     await application()
     const d = await reviewDetail(ws, ID)

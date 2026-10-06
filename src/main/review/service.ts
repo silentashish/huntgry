@@ -306,11 +306,23 @@ async function pinned(
  * Records `next` only if the review is still the one the decision was made on (anything else
  * wrote meanwhile: a continuation, the verify gate): the store's own atomic compare-and-set.
  */
-async function decide(workspace: string, applicationId: string, seen: ReviewTracking, next: RecordedReview): Promise<boolean> {
+async function decide(
+  workspace: string,
+  applicationId: string,
+  seen: ReviewTracking,
+  next: RecordedReview,
+  /**
+   * Approve and discard decide on the files as they are, so the verify gate's own verify.py report
+   * stays with them (it is part of the content revision an approval vouches for). A re-run does not
+   * keep it: the next build gets its own.
+   */
+  keepVerify = false
+): Promise<boolean> {
   const { written } = await updateReview(workspace, applicationId, (current) => {
     // A fail-closed stand-in (no recorded state) is "seen" as nothing recorded.
     const expected = seen.runId === '' && !current ? true : sameReview(current, seen)
-    return expected ? next : null
+    if (!expected) return null
+    return keepVerify && current?.verify && !next.verify ? { ...next, verify: current.verify } : next
   })
   return written
 }
@@ -364,7 +376,7 @@ export function approveReview(deps: ReviewDeps, input: ApproveReviewInput, via: 
         via,
         contentRevision: p.contentRevision
       }
-      if (!(await decide(workspace, input.applicationId, p.review, approved))) return STALE
+      if (!(await decide(workspace, input.applicationId, p.review, approved, true))) return STALE
       if (picked.length > 0) await addApprovals(workspace, entriesFor(picked, detail, via, now))
       await audit(workspace, { at, action: 'approve', applicationId: input.applicationId, revision: input.revision, ids, via })
       deps.changed?.()
@@ -426,7 +438,7 @@ export function discardReview(deps: ReviewDeps, input: DiscardReviewInput, via: 
       const now = deps.now?.() ?? new Date()
       const at = now.toISOString()
       const discarded: RecordedReview = { state: 'discarded', runId: p.detail.runId, at, reviewedAt: at, via }
-      if (!(await decide(workspace, input.applicationId, p.review, discarded))) return STALE
+      if (!(await decide(workspace, input.applicationId, p.review, discarded, true))) return STALE
       const folder = await resolveApplicationFolder(workspace, input.applicationId)
       await updateTracking(folder, { status: 'archived' })
       await audit(workspace, { at, action: 'discard', applicationId: input.applicationId, revision: input.revision, via })
