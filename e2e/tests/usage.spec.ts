@@ -88,7 +88,7 @@ test.describe('run observability', () => {
 
     // Reset goes back to the bundled table.
     await shell.goTo('settings')
-    await usage.pricingCard.getByRole('button', { name: 'Reset to bundled' }).click()
+    await usage.pricingCard.getByRole('button', { name: 'Reset to defaults' }).click()
     await expect(usage.priceRow('claude-haiku-4-5')).not.toContainText('changed')
     await shell.goTo('dashboard')
     await expect(usage.kpi('cost')).toHaveText('$0.02')

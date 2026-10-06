@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ActionIcon, Alert, Anchor, Badge, Button, Card, Group, Modal, NumberInput, ScrollArea, Stack, Table, Text, TextInput, Title, Tooltip } from '@mantine/core'
-import { IconPencil, IconPlus, IconRestore } from '@tabler/icons-react'
+import { IconCloudDownload, IconPencil, IconPlus, IconRestore } from '@tabler/icons-react'
 import type { ModelPrice } from '@shared/pricing'
 import type { PricingState } from '@shared/usage-types'
 import { api, errorText } from '../../api'
@@ -21,6 +21,15 @@ type Draft = {
 
 const EMPTY: Draft = { id: '', label: '', input: '', cachedInput: '', cacheWrite: '', cacheWrite1h: '', output: '', source: '', aliases: [], existing: false }
 
+/** `raw.githubusercontent.com` for a URL; the text itself otherwise. */
+function hostOf(source: string): string {
+  try {
+    return new URL(source).hostname
+  } catch {
+    return source
+  }
+}
+
 const num = (v: number | string): number | undefined => (v === '' ? undefined : Number(v))
 const rate = (v: number | undefined) => (v === undefined ? '—' : `$${Number(v.toFixed(4))}`)
 
@@ -34,6 +43,7 @@ export function PricingCard() {
   const [error, setError] = useState<string | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
+  const [syncing, setSyncing] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -92,7 +102,14 @@ export function PricingCard() {
     if (ok) setDraft(null)
   }
 
+  async function sync() {
+    setSyncing(true)
+    await act(api.runner.syncPrices)
+    setSyncing(false)
+  }
+
   const bundled = new Set(state?.bundledIds ?? [])
+  const synced = state?.synced ?? null
   const changed = state?.prices.some((p) => p.custom) ?? false
 
   return (
@@ -107,15 +124,30 @@ export function PricingCard() {
           </Text>
         </div>
         <Group gap="xs">
+          <Button size="xs" leftSection={<IconCloudDownload size={14} />} loading={syncing} onClick={() => void sync()}>
+            Sync prices
+          </Button>
           <Button size="xs" variant="light" leftSection={<IconPlus size={14} />} onClick={() => setDraft({ ...EMPTY })}>
             Add model
           </Button>
           {changed && (
             <Button size="xs" variant="default" leftSection={<IconRestore size={14} />} onClick={() => void act(api.runner.resetPrices)}>
-              Reset to bundled
+              Reset to defaults
             </Button>
           )}
         </Group>
+      </Group>
+      <Group gap="xs" mb="xs">
+        <Text size="xs" c="dimmed" data-testid="pricing-sync-status">
+          {synced
+            ? `Last synced ${new Date(synced.syncedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })} from ${hostOf(synced.source)} (${synced.models} models). Your own edits still win.`
+            : 'Not synced: bundled prices. "Sync prices" fetches current prices for Claude, OpenAI and Gemini models from a public price list (a rough estimate, not your bill).'}
+        </Text>
+        {synced && (
+          <Anchor component="button" size="xs" onClick={() => void act(api.runner.clearSyncedPrices)}>
+            Clear synced prices
+          </Anchor>
+        )}
       </Group>
       {error && (
         <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)} mb="xs">
@@ -164,9 +196,16 @@ export function PricingCard() {
                       {bundled.has(p.id) ? 'changed' : 'added'}
                     </Badge>
                   ) : (
-                    <Anchor href={p.source} target="_blank" rel="noreferrer" size="xs">
-                      {new URL(p.source).hostname}
-                    </Anchor>
+                    <>
+                      {p.synced && (
+                        <Badge size="xs" variant="light" color="teal" mr={4}>
+                          synced
+                        </Badge>
+                      )}
+                      <Anchor href={p.source} target="_blank" rel="noreferrer" size="xs">
+                        {hostOf(p.source)}
+                      </Anchor>
+                    </>
                   )}{' '}
                   <Text span size="xs" c="dimmed">
                     {p.asOf}
