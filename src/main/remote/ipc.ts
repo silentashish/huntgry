@@ -131,14 +131,16 @@ async function relayCall(creds: Pick<RelayCredentials, 'relayUrl'>, path: string
   return text ? JSON.parse(text) : null
 }
 
-/** Mints a new owner secret and room (rotation deletes the old room; every phone pairs again). */
-async function createRoom(relayUrl: string, adminToken: string, previous: RelayCredentials | null): Promise<RelayCredentials> {
+/** Mints a new owner secret and room (a rotation then deletes the old room; every phone pairs again). */
+async function createRoom(relayUrl: string, adminToken: string): Promise<RelayCredentials> {
   const ownerSecret = newOwnerSecret()
   const created = requireCreateRoomResponse(await relayCall({ relayUrl }, RELAY_PATHS.rooms, adminToken, 'POST', { ownerSecretHash: sha256(ownerSecret) }))
-  if (previous) {
-    await relayCall(previous, RELAY_PATHS.room(previous.roomId), previous.ownerSecret, 'DELETE').catch((err) => console.warn('[remote] deleting the old room failed:', err))
-  }
   return { relayUrl, adminToken, roomId: created.roomId, ownerSecret }
+}
+
+/** Deletes a replaced room, best effort (rooms.ts calls it once the new credentials are saved). */
+async function deleteRoom(old: RelayCredentials): Promise<void> {
+  await relayCall(old, RELAY_PATHS.room(old.roomId), old.ownerSecret, 'DELETE').catch((err) => console.warn('[remote] deleting the old room failed:', err))
 }
 
 const RELAY_TIMEOUT_MS = 10_000
@@ -146,6 +148,7 @@ const RELAY_TIMEOUT_MS = 10_000
 /** Rotate / Unpair everything, and the warning an unconfirmed relay revocation leaves until one runs. */
 const rooms = new RoomControl({
   createRoom,
+  deleteRoom,
   writeCredentials: (c) => credentials.write(c),
   rotateKeyPair: () => devices.rotateKeyPair(),
   stopSession: () => session.stop(),

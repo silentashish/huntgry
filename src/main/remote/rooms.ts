@@ -8,8 +8,13 @@ import type { RelayCredentials } from './credentials'
  */
 
 export interface RoomDeps {
-  /** Creates a room for a new owner secret; with `previous`, deletes the old room (best effort). */
-  createRoom(relayUrl: string, adminToken: string, previous: RelayCredentials | null): Promise<RelayCredentials>
+  /** Creates a room for a new owner secret. */
+  createRoom(relayUrl: string, adminToken: string): Promise<RelayCredentials>
+  /**
+   * Deletes a replaced room (best effort, never throws). Called only once the new credentials are
+   * on disk: deleted first, a failed write would leave relay.json naming a room that is gone.
+   */
+  deleteRoom(old: RelayCredentials): Promise<void>
   writeCredentials(credentials: RelayCredentials): Promise<void>
   /** New desktop identity; every paired device is dropped. */
   rotateKeyPair(): Promise<unknown>
@@ -37,9 +42,10 @@ export class RoomControl {
 
   /** The relay form's Save / Rotate: a new room; replacing one also rotates the desktop key. */
   async replaceRoom(relayUrl: string, adminToken: string, previous: RelayCredentials | null): Promise<void> {
-    const next = await this.deps.createRoom(relayUrl, adminToken, previous)
+    const next = await this.deps.createRoom(relayUrl, adminToken)
     await this.deps.writeCredentials(next)
     if (previous) {
+      await this.deps.deleteRoom(previous)
       await this.deps.rotateKeyPair()
       // The old room, and every token a failed revocation left in it, is gone.
       this.warning = null
@@ -59,7 +65,8 @@ export class RoomControl {
     }
     this.deps.stopSession()
     try {
-      await this.deps.writeCredentials(await this.deps.createRoom(current.relayUrl, current.adminToken, current))
+      await this.deps.writeCredentials(await this.deps.createRoom(current.relayUrl, current.adminToken))
+      await this.deps.deleteRoom(current)
       this.warning = null
     } finally {
       await this.deps.apply()
