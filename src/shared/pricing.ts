@@ -112,7 +112,13 @@ export interface PricingOverrides {
 /** The bundled table with the user's entries replacing same-id ones and added at the end. */
 export function effectivePrices(overrides?: PricingOverrides | null): ModelPrice[] {
   const custom = new Map((overrides?.models ?? []).map((m) => [m.id, { ...m, custom: true as const }]))
-  const merged = MODEL_PRICES.map((m) => custom.get(m.id) ?? m)
+  // An edited bundled model keeps the names it is known by (agy's `Gemini 3.1 Pro` …), whatever the edit sent.
+  const merged = MODEL_PRICES.map((m) => {
+    const c = custom.get(m.id)
+    if (!c) return m
+    const aliases = [...new Set([...(m.aliases ?? []), ...(c.aliases ?? [])])]
+    return { ...c, ...(aliases.length ? { aliases } : {}) }
+  })
   for (const m of custom.values()) if (!MODEL_PRICES.some((b) => b.id === m.id)) merged.push(m)
   return merged
 }
@@ -251,6 +257,7 @@ export function runTotals(metrics: readonly TurnMetrics[]): RunTotals {
     estimatedCostUsd: cost,
     pricedTurns: priced,
     unpricedTurns: metrics.length - priced,
+    incompleteTurns: metrics.filter((t) => t.usageIncomplete).length,
     ...(reported !== undefined ? { reportedCostUsd: reported } : {})
   }
 }

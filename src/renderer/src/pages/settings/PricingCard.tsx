@@ -14,11 +14,12 @@ type Draft = {
   cacheWrite1h: number | string
   output: number | string
   source: string
+  aliases: string[]
   /** Editing an existing model (its id is fixed). */
   existing: boolean
 }
 
-const EMPTY: Draft = { id: '', label: '', input: '', cachedInput: '', cacheWrite: '', cacheWrite1h: '', output: '', source: '', existing: false }
+const EMPTY: Draft = { id: '', label: '', input: '', cachedInput: '', cacheWrite: '', cacheWrite1h: '', output: '', source: '', aliases: [], existing: false }
 
 const num = (v: number | string): number | undefined => (v === '' ? undefined : Number(v))
 const rate = (v: number | undefined) => (v === undefined ? '—' : `$${Number(v.toFixed(4))}`)
@@ -66,6 +67,7 @@ export function PricingCard() {
       cacheWrite1h: p.cacheWrite1h ?? '',
       output: p.output,
       source: p.custom ? p.source : '',
+      aliases: p.aliases ?? [],
       existing: true
     })
   }
@@ -82,7 +84,8 @@ export function PricingCard() {
         cacheWrite: num(draft.cacheWrite),
         cacheWrite1h: num(draft.cacheWrite1h),
         output: num(draft.output),
-        source: draft.source.trim() || undefined
+        source: draft.source.trim() || undefined,
+        aliases: draft.aliases
       })
     )
     setSaving(false)
