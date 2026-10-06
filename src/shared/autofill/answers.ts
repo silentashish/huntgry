@@ -11,6 +11,7 @@ import {
   setSelectValue,
   type FormControl
 } from './dom'
+import { widgetOf } from './pick'
 import { editedByUser } from './user-edits'
 
 /**
@@ -23,17 +24,29 @@ import { editedByUser } from './user-edits'
  * - native `<select>`: its native value setter, then `input` / `change`;
  * - native radios on pages that listen to `change`: the `checked` setter;
  * - checkboxes: never (consent, certification, acknowledgements);
- * - widgets that only take a click (react-select comboboxes, an adapter's
- *   `clickOnly` / `choices`, e.g. Ashby's React radios and yes/no buttons):
- *   `CLICK_ONLY_POLICY`. Huntgry never clicks (#24; guard.test.ts), so the only
- *   policy is `suggest`: the remembered answer is shown in the panel for the
- *   user to pick. Picking such an option for the user would be a second
- *   policy value handled in `answerField`, nothing else changes.
+ * - widgets that only take a click (react-select comboboxes, Workday dropdown
+ *   buttons, an adapter's `clickOnly` / `choices`, e.g. Ashby's React radios,
+ *   and yes/no button groups): `ClickOnlyPolicy`. `pick` queues a
+ *   `PickRequest` for pick.ts, the one module allowed to press anything;
+ *   `suggest` shows the remembered answer in the panel for the user to pick.
  */
 
-/** What happens to a widget that only takes a click (the owner's decision; see the module comment). */
-export type ClickOnlyPolicy = 'suggest'
-export const CLICK_ONLY_POLICY: ClickOnlyPolicy = 'suggest'
+/**
+ * What happens to a widget that only takes a click. The owner decided on
+ * 2026-10-06 that Huntgry picks remembered answers there (pick.ts), behind the
+ * Settings switch "Pick dropdown answers automatically" (on by default), which
+ * main sends with every fill as `pick`. Off, or when the answer is not trusted
+ * (a model's mapping the user has not confirmed), it only suggests.
+ */
+export type ClickOnlyPolicy = 'suggest' | 'pick'
+
+/** An answer to pick after the synchronous fill (the engine's `pickAnswers` runs them). */
+export interface PickRequest {
+  el: FormControl
+  line: FieldReport
+  fact: FactKey | null
+  value: string
+}
 
 export type WriteStrategy = 'text' | 'select' | 'radio' | 'click-only' | 'never'
 
@@ -94,17 +107,29 @@ export function writeAnswer(el: FormControl, strategy: WriteStrategy, root: Pare
  * untouched. Otherwise the answer is only a `suggestion`. Returns whether it
  * wrote.
  */
+/** The option texts of a yes/no button group around a hidden checkbox (Ashby), or null for any other checkbox. */
+export function yesNoGroup(el: FormControl): string[] | null {
+  if (kindOf(el) !== 'checkbox') return null
+  const widget = widgetOf(el)
+  return widget?.type === 'buttons' ? widget.options.map((b) => (b.textContent ?? '').trim()).filter(Boolean) : null
+}
+
 export function answerField(
   el: FormControl,
   line: FieldReport,
   root: ParentNode,
   answers: PageAnswers,
-  clickOnly: boolean
+  clickOnly: boolean,
+  policy: ClickOnlyPolicy = 'suggest',
+  picks: PickRequest[] = []
 ): boolean {
-  const kind = kindOf(el)
-  const strategy = strategyOf(kind, clickOnly)
+  // A yes/no button group is a single choice whose options are its buttons, reported as a radio question.
+  const buttons = yesNoGroup(el)
+  if (buttons) line.kind = 'radio'
+  const kind = buttons ? 'radio' : kindOf(el)
+  const strategy = buttons ? 'click-only' : strategyOf(kind, clickOnly)
   if (strategy === 'never') return false
-  const options = kind === 'select' || kind === 'radio' ? optionsOf(el, root) : []
+  const options = buttons ?? (kind === 'select' || kind === 'radio' ? optionsOf(el, root) : [])
   line.question = questionKey(line.label, kind, options)
   if (options.length) line.options = options
   const found = lookup(answers, line.question, line.label)
@@ -125,10 +150,11 @@ export function answerField(
     return false
   }
   if (strategy === 'click-only') {
-    // CLICK_ONLY_POLICY === 'suggest': Huntgry never clicks; the user picks the remembered answer.
+    // Shown as a suggestion; with the `pick` policy, pick.ts then tries to choose it and replaces this line.
     line.suggestion = answer
     line.suggestedBy = 'saved'
     line.reason = `This picker takes a click: choose "${answer.slice(0, 80)}" yourself.`
+    if (policy === 'pick') picks.push({ el, line, fact: found.fact ?? null, value: found.value })
     return false
   }
   const shown = chosenOf(el, root)

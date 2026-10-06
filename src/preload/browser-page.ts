@@ -25,6 +25,8 @@ interface Request {
   values?: FillValues
   /** Remembered application answers (#71), checked like everything else main sends. */
   answers?: PageAnswers
+  /** Pick remembered answers in click-only widgets (the Settings switch). */
+  pick?: boolean
   text?: boolean
   key?: 'resume' | 'coverLetter'
   fileName?: string
@@ -127,7 +129,7 @@ ipcRenderer.on(AUTOFILL_CHANNELS.detect, (_e, req: Request) => {
 ipcRenderer.on(AUTOFILL_CHANNELS.fill, (_e, req: Request) => {
   reply(req.requestId, async () => {
     if (!req.values) throw new Error('No values to fill.')
-    return page.fill(req.values, req.text, answersOf(req.answers))
+    return page.fill(req.values, req.text, answersOf(req.answers), req.pick === true)
   })
 })
 

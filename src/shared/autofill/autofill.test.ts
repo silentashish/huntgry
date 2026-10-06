@@ -6,7 +6,7 @@ import { factsFromProfile, questionKey, type PageAnswers } from '../apply-facts'
 import type { FieldReport, FillReport, FillValues } from '../apply-types'
 import { UPLOAD_ATTR } from '../autofill-channels'
 import { setNativeValue } from './dom'
-import { detectConfirmation, fillPage, scanPage, verifyFill } from './engine'
+import { detectConfirmation, fillPage, pendingPicks, pickAnswers, scanPage, verifyFill } from './engine'
 import { identifierWords } from './match'
 
 const fixture = (name: string) => readFileSync(join(__dirname, 'fixtures', name), 'utf8')
@@ -547,5 +547,143 @@ describe('application answers (#71)', () => {
     await verifyFill(doc, VALUES, report, { settleMs: 1 })
     expect(field(report, 'Gender')).toMatchObject({ outcome: 'filled', value: 'Female' })
     expect(select(dom, 'select[name="eeo[gender]"]').value).toBe('Female')
+  })
+})
+
+describe('picking remembered answers in click-only widgets (#71, owner decision)', () => {
+  const GREENHOUSE = 'https://job-boards.greenhouse.io/acme/jobs/1000001'
+  const ASHBY = 'https://jobs.ashbyhq.com/acme/00000000-0000-4000-8000-000000000001/application'
+  const WORKDAY = 'https://acme.wd1.myworkdayjobs.com/en-US/AcmeCareers/job/Remote-USA/Software-Engineer_JR-1001/apply'
+  const REACT_SELECT = readFileSync(join(__dirname, '../../../scripts/mock-ats/sites/react-select.js'), 'utf8')
+  const AUTHORIZED = 'Are you legally authorized to work in the United States?'
+  const facts = (f: PageAnswers['facts']): PageAnswers => ({ facts: f, questions: {} })
+
+  /** No submit, requestSubmit or key event; pointer and mouse events only. */
+  function forbidSubmitAndKeys(dom: JSDOM) {
+    const w = dom.window
+    const submit = vi.spyOn(w.HTMLFormElement.prototype, 'submit').mockImplementation(() => undefined)
+    const requestSubmit = vi.spyOn(w.HTMLFormElement.prototype, 'requestSubmit').mockImplementation(() => undefined)
+    const events: string[] = []
+    for (const type of ['submit', 'keydown', 'keypress', 'keyup']) w.document.addEventListener(type, () => events.push(type), true)
+    return () => {
+      expect(submit).not.toHaveBeenCalled()
+      expect(requestSubmit).not.toHaveBeenCalled()
+      expect(events).toEqual([])
+    }
+  }
+
+  /** The Greenhouse fixture with the mock's react-select behaviour on its authorization question. */
+  function greenhouse(): JSDOM {
+    const dom = new JSDOM(fixture('greenhouse-form.html'), { url: GREENHOUSE, runScripts: 'outside-only' })
+    const container = dom.window.document.getElementById('question_1000007')!.closest('.select__container') as HTMLElement
+    container.dataset.mockOptions = 'Yes|No'
+    dom.window.eval(REACT_SELECT)
+    return dom
+  }
+  const singleValue = (dom: JSDOM, id: string) =>
+    dom.window.document.getElementById(id)!.closest('.select__container')!.querySelector('.select__single-value')?.textContent ?? ''
+
+  it('picks a trusted answer in a Greenhouse react-select and reads it back', async () => {
+    const dom = greenhouse()
+    const check = forbidSubmitAndKeys(dom)
+    const report = fillPage(dom.window.document, VALUES, { answers: facts({ workAuthorized: 'yes' }), pick: true })
+    expect(pendingPicks(report)).toHaveLength(1)
+    await pickAnswers(report)
+    expect(field(report, AUTHORIZED)).toMatchObject({ outcome: 'filled', value: 'Yes', fact: 'workAuthorized' })
+    expect(field(report, AUTHORIZED).suggestion).toBeUndefined()
+    expect(singleValue(dom, 'question_1000007')).toBe('Yes')
+    // The menu closed; nothing else on the page was opened or pressed.
+    expect(dom.window.document.querySelector('.select__menu')).toBeNull()
+    check()
+  })
+
+  it('with the switch off, only suggests (nothing opened, nothing picked)', async () => {
+    const dom = greenhouse()
+    const report = fillPage(dom.window.document, VALUES, { answers: facts({ workAuthorized: 'yes' }), pick: false })
+    expect(pendingPicks(report)).toEqual([])
+    expect(field(report, AUTHORIZED)).toMatchObject({ outcome: 'skipped-unsupported', suggestion: 'Yes', suggestedBy: 'saved' })
+    expect(dom.window.document.querySelector('.select__menu')).toBeNull()
+  })
+
+  it("never picks a model's mapping the user has not confirmed", () => {
+    const dom = greenhouse()
+    const question = questionKey(AUTHORIZED, 'combobox')
+    const report = fillPage(dom.window.document, VALUES, {
+      answers: { facts: { workAuthorized: 'yes' }, questions: { [question]: { fact: 'workAuthorized', confirmed: false } } },
+      pick: true
+    })
+    expect(pendingPicks(report)).toEqual([])
+    expect(field(report, AUTHORIZED)).toMatchObject({ suggestion: 'Yes', suggestedBy: 'model' })
+  })
+
+  it('reports a pick that did not stick as needing the user, with the suggestion', async () => {
+    const dom = new JSDOM(fixture('greenhouse-form.html'), { url: GREENHOUSE })
+    const report = fillPage(dom.window.document, VALUES, { answers: facts({ workAuthorized: 'yes' }), pick: true })
+    // No menu ever opens on the static fixture.
+    await pickAnswers(report, pendingPicks(report))
+    expect(field(report, AUTHORIZED)).toMatchObject({ outcome: 'rejected', suggestion: 'Yes' })
+    expect(field(report, AUTHORIZED).reason).toMatch(/could not pick "Yes".*pick it yourself/)
+  })
+
+  it('presses the right Ashby yes/no button and checks the right React radio', async () => {
+    const dom = new JSDOM(fixture('ashby-form.html'), { url: ASHBY })
+    const doc = dom.window.document
+    const check = forbidSubmitAndKeys(dom)
+    // Ashby's yes/no buttons: pressing one marks it and sets the hidden checkbox.
+    for (const group of Array.from(doc.querySelectorAll('.ashby-application-form-input-yesno'))) {
+      for (const button of Array.from(group.querySelectorAll('button'))) {
+        button.addEventListener('click', () => {
+          for (const b of Array.from(group.querySelectorAll('button'))) b.setAttribute('aria-pressed', String(b === button))
+          ;(group.querySelector('input[type="checkbox"]') as HTMLInputElement).checked = button.dataset.option === 'yes'
+        })
+      }
+    }
+    const report = fillPage(doc, VALUES, { text: true, answers: facts({ workAuthorized: 'yes', gender: 'decline' }), pick: true })
+    await pickAnswers(report)
+    const auth = field(report, 'Are you authorized to work in the country where the job is located?')
+    expect(auth).toMatchObject({ kind: 'radio', outcome: 'filled', value: 'Yes', options: ['Yes', 'No'] })
+    const yes = doc.querySelector('button[data-option="yes"]')!
+    expect(yes.getAttribute('aria-pressed')).toBe('true')
+    expect((yes.parentElement!.querySelector('input[type="checkbox"]') as HTMLInputElement).checked).toBe(true)
+    const gender = field(report, 'Gender')
+    expect(gender).toMatchObject({ kind: 'radio', outcome: 'filled' })
+    const checked = Array.from(doc.querySelectorAll<HTMLInputElement>('input[type="radio"]')).filter((r) => r.checked)
+    expect(checked).toHaveLength(1)
+    expect(checked[0].labels?.[0]?.textContent).toBe(gender.value)
+    // Consent and acknowledgement checkboxes are never ticked.
+    expect(Array.from(doc.querySelectorAll<HTMLInputElement>('.ashby-application-form-input-checkbox-group input')).some((c) => c.checked)).toBe(false)
+    check()
+  })
+
+  it('chooses a remembered option in a Workday dropdown (button and popup listbox)', async () => {
+    const dom = new JSDOM(fixture('workday-my-information.html'), { url: WORKDAY })
+    const doc = dom.window.document
+    const check = forbidSubmitAndKeys(dom)
+    const button = doc.getElementById('source--source')!
+    // Workday renders the options in a popup at the end of <body>.
+    button.addEventListener('click', () => {
+      doc.body.insertAdjacentHTML(
+        'beforeend',
+        '<div data-automation-id="activeListContainer"><ul role="listbox"><li role="option"><div>Job board</div></li><li role="option"><div>LinkedIn</div></li></ul></div>'
+      )
+      for (const li of Array.from(doc.querySelectorAll('[role="option"]'))) {
+        li.addEventListener('click', () => {
+          button.textContent = li.textContent
+          doc.querySelector('[data-automation-id="activeListContainer"]')!.remove()
+        })
+      }
+    })
+    const first = fillPage(doc, VALUES, { answers: facts({}), pick: true })
+    const question = field(first, 'How Did You Hear About Us?').question!
+    const report = fillPage(doc, VALUES, {
+      answers: { facts: {}, questions: { [question]: { fact: null, value: 'LinkedIn', confirmed: true } } },
+      pick: true
+    })
+    await pickAnswers(report)
+    expect(field(report, 'How Did You Hear About Us?')).toMatchObject({ kind: 'combobox', outcome: 'filled', value: 'LinkedIn' })
+    expect(button.textContent).toBe('LinkedIn')
+    // Other dropdowns, with nothing remembered, were never opened.
+    expect(doc.querySelectorAll('[data-automation-id="activeListContainer"]')).toHaveLength(0)
+    check()
   })
 })

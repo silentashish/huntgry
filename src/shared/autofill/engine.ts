@@ -1,4 +1,4 @@
-import { NO_ANSWERS, type PageAnswers } from '../apply-facts'
+import { NO_ANSWERS, resolveAnswer, type PageAnswers } from '../apply-facts'
 import type { AdapterStep, ApplyAts, FieldKey, FieldReport, FillReport, FillValues, PageScan, UploadState } from '../apply-types'
 import { EMBED_RULES, embedPathMatches } from '../apply-embeds'
 import { adapterFor, type Adapter, type UploadProbe } from './adapters'
@@ -15,7 +15,8 @@ import {
   valueMatches,
   type FormControl
 } from './dom'
-import { answerable, answerField, editedInGroup, strategyOf, writeAnswer } from './answers'
+import { answerable, answerField, editedInGroup, strategyOf, writeAnswer, yesNoGroup, type PickRequest } from './answers'
+import { pick, widgetOf } from './pick'
 import { matchFileField, matchTextField, type Match } from './match'
 import { sleep } from './ready'
 import { defaultUploadAttached } from './upload-state'
@@ -97,6 +98,24 @@ function clickOnlyOf(adapter: Adapter, roots: Element[]): Set<Element> {
 /** The adapter's extra answer-only containers (outside the form root), with their questions. */
 function answerRootsOf(adapter: Adapter, doc: Document, root: Element): Element[] {
   return (adapter.answerRoots?.(doc) ?? []).filter((r) => r !== root && !root.contains(r) && !r.contains(root))
+}
+
+/**
+ * Dropdown buttons with a listbox (Workday): not form controls, but questions
+ * answered from memory (#71). Reported as comboboxes; never matched to contact values.
+ */
+function listboxButtons(root: Element, planned: Planned[]): Planned[] {
+  const seen = new Set(planned.map((p) => p.el as Element))
+  return Array.from(root.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="listbox"]'))
+    .filter((b) => !b.disabled && !seen.has(b))
+    .slice(0, 50)
+    .map((b) => ({
+      el: b as unknown as FormControl,
+      key: null,
+      score: 0,
+      outcome: 'skipped-unsupported' as const,
+      reason: 'A choice; pick it yourself.'
+    }))
 }
 
 /** Questions of the extra containers: only ever answered from memory, never matched to contact values. */
@@ -274,7 +293,18 @@ export interface FillOptions {
   text?: boolean
   /** Remembered facts and question answers (#71); without them only contact fields are filled. */
   answers?: PageAnswers
+  /**
+   * Pick trusted remembered answers in widgets that only take a click (the
+   * Settings switch, sent by main). The picks are queued on the report
+   * (`pendingPicks`) and run by `pickAnswers` after this synchronous fill.
+   */
+  pick?: boolean
 }
+
+/** Picks a fill queued for `pickAnswers` (not part of the report sent to main). */
+const PENDING_PICKS = new WeakMap<FillReport, PickRequest[]>()
+
+export const pendingPicks = (report: FillReport): PickRequest[] => PENDING_PICKS.get(report) ?? []
 
 /** The upload widget around a file input (see `Adapter.uploadGroup`). */
 function defaultUploadGroup(input: HTMLInputElement): Element | null {
@@ -314,10 +344,13 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
   }
   let first: Element | null = null
   const extraRoots = answerRootsOf(adapter, doc, root)
-  const planned = [...plan(adapter, root), ...answerOnlyPlanned(extraRoots)]
+  const base = [...plan(adapter, root), ...answerOnlyPlanned(extraRoots)]
+  const planned = [...base, ...listboxButtons(root, base)]
   const ids = fieldIdsOf(planned.map((p) => p.el))
   const clickOnly = clickOnlyOf(adapter, [root, ...extraRoots])
   const answers = options.answers ?? NO_ANSWERS
+  const picks: PickRequest[] = []
+  PENDING_PICKS.set(report, picks)
 
   for (const p of planned) {
     const kind = kindOf(p.el)
@@ -333,9 +366,10 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
       line.reason = p.reason
       if (p.outcome !== 'skipped-unsupported') highlight(p.el, 'attention')
       // A question the contact block does not cover: answered from what the user taught Huntgry (#71).
-      if (writeText && p.outcome !== 'ambiguous' && answerable(kind) && kind !== 'checkbox') {
+      if (writeText && p.outcome !== 'ambiguous' && answerable(kind) && (kind !== 'checkbox' || yesNoGroup(p.el))) {
         line.fieldId = ids.get(p.el)
-        if (answerField(p.el, line, p.root ?? root, answers, clickOnly.has(p.el))) first ??= p.el
+        const policy = options.pick ? 'pick' : 'suggest'
+        if (answerField(p.el, line, p.root ?? root, answers, clickOnly.has(p.el), policy, picks)) first ??= p.el
       }
       report.fields.push(line)
       continue
@@ -420,7 +454,9 @@ export async function verifyFill(
   const adapter = adapterFor(url, doc)
   const root = adapter.formRoot(doc)
   if (!root) return report
-  const planned = [...plan(adapter, root), ...answerOnlyPlanned(answerRootsOf(adapter, doc, root))]
+  const extraRoots = answerRootsOf(adapter, doc, root)
+  const planned = [...plan(adapter, root), ...answerOnlyPlanned(extraRoots)]
+  const clickOnly = clickOnlyOf(adapter, [root, ...extraRoots])
   const byKey = new Map<FieldKey, FormControl>()
   for (const p of planned) if (p.key && !p.outcome && !byKey.has(p.key)) byKey.set(p.key, p.el)
   const byId = new Map([...fieldIdsOf(planned.map((p) => p.el))].map(([el, id]) => [id, el]))
@@ -432,6 +468,9 @@ export async function verifyFill(
     // A remembered answer Huntgry wrote (#71): the same check, keyed by the control's id.
     if (!line.key && line.outcome === 'filled' && line.fieldId && line.value) {
       const el = byId.get(line.fieldId)
+      // A picked widget (pick.ts read it back) or a dropdown button: nothing here may write it again.
+      if (el && (yesNoGroup(el) || ['click-only', 'never'].includes(strategyOf(kindOf(el), clickOnly.has(el))))) continue
+      if (!el && line.kind === 'combobox') continue
       if (!el) {
         line.outcome = 'rejected'
         line.reason = 'The field disappeared after it was filled.'
@@ -520,4 +559,44 @@ export function uploadStateOf(doc: Document, key: UploadKey, fileName: string): 
 /** The adapter for the page as it is now (for the preload's waits). */
 export function currentAdapter(doc: Document): Adapter {
   return adapterFor(pageUrl(doc), doc)
+}
+
+/** Picks at most this many answers per fill (each waits for its menu)… */
+const MAX_PICKS = 25
+/** …within this time, well inside main's 15 s wait for the fill; later ones stay suggestions. */
+const PICK_BUDGET_MS = 8000
+
+/**
+ * Runs the picks a fill queued (#71): each widget's remembered answer is
+ * chosen through pick.ts, which presses only inside that widget and reads the
+ * choice back. Picked lines become `filled`; a widget that already shows
+ * another answer is `kept`; a pick that did not stick goes to the user
+ * (`rejected`, with the suggestion). Mutates and returns `report`.
+ */
+export async function pickAnswers(report: FillReport, picks: readonly PickRequest[] = pendingPicks(report)): Promise<FillReport> {
+  const deadline = Date.now() + PICK_BUDGET_MS
+  for (const req of picks.slice(0, MAX_PICKS)) {
+    if (Date.now() > deadline) break
+    const widget = req.el.isConnected ? widgetOf(req.el) : null
+    if (!widget) continue
+    const line = req.line
+    const result = await pick(widget, (options) => resolveAnswer(req.fact, req.value, 'select', options))
+    if (result.status === 'filled') {
+      line.outcome = 'filled'
+      line.value = result.value.slice(0, 200)
+      line.reason = undefined
+      line.suggestion = undefined
+      line.suggestedBy = undefined
+      highlight(widget.scope, 'done')
+    } else if (result.status === 'kept') {
+      line.outcome = 'kept'
+      line.value = result.value.slice(0, 200)
+      line.reason = 'Already answered; left as is.'
+    } else {
+      line.outcome = 'rejected'
+      line.reason = `Huntgry could not pick "${(line.suggestion ?? '').slice(0, 80)}" (${result.reason.slice(0, 80)}); pick it yourself.`
+      highlight(widget.scope, 'attention')
+    }
+  }
+  return report
 }

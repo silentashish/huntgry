@@ -1,6 +1,6 @@
 import type { PageAnswers } from '../apply-facts'
 import type { FillReport, FillValues, PageScan, UploadState } from '../apply-types'
-import { currentAdapter, embedUrlsOf, fillPage, scanPage, uploadStateOf, verifyFill, type UploadKey } from './engine'
+import { currentAdapter, embedUrlsOf, fillPage, pendingPicks, pickAnswers, scanPage, uploadStateOf, verifyFill, type UploadKey } from './engine'
 import { anyShown, sleep, waitForReady, waitUntil } from './ready'
 import { watchUserEdits, type UserEditOptions } from './user-edits'
 
@@ -47,14 +47,16 @@ export class PageSession {
    * Fills (or with `text: false` only re-marks the file inputs), then verifies.
    * A marker-only pass (an upload retry) never replaces the text report that
    * the verify after the upload works from. `answers` are the remembered
-   * application answers (#71).
+   * application answers (#71); with `pick`, trusted ones are also picked in
+   * widgets that only take a click (pick.ts).
    */
-  async fill(values: FillValues, text?: boolean, answers?: PageAnswers): Promise<FillReport> {
+  async fill(values: FillValues, text?: boolean, answers?: PageAnswers, pick?: boolean): Promise<FillReport> {
     const url = this.url
     await this.ready(Math.min(this.opts.readyMaxMs ?? 3000, 3000))
     // A single-page app moved on while it settled: this fill was for the previous view.
     if (this.url !== url) throw new Error('The page changed before it could be filled.')
-    const report = fillPage(this.doc, values, { text, answers })
+    const report = fillPage(this.doc, values, { text, answers, pick })
+    if (pendingPicks(report).length > 0) await pickAnswers(report)
     if (report.fields.some((f) => f.outcome === 'filled')) {
       await sleep(this.doc, this.opts.verifyAfterMs ?? 1000)
       await verifyFill(this.doc, values, report, { settleMs: this.opts.settleMs })

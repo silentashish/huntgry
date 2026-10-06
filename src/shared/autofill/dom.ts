@@ -37,6 +37,8 @@ export function isRelevant(el: FormControl): boolean {
 
 export function kindOf(el: FormControl): FieldKind {
   const t = tag(el)
+  // A dropdown button with a listbox (Workday) is a choice, like a combobox (#71).
+  if (t === 'button') return el.getAttribute('aria-haspopup') === 'listbox' ? 'combobox' : 'other'
   if (t === 'select') return 'select'
   if (t === 'textarea') return 'textarea'
   const input = el as HTMLInputElement
@@ -86,6 +88,8 @@ function rawLabel(el: FormControl): string {
     const question = el.closest('li.application-question, .application-question')?.querySelector('.application-label')
     if (question?.textContent) return question.textContent
   }
+  // A dropdown button's aria-label also carries its current value ("Country United States Required"): its label first.
+  if (tag(el) === 'button' && el.labels?.length) return Array.from(el.labels).map(labelText).join(' ')
   const labelledBy = textOfIds(doc, el.getAttribute('aria-labelledby'))
   if (labelledBy.trim()) return labelledBy
   const aria = el.getAttribute('aria-label')
@@ -93,6 +97,10 @@ function rawLabel(el: FormControl): string {
   const labels = el.labels ? Array.from(el.labels) : []
   const fromLabel = labels.map(labelText).join(' ')
   if (fromLabel.trim()) return fromLabel
+  // A label pointing at the control's name (Ashby's yes/no groups: the hidden checkbox has a name but no id).
+  const name = el.getAttribute('name')
+  const byName = name ? Array.from(doc.querySelectorAll('label[for]')).find((l) => l.getAttribute('for') === name) : undefined
+  if (byName && !byName.contains(el) && byName.textContent?.trim()) return labelText(byName as HTMLLabelElement)
   return el.getAttribute('placeholder') ?? el.getAttribute('name') ?? el.id ?? ''
 }
 
