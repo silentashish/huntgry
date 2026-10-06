@@ -230,6 +230,69 @@ describe('RunManager against a fake claude', () => {
     expect(failed.error).toContain("error: unknown option '--permission-prompts'")
   })
 
+  it('keeps the rate-limit event on the run (not in the transcript) and stamps every output line', async () => {
+    const { id } = await manager.start({ ...params, notes: 'RATE_WARN' }, ctx())
+    const waiting = await until(id, (r) => r.status === 'waiting')
+    expect(waiting.rateLimit).toMatchObject({ status: 'allowed_warning', utilization: 0.96, rateLimitType: 'five_hour' })
+    expect(typeof waiting.rateLimit?.resetsAt).toBe('number')
+    expect(waiting.lastOutputAt).toBeDefined()
+    expect(Date.parse(waiting.lastOutputAt!)).toBeGreaterThanOrEqual(Date.parse(waiting.createdAt) - 1000)
+    await manager.flush(id)
+    const events = await readEvents(ws, id)
+    expect(events.some((e) => (e as { type?: string }).type === 'rate_limit_event')).toBe(false)
+  })
+
+  it('fails a turn whose result is an error (usage limit), with the reset epoch from the last rate-limit event', async () => {
+    const { id } = await manager.start({ ...params, notes: 'USAGE_LIMIT:1790304000' }, ctx())
+    const failed = await until(id, (r) => r.status === 'failed')
+    expect(failed.error).toContain("You've hit your session limit · resets 3:45pm")
+    expect(failed.rateLimit).toMatchObject({ status: 'rejected', resetsAt: 1790304000 })
+  })
+
+  it('abort kills the process and fails the run with the given reason, so it can be retried', async () => {
+    const { id } = await manager.start({ ...params, notes: 'STALL' }, ctx())
+    await until(id, (r) => r.sessionId !== null)
+    manager.abort(id, 'No output for 20 minutes.')
+    const failed = await until(id, (r) => r.status === 'failed' && !r.live)
+    expect(failed.error).toBe('No output for 20 minutes.')
+    expect(manager.isLive(id)).toBe(false)
+    await manager.flush(id)
+    const t = buildTranscript(await readEvents(ws, id))
+    expect(t[t.length - 1]).toMatchObject({ kind: 'notice', level: 'error', text: expect.stringContaining('No output for 20 minutes') })
+  })
+
+  it('release ends the idle process of a waiting run and keeps it waiting; a reply resumes it', async () => {
+    const { id } = await manager.start(params, ctx())
+    await until(id, (r) => r.status === 'waiting')
+    manager.release(id)
+    const released = await until(id, (r) => r.status === 'waiting' && !r.live)
+    expect(released.error).toBeUndefined()
+    expect(manager.isLive(id)).toBe(false)
+    await manager.reply(id, 'go on', async () => ctx())
+    expect(manager.isLive(id)).toBe(true)
+    await until(id, (r) => r.status === 'waiting' && r.live)
+  })
+
+  it('a reply restarts the stall clock (lastOutputAt), even after a long wait', async () => {
+    const { id } = await manager.start(params, ctx())
+    const waiting = await until(id, (r) => r.status === 'waiting')
+    await new Promise((r) => setTimeout(r, 30))
+    const before = Date.now()
+    const sent = await manager.reply(id, 'next', async () => ctx())
+    expect(Date.parse(sent.lastOutputAt!)).toBeGreaterThanOrEqual(before)
+    expect(Date.parse(sent.lastOutputAt!)).toBeGreaterThan(Date.parse(waiting.lastOutputAt!))
+  })
+
+  it('records an unattended run as such, so a resume keeps the variant', async () => {
+    const { id, unattended } = await manager.start({ ...params, unattended: true, notes: 'WRITE_NOTES' }, ctx())
+    expect(unattended).toBe(true)
+    const waiting = await until(id, (r) => r.status === 'waiting')
+    expect(waiting.outputFiles).toContain('review-notes.md')
+    manager.finish(id)
+    await until(id, (r) => r.status === 'finished')
+    expect((await readRun(ws, id)).unattended).toBe(true)
+  })
+
   it('does not pass --permission-prompts to an older Claude Code', async () => {
     const old = { ...ctx(), env: { ...process.env, FAKE_CLAUDE_UNKNOWN: '--permission-prompts' } }
     const r = await manager.start(params, { ...old, claudeVersion: '2.1.231', permissionPrompts: false })

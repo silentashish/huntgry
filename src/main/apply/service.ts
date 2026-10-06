@@ -14,8 +14,10 @@ import {
 import { embedPageFor } from '@shared/apply-embeds'
 import { applyUrlFor, isTrustedApplyPage } from '@shared/apply-url'
 import { AUTOFILL_CHANNELS, UPLOAD_ATTR } from '@shared/autofill-channels'
+import { reviewBlocker } from '@shared/review-types'
 import { resolveApplicationFile, resolveApplicationFolder } from '../applications/safe-path'
 import { readApplication } from '../applications/scan'
+import { approvalDrift } from '../review/service'
 import { isBlockedPage } from '../jobs/blocked'
 import { uploadFile, type Cdp } from './upload'
 import { parseFillReport, parsePageScan, parseUploadState } from './validate'
@@ -150,6 +152,12 @@ export class ApplyService {
     const workspace = await this.deps.workspace()
     const folder = await resolveApplicationFolder(workspace, applicationId)
     const record = await readApplication(workspace, folder)
+    // An unattended result is applied only once the user approved it on the Review page (#31).
+    const unreviewed = reviewBlocker(record.tracking.review)
+    if (unreviewed) throw new Error(unreviewed)
+    // An approval vouches for the files the user saw; if they changed since, it no longer holds.
+    const drift = await approvalDrift(workspace, applicationId)
+    if (drift) throw new Error(drift)
     if (!record.jobUrl) throw new Error('This application has no posting URL. Add it in the application drawer first.')
     const resumePath = await resolveApplicationFile(workspace, applicationId, 'resume.pdf').catch(() => {
       throw new Error('This application has no resume.pdf yet. Build it in Tailor first.')

@@ -8,7 +8,9 @@ import { graph } from './graph'
 import { insights } from './insights'
 import { runner } from './runner'
 import { jobs } from './jobs'
+import { pipeline } from './pipeline'
 import { queue } from './queue'
+import { review } from './review'
 import { profile, workspace } from './workspace'
 
 // Sandboxed preload: only `electron` may be required (local modules are bundled
@@ -25,6 +27,8 @@ const api: HuntgryApi = {
   browser,
   queue,
   apply,
+  review,
+  pipeline,
   on
 }
 

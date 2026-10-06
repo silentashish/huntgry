@@ -1,0 +1,52 @@
+import { ipcMain } from 'electron'
+import { REVIEW_CHANNELS } from '@shared/review-types'
+import { manager } from '../cli/start'
+import { requireCurrentWorkspace } from '../current-workspace'
+import { emit } from '../events'
+import { queue, replyThroughQueue } from '../queue/ipc'
+import { requireApprovalId } from './approvals'
+import {
+  approveReview,
+  discardReview,
+  dropAllApprovals,
+  dropApproval,
+  listApprovals,
+  listReviews,
+  requireApplicationId,
+  requireApproveInput,
+  requireDiscardInput,
+  requireRerunInput,
+  rerunReview,
+  reviewDetail,
+  type ReviewDeps
+} from './service'
+
+const workspace = async () => (await requireCurrentWorkspace()).path
+
+/** The desktop's review deps; #42's gateway builds the same shape with `via: 'phone:<id>'`. */
+export const reviewDeps: ReviewDeps = {
+  workspace,
+  reply: async (runId, text) => {
+    // Always through the queue (it takes back a result whose item was removed): the process cap,
+    // the pipeline's policy and the verify gate apply to a re-run like to any job. Never directly.
+    const viaQueue = await replyThroughQueue(runId, text)
+    if (viaQueue === null) throw new Error('This result cannot be re-run now (another workspace is open, or the app is quitting).')
+    return viaQueue
+  },
+  changed: () => emit('applications:changed', null),
+  busy: (runId) =>
+    manager.liveRun(runId)?.status === 'running' ||
+    queue.state().items.some((i) => i.runId === runId && (i.status === 'queued' || i.status === 'preparing' || i.status === 'running'))
+}
+
+/** Review of unattended results: list, detail, approve / re-run / discard bound to a revision, standing approvals. */
+export function registerReviewIpc(): void {
+  ipcMain.handle(REVIEW_CHANNELS.list, async () => listReviews(await workspace()))
+  ipcMain.handle(REVIEW_CHANNELS.get, async (_e, id: unknown) => reviewDetail(await workspace(), requireApplicationId(id)))
+  ipcMain.handle(REVIEW_CHANNELS.approve, (_e, input: unknown) => approveReview(reviewDeps, requireApproveInput(input), 'desktop'))
+  ipcMain.handle(REVIEW_CHANNELS.rerun, (_e, input: unknown) => rerunReview(reviewDeps, requireRerunInput(input), 'desktop'))
+  ipcMain.handle(REVIEW_CHANNELS.discard, (_e, input: unknown) => discardReview(reviewDeps, requireDiscardInput(input), 'desktop'))
+  ipcMain.handle(REVIEW_CHANNELS.approvals, async () => listApprovals(await workspace()))
+  ipcMain.handle(REVIEW_CHANNELS.removeApproval, async (_e, id: unknown) => dropApproval(await workspace(), requireApprovalId(id)))
+  ipcMain.handle(REVIEW_CHANNELS.removeAllApprovals, async () => dropAllApprovals(await workspace()))
+}

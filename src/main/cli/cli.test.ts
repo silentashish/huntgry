@@ -7,9 +7,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { appendLive, buildTranscript, LineBuffer, parseEventLine, summarizeToolInput } from '@shared/transcript'
 import {
   allowedTools,
+  ATTENDED_APPROVAL_LINE,
   texRootOf,
   buildClaudeArgs,
   buildFirstPrompt,
+  buildSystemPrompt,
   requireStartParams,
   runTitle,
   userMessageLine
@@ -275,6 +277,35 @@ describe('command line and prompts', () => {
       dateStyle: 'right',
       coverLetter: false
     })
+  })
+
+  it('builds the unattended prompt variant without the "wait for the user" line, with the rule, the notes format and the approvals', () => {
+    const base = { workspace: '/Users/x/cv', masterProfile: 'master-profile.md', skillDir: '/s' }
+    const attended = buildSystemPrompt(base)
+    expect(attended).toContain(ATTENDED_APPROVAL_LINE)
+    expect(attended).not.toMatch(/UNATTENDED/)
+    // Byte for byte what runs got before #31.
+    expect(buildSystemPrompt({ ...base, unattended: undefined })).toBe(attended)
+
+    const approvals = [
+      { sourceFact: 'newest fact', wording: 'newest wording' },
+      { sourceFact: 'older fact', wording: 'older "quoted" wording' }
+    ]
+    const unattended = buildSystemPrompt({ ...base, unattended: { approvals } })
+    expect(unattended).not.toContain(ATTENDED_APPROVAL_LINE)
+    expect(unattended).not.toMatch(/wait for the user to approve/)
+    expect(unattended).toMatch(/UNATTENDED RUN\. Nobody is reading/)
+    expect(unattended).toMatch(/APPROVAL RULE/)
+    expect(unattended).toMatch(/LEFT OUT of the resume and cover letter/)
+    expect(unattended).toContain('write review-notes.md in the application folder')
+    expect(unattended).toContain('## Proposed reframings (not used)')
+    expect(unattended).toContain('- Proposed wording:')
+    expect(unattended).toContain('## Open gaps')
+    expect(unattended).toContain(`STANDING APPROVALS (JSON, newest first): ${JSON.stringify(approvals)}`)
+    // Everything else (paths, skill, drafts, folder line) is the same as the attended prompt.
+    for (const line of attended.split('\n').filter((l) => l !== ATTENDED_APPROVAL_LINE)) expect(unattended).toContain(line)
+    expect(requireStartParams({ jobDescription: 'x', unattended: true }).unattended).toBe(true)
+    expect(requireStartParams({ jobDescription: 'x', unattended: 'yes' }).unattended).toBeUndefined()
   })
 
   it('encodes a stdin user message', () => {

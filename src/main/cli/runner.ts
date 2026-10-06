@@ -40,6 +40,11 @@ export interface RunnerHooks {
   /** `seq` is the event's index in the run's `events.jsonl`. */
   onEvent(runId: string, seq: number, event: unknown): void
   onRun(run: RunSummary): void
+  /**
+   * Before any reply reaches a run (live or resumed): an unattended result is about to change,
+   * so its approval is revoked first (#31). A failure here fails the reply: nothing is sent.
+   */
+  beforeReply?(run: RunSummary, workspace: string): Promise<void>
 }
 
 interface Live {
@@ -48,6 +53,8 @@ interface Live {
   ctx: RunContext
   adapter: AgentAdapter
   stderr: string
+  /** The current turn ended (the agent waits); reset by the next `send`. */
+  turnEnded: boolean
   /** Why the last turn failed, as the agent reported it (cleared by a good turn). */
   turnError?: string
   /** Items the agent produced in the current turn (messages, commands, edits). */
@@ -57,6 +64,10 @@ interface Live {
   /** Index the next recorded event gets in `events.jsonl`. */
   seq: number
   stopping: boolean
+  /** Set by `abort()`: the run fails with this reason when the process exits. */
+  aborted?: string
+  /** Set by `release()`: the process ends but the run keeps waiting for its reply. */
+  releasing?: boolean
   finishing: boolean
   turnStartedAt: number
 }
@@ -78,6 +89,28 @@ export class RunManager {
     return this.live.has(id)
   }
 
+  /** Runs with an agent process right now (working, waiting with its process, or still exiting). */
+  liveIds(): string[] {
+    return [...this.live.keys()]
+  }
+
+  /**
+   * Ends the process of the run that has waited longest for a reply (session kept, see `release`),
+   * so a job can use its slot. `false` when no live run is waiting (or one is already being released).
+   */
+  releaseIdle(): boolean {
+    // Not an unattended run: one that waits is being settled (and finished) by the queue right now.
+    const idle = [...this.live.values()].filter(
+      (e) => e.run.status === 'waiting' && !e.run.unattended && !e.run.params.unattended && !e.releasing && !e.stopping && !e.finishing
+    )
+    // One at a time: a release already under way frees a slot when its process exits.
+    if ([...this.live.values()].some((e) => e.releasing)) return false
+    const oldest = idle.sort((a, b) => a.run.updatedAt.localeCompare(b.run.updatedAt))[0]
+    if (!oldest) return false
+    this.release(oldest.run.id)
+    return true
+  }
+
   /** The in-memory summary of a live run (fresher than `run.json`). */
   liveRun(id: string): RunSummary | null {
     return this.live.get(id)?.run ?? null
@@ -97,7 +130,8 @@ export class RunManager {
       outputFolder: null,
       outputFiles: [],
       costUsd: 0,
-      live: true
+      live: true,
+      ...(params.unattended ? { unattended: true as const } : {})
     }
     await saveRun(ctx.workspace, run)
     this.spawnFor(run, ctx, null, 0)
@@ -115,6 +149,7 @@ export class RunManager {
     if (live) {
       // An exec agent's process lives for one turn: while it runs, the turn is not over.
       if (live.adapter.turnMode === 'exec') throw stillWorking(live)
+      await this.hooks.beforeReply?.({ ...live.run }, live.ctx.workspace)
       await this.send(id, text)
       return { ...live.run }
     }
@@ -124,12 +159,14 @@ export class RunManager {
         // A reply that came first resumed the run meanwhile. An exec agent has already read its
         // whole prompt (stdin is closed), so this one could never reach it: refuse it.
         if (entry.adapter.turnMode === 'exec') throw stillWorking(entry)
+        await this.hooks.beforeReply?.({ ...entry.run }, entry.ctx.workspace)
       } else {
         const ctx = await context()
         const run = await readRun(ctx.workspace, id)
         if ((ctx.agent ?? DEFAULT_AGENT) !== run.agent)
           throw new Error(`This run uses ${AGENT_LABEL[run.agent]}; it cannot be continued with another agent.`)
         if (!run.sessionId) throw new Error(`This run has no ${AGENT_LABEL[run.agent]} session to resume.`)
+        await this.hooks.beforeReply?.(run, ctx.workspace)
         run.error = undefined
         const existing = (await readEvents(ctx.workspace, id)).length
         this.spawnFor(run, ctx, run.sessionId, existing)
@@ -144,6 +181,33 @@ export class RunManager {
     const entry = this.live.get(id)
     if (!entry) return
     entry.stopping = true
+    this.kill(entry)
+  }
+
+  /**
+   * Kills a run that Huntgry gave up on (the pipeline's stall watchdog): the run ends `failed`
+   * with `reason`, not `stopped` (which the queue reads as cancelled), so it can be retried.
+   */
+  abort(id: string, reason: string): void {
+    const entry = this.live.get(id)
+    if (!entry) return
+    entry.aborted = reason
+    this.kill(entry)
+  }
+
+  /**
+   * Ends the process of a run that waits for a reply and keeps the run `waiting`: the reply
+   * resumes its session in a new process. An unattended run that needs the user holds no
+   * idle agent process (#31).
+   */
+  release(id: string): void {
+    const entry = this.live.get(id)
+    if (!entry || entry.run.status !== 'waiting') return
+    entry.releasing = true
+    this.kill(entry)
+  }
+
+  private kill(entry: Live): void {
     entry.child.kill('SIGTERM')
     // Claude handles SIGTERM quickly; make sure nothing is left behind.
     setTimeout(() => {
@@ -252,9 +316,11 @@ export class RunManager {
       seq,
       stopping: false,
       finishing: false,
+      turnEnded: false,
       turnContent: 0,
       turnStartedAt: Date.now()
     }
+    entry.run.lastOutputAt = new Date().toISOString()
     this.live.set(run.id, entry)
 
     const lines = new LineBuffer()
@@ -281,9 +347,14 @@ export class RunManager {
       const exec = adapter.turnMode === 'exec'
       if (entry.stopping) {
         r.status = 'stopped'
+      } else if (entry.releasing && r.status === 'waiting') {
+        // Released between turns: still waiting, resumable.
+      } else if (entry.aborted) {
+        r.status = 'failed'
+        r.error = entry.aborted
       } else if (entry.finishing || (code === 0 && !exec && !entry.turnError)) {
         r.status = 'finished'
-      } else if (r.status !== 'waiting' || entry.turnError) {
+      } else if (!entry.turnEnded || entry.turnError) {
         // An exec agent that exits cleanly after its turn is between turns ("waiting"), not finished.
         r.status = 'failed'
         const stderr = entry.stderr.trim()
@@ -319,6 +390,9 @@ export class RunManager {
     entry.run.status = 'running'
     entry.turnStartedAt = Date.now()
     entry.turnContent = 0
+    entry.turnEnded = false
+    // A new turn starts now: the stall watchdog counts from here, not from before a long wait.
+    entry.run.lastOutputAt = new Date().toISOString()
     const event: HuntgryEvent = { type: 'huntgry', subtype: 'user_message', text, ts: new Date().toISOString() }
     this.record(entry, event)
     this.touch(entry)
@@ -331,9 +405,21 @@ export class RunManager {
     const event = parseEventLine(line)
     if (!event) return
     const signal = entry.adapter.signal(event)
-    if (signal.type === 'drop') return
-    this.record(entry, event)
     const r = entry.run
+    r.lastOutputAt = new Date().toISOString()
+    if (signal.type === 'drop') return
+    if (signal.type === 'rate-limit') {
+      // Not recorded (nothing for the transcript); the pipeline reads it from the summary.
+      r.rateLimit = {
+        status: signal.status,
+        ...(signal.resetsAt !== undefined ? { resetsAt: signal.resetsAt } : {}),
+        ...(signal.rateLimitType ? { rateLimitType: signal.rateLimitType } : {}),
+        ...(signal.utilization !== undefined ? { utilization: signal.utilization } : {})
+      }
+      this.touch(entry)
+      return
+    }
+    this.record(entry, event)
     if (signal.type === 'keep' && signal.content) entry.turnContent++
     if (signal.type === 'init') {
       r.sessionId = signal.sessionId
@@ -356,7 +442,7 @@ export class RunManager {
         signal.usage?.outputTokens === 0
       entry.turnError = signal.error ?? (empty ? `${entry.adapter.label} ended the turn without any answer or action.` : undefined)
       r.error = entry.turnError
-      r.status = 'waiting'
+      entry.turnEnded = true
       const since = entry.turnStartedAt - 1000
       entry.queue = entry.queue.then(async () => {
         // Other runs may be building at the same time: never take a folder another live run owns,
@@ -380,6 +466,10 @@ export class RunManager {
             )
           }
         }
+        // Only now does the run read as waiting, so every summary that says so carries the output
+        // folder (a summary queued earlier, e.g. for the session id, still reads as running).
+        // The process may have ended meanwhile (failed, stopped, finished): that verdict stands.
+        if (r.status === 'running') r.status = 'waiting'
       })
       this.touch(entry)
     }

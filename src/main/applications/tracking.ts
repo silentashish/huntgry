@@ -7,6 +7,7 @@ import {
   type ApplicationStatus,
   type ApplicationTracking
 } from '@shared/applications-types'
+import type { ReviewTracking } from '@shared/review-types'
 
 /**
  * `<job folder>/huntgry.json`: Huntgry's tracking data for one application.
@@ -28,7 +29,31 @@ export function normalizeTracking(input: unknown): ApplicationTracking {
   if (typeof o.appliedAt === 'string' && DATE.test(o.appliedAt)) t.appliedAt = o.appliedAt
   if (typeof o.jobUrl === 'string' && /^https?:\/\//i.test(o.jobUrl)) t.jobUrl = o.jobUrl.slice(0, 2000)
   if (typeof o.source === 'string' && o.source.trim()) t.source = o.source.trim().slice(0, 50)
+  const review = normalizeReview(o.review)
+  if (review) t.review = review
   return t
+}
+
+const REVIEW_STATES = ['unreviewed', 'needs-attention', 'approved', 'discarded'] as const
+
+export const UNREADABLE_REVIEW = 'The review state in huntgry.json is unreadable: check this result on the Review page.'
+
+/**
+ * `review` as written by the pipeline and the Review page. A malformed one fails closed: it
+ * reads as Needs attention, so a damaged file never lets an unattended result reach Apply.
+ */
+export function normalizeReview(input: unknown): ReviewTracking | undefined {
+  if (input === undefined || input === null) return undefined
+  const unreadable: ReviewTracking = { state: 'needs-attention', runId: '', at: '', reason: UNREADABLE_REVIEW }
+  if (typeof input !== 'object') return unreadable
+  const r = input as Record<string, unknown>
+  if (!(REVIEW_STATES as readonly unknown[]).includes(r.state)) return unreadable
+  if (typeof r.runId !== 'string' || typeof r.at !== 'string') return unreadable
+  const out: ReviewTracking = { state: r.state as ReviewTracking['state'], runId: r.runId, at: r.at }
+  if (typeof r.reason === 'string' && r.reason) out.reason = r.reason.slice(0, 2000)
+  if (typeof r.reviewedAt === 'string') out.reviewedAt = r.reviewedAt
+  if (typeof r.via === 'string' && /^(desktop|phone:[\w-]{1,100})$/.test(r.via)) out.via = r.via as ReviewTracking['via']
+  return out
 }
 
 /** Tracking for a folder; defaults when `huntgry.json` is missing, unreadable or not a regular file. */

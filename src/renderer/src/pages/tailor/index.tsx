@@ -3,8 +3,10 @@ import { Alert, Grid, Loader, Stack, Title } from '@mantine/core'
 import type { RunDetail, RunnerEnvironment, RunSummary, StartRunParams } from '@shared/runner-types'
 import { appendLive } from '@shared/transcript'
 import { api, errorText } from '../../api'
+import { usePipeline } from '../../components/queue/usePipeline'
 import { useQueue } from '../../components/queue/useQueue'
-import type { PageParams } from '../../navigation'
+import { useNavigation, type PageParams } from '../../navigation'
+import { PipelinePanel } from './PipelinePanel'
 import { QueuePanel } from './QueuePanel'
 import { RunList } from './RunList'
 import { RunView } from './RunView'
@@ -20,6 +22,12 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [queue, setQueue] = useQueue()
+  const [pipeline, setPipeline] = usePipeline()
+  const { navigate } = useNavigation()
+  const review = (applicationId: string) => navigate('review', applicationId ? { applicationId } : undefined)
+  // While a pipeline exists its jobs show in its panel; the queue panel keeps the rest.
+  const pipelineItems = queue && pipeline ? queue.items.filter((i) => i.pipelineId === pipeline.id) : []
+  const otherItems = queue && pipeline ? queue.items.filter((i) => i.pipelineId !== pipeline.id) : (queue?.items ?? [])
   /** Run whose events are being read from disk, with the live events that arrived meanwhile. */
   const loading = useRef<{ id: string; buffer: { seq: number; event: unknown }[] } | null>(null)
 
@@ -91,8 +99,18 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
           {error}
         </Alert>
       )}
-      {queue && (params?.view === 'queue' || queue.items.length > 0) && (
-        <QueuePanel queue={queue} onChange={setQueue} onOpenRun={(id) => void open(id)} />
+      {queue && pipeline && (
+        <PipelinePanel
+          state={pipeline}
+          queue={{ ...queue, items: pipelineItems }}
+          onQueueChange={setQueue}
+          onPipelineChange={setPipeline}
+          onOpenRun={(id) => void open(id)}
+          onReview={review}
+        />
+      )}
+      {queue && ((params?.view === 'queue' && !pipeline) || otherItems.length > 0) && (
+        <QueuePanel queue={{ ...queue, items: otherItems }} onChange={setQueue} onOpenRun={(id) => void open(id)} onReview={review} />
       )}
       <Grid gap="lg">
         <Grid.Col span={{ base: 12, md: 3 }}>

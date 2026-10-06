@@ -7,6 +7,8 @@ import { stopApply } from './apply/ipc'
 import { attachBrowser, destroyBrowser } from './browser/manager'
 import { setPackagedBuild } from './cli/env'
 import { stopAllRuns } from './cli/ipc'
+import { initPipeline, stopPipeline } from './pipeline/ipc'
+import { setReviewAuthorityRoot } from './review/authority'
 import { stopQueue } from './queue/ipc'
 import { registerIpcHandlers } from './ipc'
 
@@ -14,6 +16,8 @@ import { registerIpcHandlers } from './ipc'
 // bundle name and icon from electron-builder; `npm run dev` gets them from
 // scripts/brand-dev-electron.cjs plus the dock icon set below.
 app.setName('Huntgry')
+// Review decisions and standing approvals live under userData, outside every agent's writable roots (#31).
+setReviewAuthorityRoot(() => join(app.getPath('userData'), 'review'))
 // CLI discovery's e2e escape hatch (HUNTGRY_E2E) is only honoured by unpackaged builds.
 setPackagedBuild(app.isPackaged)
 
@@ -87,6 +91,8 @@ app.whenReady().then(() => {
   handleFileScheme()
   registerIpcHandlers()
   createWindow()
+  // Resumes an unattended pipeline interrupted by a restart, keeps the Mac awake while it has work.
+  initPipeline()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -104,7 +110,8 @@ app.on('before-quit', (event) => {
   if (runsStopped) return
   event.preventDefault()
   // The queue stops following its runs first, so they reload as interrupted, not cancelled.
-  void stopQueue()
+  void stopPipeline()
+    .then(stopQueue)
     .then(stopAllRuns)
     .catch((err: unknown) => console.error('Stopping runs before quit failed:', err))
     .finally(() => {
