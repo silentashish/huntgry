@@ -211,6 +211,24 @@ Pro/Max, ChatGPT or Google AI subscription nothing is billed per token; the same
 running a Claude model on Google's quota: the figure is then the equivalent API price, useful to
 compare runs, agents and models. Claude's own `costUSD` is shown next to it as "Claude reported".
 
+## Screenshots
+
+Before (main) / after (this branch), the e2e demo workspace with the fake agents:
+
+| | Before | After |
+| --- | --- | --- |
+| Tailor run | ![](44-images/before-tailor-run.png) | ![](44-images/after-tailor-run.png) |
+| Dashboard | ![](44-images/before-dashboard.png) | ![](44-images/after-dashboard.png) |
+| Settings | ![](44-images/before-settings.png) | ![](44-images/after-settings.png) |
+
+Real bulk run (3 jobs by "Tailor all": two on Claude Haiku 4.5, one on Codex gpt-6.1-sol, each
+stopped at the approval step), then **Sync prices** against LiteLLM:
+
+![](44-images/real-tailor-claude-haiku.png)
+![](44-images/real-tailor-codex.png)
+![](44-images/real-dashboard.png)
+![](44-images/real-settings-pricing-synced.png)
+
 ## Decisions and alternatives rejected
 
 - **Estimate from the table for every agent, Claude's figure as a cross-check** (not "show the CLI
