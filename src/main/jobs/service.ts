@@ -114,13 +114,19 @@ export async function updateJob(
 ): Promise<Job> {
   const canonical = await findCanonical(workspace, id)
   if (!canonical) throw new Error('This job is no longer saved.')
-  const tailoredAt = patch.tailored === true ? new Date().toISOString() : undefined
+  const now = new Date().toISOString()
+  const tailoredAt = patch.tailored === true ? now : undefined
   // The same state goes to every copy of the job, so the canonical view stays consistent.
   for (const fileId of [canonical.id, ...(canonical.aliases ?? [])]) {
     const raw = await readJob(workspace, fileId)
     if (!raw) continue
     const next: Job = { ...raw }
-    if (typeof patch.dismissed === 'boolean') next.dismissed = patch.dismissed
+    if (typeof patch.dismissed === 'boolean') {
+      // When it was dismissed: the Board drops an archived card a week later (#85).
+      if (patch.dismissed && !raw.dismissed) next.dismissedAt = now
+      if (!patch.dismissed) delete next.dismissedAt
+      next.dismissed = patch.dismissed
+    }
     if (tailoredAt) next.tailoredAt = tailoredAt
     await writeJobFile(workspace, next)
   }

@@ -17,6 +17,8 @@ export interface ApplicationTracking {
   status: ApplicationStatus
   /** ISO date (YYYY-MM-DD) the application was sent. */
   appliedAt?: string
+  /** ISO time the status became `archived`; cleared when it leaves it. The Board hides a card a week after (#85). */
+  archivedAt?: string
   notes: string
   /** Job posting URL; overrides the one found in `job-description.md`. */
   jobUrl?: string
