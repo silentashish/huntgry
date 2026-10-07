@@ -1,4 +1,4 @@
-import { Anchor, Group, MultiSelect, NumberInput, Select, Switch } from '@mantine/core'
+import { Anchor, Group, MultiSelect, NumberInput, Select } from '@mantine/core'
 import {
   activeFilterCount,
   DEFAULT_FILTERS,
@@ -27,18 +27,8 @@ const POSTED_LABEL: Record<PostedWithinDays, string> = {
   30: 'Past month'
 }
 
-/** Filters of the saved-job list, plus the auto-refresh toggle; both are saved per workspace by the page. */
-export function JobFiltersBar({
-  filters,
-  onChange,
-  autoRefresh,
-  onAutoRefresh
-}: {
-  filters: JobFilters
-  onChange: (f: JobFilters) => void
-  autoRefresh: boolean
-  onAutoRefresh: (on: boolean) => void
-}) {
+/** Filters of the saved-job list; saved per workspace by the page. */
+export function JobFiltersBar({ filters, onChange }: { filters: JobFilters; onChange: (f: JobFilters) => void }) {
   const set = <K extends keyof JobFilters>(k: K, v: JobFilters[K]) => onChange({ ...filters, [k]: v })
   return (
     <Group gap="sm" align="flex-end" wrap="wrap">
@@ -95,15 +85,6 @@ export function JobFiltersBar({
           Clear filters
         </Anchor>
       )}
-      <Switch
-        size="xs"
-        ml="auto"
-        mb={6}
-        label="Auto-refresh relevant jobs"
-        description="On open, when the last refresh is over 12 hours old"
-        checked={autoRefresh}
-        onChange={(e) => onAutoRefresh(e.currentTarget.checked)}
-      />
     </Group>
   )
 }

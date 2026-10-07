@@ -1,28 +1,16 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_FILTERS, matchesLocation } from '@shared/job-filters'
 import { DEFAULT_JOBS_PREFS } from '@shared/jobs-prefs'
 import { jobDescriptionFor, type Job } from '@shared/jobs-types'
-import { emptyProfile } from '@shared/master-profile'
 import { isBlockedPage } from './blocked'
 import type { LoadResult } from './loader'
-import { prefsPath, readPrefs, recordLastSearch, updatePrefs } from './prefs'
-import {
-  addByUrl,
-  addPasted,
-  fetchDetails,
-  refreshRelevant,
-  searchJobs,
-  updateJob,
-  validateQuery,
-  validateSources
-} from './service'
-import { hiringCafeSearchUrl, parseHiringCafeHits } from './sources/hiringcafe'
-import { indeedSearchUrl, parseIndeedCards } from './sources/indeed'
+import { prefsPath, readPrefs, updatePrefs } from './prefs'
+import { addByUrl, addPasted, fetchDetails, updateJob } from './service'
 import { findJobPosting, isoDate, parsePosting, urlJobId, type PageData } from './sources/posting'
-import { canonicalize, canonicalKey, jobFileName, listJobs, mergeJob, recentSearches, saveJob, writeJobFile } from './store'
+import { canonicalize, canonicalKey, jobFileName, listJobs, mergeJob, saveJob, writeJobFile } from './store'
 import { htmlToText } from './text'
 
 const fixture = async (name: string) => JSON.parse(await readFile(join(__dirname, 'fixtures', name), 'utf8'))
@@ -35,121 +23,12 @@ afterEach(async () => {
   await rm(ws, { recursive: true, force: true })
 })
 
-describe('hiring.cafe', () => {
-  it('parses the search page data (recorded from hiringcafe.com)', async () => {
-    const data = await fixture('hiringcafe-next-data.json')
-    const jobs = parseHiringCafeHits({ hits: data.props.pageProps.ssrHits })
-    expect(jobs).toHaveLength(3)
-    const j = jobs[0]
-    expect(j).toMatchObject({
-      source: 'hiring.cafe',
-      title: 'Platform Engineer',
-      company: 'NS2 Mission',
-      remote: false,
-      descriptionComplete: false
-    })
-    expect(j.id).toBe(`hiring.cafe:${j.sourceId}`)
-    expect(j.url).toMatch(/^https:\/\/workforcenow\.adp\.com\//)
-    expect(j.salary).toBe('$131,644 – $190,789 / year')
-    expect(j.tags).toContain('Python')
-    expect(j.description).toContain('Requirements:')
-    expect(j.postedAt).toBe('2026-09-03T21:38:00.000Z')
-    // Structured facts for the filters and the Relevant view (#73).
-    expect(j).toMatchObject({
-      visaSponsorship: false,
-      seniority: 'Senior Level',
-      minYearsExperience: null,
-      commitment: ['Full Time'],
-      workplaceType: 'Onsite',
-      salaryMin: 131644,
-      salaryMax: 190789
-    })
-    expect(jobs[1]).toMatchObject({ seniority: 'Mid Level', salaryMin: null, salaryMax: null })
-    expect(jobs[2].minYearsExperience).toBe(5)
-  })
-
-  it('reads a hit that sponsors visas, and leaves unknown facts unknown', () => {
-    const [sponsoring, bare] = parseHiringCafeHits({
-      hits: [
-        {
-          id: 's',
-          job_information: { title: 'Backend Engineer' },
-          v5_processed_job_data: {
-            visa_sponsorship: true,
-            workplace_type: 'Hybrid',
-            seniority_level: 'Entry Level',
-            min_industry_and_role_yoe: 1
-          }
-        },
-        { id: 'b', job_information: { title: 'Data Engineer' } }
-      ]
-    })
-    expect(sponsoring).toMatchObject({
-      visaSponsorship: true,
-      workplaceType: 'Hybrid',
-      remote: false,
-      seniority: 'Entry Level',
-      minYearsExperience: 1
-    })
-    expect(bare).toMatchObject({
-      visaSponsorship: null,
-      seniority: '',
-      minYearsExperience: null,
-      commitment: [],
-      workplaceType: '',
-      salaryMin: null,
-      salaryMax: null
-    })
-  })
-
-  it('skips expired or incomplete hits and builds search URLs', () => {
-    expect(
-      parseHiringCafeHits({
-        hits: [
-          { id: 'x', is_expired: true, job_information: { title: 'T' } },
-          { job_information: { title: 'no id' } },
-          null
-        ]
-      })
-    ).toEqual([])
-    expect(parseHiringCafeHits(null)).toEqual([])
-    // A hit without apply_url has no posting URL (not the board's home page, #63).
-    expect(parseHiringCafeHits({ hits: [{ id: 'n', job_information: { title: 'T' } }] })[0].url).toBe('')
-    const url = new URL(hiringCafeSearchUrl({ keywords: 'platform engineer', location: 'Atlanta', remoteOnly: true }))
-    expect(JSON.parse(url.searchParams.get('searchState')!)).toEqual({
-      searchQuery: 'platform engineer',
-      workplaceTypes: ['Remote']
-    })
+describe('matchesLocation', () => {
+  it('matches the city of a location, and remote jobs anywhere', () => {
     expect(matchesLocation({ location: 'Herndon, Virginia, United States', remote: false }, 'Atlanta, GA')).toBe(false)
     expect(matchesLocation({ location: 'Atlanta, Georgia, United States', remote: false }, 'Atlanta, GA')).toBe(true)
     expect(matchesLocation({ location: 'Anywhere', remote: true }, 'Atlanta, GA')).toBe(true)
     expect(matchesLocation({ location: 'Herndon', remote: false }, '')).toBe(true)
-  })
-})
-
-describe('Indeed', () => {
-  it('parses the embedded job cards (recorded from indeed.com)', async () => {
-    const jobs = parseIndeedCards(await fixture('indeed-jobcards.json'))
-    expect(jobs).toHaveLength(3)
-    expect(jobs[0]).toMatchObject({
-      source: 'indeed',
-      title: 'Platform Engineer',
-      company: 'Capgemini',
-      location: 'Alpharetta, GA',
-      salary: '$34.67 - $54.18 an hour',
-      tags: ['Contract']
-    })
-    expect(jobs[0].url).toBe(`https://www.indeed.com/viewjob?jk=${jobs[0].sourceId}`)
-    expect(jobs[0].description.startsWith('- Build self-service portals')).toBe(true)
-    expect(jobs[0].description).not.toContain('<')
-  })
-
-  it('refuses bad job keys and builds search URLs', () => {
-    expect(parseIndeedCards({ results: [{ jobkey: '../x', title: 'T' }] })).toEqual([])
-    expect(indeedSearchUrl({ keywords: 'sre', location: 'Austin, TX', remoteOnly: false })).toBe(
-      'https://www.indeed.com/jobs?q=sre&l=Austin%2C+TX&sort=date'
-    )
-    expect(indeedSearchUrl({ keywords: 'sre', location: 'Austin', remoteOnly: true })).toContain('l=Remote')
   })
 })
 
@@ -404,61 +283,46 @@ describe('service with a stub loader', () => {
     return { status: 'error', message: 'unexpected url' }
   }
 
-  it('reports a board whose loader throws and still searches the others', async () => {
-    const hc = await fixture('hiringcafe-next-data.json')
-    const flaky = async (url: string): Promise<LoadResult> => {
-      if (url.includes('indeed')) throw new Error('The page closed.')
-      return { status: 'ok', data: { hits: hc.props.pageProps.ssrHits } }
-    }
-    const res = await searchJobs(ws, validateQuery({ keywords: 'x', sources: ['indeed', 'hiring.cafe'] }), flaky)
-    expect(res.sources).toEqual([
-      { source: 'indeed', status: 'error', count: 0, message: 'The page closed.' },
-      { source: 'hiring.cafe', status: 'ok', count: 3, message: undefined }
-    ])
+  /** A job saved by the board search removed in #78; workspaces may still hold some. */
+  const legacy = (over: Partial<Job>): Job => ({
+    id: 'hiring.cafe:adp___1___594192',
+    source: 'hiring.cafe',
+    sourceId: 'adp___1___594192',
+    title: 'Senior Platform Engineer',
+    company: 'NS2 Mission',
+    location: 'Herndon, Virginia, United States',
+    remote: false,
+    salary: '',
+    postedAt: '2026-09-30T00:00:00Z',
+    url: 'https://careers.example.com/ns2/594192',
+    boardUrl: null,
+    description: 'A summary.',
+    descriptionComplete: false,
+    tags: [],
+    fetchedAt: '2030-01-01T00:00:00Z',
+    ...over
   })
+  const indeedCopy = (over: Partial<Job> = {}): Job =>
+    legacy({
+      id: 'indeed:2bd2cff5c29c9fca',
+      source: 'indeed',
+      sourceId: '2bd2cff5c29c9fca',
+      location: 'Herndon, VA',
+      url: 'https://www.indeed.com/viewjob?jk=2bd2cff5c29c9fca',
+      ...over
+    })
 
-  it('searches both boards, saves results and reports a blocked board', async () => {
-    const hc = await fixture('hiringcafe-next-data.json')
-    pages['https://hiringcafe.com/'] = { status: 'ok', data: { hits: hc.props.pageProps.ssrHits } }
-    pages['https://www.indeed.com/jobs'] = {
-      status: 'blocked',
-      message: 'www.indeed.com asked for a human check (Just a moment...).'
-    }
-    const res = await searchJobs(
-      ws,
-      validateQuery({ keywords: 'platform engineer', location: '', sources: ['hiring.cafe', 'indeed'] }),
-      load
-    )
-    expect(res.sources).toEqual([
-      { source: 'hiring.cafe', status: 'ok', count: 3, message: undefined },
-      {
-        source: 'indeed',
-        status: 'blocked',
-        count: 0,
-        message: 'www.indeed.com asked for a human check (Just a moment...).'
-      }
-    ])
-    expect((await listJobs(ws)).length).toBe(3)
-    expect((await readdir(join(ws, '.huntgry/jobs'))).length).toBe(3)
-    expect((await recentSearches(ws))[0].query.keywords).toBe('platform engineer')
-    // Searching again does not duplicate.
-    await searchJobs(ws, validateQuery({ keywords: 'platform engineer', sources: ['hiring.cafe'] }), load)
-    expect((await listJobs(ws)).length).toBe(3)
-  })
-
-  it('fetches full details for a hiring.cafe job from the employer page', async () => {
-    const hc = await fixture('hiringcafe-next-data.json')
-    pages['https://hiringcafe.com/'] = { status: 'ok', data: { hits: hc.props.pageProps.ssrHits } }
-    const { jobs } = await searchJobs(ws, validateQuery({ keywords: 'x', sources: ['hiring.cafe'] }), load)
+  it('fetches full details for a saved board job from the employer page', async () => {
+    const job = await saveJob(ws, legacy({}))
     const posting = await fixture('jsonld-posting.json')
-    pages[jobs[0].url] = { status: 'ok', data: { ...posting, url: jobs[0].url } }
-    const full = await fetchDetails(ws, jobs[0].id, load)
+    pages[job.url] = { status: 'ok', data: { ...posting, url: job.url } }
+    const full = await fetchDetails(ws, job.id, load)
     expect(full.descriptionComplete).toBe(true)
     expect(full.description).toContain('routing platform')
     expect(full.company).toBe('NS2 Mission')
   })
 
-  it('adds by URL, adds pasted text, marks tailored/dismissed, and explains Indeed details', async () => {
+  it('adds by URL, adds pasted text, marks tailored/dismissed, and explains saved Indeed details', async () => {
     pages['https://jobs.example.com/'] = { status: 'ok', data: await fixture('jsonld-posting.json') }
     const job = await addByUrl(ws, 'https://jobs.example.com/acme/senior-backend-engineer', load)
     expect(job.source).toBe('url')
@@ -486,21 +350,13 @@ describe('service with a stub loader', () => {
     expect((await updateJob(ws, pasted.id, { dismissed: true })).dismissed).toBe(true)
     expect(jobDescriptionFor(t)).toMatch(/^# ML Engineer\n\nGlobex\n\nBuild ranking/)
 
-    const indeed = parseIndeedCards(await fixture('indeed-jobcards.json'))[0]
-    await saveJob(ws, indeed)
+    const indeed = await saveJob(ws, indeedCopy())
     await expect(fetchDetails(ws, indeed.id, load)).rejects.toThrow(/human check/)
   })
 
   it('lists and updates a job found on two boards as one', async () => {
-    const hc = await fixture('hiringcafe-next-data.json')
-    const hcJob = parseHiringCafeHits({ hits: hc.props.pageProps.ssrHits })[0]
-    const card = {
-      ...parseIndeedCards(await fixture('indeed-jobcards.json'))[0],
-      title: hcJob.title,
-      company: hcJob.company,
-      location: 'Herndon, VA',
-      fetchedAt: '2030-01-01T00:00:00Z'
-    }
+    const hcJob = legacy({ fetchedAt: '2029-12-31T00:00:00Z' })
+    const card = indeedCopy()
     await saveJob(ws, hcJob)
     await saveJob(ws, card)
     const listed = await listJobs(ws)
@@ -517,16 +373,9 @@ describe('service with a stub loader', () => {
   })
 
   it('fetches details through the hiring.cafe copy when the Indeed copy is canonical', async () => {
-    const hc = await fixture('hiringcafe-next-data.json')
-    const hcJob = { ...parseHiringCafeHits({ hits: hc.props.pageProps.ssrHits })[0], fetchedAt: '2030-01-02T00:00:00Z' }
+    const hcJob = legacy({ fetchedAt: '2030-01-02T00:00:00Z' })
     // Saved first, so the Indeed record is the canonical one.
-    const card = {
-      ...parseIndeedCards(await fixture('indeed-jobcards.json'))[0],
-      title: hcJob.title,
-      company: hcJob.company,
-      location: 'Herndon, VA',
-      fetchedAt: '2030-01-01T00:00:00Z'
-    }
+    const card = indeedCopy()
     await saveJob(ws, card)
     await saveJob(ws, hcJob)
     const canonical = (await listJobs(ws)).find((j) => j.id === card.id)!
@@ -551,8 +400,7 @@ describe('service with a stub loader', () => {
   })
 
   it('tries the next loadable copy when the first one fails', async () => {
-    const hc = await fixture('hiringcafe-next-data.json')
-    const hcJob = { ...parseHiringCafeHits({ hits: hc.props.pageProps.ssrHits })[0], fetchedAt: '2030-01-01T00:00:00Z' }
+    const hcJob = legacy({})
     const urlCopy = { ...hcJob, id: 'url:acme-1', source: 'url' as const, sourceId: 'acme-1', url: 'https://careers.example.com/acme-1', fetchedAt: '2030-01-02T00:00:00Z' }
     await saveJob(ws, hcJob)
     await saveJob(ws, urlCopy)
@@ -592,105 +440,18 @@ describe('service with a stub loader', () => {
     expect(kept.descriptionComplete).toBe(false)
 
     // When every copy fails, the last failure is reported.
-    await saveJob(ws, { ...parseHiringCafeHits({ hits: hc.props.pageProps.ssrHits })[1] })
-    const other = parseHiringCafeHits({ hits: hc.props.pageProps.ssrHits })[1]
+    const other = await saveJob(
+      ws,
+      legacy({ id: 'hiring.cafe:other', sourceId: 'other', title: 'Data Engineer', url: 'https://careers.example.com/other' })
+    )
     await expect(
       fetchDetails(ws, other.id, async () => ({ status: 'error', message: 'timed out.' }))
     ).rejects.toThrow(/timed out\. The summary from the job board is kept/)
   })
-
-  it('validates queries', () => {
-    expect(() => validateQuery({ keywords: ' ', sources: ['indeed'] })).toThrow(/keywords/)
-    expect(() => validateQuery({ keywords: 'x', sources: ['monster'] })).toThrow(/job board/)
-    expect(validateSources(['indeed', 'indeed', 'monster'])).toEqual(['indeed'])
-    expect(() => validateSources('indeed')).toThrow(/job board/)
-  })
-
-  it('remembers the last search in the Jobs preferences, so it survives leaving the page (#73)', async () => {
-    const hc = await fixture('hiringcafe-next-data.json')
-    pages['https://hiringcafe.com/'] = { status: 'ok', data: { hits: hc.props.pageProps.ssrHits } }
-    const at = new Date('2026-10-06T12:00:00Z')
-    const res = await searchJobs(ws, validateQuery({ keywords: 'platform', sources: ['hiring.cafe'] }), load, {
-      now: () => at
-    })
-    const prefs = await readPrefs(ws)
-    expect(prefs.lastSearch).toMatchObject({ at: at.toISOString(), relevant: false, query: { keywords: 'platform' } })
-    expect(prefs.lastSearch?.ids).toEqual(res.jobs.map((j) => j.id))
-    // A typed search is not a profile refresh.
-    expect(prefs.lastRefreshAt).toBeNull()
-  })
-
-  it('refreshes with the profile-derived query and records the refresh time (#73)', async () => {
-    const hc = await fixture('hiringcafe-next-data.json')
-    const urls: string[] = []
-    const recording = async (url: string): Promise<LoadResult> => {
-      urls.push(url)
-      return url.includes('indeed')
-        ? { status: 'blocked', message: 'www.indeed.com asked for a human check (x).' }
-        : { status: 'ok', data: { hits: hc.props.pageProps.ssrHits } }
-    }
-    const profile = emptyProfile()
-    profile.contact.headline = 'Platform Engineer | Infrastructure'
-    profile.contact.location = 'Remote'
-    const at = new Date('2026-10-06T12:00:00Z')
-    const res = (await refreshRelevant(ws, profile, ['hiring.cafe', 'indeed'], recording, { now: () => at }))!
-    expect(res.query).toEqual({ keywords: 'Platform Engineer', location: '', remoteOnly: true, sources: ['hiring.cafe', 'indeed'] })
-    const state = JSON.parse(new URL(urls[0]).searchParams.get('searchState')!)
-    // Only the keys our own code has verified are sent; visa, salary and experience are filtered locally.
-    expect(state).toEqual({ searchQuery: 'Platform Engineer', workplaceTypes: ['Remote'] })
-    expect(urls[1]).toMatch(/[?&]q=Platform\+Engineer/)
-    expect(res.sources.map((s) => s.status)).toEqual(['ok', 'blocked'])
-    const prefs = await readPrefs(ws)
-    // Recorded even though a board was blocked, so auto-refresh does not retry it on every open.
-    expect(prefs.lastRefreshAt).toBe(at.toISOString())
-    expect(prefs.lastSearch).toMatchObject({ relevant: true, query: { keywords: 'Platform Engineer' } })
-    expect((await recentSearches(ws))[0].query.keywords).toBe('Platform Engineer')
-
-    // Without a headline or a role there is nothing to search for.
-    await expect(refreshRelevant(ws, emptyProfile(), ['hiring.cafe'], recording)).rejects.toThrow(/headline or a role/)
-  })
-
-  it('joins a refresh already running, and runs an automatic one only when it is due (review on #75)', async () => {
-    const hc = await fixture('hiringcafe-next-data.json')
-    let loads = 0
-    let release!: () => void
-    const gate = new Promise<void>((r) => (release = r))
-    const slow = async (): Promise<LoadResult> => {
-      loads++
-      await gate
-      return { status: 'ok', data: { hits: hc.props.pageProps.ssrHits } }
-    }
-    const profile = emptyProfile()
-    profile.contact.headline = 'Platform Engineer'
-    const t0 = new Date('2026-10-06T12:00:00Z')
-    // Jobs opens (stale: never refreshed), is left while the board loads, and is opened again.
-    const first = refreshRelevant(ws, profile, ['hiring.cafe'], slow, { auto: true, now: () => t0 })
-    const second = refreshRelevant(ws, profile, ['hiring.cafe'], slow, { auto: true, now: () => t0 })
-    const manual = refreshRelevant(ws, profile, ['hiring.cafe'], slow, { now: () => t0 })
-    await new Promise((r) => setTimeout(r, 20))
-    release()
-    const [a, b, c] = await Promise.all([first, second, manual])
-    expect(loads).toBe(1)
-    expect(b).toBe(a)
-    expect(c).toBe(a)
-
-    // Fresh now: an automatic refresh within 12 h does nothing; after 12 h it runs again; Refresh always runs.
-    const later = (h: number) => () => new Date(t0.getTime() + h * 3_600_000)
-    expect(await refreshRelevant(ws, profile, ['hiring.cafe'], slow, { auto: true, now: later(1) })).toBeNull()
-    expect(loads).toBe(1)
-    expect(await refreshRelevant(ws, profile, ['hiring.cafe'], slow, { now: later(1) })).not.toBeNull()
-    expect(loads).toBe(2)
-    expect(await refreshRelevant(ws, profile, ['hiring.cafe'], slow, { auto: true, now: later(14) })).not.toBeNull()
-    expect(loads).toBe(3)
-    // Turned off: never automatic.
-    await updatePrefs(ws, { autoRefresh: false })
-    expect(await refreshRelevant(ws, profile, ['hiring.cafe'], slow, { auto: true, now: later(40) })).toBeNull()
-    expect(loads).toBe(3)
-  })
 })
 
 describe('Jobs preferences', () => {
-  it('defaults when missing or corrupt, and keeps filter and toggle changes', async () => {
+  it('defaults when missing or corrupt, and keeps filter changes', async () => {
     expect(await readPrefs(ws)).toEqual(DEFAULT_JOBS_PREFS)
     await mkdir(join(ws, '.huntgry'), { recursive: true })
     await writeFile(prefsPath(ws), '{ not json')
@@ -698,24 +459,21 @@ describe('Jobs preferences', () => {
 
     const filters = { ...DEFAULT_FILTERS, sponsorship: 'only-yes' as const, workplace: ['Remote' as const] }
     await updatePrefs(ws, { filters })
-    await updatePrefs(ws, { autoRefresh: false })
-    expect(await readPrefs(ws)).toMatchObject({ filters, autoRefresh: false })
+    expect(await readPrefs(ws)).toEqual({ filters })
   })
 
   it('does not lose a change when two land at once', async () => {
-    await Promise.all([
-      updatePrefs(ws, { autoRefresh: false }),
-      recordLastSearch(ws, {
-        query: { keywords: 'x', location: '', remoteOnly: false, sources: ['indeed'] },
-        at: '2026-10-06T00:00:00.000Z',
-        ids: ['indeed:1'],
-        relevant: true
-      })
-    ])
-    expect(await readPrefs(ws)).toMatchObject({
-      autoRefresh: false,
-      lastRefreshAt: '2026-10-06T00:00:00.000Z',
-      lastSearch: { ids: ['indeed:1'] }
-    })
+    const remote = { ...DEFAULT_FILTERS, workplace: ['Remote' as const] }
+    await Promise.all([updatePrefs(ws, { filters: DEFAULT_FILTERS }), updatePrefs(ws, { filters: remote })])
+    expect(await readPrefs(ws)).toEqual({ filters: remote })
+  })
+
+  it('ignores the auto-refresh and last-search fields of files written before #78', async () => {
+    await mkdir(join(ws, '.huntgry'), { recursive: true })
+    await writeFile(
+      prefsPath(ws),
+      JSON.stringify({ filters: DEFAULT_FILTERS, autoRefresh: false, lastRefreshAt: '2026-10-06T00:00:00Z', lastSearch: null })
+    )
+    expect(await readPrefs(ws)).toEqual(DEFAULT_JOBS_PREFS)
   })
 })

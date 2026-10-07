@@ -1,4 +1,4 @@
-import { chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawnedChildren } from '../fixtures/app'
 import { expect, test } from '../fixtures/servers/fixture'
@@ -7,10 +7,10 @@ import { JobsPage } from '../pages/jobs'
 import { Shell } from '../pages/shell'
 
 /**
- * The Jobs page against the mock job boards, posting pages and bot wall on
- * 127.0.0.1 (fixtures/servers). The app reaches them through the
- * `HUNTGRY_JOB_BOARD_BASE_URL_*` overrides and the loopback allowance; the
- * hidden loader's guard stays on for everything else.
+ * The Jobs page against the mock posting pages and bot wall on 127.0.0.1
+ * (fixtures/servers). The app reaches them through the loopback allowance;
+ * the hidden loader's guard stays on for everything else. Huntgry does not
+ * search job boards (#78): jobs are added by URL or pasted.
  */
 test.use({ workspace: 'mocks' })
 
@@ -20,8 +20,7 @@ const readJobs = async (workspace: string, prefix: string) =>
   Promise.all((await jobFiles(workspace, prefix)).map(async (n) => JSON.parse(await readFile(join(jobsDir(workspace), n), 'utf8'))))
 
 /**
- * Opens Jobs. It opens on the jobs relevant to the master profile (#73), rendered from the saved jobs; the `mocks`
- * workspace turns auto-refresh off (`.huntgry/jobs-prefs.json`), so nothing loads a board unless a test asks.
+ * Opens Jobs. It opens on the jobs relevant to the master profile (#73), rendered from the saved jobs.
  * Most tests then look at every saved job: `show` picks the segment.
  */
 async function openJobs(
@@ -37,202 +36,43 @@ async function openJobs(
   return jobs
 }
 
-/** The Jobs preferences as saved on disk. */
+/** The Jobs preferences as saved on disk; `{}` until the first change writes them. */
 const savedPrefs = async (workspace: string) =>
-  JSON.parse(await readFile(join(workspace, '.huntgry/jobs-prefs.json'), 'utf8'))
+  JSON.parse(await readFile(join(workspace, '.huntgry/jobs-prefs.json'), 'utf8').catch(() => '{}'))
 
-/** The searchState objects the mock hiring.cafe was asked for. */
-const searchStates = (requests: string[]) =>
-  requests
-    .filter((r) => r.startsWith('/?searchState='))
-    .map((r) => JSON.parse(decodeURIComponent(r.slice('/?searchState='.length))))
-
-test.describe('job search', () => {
-  test('Search shows results from both boards and saves them under .huntgry/jobs', async ({ app, mock }) => {
-    const jobs = await openJobs(app)
-    await expect(jobs.board('hiring.cafe')).toBeChecked()
-    await expect(jobs.board('Indeed')).toBeChecked()
-    await jobs.search('engineer')
-
-    await expect(jobs.report('hiring.cafe: 2 jobs')).toBeVisible()
-    await expect(jobs.report('Indeed: 2 jobs')).toBeVisible()
-    for (const title of ['Platform Engineer', 'Backend Engineer', 'Site Reliability Engineer', 'Data Engineer']) {
-      await expect(jobs.jobTitle(title)).toBeVisible()
-    }
-    await expect(app.window.getByText('Vandelay Industries · Portland, Oregon, United States · $130,000 – $155,000 / year')).toBeVisible()
-    await expect(app.window.getByRole('radio', { name: 'Last search (4)' })).toBeChecked()
-
-    // Both board pages were read from the mock server, each once.
-    expect(mock.requests.filter((r) => r.startsWith('/?searchState='))).toHaveLength(1)
-    expect(mock.requests.filter((r) => r.startsWith('/jobs?q=engineer'))).toHaveLength(1)
-    // One file per job, per board.
-    expect(await jobFiles(app.workspace!, 'hiring.cafe-')).toHaveLength(2)
-    expect(await jobFiles(app.workspace!, 'indeed-')).toHaveLength(2)
-    const [indeed] = await readJobs(app.workspace!, 'indeed-')
-    expect(indeed.url).toMatch(new RegExp(`^${mock.altOrigin}/viewjob\\?jk=`))
-    expect(indeed.descriptionComplete).toBe(false)
-    // The search is remembered.
-    const searches = JSON.parse(await readFile(join(app.workspace!, '.huntgry/searches.json'), 'utf8'))
-    expect(searches[0].query).toMatchObject({ keywords: 'engineer', sources: ['hiring.cafe', 'indeed'] })
-  })
-
-  test('the drawer shows the description, the source and the "summary only" notes; a hiring.cafe job can fetch its full posting', async ({
-    app
-  }) => {
-    const jobs = await openJobs(app)
-    await jobs.search('engineer')
-    await expect(jobs.report('Indeed: 2 jobs')).toBeVisible()
-
-    // Indeed: the card's snippet, and only that (its job pages sit behind a human check).
-    await jobs.openJob('Site Reliability Engineer')
-    await expect(jobs.drawer.getByText('Indeed', { exact: true })).toBeVisible()
-    await expect(jobs.drawer).toContainText('Keep the fleet tracking platform up across three regions.')
-    await expect(jobs.drawer).toContainText('Indeed search results include only a snippet')
-    await expect(jobs.drawerButton('Fetch full description')).toHaveCount(0)
-    await expect(jobs.drawer).toContainText('Umbrella Logistics · Atlanta, GA · $140,000 - $165,000 a year')
-    await jobs.closeDrawer()
-
-    // hiring.cafe: the board's summary, with the offer to fetch the employer's page.
-    await jobs.openJob('Backend Engineer')
-    await expect(jobs.drawer.getByText('hiring.cafe', { exact: true })).toBeVisible()
-    await expect(jobs.drawer).toContainText('This is the job board’s summary, not the full posting.')
-    await expect(jobs.drawer).toContainText('Requirements: Three years of Python services on AWS')
-    await jobs.drawerButton('Fetch full description').click()
-    await expect(jobs.drawer).toContainText('Vandelay Industries imports and exports fine latex goods')
-    await expect(jobs.drawer).not.toContainText('This is the job board’s summary')
-    const [saved] = (await readJobs(app.workspace!, 'hiring.cafe-')).filter((j) => j.title === 'Backend Engineer')
-    expect(saved.descriptionComplete).toBe(true)
-    expect(saved.description).toContain('forty warehouses')
-  })
-
-  test('results persist across a relaunch', async ({ app }) => {
-    const jobs = await openJobs(app)
-    await jobs.search('engineer')
-    await expect(jobs.report('hiring.cafe: 2 jobs')).toBeVisible()
-
-    await app.relaunch()
-    const again = await openJobs(app)
-    for (const title of ['Platform Engineer', 'Backend Engineer', 'Site Reliability Engineer', 'Data Engineer', 'Staff Backend Engineer']) {
-      await expect(again.jobTitle(title)).toBeVisible()
-    }
-    await expect(app.window.getByText('6 of 6 saved jobs')).toBeVisible()
-    // The last search is kept as well (#73), not only the jobs.
-    await expect(again.segment('Last search')).toHaveAccessibleName('Last search (4)')
-    // The recent search is offered again.
-    await expect(app.window.getByRole('button', { name: 'engineer', exact: true })).toBeVisible()
-  })
-})
-
-test.describe('relevant jobs, Refresh and filters (#73)', () => {
-  test('Jobs opens on the relevant saved jobs, ranked against the profile, without loading a board', async ({ app, mock }) => {
+test.describe('relevant jobs and filters (#73)', () => {
+  test('Jobs opens on the relevant saved jobs, ranked against the profile, without loading a page', async ({ app, mock }) => {
     const jobs = await openJobs(app, 'Relevant')
     // Both seeded jobs fit "Backend Engineer" with Go: the closer title first.
     await expect(jobs.segment('Relevant')).toHaveAccessibleName('Relevant (2)')
     await expect.poll(() => jobs.listedTitles()).toEqual(['Staff Backend Engineer', 'Infrastructure Engineer'])
     await expect(app.window.getByText(/^Title: Backend Engineer · Skills: .*\bGo\b.* · Remote$/)).toBeVisible()
-    await expect(jobs.lastRefreshed).toHaveText('Relevant jobs updated never')
+    // No board search or refresh is offered (#78).
+    await expect(app.window.getByRole('button', { name: 'Refresh', exact: true })).toHaveCount(0)
+    await expect(app.window.getByRole('button', { name: 'Search', exact: true })).toHaveCount(0)
     expect(mock.requests).toEqual([])
   })
 
-  test('Refresh with no keywords searches the boards for the profile headline near its location', async ({ app, mock }) => {
-    const jobs = await openJobs(app, 'Relevant')
-    await expect(jobs.keywords).toHaveValue('')
-    await jobs.refreshButton.click()
-
-    await expect(jobs.report('hiring.cafe: 2 jobs')).toBeVisible()
-    await expect(jobs.report('Indeed: 2 jobs')).toBeVisible()
-    await expect(jobs.lastRefreshed).toHaveText('Relevant jobs updated just now')
-    await expect(jobs.segment('Relevant')).toBeChecked()
-    // The new Portland backend job fits best and leads the list.
-    await expect.poll(async () => (await jobs.listedTitles())[0]).toBe('Backend Engineer')
-
-    // The profile's headline and location (Portland, OR) made the query; only the verified searchState key was sent.
-    expect(searchStates(mock.requests)).toEqual([{ searchQuery: 'Backend Engineer' }])
-    const indeed = mock.requests.filter((r) => r.startsWith('/jobs?'))
-    expect(indeed).toHaveLength(1)
-    expect(indeed[0]).toMatch(/[?&]q=Backend\+Engineer(&|$)/)
-    expect(indeed[0]).toMatch(/[?&]l=Portland/)
-    const prefs = JSON.parse(await readFile(join(app.workspace!, '.huntgry/jobs-prefs.json'), 'utf8'))
-    expect(prefs.lastRefreshAt).toEqual(expect.any(String))
-    expect(prefs.lastSearch).toMatchObject({ relevant: true, query: { keywords: 'Backend Engineer', location: 'Portland, OR' } })
-  })
-
-  test('"Only sponsors" hides the jobs that do not say they sponsor; filters and the last search survive leaving the page', async ({
-    app
-  }) => {
+  test('filters survive leaving the page', async ({ app }) => {
     const shell = new Shell(app.window)
     const jobs = await openJobs(app)
-    await jobs.search('engineer')
-    await expect(jobs.report('hiring.cafe: 2 jobs')).toBeVisible()
-    await expect.poll(() => jobs.listedTitles()).toHaveLength(4)
+    await expect.poll(() => jobs.listedTitles()).toHaveLength(2)
 
+    // Neither seeded job says it sponsors visas.
     await jobs.filterSponsorship('Only sponsors')
-    await expect.poll(() => jobs.listedTitles()).toEqual(['Platform Engineer'])
-    await expect(app.window.getByText('Sponsors visa', { exact: true })).toBeVisible()
+    await expect.poll(() => jobs.listedTitles()).toEqual([])
     // The page shows a change before main has saved it; leave only once it is on disk.
-    await expect.poll(async () => (await savedPrefs(app.workspace!)).filters.sponsorship).toBe('only-yes')
+    await expect.poll(async () => (await savedPrefs(app.workspace!)).filters?.sponsorship).toBe('only-yes')
 
     await shell.goTo('dashboard')
     await shell.goTo('jobs')
     await expect(jobs.sponsorshipFilter).toHaveValue('Only sponsors')
-    await jobs.show('Last search')
-    await expect(jobs.segment('Last search')).toHaveAccessibleName('Last search (4)')
-    await expect.poll(() => jobs.listedTitles()).toEqual(['Platform Engineer'])
 
-    // Unknown counts as passing "Hide no sponsorship": every result is back.
+    // Unknown counts as passing "Hide no sponsorship": every job is back.
     await jobs.filterSponsorship('Hide "no sponsorship"')
-    await expect.poll(() => jobs.listedTitles()).toHaveLength(4)
-    await expect.poll(async () => (await savedPrefs(app.workspace!)).filters.sponsorship).toBe('hide-no')
-  })
-
-  test('with auto-refresh on, opening Jobs refreshes once in the background, then not again within 12 hours', async ({
-    app,
-    mock
-  }) => {
-    const shell = new Shell(app.window)
-    const jobs = await openJobs(app)
-    await expect(jobs.autoRefresh).not.toBeChecked()
-    await jobs.toggleAutoRefresh(true)
-    await expect.poll(async () => (await savedPrefs(app.workspace!)).autoRefresh).toBe(true)
-    // Turning it on loads nothing by itself.
-    expect(mock.requests).toEqual([])
-
-    await shell.goTo('dashboard')
-    await shell.goTo('jobs')
-    // The saved relevant jobs are listed at once; the boards answer in the background.
-    await expect(jobs.segment('Relevant')).toBeChecked()
-    await expect(jobs.jobTitle('Staff Backend Engineer')).toBeVisible()
-    // Leaving and reopening Jobs while the boards load joins the running refresh instead of starting another.
-    await shell.goTo('dashboard')
-    await shell.goTo('jobs')
-    await expect(jobs.lastRefreshed).toHaveText('Relevant jobs updated just now')
-    await expect(jobs.jobTitle('Backend Engineer')).toBeVisible()
-    expect(searchStates(mock.requests)).toHaveLength(1)
-    expect(mock.requests.filter((r) => r.startsWith('/jobs?'))).toHaveLength(1)
-
-    await shell.goTo('dashboard')
-    await shell.goTo('jobs')
-    await expect(jobs.autoRefresh).toBeChecked()
-    await expect(jobs.jobTitle('Backend Engineer')).toBeVisible()
-    await expect(app.window.getByText(/^Refreshing relevant jobs/)).toHaveCount(0)
-    expect(searchStates(mock.requests)).toHaveLength(1)
-  })
-
-  test('with no saved jobs, the auto-refresh toggle is still there', async ({ app, mock }) => {
-    await rm(join(app.workspace!, '.huntgry/jobs'), { recursive: true, force: true })
-    await new Shell(app.window).goTo('jobs')
-    const jobs = new JobsPage(app.window)
-    await expect(app.window.getByText(/^No saved jobs yet/)).toBeVisible()
-    await expect(jobs.autoRefresh).not.toBeChecked()
-    await jobs.toggleAutoRefresh(true)
-    await expect
-      .poll(async () => (await savedPrefs(app.workspace!)).autoRefresh)
-      .toBe(true)
-    await jobs.toggleAutoRefresh(false)
-    await expect
-      .poll(async () => (await savedPrefs(app.workspace!)).autoRefresh)
-      .toBe(false)
-    expect(mock.requests).toEqual([])
+    await jobs.show('All')
+    await expect.poll(() => jobs.listedTitles()).toHaveLength(2)
+    await expect.poll(async () => (await savedPrefs(app.workspace!)).filters?.sponsorship).toBe('hide-no')
   })
 
   test('without a headline or a role, Jobs opens on All and says how to get relevant jobs', async ({ app, mock }) => {
@@ -246,7 +86,6 @@ test.describe('relevant jobs, Refresh and filters (#73)', () => {
     await expect(jobs.segment('All')).toBeChecked()
     await expect(jobs.segment('Relevant')).toHaveCount(0)
     await expect(jobs.jobTitle('Infrastructure Engineer')).toBeVisible()
-    await expect(jobs.refreshButton).toBeDisabled()
     expect(mock.requests).toEqual([])
   })
 })

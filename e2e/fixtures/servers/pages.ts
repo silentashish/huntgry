@@ -1,9 +1,7 @@
 /**
  * The pages the mock server renders. Every company, person and posting is
- * fictional. The board pages carry their results the way the real boards do,
- * which is what the parsers in `src/main/jobs/sources/*` read: hiring.cafe
- * server-renders `__NEXT_DATA__` with `pageProps.ssrHits`; Indeed embeds the
- * result cards in `window.mosaic.providerData['mosaic-provider-jobcards']`.
+ * fictional. Employer postings carry a JSON-LD `JobPosting`, which is what
+ * `src/main/jobs/sources/posting.ts` reads.
  */
 
 const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -66,7 +64,7 @@ export const EMPLOYER_POSTINGS: EmployerPosting[] = [
     seniority: 'Mid Level'
   },
   {
-    // Not a board hit: the `mocks` workspace saves this one as a job added by URL, so it never merges with a search result.
+    // The `mocks` workspace saves this one as a job added by URL.
     id: '103',
     title: 'Infrastructure Engineer',
     company: 'Tyrell Robotics',
@@ -83,111 +81,6 @@ export const EMPLOYER_POSTINGS: EmployerPosting[] = [
     datePosted: '2026-09-20'
   }
 ]
-
-/** The postings the mock hiring.cafe search page lists (`103` is left out on purpose). */
-const BOARD_HITS = EMPLOYER_POSTINGS.filter((p) => p.id !== '103')
-
-const words = (text: string) => text.toLowerCase().split(/[^a-z0-9.+#]+/).filter(Boolean)
-
-/** Hits whose title or tools mention a searched word; `nothing` finds nothing, an empty query everything. */
-function matching<T extends { title: string; tools?: string[] }>(items: T[], query: string): T[] {
-  const terms = words(query)
-  if (terms.includes('nothing')) return []
-  if (terms.length === 0) return items
-  return items.filter((item) => {
-    const hay = words(`${item.title} ${(item.tools ?? []).join(' ')} engineer`)
-    return terms.some((t) => hay.includes(t))
-  })
-}
-
-/** hiring.cafe-shaped search page: `__NEXT_DATA__` with `ssrHits` (the shape `parseHiringCafeHits` reads), plus a visible list. */
-export function hiringCafePage(searchState: string, origin: string): string {
-  let query = ''
-  let remoteOnly = false
-  try {
-    const state = JSON.parse(searchState) as { searchQuery?: string; workplaceTypes?: string[] }
-    query = state.searchQuery ?? ''
-    remoteOnly = state.workplaceTypes?.includes('Remote') ?? false
-  } catch {
-    query = ''
-  }
-  const hits = matching(BOARD_HITS, query)
-    .filter((p) => !remoteOnly || p.remote)
-    .map((p) => ({
-      id: `mock___${p.company.toLowerCase().replace(/\W+/g, '-')}___${p.id}`,
-      source: 'mock',
-      apply_url: `${origin}/postings/employer/${p.id}`,
-      is_expired: false,
-      job_information: { title: p.title },
-      v5_processed_job_data: {
-        core_job_title: p.title,
-        requirements_summary: p.requirements,
-        technical_tools: p.tools,
-        role_activities: ['building services', 'running infrastructure'],
-        commitment: ['Full Time'],
-        role_type: 'Individual Contributor',
-        seniority_level: p.seniority ?? 'Senior Level',
-        visa_sponsorship: p.visaSponsorship ?? false,
-        min_industry_and_role_yoe: null,
-        workplace_type: p.remote ? 'Remote' : 'Onsite',
-        formatted_workplace_location: p.location,
-        yearly_min_compensation: p.salary[0],
-        yearly_max_compensation: p.salary[1],
-        listed_compensation_currency: 'USD',
-        estimated_publish_date: `${p.datePosted}T12:00:00.000Z`,
-        company_name: p.company
-      },
-      enriched_company_data: { name: p.company }
-    }))
-  const data = { props: { pageProps: { ssrHits: hits, ssrTotalCount: hits.length } } }
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Mock hiring.cafe</title></head><body>
-<h1>Mock hiring.cafe</h1><p>${hits.length} jobs for "${escape(query)}"</p>
-<ul>${hits.map((h) => `<li><a href="${h.apply_url}">${escape(h.job_information.title)} at ${escape(h.enriched_company_data.name)}</a></li>`).join('')}</ul>
-<script id="__NEXT_DATA__" type="application/json">${json(data)}</script>
-<script>window.__NEXT_DATA__ = JSON.parse(document.getElementById('__NEXT_DATA__').textContent)</script>
-</body></html>`
-}
-
-/** The Indeed-shaped cards: snippets only, like the real board (job pages sit behind a human check). */
-const INDEED_CARDS = [
-  {
-    jobkey: 'a1b2c3d4e5f60718',
-    title: 'Site Reliability Engineer',
-    displayTitle: 'Site Reliability Engineer',
-    company: 'Umbrella Logistics',
-    formattedLocation: 'Atlanta, GA',
-    snippet: '<ul><li>Keep the fleet tracking <b>platform</b> up across three regions.</li><li>Terraform, Kubernetes and Go.</li></ul>',
-    salarySnippet: { text: '$140,000 - $165,000 a year' },
-    pubDate: Date.parse('2026-09-23T12:00:00Z'),
-    remoteLocation: false,
-    jobTypes: ['Full-time'],
-    tools: ['Terraform', 'Kubernetes', 'Go']
-  },
-  {
-    jobkey: '0f1e2d3c4b5a6978',
-    title: 'Data Engineer',
-    displayTitle: 'Data Engineer',
-    company: 'Soylent Analytics',
-    formattedLocation: 'Remote',
-    snippet: '<ul><li>Build the warehouse pipelines in Python and SQL.</li><li>Remote, US time zones.</li></ul>',
-    salarySnippet: { text: '$120,000 - $150,000 a year' },
-    pubDate: Date.parse('2026-09-21T12:00:00Z'),
-    remoteLocation: true,
-    jobTypes: ['Full-time'],
-    tools: ['Python', 'SQL']
-  }
-]
-
-/** Indeed-shaped search page: `window.mosaic.providerData['mosaic-provider-jobcards']` (the shape `parseIndeedCards` reads). */
-export function indeedPage(query: string): string {
-  const results = matching(INDEED_CARDS, query).map(({ tools: _tools, ...card }) => card)
-  const mosaic = { providerData: { 'mosaic-provider-jobcards': { metaData: { mosaicProviderJobCardsModel: { results } } } } }
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Mock Indeed</title></head><body>
-<h1>Mock Indeed</h1><p>${results.length} jobs for "${escape(query)}"</p>
-<ul>${results.map((r) => `<li>${escape(r.title)} at ${escape(r.company)}</li>`).join('')}</ul>
-<script>window.mosaic = ${json(mosaic)}</script>
-</body></html>`
-}
 
 function employerPage(p: EmployerPosting): string {
   const ld = {

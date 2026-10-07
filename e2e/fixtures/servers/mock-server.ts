@@ -2,14 +2,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createMockAts, sendHtml, type MockAts } from '../../../scripts/mock-ats/server.mjs'
-import { EMPLOYER_POSTINGS, hiringCafePage, indeedPage, postingPage } from './pages'
+import { EMPLOYER_POSTINGS, postingPage } from './pages'
 
 /**
  * One local server per worker, on a free `127.0.0.1` port, standing in for
  * every site the Jobs, Browser and Apply flows reach:
  *
- * - `/?searchState=…`      hiring.cafe-shaped search page (`__NEXT_DATA__.props.pageProps.ssrHits`)
- * - `/jobs?q=…`            Indeed-shaped search page (`window.mosaic.providerData[…jobcards]`), snippets only
  * - `/postings/employer/:id`, `/postings/lever-style`, `/postings/ashby-style`  posting pages
  * - `/bot-wall`            a 403 "Just a moment…" human check
  * - `/page/one`, `/page/two`, `/hang`  plain pages for the browser's history and Stop
@@ -19,8 +17,7 @@ import { EMPLOYER_POSTINGS, hiringCafePage, indeedPage, postingPage } from './pa
  *   S3 upload widget, Lever's résumé parser, `/greenhouse/redirect-company` → `altOrigin/company/careers` with a
  *   late `/embed/job_app?validityToken=` iframe, and `/company/posting-popup` / `/company/posting-link`
  *
- * The app is pointed at it with `HUNTGRY_JOB_BOARD_BASE_URL_*` (see `boardEnv`) and reaches it because the
- * harness sets `HUNTGRY_ALLOW_LOCAL_URLS=1`. Nothing here submits a form: the ATS routes only record what a
+ * The app reaches it because the harness sets `HUNTGRY_ALLOW_LOCAL_URLS=1`. Nothing here submits a form: the ATS routes only record what a
  * Submit pressed by the test sent.
  */
 
@@ -37,8 +34,6 @@ export interface MockServer {
   uploadsFile: string
   /** Every request path the server answered, in order. */
   requests: string[]
-  /** Environment that points the app's job boards at this server. */
-  boardEnv(): Record<string, string>
   close(): Promise<void>
 }
 
@@ -77,12 +72,7 @@ export async function startMockServer(submissionFile: string): Promise<MockServe
   const handle = (req: IncomingMessage, res: ServerResponse): void => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     requests.push(url.pathname + url.search)
-    if (url.pathname === '/') {
-      const state = url.searchParams.get('searchState')
-      if (state) return sendHtml(res, 200, hiringCafePage(state, origin))
-      return sendHtml(res, 200, ats.index())
-    }
-    if (url.pathname === '/jobs') return sendHtml(res, 200, indeedPage(url.searchParams.get('q') ?? ''))
+    if (url.pathname === '/') return sendHtml(res, 200, ats.index())
     if (url.pathname.startsWith('/postings/')) {
       const html = postingPage(url.pathname.slice('/postings/'.length), origin)
       return html ? sendHtml(res, 200, html) : sendHtml(res, 404, 'Not found')
@@ -136,11 +126,6 @@ export async function startMockServer(submissionFile: string): Promise<MockServe
     submissionFile,
     uploadsFile: ats.uploadsFile,
     requests,
-    boardEnv: () => ({
-      HUNTGRY_JOB_BOARD_BASE_URL_HIRINGCAFE: origin,
-      // Indeed on the second port: a different host:port for the loader's per-host rate limit.
-      HUNTGRY_JOB_BOARD_BASE_URL_INDEED: altOrigin
-    }),
     close: async () => {
       for (const res of hanging) res.destroy()
       for (const s of [server, altServer]) {
@@ -151,5 +136,5 @@ export async function startMockServer(submissionFile: string): Promise<MockServe
   }
 }
 
-/** Ids of the employer postings the mock hiring.cafe hits link to. */
+/** The employer postings served under `/postings/employer/<id>`. */
 export { EMPLOYER_POSTINGS }

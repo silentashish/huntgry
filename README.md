@@ -19,19 +19,14 @@ flowchart LR
 
         cli["claude cli"]
         skill["Resume<br/>Generator<br/>Skill"]
-        scraped["scrapped job<br/>board"]
-
-        hiringcafe(["hiring cafe"])
-        indeed(["indeed board"])
+        jobs["jobs added<br/>by URL or pasted"]
 
         kg --> dashboard
         dashboard --> storage
         master --> dashboard
 
         cli --> skill
-        hiringcafe --> scraped
-        indeed --> scraped
-        scraped --> skill
+        jobs --> skill
         skill -- "custom resume<br/>+<br/>cover letter" --> storage
     end
 ```
@@ -82,7 +77,7 @@ src/
 │   ├── applications/           # scan <role>/<company>/<job-id>/, huntgry.json tracking, huntgry-file:// previews, fs.watch
 │   ├── graph/                  # job descriptions for the knowledge graph overlay
 │   ├── insights/               # gap insights from job descriptions, dismissals, Claude-drafted evidence
-│   ├── jobs/                   # job boards: hidden-window loader, hiring.cafe / Indeed / posting parsers, .huntgry/jobs store
+│   ├── jobs/                   # saved jobs: hidden-window posting loader and parser, .huntgry/jobs store
 │   ├── browser/                # in-app browser: one WebContentsView per tab, session hardening, address rules
 │   ├── apply/                  # auto-apply: session per tab, CDP resume upload, page-reply checks
 │   ├── resume/                 # resume file → lines (docx, pdf, txt/md) → draft profile (parse.ts)
@@ -120,19 +115,14 @@ Features only add files, plus one line in each registry:
 
 ## Finding jobs
 
-**Jobs** searches hiring.cafe and Indeed when you click Search. Each board's search page is
-opened once in a hidden browser window, because both reject plain HTTP clients. You can
-also add any posting by URL, or paste it. Saved jobs live in `<workspace>/.huntgry/jobs/`.
-**Tailor resume** sends a job to the Tailor page with its saved description, company, role
-and job id (the board's id), first fetching the full posting from the employer's page when
-there is one. Indeed shows full descriptions only after a human check, so Indeed jobs arrive
-with the search snippet: the Tailor page says so, and you can paste the full text first.
+**Jobs** holds the postings you add: give a posting URL (the page is opened once in a hidden
+browser window and its JSON-LD or text read), or paste the description. Huntgry does not
+search job boards (#78). Saved jobs live in `<workspace>/.huntgry/jobs/`; ones found by the
+old hiring.cafe / Indeed search are still listed. **Tailor resume** sends a job to the Tailor
+page with its saved description, company, role and job id.
 
 Jobs opens on **Relevant**: the saved jobs that fit your master profile (headline and roles,
-skills, seniority, location), best first, with the reasons on each card. **Refresh** with an
-empty keyword box searches both boards for your headline near your location; when the last
-refresh is over 12 hours old, opening Jobs does that in the background (turn it off with the
-toggle under the list). Filters for visa sponsorship, workplace, seniority, date posted and
+skills, seniority, location), best first, with the reasons on each card. Filters for visa sponsorship, workplace, seniority, date posted and
 minimum salary apply to any list and are kept in `<workspace>/.huntgry/jobs-prefs.json`. If your
 Work authorization says you need a sponsor, Relevant leaves out postings that say they won't
 sponsor.
@@ -178,9 +168,7 @@ HUNTGRY_ALLOW_LOCAL_URLS=1 npm run dev         # then set an application's posti
 ```
 
 The mock's routes live in `scripts/mock-ats/server.mjs`; the e2e suite mounts the same code in
-its own server (`e2e/fixtures/servers/`), next to mock job boards that a dev build can be
-pointed at with `HUNTGRY_JOB_BOARD_BASE_URL_HIRINGCAFE` / `HUNTGRY_JOB_BOARD_BASE_URL_INDEED`
-(loopback origins only, ignored by packaged builds; see `docs/testing/e2e.md`). The e2e harness
+its own server (`e2e/fixtures/servers/`, see `docs/testing/e2e.md`). The e2e harness
 additionally sets `HUNTGRY_E2E_LOOPBACK_ONLY=1`, under which a dev build refuses every non-loopback
 address outright; packaged builds ignore it too.
 
@@ -189,7 +177,7 @@ address outright; packaged builds ignore it too.
 **Tailor** runs the installed resume-tailor skill through an agent CLI — Claude Code
 (`claude`), Codex (`codex`) or Antigravity (`agy`) — in the open
 workspace: paste a job description, or give an employer or ATS posting URL (job board URLs
-such as Indeed cannot be read directly; send those from **Jobs**), pick the agent (the
+such as Indeed cannot be read directly; paste those), pick the agent (the
 default one from **Settings** is preselected), follow its gap analysis, answer
 its approval question, and open the resulting `resume.pdf` / `cover.pdf`. Runs are kept in
 `<workspace>/.huntgry/runs/` and can be reopened and continued after a restart.

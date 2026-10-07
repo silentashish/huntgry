@@ -1,5 +1,5 @@
 import { matchesLocation, seniorityOf, sponsorshipOf } from './job-filters'
-import type { Job, JobQuery, SearchSource } from './jobs-types'
+import type { Job } from './jobs-types'
 import { buildKnowledgeGraph, interval, mergedYears } from './knowledge-graph'
 import type { MasterProfile } from './master-profile'
 import { mentions } from './skills'
@@ -90,12 +90,6 @@ export function profileSignals(profile: MasterProfile, now = new Date()): Profil
 /** Whether the profile says enough for a Relevant view: a headline or a role. */
 export function hasRelevanceSignals(s: Pick<ProfileSignals, 'titles'>): boolean {
   return s.titles.length > 0
-}
-
-/** The board search behind Refresh: the first target title, near the profile's location (or remote only). */
-export function relevantQuery(s: ProfileSignals, sources: SearchSource[]): JobQuery | null {
-  if (!hasRelevanceSignals(s)) return null
-  return { keywords: s.titles[0], location: s.remote ? '' : s.location, remoteOnly: s.remote, sources }
 }
 
 /** Seniority words do not decide whether two titles name the same job. */

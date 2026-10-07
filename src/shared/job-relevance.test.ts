@@ -4,7 +4,6 @@ import {
   needsSponsorshipFrom,
   profileSignals,
   relevantJobs,
-  relevantQuery,
   scoreJob,
   shortTitle,
   type ProfileSignals
@@ -116,7 +115,6 @@ describe('profileSignals', () => {
     const s = profileSignals(emptyProfile(), NOW)
     expect(s).toMatchObject({ titles: [], skills: [], location: '', needsSponsorship: false, years: 0 })
     expect(hasRelevanceSignals(s)).toBe(false)
-    expect(relevantQuery(s, ['indeed'])).toBeNull()
     expect(relevantJobs([backendTs], s, NOW)).toEqual([])
   })
 
@@ -127,7 +125,7 @@ describe('profileSignals', () => {
   })
 })
 
-describe('shortTitle and relevantQuery', () => {
+describe('shortTitle', () => {
   it('shortens a headline to a search title', () => {
     expect(shortTitle('Full-Stack Software Engineer | AI')).toBe('Full-Stack Software Engineer')
     expect(shortTitle('Data Scientist · ML')).toBe('Data Scientist')
@@ -135,16 +133,6 @@ describe('shortTitle and relevantQuery', () => {
     expect(shortTitle('  Platform   Engineer (Kubernetes) ')).toBe('Platform Engineer')
   })
 
-  it('searches the first title near the profile location, or remote only', () => {
-    const s = profileSignals(backend(), NOW)
-    expect(relevantQuery(s, ['hiring.cafe'])).toEqual({
-      keywords: 'Backend Engineer',
-      location: 'Portland, OR',
-      remoteOnly: false,
-      sources: ['hiring.cafe']
-    })
-    expect(relevantQuery({ ...s, remote: true, location: '' }, ['indeed'])).toMatchObject({ location: '', remoteOnly: true })
-  })
 })
 
 describe('scoreJob and relevantJobs', () => {

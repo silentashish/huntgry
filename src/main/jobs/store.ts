@@ -1,10 +1,10 @@
 import { randomBytes } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { Job, JobQuery, SavedSearch } from '@shared/jobs-types'
+import type { Job } from '@shared/jobs-types'
 import { HUNTGRY_DIR } from '../workspace/constants'
 
-/** `<workspace>/.huntgry/jobs/<source>-<id>.json`, one file per job, plus `searches.json`. No database. */
+/** `<workspace>/.huntgry/jobs/<source>-<id>.json`, one file per job. No database. */
 
 export const jobsDir = (workspace: string) => join(workspace, HUNTGRY_DIR, 'jobs')
 
@@ -210,26 +210,4 @@ async function listRaw(workspace: string): Promise<Job[]> {
 /** The canonical job containing `id` (its own id or an alias), or `null`. */
 export async function findCanonical(workspace: string, id: string): Promise<Job | null> {
   return canonicalize(await listRaw(workspace)).find((j) => j.id === id || j.aliases?.includes(id)) ?? null
-}
-
-const MAX_SEARCHES = 10
-
-export async function recordSearch(workspace: string, query: JobQuery, now = new Date()): Promise<void> {
-  const path = join(workspace, HUNTGRY_DIR, 'searches.json')
-  const list = await recentSearches(workspace)
-  const same = (a: JobQuery) => JSON.stringify(a) === JSON.stringify(query)
-  await mkdir(join(workspace, HUNTGRY_DIR), { recursive: true })
-  await writeAtomic(
-    path,
-    [{ query, at: now.toISOString() }, ...list.filter((s) => !same(s.query))].slice(0, MAX_SEARCHES)
-  )
-}
-
-export async function recentSearches(workspace: string): Promise<SavedSearch[]> {
-  try {
-    const v = JSON.parse(await readFile(join(workspace, HUNTGRY_DIR, 'searches.json'), 'utf8'))
-    return Array.isArray(v) ? v : []
-  } catch {
-    return []
-  }
 }

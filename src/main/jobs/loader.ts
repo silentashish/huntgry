@@ -5,11 +5,11 @@ import { refusalFor } from '../browser/url'
 import { isBlockedPage } from './blocked'
 
 /**
- * Loads a job board page in a hidden browser window and reads data from it.
- * Boards serve their results to real browsers and block plain HTTP clients,
- * so this is the reliable way to read them, and it is what a person does
- * when they open the page. Pages load one at a time, at most one per
- * `MIN_GAP_MS` per host, and only when the user searches.
+ * Loads a job posting page in a hidden browser window and reads data from it.
+ * Many careers sites render with JavaScript or block plain HTTP clients, so
+ * this is the reliable way to read them, and it is what a person does when
+ * they open the page. Pages load one at a time, at most one per
+ * `MIN_GAP_MS` per host, and only when the user adds or tailors a job.
  */
 
 export type LoadResult =
@@ -23,7 +23,7 @@ let queue: Promise<unknown> = Promise.resolve()
 
 let configured: Electron.Session | null = null
 
-/** The job-board session, configured once (it is the same object on every call). */
+/** The loader's session, configured once (it is the same object on every call). */
 function configureSession(): Electron.Session {
   if (configured) return configured
   const s = session.fromPartition(PARTITION)
