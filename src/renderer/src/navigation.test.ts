@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { tailorPrefillFor, type Job } from '@shared/jobs-types'
-import { DEFAULT_LOCATION, FULL_BLEED, locationOf, PAGES, paramsFor } from './navigation'
+import { DEFAULT_LOCATION, FULL_BLEED, locationOf, PAGES, paramsFor, WIDE } from './navigation'
 
 describe('navigation', () => {
   it('starts on the dashboard and lists every page once', () => {
@@ -41,6 +41,11 @@ describe('navigation', () => {
   it('lists the Board right after the Dashboard (#85)', () => {
     expect(PAGES.indexOf('board')).toBe(PAGES.indexOf('dashboard') + 1)
     expect(FULL_BLEED.has('board')).toBe(false)
+  })
+
+  it('draws only the Board wide, without the max width but with padding (#90)', () => {
+    expect([...WIDE]).toEqual(['board'])
+    for (const page of WIDE) expect(FULL_BLEED.has(page)).toBe(false)
   })
 
   it('allows omitting params where they are optional', () => {

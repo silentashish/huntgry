@@ -19,6 +19,7 @@ import {
   FULL_BLEED,
   NavigationContext,
   PAGES,
+  WIDE,
   locationOf,
   type Location,
   type Navigation,
@@ -141,7 +142,7 @@ export function AppLayout({ workspacePath, initialLocation, onSwitchWorkspace, c
         </AppShell.Navbar>
 
         <AppShell.Main>
-          {fullBleed ? (
+          {fullBleed || WIDE.has(location.page) ? (
             children(location)
           ) : (
             <div style={{ maxWidth: 1040, margin: '0 auto' }}>{children(location)}</div>
