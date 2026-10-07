@@ -38,6 +38,11 @@ describe('navigation', () => {
     expect(params?.jobDescription).toContain('Snippet.')
   })
 
+  it('lists the Board right after the Dashboard (#85)', () => {
+    expect(PAGES.indexOf('board')).toBe(PAGES.indexOf('dashboard') + 1)
+    expect(FULL_BLEED.has('board')).toBe(false)
+  })
+
   it('allows omitting params where they are optional', () => {
     expect(locationOf('settings')).toEqual({ page: 'settings', params: undefined })
     expect(paramsFor(locationOf('profile', { section: 'experience' }), 'profile')?.section).toBe('experience')

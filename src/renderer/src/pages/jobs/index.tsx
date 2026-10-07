@@ -19,7 +19,7 @@ import { IconClipboardText, IconLink, IconSparkles } from '@tabler/icons-react'
 import { DEFAULT_FILTERS, sponsorshipOf, type JobFilters } from '@shared/job-filters'
 import { hasRelevanceSignals, profileSignals, relevantJobs, type JobScore, type ProfileSignals } from '@shared/job-relevance'
 import { DEFAULT_JOBS_PREFS, type JobsPrefs } from '@shared/jobs-prefs'
-import { canFetchDetails, tailorPrefillFor, type Job } from '@shared/jobs-types'
+import { tailorPrefillFor, type Job } from '@shared/jobs-types'
 import { emptyProfile } from '@shared/master-profile'
 import { api, errorText } from '../../api'
 import { useQueue } from '../../components/queue/useQueue'
@@ -28,6 +28,7 @@ import { QUEUE_STATUS_LABEL } from '../tailor/status'
 import { BulkTailorModal } from './BulkTailorModal'
 import { JobDrawer } from './JobDrawer'
 import { JobFiltersBar } from './JobFiltersBar'
+import { prepareTailor } from './handoff'
 import { ago, SOURCE_LABEL } from './labels'
 import { PasteModal } from './PasteModal'
 import { mergeJobs } from './merge'
@@ -92,28 +93,9 @@ export function JobsPage() {
     }
   }
 
-  /**
-   * Sends a job to the Tailor form with everything saved about it, so the run never
-   * has to read a job board URL (boards block plain HTTP). A summary is first
-   * swapped for the employer's full posting when one can be fetched.
-   */
+  /** Sends a job to the Tailor form with everything saved about it (see `prepareTailor`). */
   async function tailor(job: Job) {
-    let current = job
-    if (canFetchDetails(job)) {
-      try {
-        current = await api.jobs.fetchDetails(job.id)
-        upsert([current])
-      } catch {
-        // Hand off the summary; the Tailor form says it is one.
-      }
-    }
-    try {
-      current = await api.jobs.update(job.id, { tailored: true })
-      upsert([current])
-    } catch {
-      // Marking is a convenience; tailoring still works.
-    }
-    navigate('tailor', tailorPrefillFor(current))
+    navigate('tailor', tailorPrefillFor(await prepareTailor(job, (j) => upsert([j]))))
   }
 
   const relevant = useMemo(() => (signals && jobs ? relevantJobs(jobs, signals) : []), [jobs, signals])
