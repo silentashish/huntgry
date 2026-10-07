@@ -192,7 +192,7 @@ export async function checkEnvironment(opts: {
   const agents = await Promise.all(
     AGENT_IDS.map(async (id): Promise<AgentStatus> => {
       const binary = adapterFor(id).binary
-      const cli = { cliCandidates: await cliCandidates(binary, id === 'claude' ? claudePath : null), cliChoice: cliChoice(binary), cliPinned: cliPin(binary) !== null }
+      const cli = { cliCandidates: await cliCandidates(binary, id === 'claude' ? claudePath : null), cliChoice: await cliChoice(binary), cliPinned: cliPin(binary) !== null }
       if (id === 'claude') {
         const skillTarget = join(adapterFor(id).skillRoots(home)[0], SKILL_NAME)
         return describeAgent({ id, cliPath: claudePath, version: claudeVersion, ...cli, skillPath: skillDir, skillTarget, claudeSkill: skillDir, auth: claudeAuth })

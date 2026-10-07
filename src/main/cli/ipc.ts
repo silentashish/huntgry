@@ -102,8 +102,8 @@ export const runsForRemote = {
 export function registerRunnerIpc(): void {
   // Settings → Pricing applies from the first run on.
   loadPrices(settingsFile()).catch((err) => console.error('Loading prices failed:', err))
-  // Settings → Agents: the CLI copies the user chose.
-  loadCliChoices().catch((err) => console.error('Loading the chosen CLIs failed:', err))
+  // Settings → Agents: the CLI copies the user chose. `findCli` waits for them, so no handler can run the wrong copy.
+  void loadCliChoices()
   ipcMain.handle(RUNNER_CHANNELS.environment, async () => {
     const workspace = await requireCurrentWorkspace().catch(() => null)
     return checkEnvironment({

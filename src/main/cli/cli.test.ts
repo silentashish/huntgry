@@ -26,6 +26,7 @@ import {
   findCli,
   findSkillDir,
   isolatedDiscovery,
+  loadingCliChoices,
   loginShellPath,
   parsePreflight,
   setCliChoices,
@@ -197,13 +198,27 @@ describe('choosing among several copies of an agent CLI (#79)', () => {
     process.env.PATH = `${join(tmp, 'first')}:${join(tmp, 'second')}`
     expect(await findCli('huntgry-fake-cli')).toBe(first)
     setCliChoices({ 'huntgry-fake-cli': second })
-    expect(cliChoice('huntgry-fake-cli')).toBe(second)
+    expect(await cliChoice('huntgry-fake-cli')).toBe(second)
     expect(await findCli('huntgry-fake-cli')).toBe(second)
     await rm(second)
     expect(await findCli('huntgry-fake-cli')).toBe(first)
     setCliChoices(undefined)
-    expect(cliChoice('huntgry-fake-cli')).toBeNull()
+    expect(await cliChoice('huntgry-fake-cli')).toBeNull()
     expect(await findCli('huntgry-fake-cli')).toBe(first)
+  })
+
+  it('makes a search started while the saved choices load wait for them', async () => {
+    await tool(join(tmp, 'first'))
+    const second = await tool(join(tmp, 'second'))
+    process.env.PATH = `${join(tmp, 'first')}:${join(tmp, 'second')}`
+    let finish!: (choices: Record<string, string>) => void
+    void loadingCliChoices(new Promise((resolve) => (finish = resolve)))
+    const found = findCli('huntgry-fake-cli')
+    finish({ 'huntgry-fake-cli': second })
+    expect(await found).toBe(second)
+    // A load that fails leaves no choice and blocks nothing.
+    await loadingCliChoices(Promise.reject(new Error('unreadable')))
+    expect(await findCli('huntgry-fake-cli')).toBe(join(tmp, 'first/huntgry-fake-cli'))
   })
 
   it('lets the HUNTGRY_<NAME>_PATH pin win over the choice', async () => {

@@ -150,6 +150,7 @@ export async function findClaude(): Promise<string | null> {
 export async function findCli(name: string): Promise<string | null> {
   const pinned = cliPin(name)
   if (pinned) return (await isExecutable(pinned)) ? pinned : null
+  await cliChoicesLoaded
   const chosen = cliChoices[name]
   if (chosen && (await isExecutable(chosen))) return chosen
   return findInDirs(name, await cliSearchDirs())
@@ -162,13 +163,24 @@ export async function findCli(name: string): Promise<string | null> {
  * Main loads it from the settings file; the renderer never sets it directly.
  */
 let cliChoices: Record<string, string> = {}
+let cliChoicesLoaded: Promise<void> = Promise.resolve()
 
 export function setCliChoices(choices: Record<string, string> | undefined): void {
   cliChoices = { ...(choices ?? {}) }
 }
 
+/** Startup: every `findCli` waits for the saved choices, so nothing early runs the wrong copy. A failed load means no choices. */
+export function loadingCliChoices(load: Promise<Record<string, string> | undefined>): Promise<void> {
+  cliChoicesLoaded = load.then(setCliChoices, (err) => {
+    console.error('Loading the chosen CLIs failed:', err)
+    setCliChoices({})
+  })
+  return cliChoicesLoaded
+}
+
 /** The chosen copy of `name`, if any (whether or not it still exists). */
-export function cliChoice(name: string): string | null {
+export async function cliChoice(name: string): Promise<string | null> {
+  await cliChoicesLoaded
   return cliChoices[name] ?? null
 }
 

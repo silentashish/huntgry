@@ -11,7 +11,7 @@ import { agyModel } from './agents/antigravity'
 import { codexModel } from './agents/codex'
 import { skillStatus } from './agents/skills'
 import { buildSystemPrompt, requireStartParams, texRootOf, type UnattendedPromptOptions } from './command'
-import { buildChildEnv, cliChoice, cliPin, findCli, findCliCandidates, findTexBin, isExecutable, loginShellPath, setCliChoices } from './env'
+import { buildChildEnv, cliChoice, cliPin, findCli, findCliCandidates, findTexBin, isExecutable, loadingCliChoices, loginShellPath, setCliChoices } from './env'
 import { discoverRuntime } from './environment'
 import { requireSignedIn } from './install-claude'
 import { fetchPostingText } from './posting'
@@ -69,20 +69,29 @@ export async function setDefaultAgent(agent: AgentId): Promise<void> {
 }
 
 /** Applies the CLI copies chosen in Settings (#79) to every later `findCli`. Called once at startup. */
-export async function loadCliChoices(): Promise<void> {
-  setCliChoices((await loadSettings(settingsFile())).cliPaths)
+export function loadCliChoices(): Promise<void> {
+  return loadingCliChoices(loadSettings(settingsFile()).then((s) => s.cliPaths))
 }
+
+/** CLI-choice updates, one after another, so two quick changes never save over each other. */
+let cliPathUpdates: Promise<unknown> = Promise.resolve()
 
 /**
  * Runs `agent` with the CLI at `path` from now on, or, with `null`, with the first copy found (#79).
  * `fromDialog`: the user picked `path` in a file dialog; otherwise it must be a copy the search finds,
  * so the renderer cannot name an arbitrary file to execute.
  */
-export async function setCliPath(agent: AgentId, path: string | null, fromDialog = false): Promise<void> {
+export function setCliPath(agent: AgentId, path: string | null, fromDialog = false): Promise<void> {
+  const update = cliPathUpdates.then(() => applyCliPath(agent, path, fromDialog))
+  cliPathUpdates = update.catch(() => {})
+  return update
+}
+
+async function applyCliPath(agent: AgentId, path: string | null, fromDialog: boolean): Promise<void> {
   const binary = adapterFor(agent).binary
   if (cliPin(binary)) throw new Error(`HUNTGRY_${binary.toUpperCase()}_PATH pins the ${AGENT_LABEL[agent]} CLI; unset it to choose another copy.`)
   if (path !== null) {
-    if (!fromDialog && path !== cliChoice(binary) && !(await findCliCandidates(binary)).includes(path))
+    if (!fromDialog && path !== (await cliChoice(binary)) && !(await findCliCandidates(binary)).includes(path))
       throw new Error(`${path} is not a ${AGENT_LABEL[agent]} CLI Huntgry found.`)
     if (!(await isExecutable(path))) throw new Error(`${path} is not an executable file.`)
   }
