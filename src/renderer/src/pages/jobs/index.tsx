@@ -15,7 +15,7 @@ import {
   TextInput,
   Title
 } from '@mantine/core'
-import { IconClipboardText, IconLink, IconSparkles } from '@tabler/icons-react'
+import { IconClipboardText, IconEyeOff, IconLink, IconSparkles } from '@tabler/icons-react'
 import { DEFAULT_FILTERS, sponsorshipOf, type JobFilters } from '@shared/job-filters'
 import { hasRelevanceSignals, profileSignals, relevantJobs, type JobScore, type ProfileSignals } from '@shared/job-relevance'
 import { DEFAULT_JOBS_PREFS, type JobsPrefs } from '@shared/jobs-prefs'
@@ -57,6 +57,7 @@ export function JobsPage() {
   /** Jobs ticked for "Tailor all". */
   const [selection, setSelection] = useState<Set<string>>(new Set())
   const [bulkOpen, setBulkOpen] = useState(false)
+  const [dismissing, setDismissing] = useState(false)
   const [queue] = useQueue()
 
   useEffect(() => {
@@ -115,6 +116,17 @@ export function JobsPage() {
 
   const open = (jobs ?? []).find((j) => j.id === openId) ?? null
 
+  /** Dismisses every selected job (#92); the ones that saved stay dismissed even if another fails. */
+  async function dismissSelected() {
+    setDismissing(true)
+    setError(null)
+    const results = await Promise.allSettled(selected.map((j) => api.jobs.update(j.id, { dismissed: true })))
+    upsert(results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : [])))
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+    if (failed.length > 0) setError(`${failed.length} job(s) could not be dismissed: ${errorText(failed[0].reason)}`)
+    setSelection(new Set())
+    setDismissing(false)
+  }
 
   return (
     <Stack gap="md">
@@ -297,6 +309,16 @@ export function JobsPage() {
         <ActionBar.Divider />
         <Button size="xs" leftSection={<IconSparkles size={14} />} onClick={() => setBulkOpen(true)}>
           Tailor all
+        </Button>
+        <Button
+          size="xs"
+          variant="light"
+          color="gray"
+          leftSection={<IconEyeOff size={14} />}
+          loading={dismissing}
+          onClick={() => void dismissSelected()}
+        >
+          Dismiss
         </Button>
         <Button size="xs" variant="subtle" onClick={() => setSelection(new Set())}>
           Clear
