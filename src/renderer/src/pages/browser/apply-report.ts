@@ -41,8 +41,9 @@ export interface ReportGroup {
  */
 const learnable = (f: FieldReport) => f.outcome === 'skipped-unsupported' && (f.fact !== undefined || f.suggestion !== undefined)
 
-/** The badge of a report line: its outcome's, or "Answer once" for a choice Huntgry can learn. */
+/** The badge of a report line: its outcome's, "AI draft" for a drafted answer (#82), or "Answer once" for a choice Huntgry can learn. */
 export function badgeOf(f: FieldReport): { label: string; color: string } {
+  if (f.suggestedBy === 'draft' && f.outcome === 'filled') return { label: 'AI draft', color: 'violet' }
   return learnable(f) ? { label: 'Answer once', color: 'orange' } : OUTCOME_META[f.outcome]
 }
 

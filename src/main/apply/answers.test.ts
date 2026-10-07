@@ -16,6 +16,7 @@ import {
 } from './answers-store'
 import { questionKey } from '@shared/apply-facts'
 import { parseFillReport } from './validate'
+import { agyDraftArgs, claudeDraftArgs, draftAnswers, draftPrompt, parseDraftOutput } from './draft-answers'
 import { agyMappingArgs, claudeMappingArgs, mapQuestions, parseMappingOutput, type MapQuestion } from './map-questions'
 
 let root: string
@@ -172,6 +173,55 @@ describe('question mapping call', () => {
     expect(parseMappingOutput(JSON.stringify({ result: { structured_output: { mappings: [{ id: 'a', factKey: 'over18' }] } } }), new Set(['a']))).toEqual([
       { id: 'a', fact: 'over18' }
     ])
+  })
+})
+
+describe('drafting open-ended answers (#82)', () => {
+  const context = { jobDescription: 'Acme builds rockets. Backend engineer, Go.', resume: '{"name":"Ada","skills":["Go"]}' }
+
+  it('puts the job description, resume and bounded questions in the prompt, never anything else', () => {
+    const prompt = draftPrompt([{ id: 'q1', question: 'Why Acme?' + 'x'.repeat(1000) }], context)
+    expect(prompt).toContain('Acme builds rockets')
+    expect(prompt).toContain('"skills":["Go"]')
+    expect(prompt).toContain('Why Acme?')
+    expect(prompt).not.toContain('x'.repeat(301))
+  })
+
+  it('runs Claude Sonnet one-shot without tools, and agy sandboxed', () => {
+    const claude = claudeDraftArgs()
+    expect(claude[claude.indexOf('--model') + 1]).toBe('sonnet')
+    expect(claude[claude.indexOf('--tools') + 1]).toBe('')
+    expect(claude).toContain('--no-session-persistence')
+    const agy = agyDraftArgs('Questions: []')
+    expect(agy).toContain('--sandbox')
+    expect(agy.at(-1)).toMatch(/^--print=You write answers[\s\S]*Questions: \[\]$/)
+  })
+
+  it('keeps known ids with a non-empty answer only, bounded', () => {
+    const out = JSON.stringify({
+      structured_output: {
+        answers: [
+          { id: 'q1', answer: '  I like rockets.  ' },
+          { id: 'q2', answer: null },
+          { id: 'q3', answer: '   ' },
+          { id: 'zz', answer: 'injected' },
+          { id: 'q1', answer: 'twice' },
+          { id: 'q4', answer: 'y'.repeat(5000) }
+        ]
+      }
+    })
+    const drafts = parseDraftOutput(out, new Set(['q1', 'q2', 'q3', 'q4']))
+    expect(drafts.map((d) => d.id)).toEqual(['q1', 'q4'])
+    expect(drafts[0].answer).toBe('I like rockets.')
+    expect(drafts[1].answer).toHaveLength(2000)
+    expect(() => parseDraftOutput('nope', new Set())).toThrow(/unexpected/)
+    expect(() => parseDraftOutput(JSON.stringify({ structured_output: {} }), new Set())).toThrow(/no answers/)
+  })
+
+  it('makes no call without a job description or a resume', async () => {
+    const cli = { agent: 'claude' as const, command: join(root, 'no-such-cli'), env: process.env }
+    expect(await draftAnswers([{ id: 'q1', question: 'Why?' }], { ...context, jobDescription: ' ' }, cli)).toEqual([])
+    expect(await draftAnswers([{ id: 'q1', question: 'Why?' }], { ...context, resume: '' }, cli)).toEqual([])
   })
 })
 
