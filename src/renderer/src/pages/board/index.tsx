@@ -278,7 +278,6 @@ function Column({ column, header, dropTarget, over, onDragOver, onDragLeave, onD
     <Paper
       component="section"
       aria-label={column.label}
-      data-column={column.id}
       withBorder
       radius="md"
       p="xs"

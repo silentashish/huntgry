@@ -28,7 +28,6 @@ export function BoardCardView({ card, dragging, onDragStart, onDragEnd, onOpen, 
     <Card
       component="article"
       aria-label={card.title}
-      data-card={card.key}
       withBorder
       radius="md"
       padding="sm"

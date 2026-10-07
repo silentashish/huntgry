@@ -3,6 +3,7 @@ import { expect, type Locator, type Page } from '@playwright/test'
 /** Navbar entries in order, with the label of each and how its page announces itself. */
 export const SHELL_PAGES = {
   dashboard: { label: 'Dashboard', heading: 'Dashboard' },
+  board: { label: 'Board', heading: 'Board' },
   jobs: { label: 'Jobs', heading: 'Jobs' },
   browser: { label: 'Browser', heading: null },
   tailor: { label: 'Tailor', heading: 'Tailor' },

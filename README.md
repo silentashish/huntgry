@@ -113,6 +113,18 @@ Features only add files, plus one line in each registry:
    `App.tsx`. Open other pages with `useNavigation().navigate(page, params)`; call
    `setLeaveGuard(message)` while the page has unsaved work.
 
+## Board
+
+**Board** shows every job of the workspace as one card in Kanban columns: **To do** (saved jobs),
+**Tailoring** (queued and running), **Waiting for review** (a run that needs your reply, an
+unattended result to approve), **Ready to apply**, **Applied**, **Interviewing**, **Offer**,
+**Rejected** and **Archived**. Paste a posting link at the top of To do to save the job, and press
+**Tailor** on its card to queue it. The card then moves on by itself as the run goes. Drag a card
+to another column, or use its **Move to** menu, to change an application's status or to archive a
+job. Clicking a card opens its details. An archived card leaves the board 7 days after it was
+archived, but nothing is deleted: the Dashboard's *Archived* filter and the *Dismissed* jobs still
+list it. See [docs/changes/85-board.md](docs/changes/85-board.md).
+
 ## Finding jobs
 
 **Jobs** holds the postings you add: give a posting URL (the page is opened once in a hidden
