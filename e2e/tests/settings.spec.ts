@@ -110,6 +110,51 @@ test.describe('with a decoy claude below HOME', () => {
   })
 })
 
+test.describe('with two copies of codex installed', () => {
+  const twoCodexes: Preparer = {
+    async prepare({ sandbox }) {
+      // `~/.local/bin` is searched before PATH, so this older copy is the one found first.
+      const dir = join(sandbox.home, '.local/bin')
+      await mkdir(dir, { recursive: true })
+      await writeFile(join(dir, 'codex'), '#!/bin/sh\necho "codex-cli 0.1.0"\n')
+      await chmod(join(dir, 'codex'), 0o755)
+      return installFakeAgents(sandbox)
+    }
+  }
+  test.use({ workspace: 'demo', prepare: twoCodexes })
+
+  test('the user picks which copy runs, the choice persists, and Remove goes back to the first one found (#79)', async ({ app }) => {
+    const fakes = fakeAgents(app)
+    const older = join(app.home, '.local/bin/codex')
+    const settingsJson = async () => JSON.parse(await readFile(join(app.userData, 'settings.json'), 'utf8').catch(() => '{}'))
+    let settings = await openSettings(app)
+    const row = settings.agentRow('Codex')
+    await expect(row.getByText(older, { exact: true })).toBeVisible()
+    await expect(row.getByText('0.1.0', { exact: true })).toBeVisible()
+    await expect(settings.cliSelect('Codex')).toHaveValue(older)
+    await expect(settings.removeCliButton('Codex')).toHaveCount(0)
+    // Only one Claude and one agy: no picker for them.
+    await expect(settings.cliSelect('Claude')).toHaveCount(0)
+    await expect(settings.cliSelect('Antigravity')).toHaveCount(0)
+
+    await settings.chooseCli('Codex', fakes.bin('codex'))
+    await expect(row.getByText('0.99.0', { exact: true })).toBeVisible()
+    await expect(settings.cliSelect('Codex')).toHaveValue(fakes.bin('codex'))
+    await expect.poll(async () => (await settingsJson()).cliPaths).toEqual({ codex: fakes.bin('codex') })
+
+    await app.relaunch()
+    settings = await openSettings(app)
+    await expect(settings.agentRow('Codex').getByText('0.99.0', { exact: true })).toBeVisible()
+    await expect(settings.cliSelect('Codex')).toHaveValue(fakes.bin('codex'))
+
+    await settings.removeCliButton('Codex').click()
+    await expect(settings.agentRow('Codex').getByText('0.1.0', { exact: true })).toBeVisible()
+    await expect(settings.cliSelect('Codex')).toHaveValue(older)
+    await expect(settings.removeCliButton('Codex')).toHaveCount(0)
+    await expect.poll(async () => (await settingsJson()).cliPaths).toEqual({})
+  })
+})
+
 test.describe('with nothing installed', () => {
   test.use({ workspace: 'demo' })
 

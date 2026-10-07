@@ -250,6 +250,9 @@ describe('agent status', () => {
 
   it('is ready with the CLI and the skill', () => {
     expect(describeAgent({ ...base, id: 'codex' })).toMatchObject({ ready: true, problems: [], label: 'Codex' })
+    // Without a search result, the only copy is the one found; nothing is chosen.
+    expect(describeAgent({ ...base, id: 'codex' })).toMatchObject({ cliCandidates: ['/bin/x'], cliChoice: null, cliPinned: false })
+    expect(describeAgent({ ...base, id: 'codex', cliPath: null })).toMatchObject({ cliCandidates: [], cliChoice: null })
   })
 
   it('says what is missing, per agent', () => {

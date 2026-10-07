@@ -10,6 +10,7 @@ import {
   Loader,
   Radio,
   ScrollArea,
+  Select,
   Stack,
   Table,
   Text,
@@ -91,6 +92,16 @@ export function SettingsPage() {
   const updateClaude = () => install('update', () => api.runner.updateClaude(), 'Updating Claude Code failed.')
   const linkSkill = (agent: AgentId) =>
     install(`link-${agent}`, () => api.runner.linkSkill(agent), `Installing the skill for ${AGENT_LABEL[agent]} failed.`)
+  async function setCliPath(agent: AgentId, path?: string | null) {
+    setError(null)
+    try {
+      const res = await api.runner.setCliPath(agent, path)
+      if (!res.ok && res.error) setError(res.error)
+      if (res.ok) await check()
+    } catch (err) {
+      setError(errorText(err))
+    }
+  }
   async function setDefault(agent: AgentId) {
     setError(null)
     try {
@@ -156,7 +167,13 @@ export function SettingsPage() {
             </Alert>
           )}
 
-          <AgentsCard env={env} installing={installing} onLinkSkill={linkSkill} onSetDefault={setDefault} />
+          <AgentsCard
+            env={env}
+            installing={installing}
+            onLinkSkill={linkSkill}
+            onSetDefault={setDefault}
+            onSetCliPath={setCliPath}
+          />
 
           <StandingApprovalsCard />
 
@@ -336,12 +353,15 @@ function AgentsCard({
   env,
   installing,
   onLinkSkill,
-  onSetDefault
+  onSetDefault,
+  onSetCliPath
 }: {
   env: RunnerEnvironment
   installing: Installer | null
   onLinkSkill(agent: AgentId): void
   onSetDefault(agent: AgentId): void
+  /** `undefined`: pick a file in a dialog; `null`: remove the choice. */
+  onSetCliPath(agent: AgentId, path?: string | null): void
 }) {
   return (
     <Card withBorder radius="md" padding="lg">
@@ -349,7 +369,8 @@ function AgentsCard({
       <Text size="sm" c="dimmed" mb="sm">
         The CLI that runs the resume-tailor skill. New runs use the default; the Tailor form and "Tailor all" can pick
         another one per job. Codex and Antigravity use the skill installed for Claude, linked into their own skills
-        folder.
+        folder. When several copies of a CLI are installed, pick the one to run; Remove goes back to the first one
+        found.
       </Text>
       <Radio.Group value={env.defaultAgent} onChange={(v) => onSetDefault(v as AgentId)}>
         <Table layout="fixed" verticalSpacing="sm">
@@ -369,6 +390,7 @@ function AgentsCard({
                 busy={!!installing}
                 linking={installing === `link-${a.id}`}
                 onLinkSkill={() => onLinkSkill(a.id)}
+                onSetCliPath={(path) => onSetCliPath(a.id, path)}
               />
             ))}
           </Table.Tbody>
@@ -383,13 +405,15 @@ function AgentRow({
   canLink,
   busy,
   linking,
-  onLinkSkill
+  onLinkSkill,
+  onSetCliPath
 }: {
   agent: AgentStatus
   canLink: boolean
   busy: boolean
   linking: boolean
   onLinkSkill(): void
+  onSetCliPath(path?: string | null): void
 }) {
   const cliProblem = a.problems.find((p) => p.includes('CLI') || p.includes('signed in'))
   return (
@@ -418,6 +442,7 @@ function AgentRow({
                 {cliProblem}
               </Text>
             )}
+            <CliChoice agent={a} busy={busy} onSetCliPath={onSetCliPath} />
           </Stack>
         ) : (
           <Stack gap={4} align="flex-start">
@@ -429,6 +454,7 @@ function AgentRow({
                 {cliProblem}
               </Text>
             )}
+            <CliChoice agent={a} busy={busy} onSetCliPath={onSetCliPath} />
           </Stack>
         )}
       </Table.Td>
@@ -466,6 +492,62 @@ function AgentRow({
         )}
       </Table.Td>
     </Table.Tr>
+  )
+}
+
+/**
+ * Which copy of an agent's CLI runs (#79): one of the copies found, another file, or (Remove) the
+ * first copy found again.
+ */
+function CliChoice({
+  agent: a,
+  busy,
+  onSetCliPath
+}: {
+  agent: AgentStatus
+  busy: boolean
+  onSetCliPath(path?: string | null): void
+}) {
+  if (a.cliPinned) return null
+  const gone = a.cliChoice !== null && a.cliChoice !== a.cliPath
+  return (
+    <Stack gap={4} align="flex-start" w="100%">
+      {a.cliCandidates.length > 1 && (
+        <Select
+          size="xs"
+          w="100%"
+          aria-label={`${a.label} CLI to use`}
+          data={a.cliCandidates}
+          value={a.cliPath}
+          allowDeselect={false}
+          disabled={busy}
+          comboboxProps={{ withinPortal: true }}
+          onChange={(v) => v && v !== a.cliPath && onSetCliPath(v)}
+        />
+      )}
+      {gone && (
+        <Text size="xs" c="orange">
+          The chosen CLI <Code>{a.cliChoice}</Code> is gone; using the first copy found.
+        </Text>
+      )}
+      <Group gap="xs">
+        <Button size="compact-xs" variant="subtle" disabled={busy} onClick={() => onSetCliPath()}>
+          Choose…
+        </Button>
+        {a.cliChoice !== null && (
+          <Button
+            size="compact-xs"
+            variant="subtle"
+            color="red"
+            disabled={busy}
+            onClick={() => onSetCliPath(null)}
+            aria-label={`Remove the chosen ${a.label} CLI`}
+          >
+            Remove
+          </Button>
+        )}
+      </Group>
+    </Stack>
   )
 }
 

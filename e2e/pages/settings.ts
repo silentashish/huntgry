@@ -48,6 +48,22 @@ export class SettingsPage {
     return this.agentRow(agent).getByRole('button', { name: 'Install skill' })
   }
 
+  /** The picker of `agent`'s CLI, shown when several copies are found (#79). */
+  cliSelect(agent: AgentLabel): Locator {
+    return this.page.getByRole('combobox', { name: `${agent} CLI to use` })
+  }
+
+  /** Picks the copy at `path` of `agent`'s CLI. */
+  async chooseCli(agent: AgentLabel, path: string): Promise<void> {
+    await this.cliSelect(agent).click()
+    await this.page.getByRole('option', { name: path, exact: true }).click()
+  }
+
+  /** "Remove": back to the first copy found. Only shown once a copy was chosen. */
+  removeCliButton(agent: AgentLabel): Locator {
+    return this.page.getByRole('button', { name: `Remove the chosen ${agent} CLI` })
+  }
+
   /** Rows of the Claude card by their header cell. */
   row(label: 'Claude CLI' | 'Account' | 'resume-tailor skill' | 'Python venv' | 'LaTeX'): Locator {
     return this.page.getByRole('row', { name: new RegExp(`^${label}\\b`) })

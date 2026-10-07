@@ -18,9 +18,12 @@ import { adapterFor } from './agents'
 import { skillStatus } from './agents/skills'
 import {
   buildChildEnv,
+  cliChoice,
+  cliPin,
   composePath,
   findClaude,
   findCli,
+  findCliCandidates,
   findInDirs,
   findSkillDir,
   findTexBin,
@@ -56,6 +59,11 @@ export function describeAgent(a: {
   id: AgentId
   cliPath: string | null
   version: string | null
+  /** Every copy found (default: just `cliPath`). */
+  cliCandidates?: string[]
+  /** The copy chosen in Settings, if any. */
+  cliChoice?: string | null
+  cliPinned?: boolean
   skillPath: string | null
   skillTarget: string
   /** The Claude copy of the skill, which the other agents link to. */
@@ -86,6 +94,9 @@ export function describeAgent(a: {
     label,
     cliPath: a.cliPath,
     version: a.version,
+    cliCandidates: a.cliCandidates ?? (a.cliPath ? [a.cliPath] : []),
+    cliChoice: a.cliChoice ?? null,
+    cliPinned: a.cliPinned ?? false,
     skillPath: a.skillPath,
     skillTarget: a.skillTarget,
     ready: problems.length === 0,
@@ -180,13 +191,15 @@ export async function checkEnvironment(opts: {
 
   const agents = await Promise.all(
     AGENT_IDS.map(async (id): Promise<AgentStatus> => {
+      const binary = adapterFor(id).binary
+      const cli = { cliCandidates: await cliCandidates(binary, id === 'claude' ? claudePath : null), cliChoice: await cliChoice(binary), cliPinned: cliPin(binary) !== null }
       if (id === 'claude') {
         const skillTarget = join(adapterFor(id).skillRoots(home)[0], SKILL_NAME)
-        return describeAgent({ id, cliPath: claudePath, version: claudeVersion, skillPath: skillDir, skillTarget, claudeSkill: skillDir, auth: claudeAuth })
+        return describeAgent({ id, cliPath: claudePath, version: claudeVersion, ...cli, skillPath: skillDir, skillTarget, claudeSkill: skillDir, auth: claudeAuth })
       }
-      const [cliPath, skill] = await Promise.all([findCli(adapterFor(id).binary), skillStatus(id, home)])
+      const [cliPath, skill] = await Promise.all([findCli(binary), skillStatus(id, home)])
       const version = cliPath ? await readClaudeVersion(cliPath, env, { refresh: true }) : null
-      return describeAgent({ id, cliPath, version, skillPath: skill.path, skillTarget: skill.target, claudeSkill: skillDir })
+      return describeAgent({ id, cliPath, version, ...cli, skillPath: skill.path, skillTarget: skill.target, claudeSkill: skillDir })
     })
   )
 
@@ -238,6 +251,13 @@ export async function checkEnvironment(opts: {
     agents,
     sharedProblems: shared
   }
+}
+
+/** The copies the search finds, plus a chosen one outside the searched folders (picked in a dialog). */
+async function cliCandidates(binary: string, known: string | null): Promise<string[]> {
+  const found = await findCliCandidates(binary)
+  const chosen = known ?? (await findCli(binary))
+  return chosen && !found.includes(chosen) ? [chosen, ...found] : found
 }
 
 /** A system Python 3 to create the venv with. */
