@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
-import { isAgentId, RUNNER_CHANNELS, type AgentId, type RunSummary, type TranscriptItem } from '@shared/runner-types'
+import { AGENT_LABEL, isAgentId, RUNNER_CHANNELS, type AgentId, type RunSummary, type TranscriptItem } from '@shared/runner-types'
 import { buildTranscript } from '@shared/transcript'
 import { usageCsv } from '@shared/usage'
 import { requireCurrentWorkspace, settingsFile } from '../current-workspace'
@@ -17,7 +17,7 @@ import { listRuns, OUTPUT_FILES, readEvents, readRun, requireRunId } from './run
 import { replyThroughQueue } from '../queue/ipc'
 import { WorkspaceChangedError } from '../workspace/changed'
 import { fetchSyncedPrices } from './price-sync'
-import { contextForRun, defaultAgent, manager, setDefaultAgent, startTailorRun, venvDir } from './start'
+import { contextForRun, defaultAgent, loadCliChoices, manager, setCliPath, setDefaultAgent, startTailorRun, venvDir } from './start'
 import { clearSyncedPrices, loadPrices, pricingState, syncPrices, removePrice, requireUsageFilter, resetPrices, setPrice, usageSummary, withMetrics, withPrices } from './usage'
 
 /** Which skill release Huntgry installed (see `install-skill.ts`). */
@@ -102,6 +102,8 @@ export const runsForRemote = {
 export function registerRunnerIpc(): void {
   // Settings → Pricing applies from the first run on.
   loadPrices(settingsFile()).catch((err) => console.error('Loading prices failed:', err))
+  // Settings → Agents: the CLI copies the user chose.
+  loadCliChoices().catch((err) => console.error('Loading the chosen CLIs failed:', err))
   ipcMain.handle(RUNNER_CHANNELS.environment, async () => {
     const workspace = await requireCurrentWorkspace().catch(() => null)
     return checkEnvironment({
@@ -113,6 +115,25 @@ export function registerRunnerIpc(): void {
   })
 
   ipcMain.handle(RUNNER_CHANNELS.setDefaultAgent, (_e, agent: unknown) => setDefaultAgent(requireAgent(agent)))
+
+  ipcMain.handle(RUNNER_CHANNELS.setCliPath, async (e, agent: unknown, path: unknown) => {
+    const id = requireAgent(agent)
+    try {
+      if (path === null) await setCliPath(id, null)
+      else if (typeof path === 'string') await setCliPath(id, path)
+      else {
+        const win = BrowserWindow.fromWebContents(e.sender)
+        const options = { title: `Choose the ${AGENT_LABEL[id]} CLI`, properties: ['openFile' as const, 'treatPackageAsDirectory' as const, 'showHiddenFiles' as const] }
+        const picked = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+        if (picked.canceled || !picked.filePaths[0]) return { ok: false }
+        await setCliPath(id, picked.filePaths[0], true)
+        return { ok: true, path: picked.filePaths[0] }
+      }
+      return { ok: true, path: typeof path === 'string' ? path : undefined }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
 
   ipcMain.handle(RUNNER_CHANNELS.linkSkill, async (_e, agent: unknown) =>
     installAgentSkill(requireAgent(agent), await findSkillDir(), homedir())

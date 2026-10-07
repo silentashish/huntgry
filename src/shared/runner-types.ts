@@ -27,6 +27,12 @@ export interface AgentStatus {
   cliPath: string | null
   /** `x.y.z`, or `null` when unknown. */
   version: string | null
+  /** Every copy of the CLI the search finds, in search order (#79). Empty when none. */
+  cliCandidates: string[]
+  /** The copy chosen in Settings, or `null` for the first one found. Differs from `cliPath` when it is gone. */
+  cliChoice: string | null
+  /** `HUNTGRY_<NAME>_PATH` in the app's environment pins the CLI: no copy can be chosen. */
+  cliPinned: boolean
   /** The resume-tailor folder this agent reads, or `null` when it cannot see the skill. */
   skillPath: string | null
   /** Where "Install skill" makes the skill visible to this agent. */
@@ -321,6 +327,11 @@ export interface RunnerApi {
   setDefaultAgent(agent: AgentId): Promise<void>
   /** Makes the installed resume-tailor skill visible to `agent` (a link to the Claude copy, or a copy). */
   linkSkill(agent: AgentId): Promise<InstallResult & { path?: string }>
+  /**
+   * Uses this copy of `agent`'s CLI (#79): one of its `cliCandidates`, or, without `path`, a file picked
+   * in a dialog (`ok: false` with no error when cancelled). `null` removes the choice: the first copy found.
+   */
+  setCliPath(agent: AgentId, path?: string | null): Promise<InstallResult & { path?: string }>
   /** (Re)create the Python venv and install the skill's modules; progress arrives as `runner:install-log`. */
   installPythonDeps(): Promise<InstallResult>
   /** Run the official Claude Code installer (`claude.ai/install.sh`); progress on `runner:install-log`. */
@@ -362,6 +373,7 @@ export const RUNNER_CHANNELS = {
   environment: 'runner:environment',
   setDefaultAgent: 'runner:set-default-agent',
   linkSkill: 'runner:link-skill',
+  setCliPath: 'runner:set-cli-path',
   installPythonDeps: 'runner:install-python-deps',
   installClaude: 'runner:install-claude',
   updateClaude: 'runner:update-claude',

@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -18,13 +18,17 @@ import {
 } from './command'
 import {
   buildChildEnv,
+  cliChoice,
   cliSearchDirs,
   composePath,
   E2E_ENV,
+  findAllInDirs,
+  findCli,
   findSkillDir,
   isolatedDiscovery,
   loginShellPath,
   parsePreflight,
+  setCliChoices,
   setPackagedBuild
 } from './env'
 import { fetchPostingText, htmlToText, type Fetcher } from './posting'
@@ -153,6 +157,61 @@ describe('isolated CLI discovery (HUNTGRY_E2E, used by the e2e harness)', () => 
     const normal = buildChildEnv({ base: { PATH: '/usr/bin' }, workspace: '/ws', venvDir: '/venv', texBin: null, loginPath: '/opt/homebrew/bin', home: '/tmp/home' })
     expect(normal.PATH!.split(':')).toContain('/opt/homebrew/bin')
     expect(normal.PATH!.split(':')).toContain('/usr/local/bin')
+  })
+})
+
+describe('choosing among several copies of an agent CLI (#79)', () => {
+  const tool = async (dir: string, name = 'huntgry-fake-cli'): Promise<string> => {
+    await mkdir(dir, { recursive: true })
+    const path = join(dir, name)
+    await writeFile(path, '#!/bin/sh\n')
+    await chmod(path, 0o755)
+    return path
+  }
+  const saved = { ...process.env }
+  beforeEach(() => {
+    // Isolated discovery: no login shell, only the app PATH this test sets.
+    setPackagedBuild(false)
+    process.env[E2E_ENV] = '1'
+  })
+  afterEach(() => {
+    process.env = { ...saved }
+    setPackagedBuild(true)
+    setCliChoices({})
+  })
+
+  it('lists every executable copy in search order, once per real file', async () => {
+    const a = await tool(join(tmp, 'a'))
+    const b = await tool(join(tmp, 'b'))
+    await mkdir(join(tmp, 'link'))
+    await symlink(a, join(tmp, 'link/huntgry-fake-cli'))
+    await mkdir(join(tmp, 'empty'))
+    await writeFile(join(tmp, 'empty/huntgry-fake-cli'), 'not executable')
+    const dirs = [join(tmp, 'a'), join(tmp, 'empty'), join(tmp, 'link'), join(tmp, 'b'), join(tmp, 'a')]
+    expect(await findAllInDirs('huntgry-fake-cli', dirs)).toEqual([a, b])
+  })
+
+  it('runs the chosen copy, and the first one found again once the choice is removed or gone', async () => {
+    const first = await tool(join(tmp, 'first'))
+    const second = await tool(join(tmp, 'second'))
+    process.env.PATH = `${join(tmp, 'first')}:${join(tmp, 'second')}`
+    expect(await findCli('huntgry-fake-cli')).toBe(first)
+    setCliChoices({ 'huntgry-fake-cli': second })
+    expect(cliChoice('huntgry-fake-cli')).toBe(second)
+    expect(await findCli('huntgry-fake-cli')).toBe(second)
+    await rm(second)
+    expect(await findCli('huntgry-fake-cli')).toBe(first)
+    setCliChoices(undefined)
+    expect(cliChoice('huntgry-fake-cli')).toBeNull()
+    expect(await findCli('huntgry-fake-cli')).toBe(first)
+  })
+
+  it('lets the HUNTGRY_<NAME>_PATH pin win over the choice', async () => {
+    const pinned = await tool(join(tmp, 'pinned'))
+    const chosen = await tool(join(tmp, 'chosen'))
+    process.env['HUNTGRY_HUNTGRY-FAKE-CLI_PATH'] = pinned
+    setCliChoices({ 'huntgry-fake-cli': chosen })
+    expect(await findCli('huntgry-fake-cli')).toBe(pinned)
   })
 })
 

@@ -11,7 +11,7 @@ import { agyModel } from './agents/antigravity'
 import { codexModel } from './agents/codex'
 import { skillStatus } from './agents/skills'
 import { buildSystemPrompt, requireStartParams, texRootOf, type UnattendedPromptOptions } from './command'
-import { buildChildEnv, findCli, findTexBin, loginShellPath } from './env'
+import { buildChildEnv, cliChoice, cliPin, findCli, findCliCandidates, findTexBin, isExecutable, loginShellPath, setCliChoices } from './env'
 import { discoverRuntime } from './environment'
 import { requireSignedIn } from './install-claude'
 import { fetchPostingText } from './posting'
@@ -66,6 +66,32 @@ export async function defaultAgent(): Promise<AgentId> {
 
 export async function setDefaultAgent(agent: AgentId): Promise<void> {
   await saveSettings(settingsFile(), { defaultAgent: agent })
+}
+
+/** Applies the CLI copies chosen in Settings (#79) to every later `findCli`. Called once at startup. */
+export async function loadCliChoices(): Promise<void> {
+  setCliChoices((await loadSettings(settingsFile())).cliPaths)
+}
+
+/**
+ * Runs `agent` with the CLI at `path` from now on, or, with `null`, with the first copy found (#79).
+ * `fromDialog`: the user picked `path` in a file dialog; otherwise it must be a copy the search finds,
+ * so the renderer cannot name an arbitrary file to execute.
+ */
+export async function setCliPath(agent: AgentId, path: string | null, fromDialog = false): Promise<void> {
+  const binary = adapterFor(agent).binary
+  if (cliPin(binary)) throw new Error(`HUNTGRY_${binary.toUpperCase()}_PATH pins the ${AGENT_LABEL[agent]} CLI; unset it to choose another copy.`)
+  if (path !== null) {
+    if (!fromDialog && path !== cliChoice(binary) && !(await findCliCandidates(binary)).includes(path))
+      throw new Error(`${path} is not a ${AGENT_LABEL[agent]} CLI Huntgry found.`)
+    if (!(await isExecutable(path))) throw new Error(`${path} is not an executable file.`)
+  }
+  const { cliPaths = {} } = await loadSettings(settingsFile())
+  const next = { ...cliPaths }
+  if (path === null) delete next[binary]
+  else next[binary] = path
+  await saveSettings(settingsFile(), { cliPaths: next })
+  setCliChoices(next)
 }
 
 /** The context to continue run `runId` of the open workspace with: always the run's own agent and prompt variant. */

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
-import { access, opendir, readdir } from 'node:fs/promises'
+import { access, opendir, readdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import type { PreflightItem } from '@shared/runner-types'
@@ -82,7 +82,7 @@ export function texBinCandidates(home = homedir()): string[] {
   ]
 }
 
-async function isExecutable(path: string): Promise<boolean> {
+export async function isExecutable(path: string): Promise<boolean> {
   try {
     await access(path, constants.X_OK)
     return true
@@ -148,9 +148,59 @@ export async function findClaude(): Promise<string | null> {
  * app's own environment pins a binary (e.g. `HUNTGRY_CLAUDE_PATH`).
  */
 export async function findCli(name: string): Promise<string | null> {
-  const pinned = process.env[`HUNTGRY_${name.toUpperCase()}_PATH`]
+  const pinned = cliPin(name)
   if (pinned) return (await isExecutable(pinned)) ? pinned : null
+  const chosen = cliChoices[name]
+  if (chosen && (await isExecutable(chosen))) return chosen
   return findInDirs(name, await cliSearchDirs())
+}
+
+/**
+ * The CLI copy the user chose in Settings → Agents (#79), by executable name
+ * (`claude`, `codex`, `agy`). `findCli` uses it before searching; a chosen
+ * copy that is gone or no longer executable falls back to the search.
+ * Main loads it from the settings file; the renderer never sets it directly.
+ */
+let cliChoices: Record<string, string> = {}
+
+export function setCliChoices(choices: Record<string, string> | undefined): void {
+  cliChoices = { ...(choices ?? {}) }
+}
+
+/** The chosen copy of `name`, if any (whether or not it still exists). */
+export function cliChoice(name: string): string | null {
+  return cliChoices[name] ?? null
+}
+
+/** Every executable `name` in `dirs`, in search order, without copies reached twice through the same real file. */
+export async function findAllInDirs(name: string, dirs: readonly string[]): Promise<string[]> {
+  const found: string[] = []
+  const seen = new Set<string>()
+  for (const dir of new Set(dirs)) {
+    if (!dir) continue
+    const path = join(dir, name)
+    if (!(await isExecutable(path))) continue
+    const real = await realpath(path).catch(() => path)
+    if (seen.has(real)) continue
+    seen.add(real)
+    found.push(path)
+  }
+  return found
+}
+
+/** `HUNTGRY_<NAME>_PATH` from the app's own environment: it wins over any choice and any search. */
+export function cliPin(name: string): string | null {
+  return process.env[`HUNTGRY_${name.toUpperCase()}_PATH`] || null
+}
+
+/**
+ * Every copy of an agent CLI the search finds (the first one is what `findCli` picks without a choice).
+ * Under a `HUNTGRY_<NAME>_PATH` pin, only the pinned one: no other copy could run.
+ */
+export async function findCliCandidates(name: string): Promise<string[]> {
+  const pinned = cliPin(name)
+  if (pinned) return (await isExecutable(pinned)) ? [pinned] : []
+  return findAllInDirs(name, await cliSearchDirs())
 }
 
 export async function findTexBin(): Promise<string | null> {

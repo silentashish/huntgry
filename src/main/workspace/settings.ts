@@ -14,6 +14,8 @@ export interface AppSettings {
   currentWorkspace?: string
   /** Agent new tailoring runs use (`AgentId`); read through `agentOr`, so an unknown value means Claude. */
   defaultAgent?: string
+  /** Settings → Agents (#79): the CLI copy to run, by executable name (`claude`, `codex`, `agy`); unset = the first one found. */
+  cliPaths?: Record<string, string>
   /** Remote control (ADR-0001): the session is off unless enabled; the two toggles default to details off, transcripts on. */
   remote?: { enabled?: boolean; notificationDetails?: boolean; transcripts?: boolean }
   /** Settings → Pricing (#44): prices the user changed or added; the bundled table fills in the rest. */
