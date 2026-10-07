@@ -55,6 +55,9 @@ export const PAGES: readonly Page[] = ['dashboard', 'board', 'jobs', 'browser', 
 /** Pages drawn edge to edge, without the shell's padding and max width. */
 export const FULL_BLEED: ReadonlySet<Page> = new Set<Page>(['browser'])
 
+/** Pages that keep the shell's padding but drop its max width, to use the whole window (#90). */
+export const WIDE: ReadonlySet<Page> = new Set<Page>(['board'])
+
 export const DEFAULT_LOCATION: Location = { page: 'dashboard', params: undefined }
 
 /** Builds a location; params are optional only for pages whose params may be `undefined`. */
