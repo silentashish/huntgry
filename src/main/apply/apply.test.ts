@@ -1388,6 +1388,53 @@ describe('application answers (#71)', () => {
     await rm(other, { recursive: true, force: true })
   })
 
+  it('drafts open-ended questions from the resume and job description, types them in, never remembers them (#82)', async () => {
+    const drafted: Array<{ applicationId: string; questions: string[] }> = []
+    const { deps } = answers()
+    deps.draft = async (_w, applicationId, questions) => {
+      drafted.push({ applicationId, questions: questions.map((q) => q.question) })
+      // Like the real prompt: an answer for motivation questions only, none for location, URLs and the like.
+      return questions.filter((q) => /interests you/.test(q.question)).map((q) => ({ id: q.id, answer: `Draft for ${q.question}` }))
+    }
+    const { tab, service } = await open(deps, fixture('lever-form.html'))
+    const label = 'What interests you about this role?'
+    await vi.waitFor(() => expect(line(service, label)).toMatchObject({ outcome: 'filled', suggestedBy: 'draft' }))
+    expect(line(service, label).value).toBe(`Draft for ${label}`)
+    const textarea = tab.dom.window.document.querySelector('textarea') as HTMLTextAreaElement
+    expect(textarea.value).toBe(`Draft for ${label}`)
+    // One call, for typed questions that ask for no fact: a fact question (gender) or a choice is never sent.
+    expect(drafted).toHaveLength(1)
+    expect(drafted[0].applicationId).toBe(ID)
+    expect(drafted[0].questions).toContain(label)
+    expect(drafted[0].questions.join('|')).not.toMatch(/Gender|sponsorship|Race/)
+    expect(line(service, 'Current location').suggestedBy).toBeUndefined()
+    // The draft is this application's only: nothing of it is stored.
+    expect(readFileSync(answersFile(ws), 'utf8')).not.toContain('Draft for')
+    // Filling again keeps the mark and makes no new call.
+    await service.fill(service.current()!.id)
+    expect(line(service, label)).toMatchObject({ outcome: 'filled', suggestedBy: 'draft' })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(drafted).toHaveLength(1)
+  })
+
+  it('leaves text the user typed into an open-ended question alone (#82)', async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => (release = r))
+    const { deps } = answers()
+    deps.draft = async (_w, _id, questions) => {
+      await gate
+      return questions.map((q) => ({ id: q.id, answer: 'AI text' }))
+    }
+    const { tab, service } = await open(deps, fixture('lever-form.html'))
+    const textarea = tab.dom.window.document.querySelector('textarea') as HTMLTextAreaElement
+    textarea.value = 'My own words'
+    textarea.dispatchEvent(new tab.dom.window.Event('input', { bubbles: true }))
+    release()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(textarea.value).toBe('My own words')
+    expect(line(service, 'What interests you about this role?').suggestedBy).not.toBe('draft')
+  })
+
   it('makes at most one model call per page: over the limit, late-rendered or after a failure', async () => {
     const many = (n: number, from = 0) =>
       Array.from({ length: n }, (_, i) => `<p><label for="c${i + from}">Custom question ${i + from}</label><input id="c${i + from}" name="c${i + from}"></p>`).join('')

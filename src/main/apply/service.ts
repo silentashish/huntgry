@@ -20,6 +20,7 @@ import { resolveApplicationFile, resolveApplicationFolder } from '../application
 import { readApplication } from '../applications/scan'
 import { approvalDrift } from '../review/service'
 import { isBlockedPage } from '../jobs/blocked'
+import type { Draft, DraftQuestion } from './draft-answers'
 import type { Mapping, MapQuestion } from './map-questions'
 import { uploadFile, type Cdp } from './upload'
 import { parseFillReport, parsePageScan, parseUploadState } from './validate'
@@ -65,6 +66,11 @@ export interface AnswersDeps {
   rememberMappings(workspace: string, mappings: Array<{ question: string; label: string; fact: FactKey | null }>): Promise<void>
   /** One model call for the questions nothing knows yet; rejects when no model is available or it fails. */
   map(workspace: string, questions: MapQuestion[]): Promise<Mapping[]>
+  /**
+   * Drafts for open-ended questions (#82) from the application's tailored resume and job description, in one
+   * call; rejects when no model is available or it fails. Without it, those questions stay with the user.
+   */
+  draft?(workspace: string, applicationId: string, questions: DraftQuestion[]): Promise<Draft[]>
 }
 
 export interface ApplyDeps {
@@ -112,6 +118,12 @@ interface Context {
   asked: Set<string>
   /** Pages (URL plus step title) that already had their one model call, made or failed. */
   mappedSteps: Set<string>
+  /** The application being applied to (its resume and job description are the drafts' context, #82). */
+  applicationId: string
+  /** AI drafts typed into open-ended questions this session, by question key (#82); never remembered. */
+  drafts: Map<string, string>
+  /** Pages (URL plus step title) that already had their one draft call, made or failed. */
+  draftedSteps: Set<string>
   resumePath: string
   coverPath: string | null
   /** Listeners of the session's tab (replaced when a popup takes over). */
@@ -156,10 +168,13 @@ interface Pending {
 const DEFAULT_RETRIES = [1000, 3000]
 /** Questions of one page sent to the model at most (the call's own bound). */
 const MAX_MAPPED = 40
+/** Open-ended questions of one page drafted at most (#82). */
+const MAX_DRAFTED = 10
 /** The preload waits for the page to settle (up to ~6 s) before it answers a detect. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 const DEFAULT_UPLOAD_CONFIRM_MS = 10_000
 const MAX_EMBED_FOLLOWS = 3
+const DRAFTED = 'AI draft from your resume and this job description. Read and edit it in the page before you submit.'
 
 export class ApplyService {
   private session: ApplySession | null = null
@@ -222,6 +237,9 @@ export class ApplyService {
       workspace,
       asked: new Set(),
       mappedSteps: new Set(),
+      applicationId,
+      drafts: new Map(),
+      draftedSteps: new Set(),
       resumePath,
       coverPath,
       unsubscribe: [],
@@ -522,6 +540,7 @@ export class ApplyService {
         report = withFilesFrom(text, report)
       }
       this.markHandled(ctx, report)
+      report = this.withDrafts(ctx, report)
       this.update({ status: 'filled', ats: report.ats, report, message: summary(report.fields) })
       void this.learn(ctx, report)
       if (ctx.recheck) {
@@ -563,6 +582,11 @@ export class ApplyService {
    * missing CLI, a timeout or a bad reply leaves the fields as they are.
    */
   private async learn(ctx: Context, report: FillReport): Promise<void> {
+    await this.mapUnknown(ctx, report)
+    await this.draft(ctx, report)
+  }
+
+  private async mapUnknown(ctx: Context, report: FillReport): Promise<void> {
     const answers = this.deps.answers
     if (!answers) return
     const unknown = new Map<string, FieldReport>()
@@ -612,6 +636,68 @@ export class ApplyService {
   }
 
   /**
+   * After the mapping (#82): typed questions that ask for no fact ("Why this
+   * company?") get a draft from the application's tailored resume and job
+   * description, one model call per page and step. A draft holds for this
+   * session only and is typed into an empty field only (the user's own text
+   * stays); the panel marks it as an AI draft to read before Submit.
+   */
+  private async draft(ctx: Context, report: FillReport): Promise<void> {
+    const draft = this.deps.answers?.draft?.bind(this.deps.answers)
+    if (!draft || this.ctx !== ctx) return
+    const current = this.session?.report
+    if (!current || current.url !== report.url) return
+    const open = new Map<string, FieldReport>()
+    for (const f of current.fields) {
+      if (!f.question || !f.fieldId || f.fact || f.outcome === 'filled' || f.outcome === 'kept') continue
+      if (f.kind !== 'text' && f.kind !== 'textarea') continue
+      if (ctx.once[f.question] || ctx.drafts.has(f.question)) continue
+      // Only questions the model already said ask for no personal fact; a remembered answer is filled, not drafted.
+      const known = ctx.answers.questions[f.question]
+      if (!known || known.fact || known.confirmed) continue
+      if (!open.has(f.question)) open.set(f.question, f)
+    }
+    if (open.size === 0) return
+    const step = stepKey(report.url, report.stepTitle ?? null)
+    if (ctx.draftedSteps.has(step)) return
+    ctx.draftedSteps.add(step)
+    const asked = [...open.values()].slice(0, MAX_DRAFTED)
+    const byId = new Map(asked.map((f, i) => [`q${i + 1}`, f]))
+    let drafts: Draft[]
+    try {
+      drafts = await draft(
+        ctx.workspace,
+        ctx.applicationId,
+        [...byId].map(([id, f]) => ({ id, question: f.label }))
+      )
+    } catch {
+      return
+    }
+    if (this.ctx !== ctx) return
+    let added = false
+    for (const d of drafts) {
+      const f = byId.get(d.id)
+      if (!f?.question || ctx.once[f.question]) continue
+      ctx.drafts.set(f.question, d.answer)
+      ctx.once[f.question] = d.answer
+      added = true
+    }
+    if (!added || this.session?.report?.url !== report.url || ctx.fillingSeq !== null) return
+    await this.refill(ctx).catch(() => undefined)
+  }
+
+  /** Report lines Huntgry typed an AI draft into (#82) say so. */
+  private withDrafts(ctx: Context, report: FillReport): FillReport {
+    if (ctx.drafts.size === 0) return report
+    const fields = report.fields.map((f) =>
+      f.question && f.outcome === 'filled' && ctx.drafts.has(f.question) && ctx.once[f.question] === ctx.drafts.get(f.question)
+        ? { ...f, suggestedBy: 'draft' as const, reason: DRAFTED }
+        : f
+    )
+    return { ...report, fields }
+  }
+
+  /**
    * The user answered a question in the panel (#71). The field must be one
    * the page reported, and a select or radio answer one of its options. With
    * `remember` the answer is saved (main's store under userData); without it
@@ -649,7 +735,7 @@ export class ApplyService {
       const text = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { ...this.fillPayload(ctx), text: true }))
       if (!current() || (text.step && text.step !== 'form')) return
       const previous = this.session?.report
-      const report = previous && previous.url === text.url ? withFilesFrom(text, previous) : text
+      const report = this.withDrafts(ctx, previous && previous.url === text.url ? withFilesFrom(text, previous) : text)
       this.update({ status: 'filled', report, message: summary(report.fields) })
     } finally {
       if (ctx.fillingSeq === seq) ctx.fillingSeq = null

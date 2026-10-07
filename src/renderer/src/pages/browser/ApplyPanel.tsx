@@ -222,6 +222,11 @@ export function ApplyPanel({ activeTabId }: { activeTabId: string | null }) {
                           : f.reason}
                       </Text>
                     )}
+                    {f.suggestedBy === 'draft' && f.outcome === 'filled' && (
+                      <Text size="xs" c="blue">
+                        {f.reason}
+                      </Text>
+                    )}
                     {suggestionNote(f) && (
                       <Text size="xs" c="blue" lineClamp={3}>
                         {suggestionNote(f)}

@@ -1,4 +1,5 @@
 import { app, ipcMain, type WebContents } from 'electron'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { factsFromProfile, isFactKey, type FactKey } from '@shared/apply-facts'
 import { APPLY_CHANNELS } from '@shared/apply-types'
@@ -11,6 +12,7 @@ import { emit } from '../events'
 import { currentProfilePath } from '../profile/ipc'
 import { readProfile } from '../profile/store'
 import { inspectWorkspace } from '../workspace/inspect'
+import { resolveApplicationFile } from '../applications/safe-path'
 import {
   clearAnswers,
   forgetFact,
@@ -21,6 +23,7 @@ import {
   rememberMappings,
   savedAnswers
 } from './answers-store'
+import { draftAnswers } from './draft-answers'
 import { mapQuestions } from './map-questions'
 import { availableMapper } from './mapper'
 import { ApplyService, type AnswersDeps, type ApplyPage } from './service'
@@ -109,6 +112,29 @@ const answers: AnswersDeps = {
     const cli = await availableMapper(ws)
     if (!cli) throw new Error('No model available to map questions.')
     return mapQuestions(questions, cli)
+  },
+  draft: async (ws, applicationId, questions) => {
+    const read = (file: string) =>
+      resolveApplicationFile(ws, applicationId, file)
+        .then((p) => readFile(p, 'utf8'))
+        .catch(() => '')
+    const [jobDescription, tailored] = await Promise.all([read('job-description.md'), read('resume_data.json')])
+    // Without a tailored resume, the workspace's master profile is the applicant's story.
+    const resume = tailored || (await masterProfileText(ws))
+    if (!jobDescription.trim() || !resume.trim()) return []
+    const cli = await availableMapper(ws)
+    if (!cli) throw new Error('No model available to draft answers.')
+    return draftAnswers(questions, { jobDescription, resume }, cli)
+  }
+}
+
+/** The workspace's master profile as written, or '' when it cannot be read. */
+async function masterProfileText(ws: string): Promise<string> {
+  try {
+    const inspection = await inspectWorkspace(ws)
+    return inspection.masterProfile ? await readFile(join(inspection.path, inspection.masterProfile), 'utf8') : ''
+  } catch {
+    return ''
   }
 }
 

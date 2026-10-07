@@ -155,14 +155,21 @@ export async function mapQuestions(questions: readonly MapQuestion[], cli: Mappe
   if (asked.length === 0) return []
   const prompt = mappingPrompt(asked)
   const claude = cli.agent === 'claude'
-  const args = [...(cli.args ?? []), ...(claude ? claudeMappingArgs({ permissionPrompts: cli.permissionPrompts }) : agyMappingArgs(prompt))]
+  const args = claude ? claudeMappingArgs({ permissionPrompts: cli.permissionPrompts }) : agyMappingArgs(prompt)
+  const stdout = await runOneShot(cli, args, prompt, claude ? 60_000 : 90_000)
+  return parseMappingOutput(stdout, new Set(asked.map((q) => q.id)))
+}
+
+/** Runs one tool-less CLI call in an empty temp folder; resolves with its stdout. */
+export async function runOneShot(cli: MapperCli, args: readonly string[], prompt: string, defaultTimeoutMs: number): Promise<string> {
+  const claude = cli.agent === 'claude'
   const cwd = await mkdtemp(join(tmpdir(), 'huntgry-map-'))
   try {
-    const stdout = await new Promise<string>((resolve, reject) => {
+    return await new Promise<string>((resolve, reject) => {
       const child = execFile(
         cli.command,
-        args,
-        { cwd, env: cli.env, timeout: cli.timeoutMs ?? (claude ? 60_000 : 90_000), maxBuffer: 4 * 1024 * 1024 },
+        [...(cli.args ?? []), ...args],
+        { cwd, env: cli.env, timeout: cli.timeoutMs ?? defaultTimeoutMs, maxBuffer: 4 * 1024 * 1024 },
         (err, out, errOut) => {
           if (err && !out) reject(new Error(`${cli.agent} failed: ${(errOut || err.message).trim().slice(0, 300)}`))
           else resolve(out)
@@ -171,8 +178,22 @@ export async function mapQuestions(questions: readonly MapQuestion[], cli: Mappe
       // Claude reads the prompt on stdin (it stays out of `ps`); agy already has it.
       child.stdin?.end(claude ? prompt : '')
     })
-    return parseMappingOutput(stdout, new Set(asked.map((q) => q.id)))
   } finally {
     await rm(cwd, { recursive: true, force: true })
   }
+}
+
+/** The structured output of a `--output-format json` result, or a thrown error. */
+export function structuredOutput(stdout: string): Record<string, unknown> | undefined {
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(stdout.trim().split('\n').pop() ?? '')
+  } catch {
+    throw new Error('The model returned something unexpected.')
+  }
+  if (parsed.is_error === true) throw new Error(`The model failed: ${String(parsed.result ?? 'unknown error').slice(0, 200)}`)
+  const result = parsed.result as Record<string, unknown> | undefined
+  return (parsed.structured_output ?? (typeof result === 'object' && result ? result.structured_output : undefined)) as
+    | Record<string, unknown>
+    | undefined
 }

@@ -114,14 +114,15 @@ export interface FieldReport {
    * personal fact it asks for; `options` the choices of a select or radio
    * group (page text, bounded); `suggestion` an answer Huntgry knows but did
    * not write: a widget that only takes a click (`saved`), or a model's
-   * mapping the user has not confirmed yet (`model`).
+   * mapping the user has not confirmed yet (`model`). `draft` marks a line
+   * Huntgry typed an AI draft into (#82), from the resume and job description.
    */
   fieldId?: string
   question?: string
   fact?: FactKey
   options?: string[]
   suggestion?: string
-  suggestedBy?: 'saved' | 'model'
+  suggestedBy?: 'saved' | 'model' | 'draft'
 }
 
 export interface FillReport {
