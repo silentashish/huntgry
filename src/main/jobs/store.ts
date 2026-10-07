@@ -45,7 +45,8 @@ export function mergeJob(saved: Job | null, fresh: Job): Job {
     description: keepDescription ? saved.description : fresh.description || saved.description,
     descriptionComplete: keepDescription || fresh.descriptionComplete,
     tailoredAt: saved.tailoredAt,
-    dismissed: saved.dismissed
+    dismissed: saved.dismissed,
+    dismissedAt: saved.dismissedAt
   }
 }
 

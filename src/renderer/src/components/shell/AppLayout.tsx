@@ -6,6 +6,7 @@ import {
   IconEyeCheck,
   IconFileText,
   IconLayoutDashboard,
+  IconLayoutKanban,
   IconSettings,
   IconSparkles,
   IconSwitchHorizontal,
@@ -26,6 +27,7 @@ import {
 
 const NAV: Record<Page, { label: string; icon: Icon; hint: string }> = {
   dashboard: { label: 'Dashboard', icon: IconLayoutDashboard, hint: 'Generated resumes and applications' },
+  board: { label: 'Board', icon: IconLayoutKanban, hint: 'Every job from To do to Archived' },
   jobs: { label: 'Jobs', icon: IconBriefcase, hint: 'Jobs added by URL or pasted' },
   browser: { label: 'Browser', icon: IconWorld, hint: 'Open job postings without leaving the app' },
   tailor: { label: 'Tailor', icon: IconSparkles, hint: 'Run the resume-tailor skill with Claude, Codex or Antigravity' },

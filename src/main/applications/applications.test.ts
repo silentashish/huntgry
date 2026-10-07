@@ -116,6 +116,19 @@ describe('tracking', () => {
     expect(JSON.parse(await readFile(join(dir, 'huntgry.json'), 'utf8'))).toEqual(t3)
   })
 
+  it('stamps archivedAt when archived, keeps it on a repeat, and drops it when the card leaves Archived (#85)', async () => {
+    const dir = await app('eng/acme/3', {})
+    const t1 = await updateTracking(dir, { status: 'archived' }, new Date('2026-10-01T08:00:00Z'))
+    expect(t1.archivedAt).toBe('2026-10-01T08:00:00.000Z')
+    const t2 = await updateTracking(dir, { status: 'archived', notes: 'old' }, new Date('2026-10-05T08:00:00Z'))
+    expect(t2.archivedAt).toBe('2026-10-01T08:00:00.000Z')
+    const t3 = await updateTracking(dir, { status: 'applied' }, new Date('2026-10-06T08:00:00Z'))
+    expect(t3.archivedAt).toBeUndefined()
+    const t4 = await updateTracking(dir, { status: 'archived' }, new Date('2026-10-07T08:00:00Z'))
+    expect(t4.archivedAt).toBe('2026-10-07T08:00:00.000Z')
+    expect(normalizeTracking({ status: 'archived', archivedAt: 'last week' }).archivedAt).toBeUndefined()
+  })
+
   it('records the job source without resetting status or notes', async () => {
     const dir = await app('eng/acme/2', {})
     await updateTracking(dir, { status: 'offer', notes: 'yay' })

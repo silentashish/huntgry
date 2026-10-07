@@ -44,6 +44,8 @@ export interface Job {
   /** Set when the user sent the job to the resume tailor. */
   tailoredAt?: string
   dismissed?: boolean
+  /** ISO time the job was dismissed (archived on the Board, #85); cleared on restore. */
+  dismissedAt?: string
   /** Ids of the same job found on other boards, merged into this record (see `canonicalize`). */
   aliases?: string[]
   /*

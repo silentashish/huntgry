@@ -8,6 +8,7 @@ import { ProfileSetup } from './components/ProfileSetup'
 import { AppLayout } from './components/shell/AppLayout'
 import { WorkspacePicker } from './components/WorkspacePicker'
 import { locationOf, paramsFor, type Location } from './navigation'
+import { BoardPage } from './pages/board'
 import { BrowserPage } from './pages/browser'
 import { DashboardPage } from './pages/dashboard'
 import { GraphPage } from './pages/graph'
@@ -75,6 +76,8 @@ export function App() {
           switch (location.page) {
             case 'dashboard':
               return <DashboardPage />
+            case 'board':
+              return <BoardPage />
             case 'jobs':
               return <JobsPage />
             case 'browser':

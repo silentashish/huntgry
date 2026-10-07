@@ -324,7 +324,11 @@ the open run's `runCard`, `expectStatus`, `toolRow`, `turnResults`, `outputLine`
 `notReadyBanner`, `warnings`, `agentRow`, `defaultRadio` / `setDefault`, `linkSkillButton`,
 `row('Claude CLI' | 'Account' | …)`, `preflightRow`, the install/update buttons, and `mainEnv`
 for the PATH-isolation assertion), `JobsPage`, `BrowserPage` with `ApplyPanel` (#49, see "Mock
-servers" above).
+servers" above), and `BoardPage` (#85: `column(id)` (a `region` named after the column), `cards(id)`,
+`card(title)` (an `article` named by its title), `expectIn(id, title)`, `titles(id)`,
+`moveTo(title, id)` / `moveTargets(title)` through the card's Move to menu, `drag(title, id)` for
+HTML5 drag and drop, `addLink(url)`). `board.spec.ts` seeds its own queue, review and archived
+folders on top of `demo` and uses the mock server for the pasted link.
 
 The dashboard's search box, status filter and sort select carry `aria-label`s (`Search
 applications`, `Filter by status`, `Sort applications`) added for the tests, since a placeholder

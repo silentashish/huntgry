@@ -347,7 +347,15 @@ describe('service with a stub loader', () => {
     })
     const t = await updateJob(ws, pasted.id, { tailored: true })
     expect(t.tailoredAt).toBeTruthy()
-    expect((await updateJob(ws, pasted.id, { dismissed: true })).dismissed).toBe(true)
+    const dismissed = await updateJob(ws, pasted.id, { dismissed: true })
+    expect(dismissed.dismissed).toBe(true)
+    expect(Date.parse(dismissed.dismissedAt!)).not.toBeNaN()
+    // Dismissing again keeps the first time; the Board counts its week from it (#85).
+    expect((await updateJob(ws, pasted.id, { dismissed: true })).dismissedAt).toBe(dismissed.dismissedAt)
+    expect(mergeJob(dismissed, { ...pasted, dismissed: undefined }).dismissedAt).toBe(dismissed.dismissedAt)
+    const restored = await updateJob(ws, pasted.id, { dismissed: false })
+    expect(restored.dismissed).toBe(false)
+    expect(restored.dismissedAt).toBeUndefined()
     expect(jobDescriptionFor(t)).toMatch(/^# ML Engineer\n\nGlobex\n\nBuild ranking/)
 
     const indeed = await saveJob(ws, indeedCopy())
