@@ -27,7 +27,8 @@
 //
 // One-shot calls (`claude -p … --json-schema …` with the prompt on stdin, `agy … --json-schema … --print=<prompt>`),
 // as the Apply question mapping makes them (#71), answer one JSON result whose `structured_output.mappings` maps
-// questions mentioning "gender" to `gender` and the rest to null; the marker records `mode: 'oneshot'` and the prompt.
+// questions mentioning "gender" to `gender` and the rest to null; the answer drafting (#82, a schema with `answers`)
+// drafts "interests you" questions only. The marker records `mode: 'oneshot'` and the prompt.
 //
 // Every spawn appends a line to `$FAKE_AGENT_HOME/invocations.jsonl` (the marker the tests
 // read): `{ agent, mode: 'version' | 'auth' | 'run' | 'oneshot', pid, cwd, args, resume, at }`, then
@@ -99,9 +100,21 @@ if (args.includes('--json-schema') && (args.includes('-p') || (agent === 'agy' &
   mark({ mode: 'oneshot', args, cwd: process.cwd(), prompt })
   let questions = []
   try {
-    questions = JSON.parse(prompt.slice(prompt.indexOf('['), prompt.lastIndexOf(']') + 1))
+    // The questions list is last in both prompts (the draft prompt has the job description and resume before it).
+    const list = prompt.slice(prompt.lastIndexOf('Questions:'))
+    questions = JSON.parse(list.slice(list.indexOf('['), list.lastIndexOf(']') + 1))
   } catch {
     // Not a mapping prompt: no mappings.
+  }
+  const schema = args[args.indexOf('--json-schema') + 1] ?? ''
+  if (schema.includes('"answers"')) {
+    // The Apply answer drafting (#82): a draft for "interests you" questions, null for the rest.
+    const answers = questions.map((q) => ({
+      id: String(q.id),
+      answer: /interests you/i.test(String(q.question)) ? `Fake draft: ${String(q.question)}` : null
+    }))
+    process.stdout.write(`${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, structured_output: { answers }, total_cost_usd: 0.02 })}\n`)
+    process.exit(0)
   }
   const mappings = questions.map((q) => ({ id: String(q.id), factKey: /gender/i.test(String(q.question)) ? 'gender' : null }))
   process.stdout.write(`${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, structured_output: { mappings }, total_cost_usd: 0.017 })}\n`)

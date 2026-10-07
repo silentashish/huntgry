@@ -11,8 +11,9 @@ import { Shell } from '../pages/shell'
  * Remembered application answers (#71) against the mock Lever form: the
  * Gender question (a native select) is answered once in the Apply panel with
  * "Remember", and a second application with the same question fills it with
- * no prompt and no model call. Unknown questions cost one tool-less model call
- * (the fake `claude`), which never sees a stored answer. Huntgry never
+ * no prompt and no mapping call. Unknown questions cost one tool-less model call
+ * (the fake `claude`), which never sees a stored answer; open-ended ones get a
+ * draft per application (#82). Huntgry never
  * submits; nothing presses the form's Submit here at all.
  */
 test.use({ workspace: 'mocks', prepare: withFakeAgents() })
@@ -40,6 +41,9 @@ async function filesBelow(dir: string): Promise<string[]> {
 test('a question answered once in the Apply panel fills itself on the next application', async ({ app, mock }) => {
   const agents = fakeAgents(app)
   const oneShots = async () => (await agents.invocations()).filter((i) => i.mode === 'oneshot')
+  const model = (i: { args?: string[] }) => i.args![i.args!.indexOf('--model') + 1]
+  const mappingCalls = async () => (await oneShots()).filter((i) => model(i) === 'haiku')
+  const draftCalls = async () => (await oneShots()).filter((i) => model(i) === 'sonnet')
 
   const browser = await applyFromDashboard(app.window, 'Lever Mock', `${mock.origin}/lever/`)
   await expectTabLoaded(app.electronApp, '/lever/', 'Acme - Software Engineer')
@@ -49,14 +53,28 @@ test('a question answered once in the Apply panel fills itself on the next appli
   expect(await genderInTab(app.electronApp, '/lever/')).toBe('')
 
   // The questions nothing knows go to the model once: Haiku, no tools; the catalog's own (Gender) are not sent.
-  await expect.poll(async () => (await oneShots()).length).toBe(1)
-  const [call] = await oneShots()
+  await expect.poll(async () => (await mappingCalls()).length).toBe(1)
+  const [call] = await mappingCalls()
   expect(call.agent).toBe('claude')
-  expect(call.args![call.args!.indexOf('--model') + 1]).toBe('haiku')
   expect(call.args![call.args!.indexOf('--tools') + 1]).toBe('')
   expect(call.args).toContain('--no-session-persistence')
   expect(call.prompt).toContain('What interests you about this role?')
   expect(call.prompt).not.toContain('Gender')
+
+  // Open-ended questions get an AI draft (#82) from the job description and the profile, typed into the page.
+  // A required question's label ends with its " *".
+  const interests = browser.apply.field('What interests you about this role? *')
+  await expect(interests).toContainText('AI draft')
+  await expect(interests).toContainText('Fake draft: What interests you about this role?')
+  expect(await evaluateInTab<string>(app.electronApp, '/lever/', `document.querySelector('textarea').value`)).toBe(
+    'Fake draft: What interests you about this role?'
+  )
+  const drafts = await draftCalls()
+  expect(drafts).toHaveLength(1)
+  expect(drafts[0].args![drafts[0].args!.indexOf('--tools') + 1]).toBe('')
+  expect(drafts[0].prompt).toContain('Job description:')
+  expect(drafts[0].prompt).toContain('What interests you about this role?')
+  expect(drafts[0].prompt).not.toContain('Gender')
 
   // Answer it once, remembered.
   await gender.getByRole('button', { name: 'Answer Gender' }).click()
@@ -70,7 +88,10 @@ test('a question answered once in the Apply panel fills itself on the next appli
   // Kept with the app's data, never in the workspace.
   const stored = (await filesBelow(join(app.sandbox.userData, 'apply-answers'))).filter((f) => f.endsWith('answers.json'))
   expect(stored).toHaveLength(1)
-  expect(JSON.parse(await readFile(join(app.sandbox.userData, 'apply-answers', stored[0]), 'utf8')).facts.gender.value).toBe('Female')
+  const memory = await readFile(join(app.sandbox.userData, 'apply-answers', stored[0]), 'utf8')
+  expect(JSON.parse(memory).facts.gender.value).toBe('Female')
+  // A draft belongs to its application: never remembered.
+  expect(memory).not.toContain('Fake draft')
   expect((await filesBelow(app.workspace!)).filter((f) => /answers/.test(f))).toEqual([])
 
   // A second application with the same question: filled on its own, no prompt, no new model call.
@@ -82,7 +103,9 @@ test('a question answered once in the Apply panel fills itself on the next appli
   await expect(second.apply.field('Gender')).toContainText('Filled')
   await expect(second.apply.field('Gender')).toContainText('Female')
   expect(await genderInTab(app.electronApp, 'posting=2')).toBe('Female')
-  expect(await oneShots()).toHaveLength(1)
+  // No new mapping call; the new application gets its own draft.
+  expect(await mappingCalls()).toHaveLength(1)
+  await expect.poll(async () => (await draftCalls()).length).toBe(2)
 
   // Settings lists it, masked until shown.
   await second.apply.endButton.click()
