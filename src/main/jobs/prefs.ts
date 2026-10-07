@@ -1,14 +1,14 @@
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { normalizePrefs, type JobsPrefs, type JobsPrefsPatch, type LastSearch } from '@shared/jobs-prefs'
+import { normalizePrefs, type JobsPrefs, type JobsPrefsPatch } from '@shared/jobs-prefs'
 import { HUNTGRY_DIR } from '../workspace/constants'
 
-/** `<workspace>/.huntgry/jobs-prefs.json`: the Jobs page's filters, auto-refresh, last search and last refresh. */
+/** `<workspace>/.huntgry/jobs-prefs.json`: the Jobs page's filters. */
 
 export const prefsPath = (workspace: string) => join(workspace, HUNTGRY_DIR, 'jobs-prefs.json')
 
-/** One read-modify-write at a time per workspace, so a filter change and a finishing search cannot undo each other. */
+/** One read-modify-write at a time per workspace, so two quick filter changes cannot undo each other. */
 const pending = new Map<string, Promise<unknown>>()
 
 async function load(workspace: string): Promise<JobsPrefs> {
@@ -46,9 +46,4 @@ async function change(workspace: string, edit: (p: JobsPrefs) => JobsPrefs): Pro
 /** Applies a validated patch from the renderer (`normalizePrefsPatch`). */
 export function updatePrefs(workspace: string, patch: JobsPrefsPatch): Promise<JobsPrefs> {
   return change(workspace, (p) => ({ ...p, ...patch }))
-}
-
-/** Remembers what the last search returned, and for a profile refresh when it ran. */
-export function recordLastSearch(workspace: string, last: LastSearch): Promise<JobsPrefs> {
-  return change(workspace, (p) => ({ ...p, lastSearch: last, lastRefreshAt: last.relevant ? last.at : p.lastRefreshAt }))
 }

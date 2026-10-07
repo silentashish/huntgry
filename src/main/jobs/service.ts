@@ -1,154 +1,11 @@
 import { createHash } from 'node:crypto'
-import { matchesLocation } from '@shared/job-filters'
-import { profileSignals, relevantQuery } from '@shared/job-relevance'
-import { autoRefreshDue } from '@shared/jobs-prefs'
-import type { Job, JobQuery, RefreshResult, SearchResult, SearchSource, SourceResult } from '@shared/jobs-types'
-import type { MasterProfile } from '@shared/master-profile'
-import { boardOrigin } from './board-url'
+import type { Job } from '@shared/jobs-types'
 import type { LoadResult } from './loader'
-import { HIRINGCAFE_EXTRACT, hiringCafeSearchUrl, parseHiringCafeHits } from './sources/hiringcafe'
-import { INDEED_EXTRACT, indeedSearchUrl, parseIndeedCards } from './sources/indeed'
-import { readPrefs, recordLastSearch } from './prefs'
 import { parsePosting, POSTING_EXTRACT, type PageData } from './sources/posting'
-import { findCanonical, listJobs, readJob, recordSearch, saveJob, saveJobs, writeJobFile } from './store'
+import { findCanonical, listJobs, readJob, saveJob, writeJobFile } from './store'
 
 /** Loads a page and reads data from it; the hidden-window loader in the app, a stub in tests. */
 export type Loader = (url: string, extract: string) => Promise<LoadResult>
-
-const MAX_PER_SOURCE = 60
-
-const SOURCES: Record<
-  SearchSource,
-  { url(q: JobQuery): string; extract: string; parse(data: unknown, q: JobQuery): Job[] }
-> = {
-  'hiring.cafe': {
-    url: (q) => hiringCafeSearchUrl(q, boardOrigin('hiring.cafe')),
-    extract: HIRINGCAFE_EXTRACT,
-    parse: (d, q) => parseHiringCafeHits(d).filter((j) => matchesLocation(j, q.location))
-  },
-  indeed: {
-    url: (q) => indeedSearchUrl(q, boardOrigin('indeed')),
-    extract: INDEED_EXTRACT,
-    parse: (d) => parseIndeedCards(d, new Date(), boardOrigin('indeed'))
-  }
-}
-
-/** The selected boards from untrusted input; at least one. */
-export function validateSources(input: unknown): SearchSource[] {
-  const sources = Array.isArray(input)
-    ? input.filter((s): s is SearchSource => s === 'hiring.cafe' || s === 'indeed')
-    : []
-  if (sources.length === 0) throw new Error('Pick at least one job board.')
-  return [...new Set(sources)]
-}
-
-export function validateQuery(input: unknown): JobQuery {
-  const q = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
-  const keywords = typeof q.keywords === 'string' ? q.keywords.trim().slice(0, 200) : ''
-  if (!keywords) throw new Error('Enter keywords to search for.')
-  const sources = validateSources(q.sources)
-  return {
-    keywords,
-    location: typeof q.location === 'string' ? q.location.trim().slice(0, 200) : '',
-    remoteOnly: q.remoteOnly === true,
-    sources
-  }
-}
-
-/**
- * Searches each selected board in turn, saves what they return, and reports
- * per board. The returned ids are remembered (`jobs-prefs.json`), so the
- * "Last search" view survives leaving the page; a profile refresh (`relevant`)
- * also records its time.
- */
-export async function searchJobs(
-  workspace: string,
-  query: JobQuery,
-  load: Loader,
-  opts: { relevant?: boolean; now?: () => Date } = {}
-): Promise<SearchResult> {
-  const now = opts.now ?? (() => new Date())
-  await recordSearch(workspace, query, now())
-  const sources: SourceResult[] = []
-  const found: Job[] = []
-  for (const s of query.sources) {
-    const src = SOURCES[s]
-    let res: LoadResult
-    try {
-      res = await load(src.url(query), src.extract)
-    } catch (err) {
-      // One board failing must not hide the others' results.
-      sources.push({ source: s, status: 'error', count: 0, message: err instanceof Error ? err.message : String(err) })
-      continue
-    }
-    if (res.status !== 'ok') {
-      sources.push({ source: s, status: res.status, count: 0, message: res.message })
-      continue
-    }
-    let jobs = src.parse(res.data, query).slice(0, MAX_PER_SOURCE)
-    if (query.remoteOnly) jobs = jobs.filter((j) => j.remote)
-    const saved = await saveJobs(workspace, jobs)
-    found.push(...saved)
-    sources.push({
-      source: s,
-      status: 'ok',
-      count: saved.length,
-      message: saved.length === 0 ? 'No results for this search.' : undefined
-    })
-  }
-  // Report each job once, as its canonical record (a job seen on both boards is one job).
-  const ids = new Set(found.map((j) => j.id))
-  const canonical = (await listJobs(workspace)).filter((j) => ids.has(j.id) || j.aliases?.some((a) => ids.has(a)))
-  await recordLastSearch(workspace, {
-    query,
-    at: now().toISOString(),
-    ids: canonical.map((j) => j.id),
-    relevant: opts.relevant === true
-  })
-  return { jobs: canonical, sources }
-}
-
-/** The profile refresh running for each workspace; a second request joins it instead of loading the boards again. */
-const refreshing = new Map<string, Promise<RefreshResult>>()
-
-/**
- * Searches the boards for jobs like the master profile: its headline (or
- * latest role) near its location, or remote only when the profile says
- * "Remote". Saves the results and records the refresh time, whatever the
- * boards answered, so a blocked board is not retried on every open.
- *
- * One refresh per workspace at a time: leaving Jobs and opening it again
- * while the boards load joins the running refresh. `auto` (the refresh on
- * opening Jobs) is decided here, against the saved preferences, and gives
- * `null` when it is not due.
- */
-export async function refreshRelevant(
-  workspace: string,
-  profile: MasterProfile,
-  sources: SearchSource[],
-  load: Loader,
-  opts: { auto?: boolean; now?: () => Date } = {}
-): Promise<RefreshResult | null> {
-  const now = opts.now ?? (() => new Date())
-  const running = refreshing.get(workspace)
-  if (running) return running
-  if (opts.auto && !autoRefreshDue(await readPrefs(workspace), now())) return null
-  // Another request may have started one while the preferences were read.
-  const started = refreshing.get(workspace)
-  if (started) return started
-  const run = (async (): Promise<RefreshResult> => {
-    const query = relevantQuery(profileSignals(profile, now()), sources)
-    if (!query) throw new Error('Add a headline or a role to your master profile to find relevant jobs.')
-    const res = await searchJobs(workspace, query, load, { relevant: true, now })
-    return { ...res, query, at: now().toISOString() }
-  })()
-  refreshing.set(workspace, run)
-  try {
-    return await run
-  } finally {
-    if (refreshing.get(workspace) === run) refreshing.delete(workspace)
-  }
-}
 
 /** Fetches a posting page and saves it as a job. */
 export async function addByUrl(workspace: string, url: string, load: Loader): Promise<Job> {
@@ -163,9 +20,9 @@ export async function addByUrl(workspace: string, url: string, load: Loader): Pr
 
 /**
  * Full description for a saved job, from the employer's posting page of the
- * first copy of the job that loads and reads. hiring.cafe and URL copies can;
- * Indeed job pages are behind a human check, so a job known only from Indeed
- * reports that. The description is saved to the canonical record.
+ * first copy of the job that loads and reads. Jobs saved from Indeed before
+ * board search was removed (#78) cannot: its job pages are behind a human
+ * check. The description is saved to the canonical record.
  */
 export async function fetchDetails(workspace: string, id: string, load: Loader): Promise<Job> {
   const job = await findCanonical(workspace, id)

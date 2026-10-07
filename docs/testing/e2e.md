@@ -43,9 +43,8 @@ The app gets a **fresh environment**, not the runner's. Everything it sees:
 | `HOME` | `<sandbox>/home` | Every `~/…` lookup in `src/main` goes through `os.homedir()`, which follows `HOME`: the skill search, the agents' skill folders, the well-known CLI folders. |
 | `PATH` | `<sandbox>/bin:/usr/bin:/bin:/usr/sbin:/sbin` | The system folders Electron and its helpers need; no user-installed CLI lives there. |
 | `HUNTGRY_E2E` | `1` | Isolated CLI discovery (`src/main/cli/env.ts`): `findCli` skips the login-shell `PATH` and the machine-wide folders (`/opt/homebrew/bin`, `/usr/local/bin`) and looks only below `HOME` and in the app's `PATH`; `buildChildEnv` builds the `PATH` of agent child processes the same way, so a fake agent never sees the machine's tools either. Without it the real `claude` in `/opt/homebrew/bin` would be found. Ignored by packaged builds. |
-| `HUNTGRY_ALLOW_LOCAL_URLS` | `1` | Lets the in-app browser **and the hidden job-board loader** open loopback addresses (`127.0.0.1`, `localhost`, `[::1]`): the mock server of the Jobs, Browser and Apply specs. Private-network addresses (`10.…`, `192.168.…`, `169.254.…`, names that resolve to them) stay refused, which those specs assert. Unpackaged builds only. |
+| `HUNTGRY_ALLOW_LOCAL_URLS` | `1` | Lets the in-app browser **and the hidden posting loader** open loopback addresses (`127.0.0.1`, `localhost`, `[::1]`): the mock server of the Jobs, Browser and Apply specs. Private-network addresses (`10.…`, `192.168.…`, `169.254.…`, names that resolve to them) stay refused, which those specs assert. Unpackaged builds only. |
 | `HUNTGRY_E2E_LOOPBACK_ONLY` | `1` | The harness's egress restriction (`loopbackOnly` in `src/main/cli/dev-urls.ts`): the in-app browser and the hidden loader refuse every address that is not loopback **before any DNS lookup or request**, with "Refusing to load <host>: this test build may only reach loopback addresses." (private literals and `.local` names keep their usual message). Both Chromium sessions' request guards cancel such requests too, so a page on the mock cannot follow a link out either. This is how the suite proves that a resolvable public URL is never reached. Unpackaged builds only; unit-tested inert when packaged. |
-| `HUNTGRY_JOB_BOARD_BASE_URL_HIRINGCAFE`, `HUNTGRY_JOB_BOARD_BASE_URL_INDEED` | the mock server's origins (set by `fixtures/servers/fixture.ts`, not by `appEnv`) | Point a job board at the mock server (`src/main/jobs/board-url.ts`). Only a loopback http(s) origin is accepted, only in unpackaged builds; anything else (or a packaged build) keeps the real board. Unit-tested in `board-url.test.ts`. |
 | `SHELL` | `/bin/sh` | Nothing sources the user's zsh profile. |
 | `PYTHONDONTWRITEBYTECODE` | `1` | The system `python3` (the skill's preflight) caches bytecode under `~/Library/Caches`; a check still running when the app quits would recreate the removed sandbox HOME for it. |
 | `TMPDIR`, `LANG`, `USER`, `LOGNAME` | sandbox tmp, `en_US.UTF-8`, the runner's user | Chromium and Node basics. |
@@ -219,19 +218,17 @@ machine: no network, nothing outside `CV_HOME`, `FAKE_AGENT_HOME` and the temp f
 
 ## Mock servers (Jobs, Browser, Apply)
 
-Those three flows reach job boards, employer pages and ATS forms. In the suite they reach
+Those three flows reach employer pages and ATS forms. In the suite they reach
 **one Node server per worker** on a free `127.0.0.1` port and nothing else
 (`e2e/fixtures/servers/`):
 
 | File | What it holds |
 | --- | --- |
-| `fixture.ts` | `test` for these specs: the `app` fixture plus `mock` (the server, its request log cleared and the last submission and recorded uploads removed per test). Before launch it rewrites `http://mock-server.invalid` in the seeded `mocks` workspace to the server's origin and sets the board overrides through `launchEnv`. |
+| `fixture.ts` | `test` for these specs: the `app` fixture plus `mock` (the server, its request log cleared and the last submission and recorded uploads removed per test). Before launch it rewrites `http://mock-server.invalid` in the seeded `mocks` workspace to the server's origin. |
 | `mock-server.ts` | The server: routes below, `origin` (`http://127.0.0.1:<port>`), `altOrigin` (`http://127.0.0.1:<altPort>`: the same handler on a second listener, a different origin), `requests`, `submissionFile`, `uploadsFile`, `close()`. Port 0 for both, never a fixed port, never `localhost` (its resolution is the machine's business). |
-| `pages.ts` | The fictional pages: the board result shapes, the employer postings, a Lever-style and an Ashby-style posting. |
+| `pages.ts` | The fictional pages: the employer postings, a Lever-style and an Ashby-style posting. |
 
-Routes: `/?searchState=…` is a hiring.cafe-shaped search page (`__NEXT_DATA__` with
-`pageProps.ssrHits`, what `parseHiringCafeHits` reads); `/jobs?q=…` an Indeed-shaped page
-(`window.mosaic.providerData['mosaic-provider-jobcards']`, snippets only); `/postings/employer/<id>`
+Routes: `/postings/employer/<id>`
 employer pages with a JSON-LD `JobPosting` and a full description; `/postings/lever-style` and
 `/postings/ashby-style` (the latter without JSON-LD, for the text fallback); `/bot-wall` (403,
 "Just a moment…"); `/page/one`, `/page/two`, `/hang` for the browser's history and Stop;
@@ -259,28 +256,17 @@ Dashboard and drawer entry points, the redirect + late embed, and both link case
 app) presses a site's own link, and `expectInTab` polls an expression in a tab.
 
 **How the app is pointed at it.** The harness already sets `HUNTGRY_ALLOW_LOCAL_URLS=1`, which
-the in-app browser session and (since #49) the hidden job-board loader honour for loopback
-addresses only. The boards are moved with `HUNTGRY_JOB_BOARD_BASE_URL_HIRINGCAFE` and
-`HUNTGRY_JOB_BOARD_BASE_URL_INDEED` (`src/main/jobs/board-url.ts`): accepted only in unpackaged
-builds and only for a loopback http(s) origin; a packaged build, a public URL or a private-network
-address leaves the real board in place (unit-tested). Indeed is put on the second port and
-hiring.cafe on the first so the loader's per-host rate limit (one load per `host:port` per 4 s)
-does not serialise a two-board search. Posting URLs inside the `mocks` workspace are placeholders
+the in-app browser session and (since #49) the hidden posting loader honour for loopback
+addresses only. Posting URLs inside the `mocks` workspace are placeholders
 (`http://mock-server.invalid/…`) rewritten at seed time. With `HUNTGRY_E2E_LOOPBACK_ONLY=1` (set by
 `appEnv` for every test) nothing but loopback can be reached at all, and the browser and jobs specs
 assert a resolvable public URL is refused before a lookup.
 
 **Timing.** The loader polls a page once a second and gives a bot wall half its 25 s timeout to
 clear itself before reporting it, so "a bot wall gives the blocked message" takes ~13 s
-(`test.slow()`); a search of both boards takes ~2 s; fetching a posting right after a search on
-the same host waits for the 4 s gap.
+(`test.slow()`); two postings loaded from the same host in a row wait for the 4 s gap.
 
-**Auto-refresh is off in `mocks` (#73).** Opening Jobs refreshes the relevant jobs in the background
-when the last refresh is over 12 hours old, and that setting is on by default. A fixture cannot hold
-a "fresh" refresh time, so `mocks/.huntgry/jobs-prefs.json` sets `"autoRefresh": false`: no spec
-loads a board just by opening Jobs, and specs that count board requests (or expect none) stay exact.
-The auto-refresh spec in `jobs.spec.ts` turns the toggle on through the UI. A new workspace fixture
-whose specs open Jobs needs the same file. Jobs also opens on the **Relevant** segment now;
+**Jobs opens on the Relevant segment (#73).**
 `openJobs` in `jobs.spec.ts` switches to **All** for the specs that look at every saved job.
 
 ### Tabs are `WebContentsView`s

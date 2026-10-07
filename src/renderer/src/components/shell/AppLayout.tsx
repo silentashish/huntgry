@@ -26,7 +26,7 @@ import {
 
 const NAV: Record<Page, { label: string; icon: Icon; hint: string }> = {
   dashboard: { label: 'Dashboard', icon: IconLayoutDashboard, hint: 'Generated resumes and applications' },
-  jobs: { label: 'Jobs', icon: IconBriefcase, hint: 'Search hiring.cafe and Indeed' },
+  jobs: { label: 'Jobs', icon: IconBriefcase, hint: 'Jobs added by URL or pasted' },
   browser: { label: 'Browser', icon: IconWorld, hint: 'Open job postings without leaving the app' },
   tailor: { label: 'Tailor', icon: IconSparkles, hint: 'Run the resume-tailor skill with Claude, Codex or Antigravity' },
   review: { label: 'Review', icon: IconEyeCheck, hint: 'Approve, re-run or discard unattended results' },

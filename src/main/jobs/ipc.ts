@@ -2,22 +2,9 @@ import { ipcMain } from 'electron'
 import { normalizePrefsPatch } from '@shared/jobs-prefs'
 import { JOB_ID_PATTERN, JOBS_CHANNELS } from '@shared/jobs-types'
 import { requireCurrentWorkspace } from '../current-workspace'
-import { currentProfilePath } from '../profile/ipc'
-import { readProfile } from '../profile/store'
 import { loadAndExtract } from './loader'
 import { readPrefs, updatePrefs } from './prefs'
-import {
-  addByUrl,
-  addPasted,
-  fetchDetails,
-  listJobs,
-  refreshRelevant,
-  searchJobs,
-  updateJob,
-  validateQuery,
-  validateSources
-} from './service'
-import { recentSearches } from './store'
+import { addByUrl, addPasted, fetchDetails, listJobs, updateJob } from './service'
 
 const workspace = async () => (await requireCurrentWorkspace()).path
 
@@ -26,12 +13,9 @@ function requireJobId(id: unknown): string {
   return id
 }
 
-/** Job boards: search, profile refresh, saved jobs and their page preferences, add by URL or pasted text. */
+/** Saved jobs and their page preferences; jobs are added by URL or pasted text. */
 export function registerJobsIpc(): void {
   ipcMain.handle(JOBS_CHANNELS.list, async () => listJobs(await workspace()))
-  ipcMain.handle(JOBS_CHANNELS.search, async (_e, q: unknown) =>
-    searchJobs(await workspace(), validateQuery(q), loadAndExtract)
-  )
   ipcMain.handle(JOBS_CHANNELS.fetchDetails, async (_e, id: unknown) =>
     fetchDetails(await workspace(), requireJobId(id), loadAndExtract)
   )
@@ -46,13 +30,6 @@ export function registerJobsIpc(): void {
       dismissed: typeof p.dismissed === 'boolean' ? p.dismissed : undefined,
       tailored: p.tailored === true
     })
-  })
-  ipcMain.handle(JOBS_CHANNELS.recentSearches, async () => recentSearches(await workspace()))
-  ipcMain.handle(JOBS_CHANNELS.refresh, async (_e, input: unknown) => {
-    const i = (typeof input === 'object' && input !== null ? input : {}) as { sources?: unknown; auto?: unknown }
-    const sources = validateSources(i.sources)
-    const { profile } = await readProfile(await currentProfilePath())
-    return refreshRelevant(await workspace(), profile, sources, loadAndExtract, { auto: i.auto === true })
   })
   ipcMain.handle(JOBS_CHANNELS.prefs, async () => readPrefs(await workspace()))
   ipcMain.handle(JOBS_CHANNELS.setPrefs, async (_e, patch: unknown) =>
