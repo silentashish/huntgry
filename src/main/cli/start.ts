@@ -90,8 +90,10 @@ export function setCliPath(agent: AgentId, path: string | null, fromDialog = fal
 async function applyCliPath(agent: AgentId, path: string | null, fromDialog: boolean): Promise<void> {
   const binary = adapterFor(agent).binary
   if (cliPin(binary)) throw new Error(`HUNTGRY_${binary.toUpperCase()}_PATH pins the ${AGENT_LABEL[agent]} CLI; unset it to choose another copy.`)
+  // Also waits for the startup load, so it cannot replace this update with the older choices.
+  const current = await cliChoice(binary)
   if (path !== null) {
-    if (!fromDialog && path !== (await cliChoice(binary)) && !(await findCliCandidates(binary)).includes(path))
+    if (!fromDialog && path !== current && !(await findCliCandidates(binary)).includes(path))
       throw new Error(`${path} is not a ${AGENT_LABEL[agent]} CLI Huntgry found.`)
     if (!(await isExecutable(path))) throw new Error(`${path} is not an executable file.`)
   }
