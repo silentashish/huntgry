@@ -448,6 +448,10 @@ export class Pipeline {
   }
 
   async resume(options: { budget?: PipelineBudget } = {}, expected?: string): Promise<PipelineState> {
+    this.require(expected)
+    // The queue itself may be paused (a restart without resume-after-restart, or a start error).
+    // Unpaused first: if another workspace is loaded meanwhile this throws before the record changes.
+    if (this.deps.queue.isPaused()) await this.deps.queue.setPaused(false, expected)
     const r = this.require(expected)
     if (options.budget) r.options.budget = options.budget
     if (r.status === 'paused' || r.status === 'stopped-budget') {
@@ -456,8 +460,6 @@ export class Pipeline {
       r.interruptedAt = undefined
     }
     this.persist()
-    // The queue itself may be paused (a restart without resume-after-restart, or a start error).
-    if (this.deps.queue.isPaused()) await this.deps.queue.setPaused(false, expected)
     this.reconcile()
     this.deps.queue.kick()
     this.changed()
