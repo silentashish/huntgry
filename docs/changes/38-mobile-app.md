@@ -34,10 +34,9 @@ desktop says the phone's counter or pairing is no longer valid.
 - **`pair.ok` sealed with the session key, not with S.** Anyone who saw the QR knows S and could
   read the relay token from an `ok` sealed with it. The desktop now seals `ok` with
   `deriveSessionKey(devicePub, desktopPriv)` and `denied` with S (the coordinator's change on
-  `feat/37-pairing`, `sealPairReply` / `openPairReply` in the package). This branch is based on
-  the earlier wire-format commit, so the phone carries the same rules in a local
-  `openPairReply` (`src/remote/pairing.ts`): ok only under the session key, denied only under S,
-  anything else ignored. When #37 is merged it can switch to the package's function.
+  `feat/37-pairing`, `sealPairReply` / `openPairReply` in the package). The phone opens the
+  answer with the package's `openPairReply`: ok only under the session key, denied only under S,
+  anything else refused. This PR is stacked on #37 for that reason.
 - **`seq` assigned in the send loop, not when a command is queued.** Two commands queued
   together, or one waiting for the rate budget, could otherwise leave out of order, and the
   desktop answers a lower `seq` after a higher one with `denied` and marks the phone for
@@ -130,8 +129,7 @@ woke up", revoke on the Mac and check the phone is back on Pair with its keys go
 
 ## Follow-ups
 
-- **#37** merged: use the package's `openPairReply` instead of the local copy; manual pairing
-  against the real desktop and a deployed relay.
+- Manual pairing against the real desktop (#37) and the deployed relay (#98).
 - **#39** push: `expo-notifications`, the `{ pushToken }` frame after auth and `{ pushToken: null }`
   on unpair; the categories screen is ready and already sends `device.setNotifications`.
 - **#41 / #42 / #40**: the Pipeline, Review detail and Jobs screens on the shared components;
