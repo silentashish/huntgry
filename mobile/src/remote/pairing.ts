@@ -7,9 +7,9 @@
  * 2. A fresh device keypair goes into the secure store.
  * 3. `wss://…/ws`, first frame `{ auth: { room, pairing } }`; after the relay's presence notice,
  *    `RelayFrame{ to: 'desktop', ref, ...sealPairMessage({ pair: 'hello', hello }, S), ttl: 120 }`.
- * 4. Waiting for approval on the Mac. The answer is a frame addressed to the pairing id that
- *    opens with `S`: `ok` → `{ ack: ref }`, close, `sessionKey = deriveSessionKey(desktopPub,
- *    devicePriv)`, everything stored; `denied` → denied (or expired).
+ * 4. Waiting for approval on the Mac. The answer is a frame addressed to the pairing id:
+ *    `ok` sealed with `sessionKey = deriveSessionKey(desktopPub, devicePriv)` → `{ ack: ref }`,
+ *    close, everything stored; `denied` sealed with `S` → denied (or expired).
  * 5. The relay closes the pairing socket at `exp` (4006): the code expired.
  */
 
@@ -30,8 +30,10 @@ import {
   toBase64,
   toHex,
   type PairingInvite,
+  type PairMessage,
   type PairOk,
-  type RelayFrame
+  type RelayFrame,
+  type Sealed
 } from '@huntgry/remote-protocol'
 import { socketUrl, uuid } from './ids'
 import { CLOSE_CODES } from './relay'
@@ -49,6 +51,27 @@ export type PairingStep =
   /** The QR's two minutes ran out (before scanning, or while waiting). */
   | { step: 'expired' }
   | { step: 'error'; message: string }
+
+/**
+ * The desktop's answer to `pair.hello`: `ok` sealed with the session key
+ * (`deriveSessionKey(desktopPub, devicePriv)`), so someone who saw the QR cannot read the relay
+ * token; `denied` sealed with the QR secret S (the desktop has no session key for a phone it
+ * refused). Anything else is refused. Same rules as the protocol package's `openPairReply` (#37);
+ * kept here until that lands on this branch.
+ */
+export function openPairReply(sealed: Sealed, keys: { secret: Uint8Array; sessionKey: Uint8Array }): PairMessage | null {
+  const underSession = openPairMessage(sealed, keys.sessionKey)
+  if (underSession) {
+    if (underSession.pair !== 'ok') throw new ProtocolError('invalid', 'Only pair.ok is sealed with the session key.')
+    return underSession
+  }
+  const underSecret = openPairMessage(sealed, keys.secret)
+  if (underSecret) {
+    if (underSecret.pair !== 'denied') throw new ProtocolError('invalid', 'Only pair.denied is sealed with the pairing secret.')
+    return underSecret
+  }
+  return null
+}
 
 export interface PairingDeps {
   vault: Vault
@@ -135,6 +158,8 @@ export class PairingFlow {
     await this.deps.vault.wipe()
     const identity = await this.deps.vault.createIdentity()
     if (this.settled) return
+    // Known before the hello leaves: the desktop seals `pair.ok` with it, so only this phone reads the relay token.
+    const sessionKey = deriveSessionKey(invite.desktopPublicKey, identity.secretKey)
     const ref = uuid()
     const hello = sealPairMessage(
       { pair: 'hello', hello: { devicePub: toBase64(identity.publicKey), deviceName: this.deps.deviceName, appVersion: this.deps.appVersion, protocol: { ...PROTOCOL } } },
@@ -201,11 +226,11 @@ export class PairingFlow {
       } catch {
         return
       }
-      let message
+      let message: PairMessage | null
       try {
-        message = openPairMessage(frame, invite.secret)
+        message = openPairReply(frame, { secret: invite.secret, sessionKey })
       } catch {
-        message = null
+        message = null // an ok under S or a denied under the session key: not from the desktop
       }
       if (!message || message.pair === 'hello') return
       socket.send(JSON.stringify(requireRelayClientFrame({ ack: frame.ref })))
@@ -213,11 +238,11 @@ export class PairingFlow {
         this.fail(message.reason === 'expired' ? { step: 'expired' } : { step: 'denied' })
         return
       }
-      void this.finish(invite, identity.secretKey, message.ok)
+      void this.finish(invite, sessionKey, message.ok)
     }
   }
 
-  private async finish(invite: PairingInvite, deviceSecret: Uint8Array, ok: PairOk): Promise<void> {
+  private async finish(invite: PairingInvite, sessionKey: Uint8Array, ok: PairOk): Promise<void> {
     try {
       negotiateProtocol(ok.protocol)
     } catch {
@@ -230,7 +255,7 @@ export class PairingFlow {
       deviceId: ok.deviceId,
       relayToken: ok.relayToken,
       desktopPublicKey: toHex(invite.desktopPublicKey),
-      sessionKey: toBase64(deriveSessionKey(invite.desktopPublicKey, deviceSecret)),
+      sessionKey: toBase64(sessionKey),
       sid: ok.sid,
       desktopName: ok.desktopName,
       deviceName: this.deps.deviceName,

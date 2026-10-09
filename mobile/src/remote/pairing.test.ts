@@ -44,8 +44,12 @@ function setup() {
       full.push(s)
     }
   })
-  const fromDesktop = (message: PairMessage): RelayFrame => ({ to: 'pairing-1', ref: uuid(), ...sealPairMessage(message, SECRET), ttl: PAIRING_TTL_SECONDS })
-  return { clock, sockets, storage, vault, steps, full, flow, fromDesktop }
+  const sealed = (message: PairMessage, key: Uint8Array): RelayFrame => ({ to: 'pairing-1', ref: uuid(), ...sealPairMessage(message, key), ttl: PAIRING_TTL_SECONDS })
+  /** The desktop's side of the session key, from the hello's device public key. */
+  const desktopSessionKey = async () => deriveSessionKey((await vault.loadIdentity())!.publicKey, DESKTOP_SECRET)
+  /** As the desktop answers: ok under the session key, denied under S. */
+  const fromDesktop = async (message: PairMessage): Promise<RelayFrame> => sealed(message, message.pair === 'ok' ? await desktopSessionKey() : SECRET)
+  return { clock, sockets, storage, vault, steps, full, flow, fromDesktop, sealed, desktopSessionKey }
 }
 
 async function untilHello(t: ReturnType<typeof setup>, desktopOnline = true) {
@@ -74,11 +78,25 @@ describe('pairing flow', () => {
     t.flow.cancel()
   })
 
+  it('refuses an ok sealed with the QR secret and a denial sealed with the session key', async () => {
+    const t = setup()
+    void t.flow.start(qr()).catch(() => undefined)
+    await untilHello(t)
+    // Anyone who saw the QR knows S: an ok under S must not hand them the pairing.
+    t.sockets.last.receive(t.sealed({ pair: 'ok', ok: OK }, SECRET))
+    t.sockets.last.receive(t.sealed({ pair: 'denied', reason: 'denied' }, await t.desktopSessionKey()))
+    await settle()
+    expect(t.steps.at(-1)).toBe('waiting')
+    expect(await t.vault.loadPairing()).toBeNull()
+    expect(t.sockets.last.acks()).toEqual([])
+    t.flow.cancel()
+  })
+
   it('stores the pairing and the derived session key on pair.ok, acks it and closes', async () => {
     const t = setup()
     const done = t.flow.start(qr())
     await untilHello(t)
-    const ok = t.fromDesktop({ pair: 'ok', ok: OK })
+    const ok = await t.fromDesktop({ pair: 'ok', ok: OK })
     t.sockets.last.receive(ok)
     const pairing = await done
     await settle()
@@ -109,7 +127,7 @@ describe('pairing flow', () => {
       const t = setup()
       const done = t.flow.start(qr())
       await untilHello(t)
-      const frame = t.fromDesktop({ pair: 'denied', reason })
+      const frame = await t.fromDesktop({ pair: 'denied', reason })
       t.sockets.last.receive(frame)
       const err = await done.catch((e: unknown) => e)
       expect(err).toBeInstanceOf(PairingError)
