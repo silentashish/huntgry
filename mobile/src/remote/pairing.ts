@@ -21,7 +21,7 @@ import {
   RELAY_PATHS,
   deriveSessionKey,
   negotiateProtocol,
-  openPairMessage,
+  openPairReply,
   parsePairingUrl,
   requireRelayClientFrame,
   requireRelayFrame,
@@ -32,8 +32,7 @@ import {
   type PairingInvite,
   type PairMessage,
   type PairOk,
-  type RelayFrame,
-  type Sealed
+  type RelayFrame
 } from '@huntgry/remote-protocol'
 import { socketUrl, uuid } from './ids'
 import { CLOSE_CODES } from './relay'
@@ -51,27 +50,6 @@ export type PairingStep =
   /** The QR's two minutes ran out (before scanning, or while waiting). */
   | { step: 'expired' }
   | { step: 'error'; message: string }
-
-/**
- * The desktop's answer to `pair.hello`: `ok` sealed with the session key
- * (`deriveSessionKey(desktopPub, devicePriv)`), so someone who saw the QR cannot read the relay
- * token; `denied` sealed with the QR secret S (the desktop has no session key for a phone it
- * refused). Anything else is refused. Same rules as the protocol package's `openPairReply` (#37);
- * kept here until that lands on this branch.
- */
-export function openPairReply(sealed: Sealed, keys: { secret: Uint8Array; sessionKey: Uint8Array }): PairMessage | null {
-  const underSession = openPairMessage(sealed, keys.sessionKey)
-  if (underSession) {
-    if (underSession.pair !== 'ok') throw new ProtocolError('invalid', 'Only pair.ok is sealed with the session key.')
-    return underSession
-  }
-  const underSecret = openPairMessage(sealed, keys.secret)
-  if (underSecret) {
-    if (underSecret.pair !== 'denied') throw new ProtocolError('invalid', 'Only pair.denied is sealed with the pairing secret.')
-    return underSecret
-  }
-  return null
-}
 
 export interface PairingDeps {
   vault: Vault

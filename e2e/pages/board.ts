@@ -75,9 +75,29 @@ export class BoardPage {
     return names.map((n) => n.trim())
   }
 
-  /** Drags a card onto a column (HTML5 drag and drop). */
+  /**
+   * Drags a card onto a column (HTML5 drag and drop) with the mouse.
+   *
+   * Not `dragTo`: it presses the mouse on the card, then scrolls the target column into view, and
+   * only then moves. Chromium picks the drag source at that first move by hit-testing where the
+   * mouse went down, and after the board has scrolled sideways that is no longer the card, so no
+   * drag starts. Here the drag starts on the card first (a few pixels' move); the board scrolls after.
+   */
   async drag(title: string, id: BoardColumnId): Promise<void> {
-    await this.card(title).dragTo(this.column(id))
+    const card = this.card(title)
+    const column = this.column(id)
+    await card.hover()
+    await this.page.mouse.down()
+    const from = await card.boundingBox()
+    if (!from) throw new Error(`card "${title}" has no box`)
+    await this.page.mouse.move(from.x + from.width / 2 + 10, from.y + from.height / 2 + 10)
+    // The board dims the card it is dragging: the drag started on this card.
+    await expect(card).toHaveCSS('opacity', '0.5')
+    await column.scrollIntoViewIfNeeded()
+    const to = await column.boundingBox()
+    if (!to) throw new Error(`column "${COLUMN[id]}" has no box`)
+    await this.page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 5 })
+    await this.page.mouse.up()
   }
 
   async addLink(url: string): Promise<void> {

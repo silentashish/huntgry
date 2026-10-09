@@ -15,7 +15,7 @@ imports nothing from the rest of `src/shared`, and uses no Node, DOM or React Na
 | `guards.ts` | Envelope, command, relay-frame guards (hand-written, no schema library), `requireJobUrl` / `isPrivateHostname`, `negotiateProtocol`, `ttlFor`. |
 | `dto.ts` | Field-by-field validation of every desktop → phone body: `requireStatusSummary`, `requireRemoteRun`, `requireQueueItem` / `requireQueueState`, `requireTranscriptItem` / `requireTranscriptPage` / `requireRunPage`, `requirePipelineState` / `requirePipelineSummary`, `requireReviewItem` / `requireReviewDetail`, `requireRemoteJob` / `requireJobsPage` / `requireRunsPage`, `requireFileChunk`, `requireEventBody`. The projector runs them before encrypting, the phone before rendering. |
 | `crypto.ts` | `tweetnacl` helpers: keypairs, `deriveSessionKey` (`nacl.box.before`), `sealEnvelope` / `openEnvelope` (box), `sealJson` / `openJson` (secretbox for pairing), nonces, base64 / hex, `equalBytes`. |
-| `pairing.ts` | Pairing (ADR "Pairing"): `pairingUrl` / `parsePairingUrl` for the QR `huntgry://pair?v=1&relay=…&room=…&pairing=…&pk=…&s=…&exp=…` (`https://` relay only, `expired` after `exp`), `PAIRING_TTL_SECONDS` (120), the `PairMessage` plaintexts `{ pair: 'hello', hello }`, `{ pair: 'ok', ok }`, `{ pair: 'denied', reason }` and `sealPairMessage` / `openPairMessage` (`secretbox` with the QR secret). |
+| `pairing.ts` | Pairing (ADR "Pairing"): `pairingUrl` / `parsePairingUrl` for the QR `huntgry://pair?v=1&relay=…&room=…&pairing=…&pk=…&s=…&exp=…` (`https://` relay only, `expired` after `exp`), `PAIRING_TTL_SECONDS` (120), the `PairMessage` plaintexts `{ pair: 'hello', hello }`, `{ pair: 'ok', ok }`, `{ pair: 'denied', reason }` and `sealPairMessage` / `openPairMessage` (`secretbox` with a 32-byte key). The phone's `pair.hello` is sealed with the QR secret; the desktop's answer goes through `sealPairReply` / `openPairReply`: `pair.ok` (it carries the relay token) under the phone's session key, `pair.denied` under the QR secret. |
 | `relay-http.ts` | The relay's HTTPS side: `RELAY_PATHS` (`/rooms`, `/rooms/{id}`, `…/devices`, `…/devices/{id}`, `…/pairings`, `/ws`), the bearer-token rule (admin token on `POST /rooms`, owner secret elsewhere), the request / response bodies (`CreateRoomRequest` / `CreateRoomResponse`, `RegisterDeviceRequest`, `RegisterPairingRequest`) and their guards. Hashes are hex SHA-256 of the secret string as presented. |
 | `text.ts` | The only host APIs the package touches: `TextEncoder` / `TextDecoder` and the WHATWG `URL` parser. |
 | `crypto.fixture.json` | Pinned keys, session key and ciphertexts so the phone and the desktop cannot drift. |
@@ -125,8 +125,10 @@ first, and set `nextSeq`. E3's projector owns that rule; `requireEnvelope` is th
 - Frames: `sealEnvelope(envelope, sessionKey)` → `{ nonce, ct }` (random 24-byte nonce,
   `nacl.box.after`); `openEnvelope` returns the parsed plaintext or `null` (tampered, wrong key,
   wrong nonce, not JSON). Always run the result through `requireEnvelope`.
-- Pairing: `sealPairMessage` / `openPairMessage` (over `sealJson` / `openJson`) = `nacl.secretbox` with
-  the 32-byte QR secret; `crypto.fixture.json` pins a sealed `pair.hello` (`pairHello`, `pairHelloCt`).
+- Pairing: `sealPairMessage` / `openPairMessage` (over `sealJson` / `openJson`) = `nacl.secretbox`.
+  `pair.hello` and `pair.denied` use the 32-byte QR secret; `pair.ok` uses the phone's session
+  key (`sealPairReply` / `openPairReply`), so only the phone that sent the approved hello reads its
+  relay token. `crypto.fixture.json` pins a sealed `pair.hello` (`pairHello`, `pairHelloCt`).
   The QR also carries the `pairing` id the phone authenticates with, which the ADR's sequence implies.
 - `randomBytes(n)` for pairing secrets, relay tokens and owner secrets; `equalBytes` for
   constant-time comparison of hashes and tokens.

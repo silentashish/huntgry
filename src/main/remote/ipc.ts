@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto'
 import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 import { AGENT_IDS, type AgentStatus } from '@shared/runner-types'
-import { REMOTE_CHANNELS, type RemoteApi, type RemoteState } from '@shared/remote-types'
-import { RELAY_PATHS, requireCreateRoomResponse } from '@shared/remote'
+import { REMOTE_CHANNELS, type RemoteApi, type RemoteCommandTtl, type RemoteState } from '@shared/remote-types'
+import { COMMAND_TTL_SECONDS, RELAY_PATHS, requireCreateRoomResponse } from '@shared/remote'
 import { resolveApplicationFile } from '../applications/safe-path'
 import { adapterFor } from '../cli/agents'
 import { skillStatus } from '../cli/agents/skills'
@@ -16,22 +16,27 @@ import { emit, onEvent } from '../events'
 import { loadAndExtract } from '../jobs/loader'
 import { addByUrl, listJobs } from '../jobs/service'
 import { queueForRemote } from '../queue/ipc'
-import { loadSettings, saveSettings } from '../workspace'
-import { CredentialStore, newOwnerSecret, normalizeRelayUrl, relayRequest, type Cipher, type CredentialsRead, type RelayCredentials } from './credentials'
+import { AuditLog } from './audit'
+import { CredentialStore, newOwnerSecret, relayRequest, type Cipher, type CredentialsRead, type RelayCredentials } from './credentials'
 import { DeviceStore } from './devices'
 import { Gateway, type GatewayServices } from './gateway'
+import { PairingManager } from './pairing'
 import { projectQueue, projectRun, projectStatus } from './project'
 import { revokeDevice } from './revoke'
 import { RoomControl } from './rooms'
 import { RemoteSession, type SocketLike } from './session'
+import { readRemoteSettings, updateRemoteSettings, type RemoteSettings } from './settings'
+import { AUDIT_VIEW_SIZE, buildRemoteState, projectAudit } from './state'
+import { requireBoolean, requireCommandTtlInput, requireConfigureInput, requireRemoteId } from './validate'
 import { workspaceIdentity } from './workspace'
 
 /**
  * Wires the remote session into the app (ADR-0001, E3): `safeStorage` as the cipher,
  * `userData/remote/` for the credentials, the desktop key and the device checkpoint, the
  * gateway onto the queue, runs, jobs and application files, `onEvent` for the events every
- * window gets, `powerMonitor` for reconnects after sleep, and the `RemoteApi` for Settings.
- * Pairing (QR, approve) is #37; this file only hosts the session.
+ * window gets, `powerMonitor` for reconnects after sleep, pairing (#37, `pairing.ts`) onto the
+ * session and the relay, and the `RemoteApi` for Settings (arguments checked in `validate.ts`,
+ * answers built in `state.ts`).
  */
 
 const remoteDir = (): string => join(app.getPath('userData'), 'remote')
@@ -64,13 +69,11 @@ let devices: DeviceStore
 let credentials: CredentialStore
 let gateway: Gateway
 let session: RemoteSession
+let pairing: PairingManager
 let lastCredentials: CredentialsRead = { status: 'none' }
 let agentsCache: { at: number; agents: Pick<AgentStatus, 'id' | 'ready'>[] } | null = null
 
-async function remoteSettings(): Promise<{ enabled: boolean; notificationDetails: boolean; transcripts: boolean }> {
-  const s = (await loadSettings(settingsFile())).remote ?? {}
-  return { enabled: s.enabled === true, notificationDetails: s.notificationDetails === true, transcripts: s.transcripts !== false }
-}
+const remoteSettings = (): Promise<RemoteSettings> => readRemoteSettings(settingsFile())
 
 /** Which agents could run a job right now: CLI found and skill visible (no preflight; cached a minute). */
 async function agentsReady(): Promise<Pick<AgentStatus, 'id' | 'ready'>[]> {
@@ -87,24 +90,14 @@ async function agentsReady(): Promise<Pick<AgentStatus, 'id' | 'ready'>[]> {
 }
 
 async function currentState(): Promise<RemoteState> {
-  const settings = await remoteSettings()
-  const s = session.current()
-  const state: RemoteState = {
-    connection: !settings.enabled ? 'disabled' : lastCredentials.status === 'unreadable' ? 'credentials-unreadable' : lastCredentials.status === 'none' ? 'unconfigured' : s.connection,
-    notificationDetails: settings.notificationDetails,
-    transcripts: settings.transcripts,
-    devices: devices.list().map((d) => ({ id: d.id, name: d.name, pairedAt: d.pairedAt, lastSeen: d.lastSeen, needsRepair: d.needsRepair, categories: d.categories }))
-  }
-  if (lastCredentials.status === 'unreadable') state.error = lastCredentials.error
-  else if (rooms.revokeWarning()) state.error = rooms.revokeWarning()!
-  else if (s.error && settings.enabled) state.error = s.error
-  if (lastCredentials.status === 'ok') {
-    state.relayUrl = lastCredentials.credentials.relayUrl
-    state.roomId = lastCredentials.credentials.roomId
-  }
-  if (s.onlineSince) state.onlineSince = s.onlineSince
-  if (s.nextAttemptAt) state.nextAttemptAt = s.nextAttemptAt
-  return state
+  return buildRemoteState({
+    settings: await remoteSettings(),
+    credentials: lastCredentials,
+    session: session.current(),
+    revokeWarning: rooms.revokeWarning(),
+    devices: devices.list(),
+    pairings: pairing.list()
+  })
 }
 
 async function publish(): Promise<RemoteState> {
@@ -112,6 +105,8 @@ async function publish(): Promise<RemoteState> {
   emit('remote:state', state)
   return state
 }
+
+const publishLater = (): void => void publish().catch((err: unknown) => console.error('[remote] publishing the state failed:', err))
 
 /** Applies the saved settings: connect when enabled and credentials are readable, else stay closed. */
 async function apply(): Promise<RemoteState> {
@@ -122,13 +117,30 @@ async function apply(): Promise<RemoteState> {
   return publish()
 }
 
+/** A relay answer other than 2xx; `status` lets a revocation treat 404 (no such token) as done. */
+class RelayHttpError extends Error {
+  constructor(
+    readonly status: number,
+    method: string,
+    path: string
+  ) {
+    super(`The relay answered ${status} for ${method} ${path}.`)
+  }
+}
+
 async function relayCall(creds: Pick<RelayCredentials, 'relayUrl'>, path: string, token: string, method: 'POST' | 'DELETE', body?: unknown, signal?: AbortSignal): Promise<unknown> {
   const { url, init } = relayRequest(creds.relayUrl, path, token, method, body)
   // Never wait on the relay without a deadline (revocation and rotation must not hang on it).
   const res = await fetch(url, { ...init, signal: signal ?? AbortSignal.timeout(RELAY_TIMEOUT_MS) })
-  if (!res.ok) throw new Error(`The relay answered ${res.status} for ${method} ${path}.`)
+  if (!res.ok) throw new RelayHttpError(res.status, method, path)
   const text = await res.text()
   return text ? JSON.parse(text) : null
+}
+
+/** The saved credentials, or an error for Settings. */
+function savedCredentials(): RelayCredentials {
+  if (lastCredentials.status === 'ok') return lastCredentials.credentials
+  throw new Error(lastCredentials.status === 'unreadable' ? 'The relay credentials are unreadable. Enter the relay URL and admin token again to recover.' : 'Set up the relay first.')
 }
 
 /** Mints a new owner secret and room (a rotation then deletes the old room; every phone pairs again). */
@@ -151,6 +163,7 @@ const rooms = new RoomControl({
   deleteRoom,
   writeCredentials: (c) => credentials.write(c),
   rotateKeyPair: () => devices.rotateKeyPair(),
+  markAllNeedsRepair: () => devices.markAllNeedsRepair(),
   stopSession: () => session.stop(),
   apply
 })
@@ -164,7 +177,12 @@ async function revoke(id: string, reason: string): Promise<void> {
       notify: (record, why) => session.notifyRevoked(record, why),
       relayDelete: async (deviceId, signal) => {
         if (!creds) return
-        await relayCall(creds, RELAY_PATHS.device(creds.roomId, deviceId), creds.ownerSecret, 'DELETE', undefined, signal)
+        try {
+          await relayCall(creds, RELAY_PATHS.device(creds.roomId, deviceId), creds.ownerSecret, 'DELETE', undefined, signal)
+        } catch (err) {
+          // 404: this room holds no such token (a phone left from a rotated room): nothing to revoke.
+          if (!(err instanceof RelayHttpError && err.status === 404)) throw err
+        }
       },
       timeoutMs: RELAY_TIMEOUT_MS
     },
@@ -179,41 +197,77 @@ async function revoke(id: string, reason: string): Promise<void> {
 const api: RemoteApi = {
   state: () => currentState(),
   setEnabled: async (enabled) => {
-    if (typeof enabled !== 'boolean') throw new Error('Invalid value.')
-    const current = (await loadSettings(settingsFile())).remote ?? {}
-    await saveSettings(settingsFile(), { remote: { ...current, enabled } })
+    await updateRemoteSettings(settingsFile(), { enabled: requireBoolean(enabled) })
+    if (!enabled) pairing.cancelAll()
     return apply()
   },
   configure: async (input) => {
-    const p = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
-    const relayUrl = normalizeRelayUrl(p.relayUrl)
-    if (typeof p.adminToken !== 'string' || !p.adminToken.trim() || p.adminToken.length > 512) throw new Error('Enter the relay admin token.')
+    const { relayUrl, adminToken } = requireConfigureInput(input)
     const previous = lastCredentials.status === 'ok' ? lastCredentials.credentials : null
-    await rooms.replaceRoom(relayUrl, p.adminToken.trim(), previous)
-    const current = (await loadSettings(settingsFile())).remote ?? {}
-    await saveSettings(settingsFile(), { remote: { ...current, enabled: true } })
+    const replacing = previous !== null || lastCredentials.status === 'unreadable'
+    // The only place a room is created: once on the first Save, again only when the owner replaces it.
+    await rooms.replaceRoom(relayUrl, adminToken, previous, replacing)
+    if (replacing) pairing.cancelAll()
+    await updateRemoteSettings(settingsFile(), { enabled: true })
+    return apply()
+  },
+  rotate: async () => {
+    const current = savedCredentials()
+    await rooms.replaceRoom(current.relayUrl, current.adminToken, current)
+    pairing.cancelAll()
     return apply()
   },
   setNotificationDetails: async (on) => {
-    const current = (await loadSettings(settingsFile())).remote ?? {}
-    await saveSettings(settingsFile(), { remote: { ...current, notificationDetails: on === true } })
+    await updateRemoteSettings(settingsFile(), { notificationDetails: requireBoolean(on) })
+    await refreshToggles()
     return publish()
   },
   setTranscripts: async (on) => {
-    const current = (await loadSettings(settingsFile())).remote ?? {}
-    await saveSettings(settingsFile(), { remote: { ...current, transcripts: on !== false } })
+    await updateRemoteSettings(settingsFile(), { transcripts: requireBoolean(on) })
+    await refreshToggles()
+    return publish()
+  },
+  setCommandTtl: async (input) => {
+    await updateRemoteSettings(settingsFile(), { commandTtl: requireCommandTtlInput(input) })
+    await refreshToggles()
     return publish()
   },
   revoke: async (deviceId) => {
-    if (typeof deviceId !== 'string' || !devices.get(deviceId)) throw new Error('Unknown device.')
-    await revoke(deviceId, 'This phone was removed in Settings.')
+    const id = requireRemoteId(deviceId, 'device')
+    if (!devices.get(id)) throw new Error('Unknown device.')
+    await revoke(id, 'This phone was removed in Settings.')
     return publish()
   },
   unpairAll: async () => {
+    pairing.cancelAll()
     await Promise.all(devices.list().map((d) => revoke(d.id, 'All phones were unpaired in Settings.')))
     // Reconnects whatever the relay answers; a refused new room is thrown to Settings after that.
     await rooms.rotateAll(lastCredentials.status === 'ok' ? lastCredentials.credentials : null)
     return currentState()
+  },
+  startPairing: async () => {
+    if (!(await remoteSettings()).enabled) throw new Error('Turn on remote control first.')
+    savedCredentials()
+    return pairing.start()
+  },
+  cancelPairing: async (pairingId) => {
+    pairing.cancel(requireRemoteId(pairingId, 'pairing'))
+    return currentState()
+  },
+  approvePairing: async (pairingId) => {
+    await pairing.approve(requireRemoteId(pairingId, 'pairing'))
+    return publish()
+  },
+  denyPairing: async (pairingId) => {
+    await pairing.deny(requireRemoteId(pairingId, 'pairing'))
+    return publish()
+  },
+  audit: async () => {
+    const workspace = await requireCurrentWorkspace().catch(() => null)
+    if (!workspace) return []
+    // Twice the view: a write-ahead entry and its outcome are two lines of one command.
+    const entries = await AuditLog.forWorkspace(workspace.path).entries(AUDIT_VIEW_SIZE * 2)
+    return projectAudit(entries, devices.list())
   }
 }
 
@@ -249,7 +303,8 @@ async function init(): Promise<void> {
     runs: runsForRemote,
     jobs: { list: listJobs, addUrl: (ws, url) => addByUrl(ws, url, loadAndExtract) },
     files: { resolve: resolveApplicationFile },
-    transcripts: () => transcriptsOn
+    transcripts: () => transcriptsOn,
+    commandTtl: () => commandTtl
   }
   gateway = new Gateway(services, devices)
   const status = async () => {
@@ -265,7 +320,29 @@ async function init(): Promise<void> {
     workspace: () => services.workspace().catch(() => null),
     status,
     notificationDetails: () => detailsOn,
-    onState: () => void publish().catch((err: unknown) => console.error('[remote] publishing the state failed:', err))
+    pairing: { receive: (frame) => pairing.receive(frame) },
+    onState: publishLater
+  })
+  pairing = new PairingManager({
+    devices,
+    relay: () => (lastCredentials.status === 'ok' ? { relayUrl: lastCredentials.credentials.relayUrl, roomId: lastCredentials.credentials.roomId } : null),
+    registerPairing: async (pairingId, exp) => {
+      const c = savedCredentials()
+      await relayCall(c, RELAY_PATHS.pairings(c.roomId), c.ownerSecret, 'POST', { pairingId, exp })
+    },
+    registerDevice: async (deviceId, tokenHash) => {
+      const c = savedCredentials()
+      await relayCall(c, RELAY_PATHS.devices(c.roomId), c.ownerSecret, 'POST', { deviceId, tokenHash })
+    },
+    unregisterDevice: async (deviceId) => {
+      const c = savedCredentials()
+      await relayCall(c, RELAY_PATHS.device(c.roomId, deviceId), c.ownerSecret, 'DELETE')
+    },
+    send: (frame) => session.sendFrame(frame),
+    ack: (ref) => session.ack(ref),
+    online: () => session.isOnline(),
+    desktopName: services.desktopName,
+    onChange: publishLater
   })
   onEvent((channel, payload) => {
     if (!session.isOnline()) return
@@ -288,11 +365,14 @@ async function init(): Promise<void> {
 
 let detailsOn = false
 let transcriptsOn = true
+let commandTtl: { costly: number; default: number } = { ...COMMAND_TTL_SECONDS }
 
+/** The gateway and the session read these synchronously on every frame. */
 async function refreshToggles(): Promise<void> {
   const s = await remoteSettings()
   detailsOn = s.notificationDetails
   transcriptsOn = s.transcripts
+  commandTtl = { ...s.commandTtl }
 }
 
 /** Closes the session (quit). */
@@ -302,19 +382,20 @@ export async function stopRemote(): Promise<void> {
 }
 
 export function registerRemoteIpc(): void {
-  ipcMain.handle(REMOTE_CHANNELS.state, async () => (await started()).state())
-  ipcMain.handle(REMOTE_CHANNELS.setEnabled, async (_e, enabled: unknown) => (await started()).setEnabled(enabled as boolean))
-  ipcMain.handle(REMOTE_CHANNELS.configure, async (_e, input: unknown) => (await started()).configure(input as { relayUrl: string; adminToken: string }))
-  ipcMain.handle(REMOTE_CHANNELS.setNotificationDetails, async (_e, on: unknown) => {
-    const state = await (await started()).setNotificationDetails(on === true)
-    await refreshToggles()
-    return state
-  })
-  ipcMain.handle(REMOTE_CHANNELS.setTranscripts, async (_e, on: unknown) => {
-    const state = await (await started()).setTranscripts(on !== false)
-    await refreshToggles()
-    return state
-  })
-  ipcMain.handle(REMOTE_CHANNELS.revoke, async (_e, id: unknown) => (await started()).revoke(id as string))
-  ipcMain.handle(REMOTE_CHANNELS.unpairAll, async () => (await started()).unpairAll())
+  // Every argument arrives as `unknown` and is checked by the API itself (validate.ts).
+  const handle = (channel: string, call: (api: RemoteApi, arg: unknown) => Promise<unknown>) => ipcMain.handle(channel, async (_e, arg: unknown) => call(await started(), arg))
+  handle(REMOTE_CHANNELS.state, (a) => a.state())
+  handle(REMOTE_CHANNELS.setEnabled, (a, v) => a.setEnabled(v as boolean))
+  handle(REMOTE_CHANNELS.configure, (a, v) => a.configure(v as { relayUrl: string; adminToken: string }))
+  handle(REMOTE_CHANNELS.rotate, (a) => a.rotate())
+  handle(REMOTE_CHANNELS.setNotificationDetails, (a, v) => a.setNotificationDetails(v as boolean))
+  handle(REMOTE_CHANNELS.setTranscripts, (a, v) => a.setTranscripts(v as boolean))
+  handle(REMOTE_CHANNELS.setCommandTtl, (a, v) => a.setCommandTtl(v as RemoteCommandTtl))
+  handle(REMOTE_CHANNELS.revoke, (a, v) => a.revoke(v as string))
+  handle(REMOTE_CHANNELS.unpairAll, (a) => a.unpairAll())
+  handle(REMOTE_CHANNELS.startPairing, (a) => a.startPairing())
+  handle(REMOTE_CHANNELS.cancelPairing, (a, v) => a.cancelPairing(v as string))
+  handle(REMOTE_CHANNELS.approvePairing, (a, v) => a.approvePairing(v as string))
+  handle(REMOTE_CHANNELS.denyPairing, (a, v) => a.denyPairing(v as string))
+  handle(REMOTE_CHANNELS.audit, (a) => a.audit())
 }
