@@ -16,12 +16,13 @@ import { emit, onEvent } from '../events'
 import { loadAndExtract } from '../jobs/loader'
 import { addByUrl, listJobs } from '../jobs/service'
 import { pipelineForRemote } from '../pipeline/ipc'
+import { reviewForRemote } from '../review/ipc'
 import { queueForRemote } from '../queue/ipc'
 import { loadSettings, saveSettings } from '../workspace'
 import { CredentialStore, newOwnerSecret, normalizeRelayUrl, relayRequest, type Cipher, type CredentialsRead, type RelayCredentials } from './credentials'
 import { DeviceStore } from './devices'
 import { RemoteEvents } from './events'
-import { Gateway, statusOf, type GatewayServices } from './gateway'
+import { Gateway, pendingReviews, statusOf, type GatewayServices } from './gateway'
 import { revokeDevice } from './revoke'
 import { RoomControl } from './rooms'
 import { RemoteSession, type SocketLike } from './session'
@@ -251,6 +252,7 @@ async function init(): Promise<void> {
     jobs: { list: listJobs, addUrl: (ws, url) => addByUrl(ws, url, loadAndExtract) },
     files: { resolve: resolveApplicationFile },
     pipeline: pipelineForRemote,
+    review: reviewForRemote,
     transcripts: () => transcriptsOn
   }
   gateway = new Gateway(services, devices)
@@ -266,7 +268,14 @@ async function init(): Promise<void> {
     notificationDetails: () => detailsOn,
     onState: () => void publish().catch((err: unknown) => console.error('[remote] publishing the state failed:', err))
   })
-  const events = new RemoteEvents({ broadcast: (name, body, pushText, hint) => session.broadcast(name, body, pushText, hint), status })
+  const events = new RemoteEvents({
+    broadcast: (name, body, pushText, hint) => session.broadcast(name, body, pushText, hint),
+    status,
+    reviews: async () => {
+      const workspace = await services.workspace()
+      return { workspaceId: workspace.id, items: await pendingReviews(services, workspace) }
+    }
+  })
   onEvent((channel, payload) => {
     if (!session.isOnline()) return
     void events.handle(channel, payload)

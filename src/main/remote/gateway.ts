@@ -25,9 +25,21 @@ import {
   type NotificationCategory,
   type RemoteCommand,
   type RemoteCommandName,
+  type ReviewDetail,
+  type ReviewItem,
   type StatusSummary
 } from '@shared/remote'
 import type { PipelineState as DesktopPipelineState } from '@shared/pipeline-types'
+import type {
+  ApproveReviewInput,
+  DiscardReviewInput,
+  RerunReviewInput,
+  ReviewDetail as DesktopReviewDetail,
+  ReviewItem as DesktopReviewItem,
+  ReviewOutcome,
+  ReviewVia
+} from '@shared/review-types'
+import { isSettledReview } from '../review/service'
 import { MAX_TEXT } from '../cli/command'
 import { assertPublicUrl, type ResolveHost } from '../cli/public-url'
 import { requireRunId } from '../cli/runs'
@@ -37,7 +49,7 @@ import { WorkspaceChangedError } from '../workspace/changed'
 import type { AgentId } from '@shared/runner-types'
 import { AuditLog, type Known } from './audit'
 import type { DeviceRecord, DeviceStore } from './devices'
-import { projectJob, projectJobsPage, projectPipeline,projectQueue, projectRun, projectRunPage, projectRunsPage, projectStatus, safeText } from './project'
+import { projectJob, projectJobsPage, projectPipeline, projectQueue, projectReviewDetail, projectReviewItem, projectReviewList, projectRun, projectRunPage, projectRunsPage, projectStatus, safeText } from './project'
 import type { WorkspaceIdentity } from './workspace'
 
 /**
@@ -102,6 +114,20 @@ export interface GatewayServices {
     resume(workspace: string): Promise<DesktopPipelineState>
     stop(workspace: string): Promise<DesktopPipelineState>
   }
+  /**
+   * #31's review service (#42): the desktop's list, detail and decisions, each bound to the
+   * workspace the gateway checked; decisions use the desktop's `ReviewDeps` (the same reply
+   * path, `afterReviewDecision`). Absent: `review.*` answer `unsupported`.
+   */
+  review?: {
+    list(workspace: string): Promise<{ item: DesktopReviewItem; openGaps: number }[]>
+    detail(workspace: string, applicationId: string): Promise<DesktopReviewDetail>
+    approve(workspace: string, input: ApproveReviewInput, via: ReviewVia): Promise<ReviewOutcome>
+    rerun(workspace: string, input: RerunReviewInput, via: ReviewVia): Promise<ReviewOutcome>
+    discard(workspace: string, input: DiscardReviewInput, via: ReviewVia): Promise<ReviewOutcome>
+    /** Results waiting for review whose run is done with them (the status count). */
+    unreviewed(workspace: string): Promise<number>
+  }
   /** Transcripts may be sent to phones (Settings, default on). */
   transcripts(): boolean
   /** DNS for `assertPublicUrl` (tests inject one). */
@@ -144,10 +170,45 @@ const RATE = {
   readsPerMinute: 30
 } as const
 
-/** Commands that touch the review queue (#31): not on this desktop yet. */
-const NOT_YET: readonly RemoteCommandName[] = ['review.list', 'review.get', 'review.approve', 'review.rerun', 'review.discard']
+const REVIEW_COMMANDS: readonly RemoteCommandName[] = ['review.list', 'review.get', 'review.approve', 'review.rerun', 'review.discard']
 const PIPELINE_COMMANDS: readonly RemoteCommandName[] = ['pipeline.start', 'pipeline.pause', 'pipeline.resume', 'pipeline.stop']
 const UNSUPPORTED = 'Pipelines and reviews are not available on this Mac yet. Update Huntgry.'
+
+/** Revisions remembered per device (a phone looks at a few results, not hundreds). */
+const SERVED_PER_DEVICE = 64
+const NOT_SERVED = 'This phone was not shown this version of the result. Open it again.'
+const UNKNOWN_REFRAMING = 'One of the ticked reframings is not part of this result. Reload it and decide again.'
+
+/** What one device was shown under one revision (`review.get`, or the detail a decision answered with). */
+interface Served {
+  applicationId: string
+  runId: string
+  /** The reframing ids listed in full on the phone: the only ones it may approve. */
+  ids: Set<string>
+}
+
+/** The revision and ids of a review decision, kept in the write-ahead audit entry. */
+function auditDetail(command: RemoteCommand): Record<string, unknown> | undefined {
+  switch (command.name) {
+    case 'review.approve':
+      return { applicationId: command.args.applicationId, revision: command.args.revision, ids: command.args.approvedReframingIds ?? [] }
+    case 'review.rerun':
+      return { runId: command.args.runId, revision: command.args.revision }
+    case 'review.discard':
+      return { applicationId: command.args.applicationId, revision: command.args.revision }
+    default:
+      return undefined
+  }
+}
+
+/**
+ * The review list for events (`review.needed`): every listed result as the phone sees it, and
+ * whether its run is done with it (not still building, not re-running with the owner's answers).
+ */
+export async function pendingReviews(s: GatewayServices, workspace: WorkspaceIdentity): Promise<{ item: ReviewItem; settled: boolean }[]> {
+  if (!s.review) return []
+  return (await s.review.list(workspace.path)).map((e) => ({ item: projectReviewItem(e.item, e.openGaps), settled: isSettledReview(e.item) }))
+}
 
 /** "Run unattended"'s defaults when the phone sends no options (BulkTailorModal). */
 const PIPELINE_OPTIONS = { coverLetter: true, dateStyle: 'right' } as const
@@ -167,12 +228,13 @@ async function desktopCall<T>(call: () => Promise<T>): Promise<T> {
 
 /** The status the phone sees (`status.get`, `hello`, heartbeats): queue, pipeline and agents of `workspace`. */
 export async function statusOf(s: GatewayServices, workspace: WorkspaceIdentity): Promise<StatusSummary> {
-  const [queue, agents, pipeline] = await Promise.all([
+  const [queue, agents, pipeline, unreviewed] = await Promise.all([
     s.queue.state(workspace.path),
     s.agents(),
-    s.pipeline ? s.pipeline.state(workspace.path).catch(() => null) : Promise.resolve(null)
+    s.pipeline ? s.pipeline.state(workspace.path).catch(() => null) : Promise.resolve(null),
+    s.review ? s.review.unreviewed(workspace.path).catch(() => 0) : Promise.resolve(0)
   ])
-  return projectStatus({ desktopName: s.desktopName, appVersion: s.appVersion, workspace, queue, agents, pipeline })
+  return projectStatus({ desktopName: s.desktopName, appVersion: s.appVersion, workspace, queue, agents, pipeline, unreviewed })
 }
 
 /** Outcome of `Gateway.admit` for a non-command envelope. */
@@ -331,7 +393,7 @@ export class Gateway {
       }
       // Not checkpointed yet: the audit entry is the commit. A crash before it persists nothing, so
       // the relay's redelivery runs the command exactly once (ADR "Commit order on the desktop").
-      if (NOT_YET.includes(command.name) || (PIPELINE_COMMANDS.includes(command.name) && !this.services.pipeline)) {
+      if ((REVIEW_COMMANDS.includes(command.name) && !this.services.review) || (PIPELINE_COMMANDS.includes(command.name) && !this.services.pipeline)) {
         throw new ProtocolError('unsupported', UNSUPPORTED)
       }
       this.checkTtl(envelope, command.name)
@@ -351,7 +413,8 @@ export class Gateway {
       }
 
       this.services.crashAt?.('before-start', command.name)
-      await durable(audit.start({ id: envelope.id, deviceId: device.id, sid: device.sid, seq, name: command.name, digest, ts: at }))
+      const detail = auditDetail(command)
+      await durable(audit.start({ id: envelope.id, deviceId: device.id, sid: device.sid, seq, name: command.name, digest, ts: at, ...(detail ? { detail } : {}) }))
       await durable(this.devices.accept(device.id, seq, at))
       this.services.crashAt?.('after-start', command.name)
       let body: unknown
@@ -575,12 +638,77 @@ export class Gateway {
       case 'pipeline.stop':
         return projectPipeline(await desktopCall(() => this.pipeline().stop(ws)), this.now())
       case 'review.list':
-      case 'review.get':
-      case 'review.approve':
-      case 'review.rerun':
-      case 'review.discard':
-        throw new ProtocolError('unsupported', UNSUPPORTED)
+        return projectReviewList(await desktopCall(() => this.review().list(ws)))
+      case 'review.get': {
+        const detail = projectReviewDetail(await desktopCall(() => this.review().detail(ws, command.args.applicationId)))
+        this.serve(device, detail)
+        return detail
+      }
+      case 'review.approve': {
+        const a = command.args
+        const served = this.servedFor(device, a.revision, (x) => x.applicationId === a.applicationId)
+        const ids = [...new Set(a.approvedReframingIds ?? [])]
+        // One id the phone was not shown in full fails the whole command, before anything is written.
+        if (ids.some((id) => !served.ids.has(id))) throw new ProtocolError('invalid', UNKNOWN_REFRAMING)
+        // The review service rebuilds the detail from disk: a different revision is `stale`; it
+        // writes only the on-disk source fact → wording pairs of these ids, clears Unreviewed and
+        // calls `afterReviewDecision` (via its deps), exactly like the desktop's Approve.
+        const outcome = await desktopCall(() => this.review().approve(ws, { applicationId: a.applicationId, revision: a.revision, approvedReframingIds: ids }, `phone:${device.id}`))
+        return this.decided(device, outcome)
+      }
+      case 'review.rerun': {
+        const a = command.args
+        const served = this.servedFor(device, a.revision, (x) => x.runId === a.runId)
+        const answers = a.answers.trim()
+        if (!answers || a.answers.length > MAX_TEXT) throw new ProtocolError('invalid', 'Type your answers first.')
+        // The desktop's Re-run: the answers go to the result's own run through the queue (same session, same sandbox).
+        const outcome = await desktopCall(() => this.review().rerun(ws, { applicationId: served.applicationId, revision: a.revision, answers, approvedReframingIds: [] }, `phone:${device.id}`))
+        return this.decided(device, outcome)
+      }
+      case 'review.discard': {
+        const a = command.args
+        this.servedFor(device, a.revision, (x) => x.applicationId === a.applicationId)
+        // The desktop's Discard: the result is archived and blocked from Apply; no file is deleted.
+        const outcome = await desktopCall(() => this.review().discard(ws, { applicationId: a.applicationId, revision: a.revision }, `phone:${device.id}`))
+        return this.decided(device, outcome)
+      }
     }
+  }
+
+  private review(): NonNullable<GatewayServices['review']> {
+    if (!this.services.review) throw new ProtocolError('unsupported', UNSUPPORTED)
+    return this.services.review
+  }
+
+  /** Revisions served per device and pairing: kept for the gateway's life, so a reconnect does not forget them. */
+  private served = new Map<string, Map<string, Served>>()
+
+  private servedKey(device: DeviceRecord): string {
+    return `${device.id}\u0000${device.sid}`
+  }
+
+  private serve(device: DeviceRecord, detail: ReviewDetail): void {
+    const key = this.servedKey(device)
+    const map = this.served.get(key) ?? new Map<string, Served>()
+    map.delete(detail.revision)
+    map.set(detail.revision, { applicationId: detail.applicationId, runId: detail.runId, ids: new Set(detail.proposedReframings.map((p) => p.id)) })
+    if (map.size > SERVED_PER_DEVICE) map.delete(map.keys().next().value!)
+    this.served.set(key, map)
+  }
+
+  /** The detail this device was shown under `revision` (for this result), else `denied`. */
+  private servedFor(device: DeviceRecord, revision: string, same: (served: Served) => boolean): Served {
+    const served = this.served.get(this.servedKey(device))?.get(revision)
+    if (!served || !same(served)) throw new ProtocolError('denied', NOT_SERVED)
+    return served
+  }
+
+  /** A decision's outcome: `stale` / `invalid` as the service said, else the new detail (served, so the phone can decide again). */
+  private decided(device: DeviceRecord, outcome: ReviewOutcome): ReviewDetail {
+    if (!outcome.ok) throw new ProtocolError(outcome.error, outcome.message)
+    const detail = projectReviewDetail(outcome.detail)
+    this.serve(device, detail)
+    return detail
   }
 
   private pipeline(): NonNullable<GatewayServices['pipeline']> {

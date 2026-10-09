@@ -185,7 +185,11 @@ const review: ReviewDetail = {
   proposedReframings: Array.from({ length: LIMITS.reviewListItems }, () => ({ id: SHA, sourceFact: 'f'.repeat(LIMITS.reviewEntryBytes), wording: 'w'.repeat(LIMITS.reviewEntryBytes) })),
   verify: { ok: false, report: 'r'.repeat(LIMITS.verifyReportBytes) },
   artifacts: Array.from({ length: LIMITS.reviewArtifacts }, (_, i) => ({ file: i === 0 ? 'resume.pdf' : i === 1 ? 'cover.pdf' : `resume-page-${i}.jpg`, bytes: 1e7, sha256: SHA })),
-  revision: SHA
+  revision: SHA,
+  state: 'needs-attention',
+  reason: errorMax,
+  parseWarning: errorMax,
+  truncated: true
 }
 const chunkData = toBase64(new Uint8Array(LIMITS.fileChunkBytes).fill(255))
 
@@ -196,7 +200,7 @@ const largestBodies: Record<RemoteEventName, unknown> = {
   'run.transcript': { runId: ID, items: transcriptItems.slice(0, 3), seq: Number.MAX_SAFE_INTEGER },
   'pipeline.changed': pipeline,
   'pipeline.finished': { status: 'budget', counts: pipeline.counts, costUsd: 1e6, startedAt: ISO, finishedAt: ISO },
-  'review.needed': { count: 100, latest: { applicationId: APP_ID, runId: ID, title: TITLE, openGaps: 20, finishedAt: ISO } },
+  'review.needed': { count: 100, latest: { applicationId: APP_ID, runId: ID, title: TITLE, openGaps: 20, finishedAt: ISO, state: 'needs-attention', reason: errorMax } },
   'applications.changed': { ids: Array.from({ length: LIMITS.applicationsChangedIds }, () => APP_ID) },
   'file.chunk': { applicationId: APP_ID, file: 'cover-page-9999.jpg', chunk: 99_999, of: 100_000, bytes: 2 ** 31, sha256: SHA, data: chunkData },
   'device.revoked': { reason: 'r'.repeat(LIMITS.shortStringChars) }

@@ -319,6 +319,9 @@ export interface PipelineSummary {
   finishedAt: string
 }
 
+/** #31's review states (`ReviewDetail.state`); the list holds only the first two. */
+export type RemoteReviewState = 'unreviewed' | 'needs-attention' | 'approved' | 'discarded'
+
 /** One row of the Unreviewed list. */
 export interface ReviewItem {
   applicationId: string
@@ -328,6 +331,16 @@ export interface ReviewItem {
   /** Number of open gaps, for the badge. */
   openGaps: number
   finishedAt: string
+  /** #42: Unreviewed, or Needs attention (failed checks, no notes, a question). */
+  state?: 'unreviewed' | 'needs-attention'
+  /** #42: why it needs attention; ≤ `LIMITS.errorBytes`. */
+  reason?: string
+}
+
+/** `review.list` result: newest first, at most `LIMITS.reviewItems` and the plaintext budget; `more` counts the rest. */
+export interface ReviewList {
+  items: ReviewItem[]
+  more?: number
 }
 
 /** Everything the desktop review screen (#31) shows, so the phone approves what it has seen. */
@@ -350,6 +363,18 @@ export interface ReviewDetail {
    * one immutable snapshot of what the phone was shown. approve / rerun / discard must echo it.
    */
   revision: string
+  /** #42: the review state, as the desktop's review screen shows it. */
+  state?: RemoteReviewState
+  /** #42: why it needs attention; ≤ `LIMITS.errorBytes`. */
+  reason?: string
+  /** #42: review-notes.md did not follow the format (nothing can be ticked); ≤ `LIMITS.errorBytes`. */
+  parseWarning?: string
+  /**
+   * #42: some of the result did not fit the bounds above (a gap, reframing or report cut, more
+   * artifacts than listed). The full text is in review-notes.md (`file.get`) and on the Mac; a
+   * reframing that is not listed cannot be approved from the phone.
+   */
+  truncated?: boolean
 }
 
 export type RemoteRunStatus = 'running' | 'waiting' | 'finished' | 'failed' | 'stopped'

@@ -1,7 +1,7 @@
 import type { PipelineState as DesktopPipelineState, PipelineSummary as DesktopPipelineSummary } from '@shared/pipeline-types'
 import type { QueueState } from '@shared/queue-types'
 import type { RunSummary } from '@shared/runner-types'
-import type { NotificationCategory, RemoteEventBody, RemoteEventName, StatusSummary } from '@shared/remote'
+import type { NotificationCategory, RemoteEventBody, RemoteEventName, ReviewItem, StatusSummary } from '@shared/remote'
 import { categoryOf } from './gateway'
 import { projectPipeline, projectPipelineSummary, projectQueue, projectRun, safeText } from './project'
 
@@ -15,6 +15,7 @@ import { projectPipeline, projectPipelineSummary, projectQueue, projectRun, safe
  * - a pipeline paused by an error (spend limit, an agent that cannot start), or a job that
  *   failed for good → `failed`; a job that stopped with a question → `needs-reply`;
  * - a pipeline's summary → `pipeline-finished`;
+ * - a result newly waiting for review (its run done with it) → `review.needed` / `needs-review`;
  * - an unattended run's own `run.changed` carries none: its pipeline reports it (a failed turn
  *   that is retried, or a turn that ended before the verify gate, is not news).
  */
@@ -24,6 +25,10 @@ export interface EventsDeps {
   broadcast<N extends RemoteEventName>(name: N, body: RemoteEventBody<N>, pushText?: string, hint?: NotificationCategory | null): Promise<void>
   /** The status of the open workspace (`statusOf`). */
   status(): Promise<StatusSummary>
+  /** #42: the open workspace's listed results (`pendingReviews`); absent, no `review.needed`. */
+  reviews?(): Promise<{ workspaceId: string; items: { item: ReviewItem; settled: boolean }[] }>
+  /** Wait after a change before listing the results again (default 500 ms; bursts fold into one). */
+  reviewDelayMs?: number
   now?(): number
 }
 
@@ -41,6 +46,10 @@ export class RemoteEvents {
   private pipelineSeen: PipelineSeen | null | undefined
   /** `id:until` of the last limit wait pushed. */
   private limitPushed: string | null = null
+  /** Per workspace: the settled results already announced (the first listing is the baseline). */
+  private reviewSeen = new Map<string, Set<string>>()
+  private reviewTimer: NodeJS.Timeout | null = null
+  private reviewScan: Promise<void> = Promise.resolve()
 
   constructor(private deps: EventsDeps) {}
 
@@ -51,6 +60,7 @@ export class RemoteEvents {
   /** One desktop event (`onEvent(channel, payload)`). Never rejects. */
   async handle(channel: string, payload: unknown): Promise<void> {
     try {
+      if (channel === 'queue:changed' || channel === 'applications:changed' || channel === 'pipeline:finished') this.scheduleReviews()
       switch (channel) {
         case 'queue:changed':
           await this.deps.broadcast('queue.changed', projectQueue(payload as QueueState))
@@ -116,6 +126,39 @@ export class RemoteEvents {
     if (state.counts.failed > prev.failed) return { hint: 'failed' }
     if (state.counts.needsReply > prev.needsReply) return { hint: 'needs-reply' }
     return { hint: null }
+  }
+
+  private scheduleReviews(): void {
+    if (!this.deps.reviews || this.reviewTimer) return
+    this.reviewTimer = setTimeout(() => {
+      this.reviewTimer = null
+      void this.checkReviews()
+    }, this.deps.reviewDelayMs ?? 500)
+    this.reviewTimer.unref?.()
+  }
+
+  /**
+   * Lists the results again (one listing at a time) and sends `review.needed` for those newly
+   * waiting for review, with the latest one and the count; the status follows the count. A
+   * result still being built, or re-running with the owner's answers, is not announced until its
+   * run is done with it. Never rejects.
+   */
+  checkReviews(): Promise<void> {
+    const run = async () => {
+      if (!this.deps.reviews) return
+      const { workspaceId, items } = await this.deps.reviews()
+      const settled = items.filter((i) => i.settled).map((i) => i.item)
+      const key = (i: ReviewItem) => `${i.applicationId}\u0000${i.runId}\u0000${i.finishedAt}`
+      const keys = new Set(settled.map(key))
+      const seen = this.reviewSeen.get(workspaceId)
+      this.reviewSeen.set(workspaceId, keys)
+      if (!seen) return
+      const fresh = settled.filter((i) => !seen.has(key(i))).sort((a, b) => b.finishedAt.localeCompare(a.finishedAt))
+      if (fresh.length > 0) await this.deps.broadcast('review.needed', { count: settled.length, latest: fresh[0] }, fresh[0].title)
+      if (fresh.length > 0 || keys.size !== seen.size) await this.status()
+    }
+    this.reviewScan = this.reviewScan.then(run).catch((err: unknown) => console.error('[remote] listing reviews failed:', err))
+    return this.reviewScan
   }
 
   private async finished(summary: DesktopPipelineSummary): Promise<void> {

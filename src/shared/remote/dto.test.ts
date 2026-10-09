@@ -10,6 +10,7 @@ import {
   requireRemoteRun,
   requireReviewDetail,
   requireReviewItem,
+  requireReviewList,
   requireRunPage,
   requireRunsPage,
   requireStatusSummary,
@@ -93,6 +94,11 @@ describe('accepts every DTO and returns only its known fields', () => {
     expect(requireReviewItem({ applicationId: 'a', runId: 'r', title: 't', openGaps: 1, finishedAt: ISO })).toMatchObject({ openGaps: 1 })
     expect(requireReviewDetail(review)).toEqual(review)
     expect(requireReviewDetail({ ...review, reviewNotes: null }).reviewNotes).toBeNull()
+    // #42: what else the desktop's review screen shows.
+    const full: ReviewDetail = { ...review, state: 'needs-attention', reason: 'page_count failed', parseWarning: 'not the format', truncated: true }
+    expect(requireReviewDetail(full)).toEqual(full)
+    const row = { applicationId: 'a/b/c', runId: 'r', title: 't', openGaps: 2, finishedAt: ISO, state: 'needs-attention' as const, reason: 'x' }
+    expect(requireReviewList({ items: [row], more: 3 })).toEqual({ items: [row], more: 3 })
     expect(requireJobsPage({ items: [{ id: 'url:1', title: 'x', savedAt: ISO, tailored: true }], nextCursor: 'c' })).toMatchObject({ nextCursor: 'c' })
     // #40: the dismissed flag.
     expect(requireJobsPage({ items: [{ id: 'url:1', title: 'x', savedAt: ISO, dismissed: true }] }).items[0].dismissed).toBe(true)
@@ -145,6 +151,14 @@ describe('refuses the first value over each limit, wrong enums and unknown field
     ['review: too many artifacts', () => requireReviewDetail({ ...review, artifacts: Array.from({ length: LIMITS.reviewArtifacts + 1 }, () => review.artifacts[0]) })],
     ['review: artifact outside the folder', () => requireReviewDetail({ ...review, artifacts: [{ file: '../master-profile.md', bytes: 1, sha256: SHA }] })],
     ['review: revision not sha256', () => requireReviewDetail({ ...review, revision: 'v1' })],
+    ['review: unknown state', () => requireReviewDetail({ ...review, state: 'applied' })],
+    ['review: reason over errorBytes', () => requireReviewDetail({ ...review, reason: over(LIMITS.errorBytes) })],
+    ['review: parseWarning over errorBytes', () => requireReviewDetail({ ...review, parseWarning: over(LIMITS.errorBytes) })],
+    ['review: truncated not a boolean', () => requireReviewDetail({ ...review, truncated: 1 })],
+    ['review: reframing with a requirement field', () => requireReviewDetail({ ...review, proposedReframings: [{ ...review.proposedReframings[0], requirement: 'x' }] })],
+    ['review item: approved state in the list', () => requireReviewItem({ applicationId: 'a', runId: 'r', title: 't', openGaps: 0, finishedAt: ISO, state: 'approved' })],
+    ['review list: more than reviewItems', () => requireReviewList({ items: Array.from({ length: LIMITS.reviewItems + 1 }, () => ({ applicationId: 'a', runId: 'r', title: 't', openGaps: 0, finishedAt: ISO })) })],
+    ['review list: unknown field', () => requireReviewList({ items: [], total: 3 })],
     ['jobs page: more than jobsPageItems', () => requireJobsPage({ items: Array.from({ length: LIMITS.jobsPageItems + 1 }, () => ({ id: 'url:1', title: 'x', savedAt: ISO })) })],
     ['job: dismissed not a boolean', () => requireJobsPage({ items: [{ id: 'url:1', title: 'x', savedAt: ISO, dismissed: 'yes' }] })],
     ['job: description', () => requireJobsPage({ items: [{ id: 'url:1', title: 'x', savedAt: ISO, description: 'full posting' }] })],

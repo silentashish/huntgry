@@ -7,12 +7,15 @@ import type { PipelineState as DesktopPipelineState, PipelineSummary as DesktopP
 import type { QueueState } from '@shared/queue-types'
 import { reviewBlocker } from '@shared/review-types'
 import type { AgentId, RunSummary, StartRunParams } from '@shared/runner-types'
-import { COMMAND_TTL_SECONDS, type Envelope, type NotificationCategory, type PipelineState, type PipelineSummary, type RemoteCommandName, type RemoteEventName, type StatusSummary } from '@shared/remote'
+import { COMMAND_TTL_SECONDS, type Envelope, type NotificationCategory, type PipelineState, type PipelineSummary, type RemoteCommandName, type RemoteEventName, type RemoteRun, type ReviewDetail, type ReviewList, type StatusSummary } from '@shared/remote'
 import { RunManager, type RunContext } from '../cli/runner'
+import { readEvents, readRun } from '../cli/runs'
 import { LIMIT_MARGIN_MS } from '../pipeline/failures'
 import { Pipeline } from '../pipeline/pipeline'
 import { getReview, setReviewAuthorityRoot } from '../review/authority'
+import { approveReview, discardReview, isSettledReview, listReviews, openGapCount, rerunReview, reviewDetail, type ReviewDeps } from '../review/service'
 import { TailorQueue } from '../queue/queue'
+import { WorkspaceChangedError } from '../workspace/changed'
 import { auditFile } from './audit'
 import { DeviceStore } from './devices'
 import { RemoteEvents } from './events'
@@ -49,6 +52,23 @@ let offset = 0
 let openWs: string | null
 
 const now = () => Date.now() + offset
+
+/** As review/ipc.ts's reviewDepsFor wires the desktop's review deps for the phone. */
+function boundReviewDeps(w: string): ReviewDeps {
+  return {
+    workspace: async () => {
+      if ((openWs ?? ws) !== w) throw new WorkspaceChangedError()
+      return w
+    },
+    reply: async (runId, text) => {
+      const viaQueue = await queue.reply(runId, text, w)
+      if (viaQueue === null) throw new Error('This result cannot be re-run now.')
+      return viaQueue
+    },
+    changed: () => void pipeline.syncReviews(),
+    busy: (runId) => manager.liveRun(runId)?.status === 'running' || queue.state().items.some((i) => i.runId === runId && (i.status === 'queued' || i.status === 'preparing' || i.status === 'running'))
+  }
+}
 const job = (id: string, description: string): Job => baseJob(id, { description, location: '' })
 
 function ctx(agent: AgentId): RunContext {
@@ -183,6 +203,15 @@ beforeEach(async () => {
         await queue.sync(w)
         return pipeline.stop(w)
       }
+    },
+    // The same calls as reviewForRemote / reviewDepsFor in review/ipc.ts (#42): the reply goes through the queue.
+    review: {
+      list: async (w) => Promise.all((await listReviews(w)).map(async (item) => ({ item, openGaps: await openGapCount(w, item.applicationId) }))),
+      detail: (w, id) => reviewDetail(w, id),
+      approve: (w, input, via) => approveReview(boundReviewDeps(w), input, via),
+      rerun: (w, input, via) => rerunReview(boundReviewDeps(w), input, via),
+      discard: (w, input, via) => discardReview(boundReviewDeps(w), input, via),
+      unreviewed: async (w) => (await listReviews(w)).filter(isSettledReview).length
     },
     transcripts: () => true,
     now
@@ -400,5 +429,41 @@ describe('pipeline pause / resume / stop and events (#41)', { timeout: 30_000 },
     await until(() => sent.find((e) => e.name === 'pipeline.finished'), 'summary')
     expect(hints('failed')).toHaveLength(1)
     expect(sent.find((e) => e.name === 'pipeline.finished')!.body).toMatchObject({ counts: { failed: 1, done: 0 } })
+  })
+})
+
+describe('review from the phone on an unattended result (#42)', { timeout: 30_000 }, () => {
+  it('re-run answers reach the same run and session through the queue, the run flows back as run.changed, approve clears Unreviewed', async () => {
+    jobs.set('url:a', job('url:a', 'WRITE_NOTES'))
+    await send('pipeline.start', { jobIds: ['url:a'], concurrency: 1, agent: 'claude' })
+    await until(() => pipeline.state()?.status === 'finished', 'finished')
+    const item = queue.state().items[0]
+    const list = (await send('review.list')).result.body as ReviewList
+    expect(list.items.map((i) => [i.applicationId, i.runId, i.openGaps, i.state])).toEqual([[item.applicationId, item.runId, 1, 'unreviewed']])
+    const detail = (await send('review.get', { applicationId: item.applicationId })).result.body as ReviewDetail
+    expect(detail.runId).toBe(item.runId)
+    const session = (await readRun(ws, item.runId!)).sessionId
+    sent = []
+    const rerun = await send('review.rerun', { runId: item.runId, revision: detail.revision, answers: 'Drop the Kafka line. SECOND:WRITE_NOTES' })
+    expect(rerun.result.ok).toBe(true)
+    await until(() => sent.some((e) => e.name === 'run.changed' && (e.body as RemoteRun).id === item.runId && (e.body as RemoteRun).status === 'running'), 'the run working again')
+    await until(() => queue.state().items[0].status === 'done' && queue.state().items[0].outcome === 'unreviewed', 'settled again')
+    // The same run and session (no new job was queued), with the phone's answers in it.
+    expect(started).toHaveLength(1)
+    expect(queue.state().items).toHaveLength(1)
+    await manager.flush(item.runId!)
+    expect((await readRun(ws, item.runId!)).sessionId).toBe(session)
+    const texts = (await readEvents(ws, item.runId!)).map((e) => (e as { text?: string }).text ?? '')
+    expect(texts.some((t) => t.includes('Decisions: Drop the Kafka line.'))).toBe(true)
+    expect((await getReview(ws, item.applicationId!))?.state).toBe('unreviewed')
+    // Approve the rebuilt result with its one reframing: Unreviewed is cleared and the queue follows (#72).
+    const fresh = (await send('review.get', { applicationId: item.applicationId })).result.body as ReviewDetail
+    expect(fresh.revision).not.toBe(detail.revision)
+    const approved = await send('review.approve', { applicationId: item.applicationId, revision: fresh.revision, approvedReframingIds: fresh.proposedReframings.map((p) => p.id) })
+    expect(approved.result.ok).toBe(true)
+    expect((await getReview(ws, item.applicationId!))?.state).toBe('approved')
+    await until(() => queue.state().items[0].outcome === 'approved', 'queue outcome synced')
+    // Nothing remote applies or submits: the result is only approved.
+    expect(queue.state().items[0].status).toBe('done')
   })
 })

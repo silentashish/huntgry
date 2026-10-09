@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TranscriptItem } from '@shared/runner-types'
 import { LIMITS, jsonBytes, requireEvent, type Envelope } from '@shared/remote'
-import { pageTranscript, projectJobsPage, projectQueue, projectRun, projectRunPage, projectRunsPage, projectStatus, projectTranscriptItem } from './project'
+import { pageTranscript, projectJobsPage, projectQueue, projectReviewList, projectRun, projectRunPage, projectRunsPage, projectStatus, projectTranscriptItem } from './project'
 import { job, queueState, run } from './test-helpers'
 
 /**
@@ -144,6 +144,20 @@ describe('project.ts', () => {
     const r1 = projectRunsPage(runs)
     expect(r1.items).toHaveLength(LIMITS.runsPageItems)
     expect(projectRunsPage(runs, r1.nextCursor).items).toHaveLength(10)
+  })
+
+  it('bounds review.list by count and bytes with `more`, and never sends a path from a reason (#42)', () => {
+    const entries = Array.from({ length: 80 }, (_, i) => ({
+      item: { applicationId: `${'r'.repeat(190)}/${'c'.repeat(190)}/${String(i).padStart(4, '0')}${'j'.repeat(190)}`, runId: '20261009-120000-abcdef', title: 'T'.repeat(400), state: 'needs-attention' as const, reason: `Failed: see /Users/me/cv/x/build.log ${'e'.repeat(2000)}`, at: '2026-10-09T12:00:00.000Z', build: { status: 'pass' as const, failed: [], warnings: 0, resumePages: 1 }, hasCover: false, jobUrl: 'https://MARKER_URL.example' },
+      openGaps: i
+    }))
+    const list = projectReviewList(entries)
+    expect(list.items.length).toBeLessThan(LIMITS.reviewItems)
+    expect(list.more).toBe(80 - list.items.length)
+    expect(jsonBytes(envelope(list))).toBeLessThanOrEqual(LIMITS.plaintextBytes)
+    expect(JSON.stringify(list)).not.toMatch(/\/Users|MARKER_URL|build":/)
+    expect(list.items[0].reason!.length).toBeLessThanOrEqual(LIMITS.errorBytes)
+    expect(projectReviewList(entries.slice(0, 3)).more).toBeUndefined()
   })
 
   it('every DTO with the largest fields fits the plaintext budget and passes the package guard', () => {

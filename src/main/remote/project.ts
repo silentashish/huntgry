@@ -1,5 +1,6 @@
 import type { Job } from '@shared/jobs-types'
 import type { PipelineCounts as DesktopCounts, PipelineState as DesktopPipelineState, PipelineSummary as DesktopPipelineSummary } from '@shared/pipeline-types'
+import type { ReviewDetail as DesktopReviewDetail, ReviewItem as DesktopReviewItem } from '@shared/review-types'
 import type { QueueItem, QueueState } from '@shared/queue-types'
 import type { AgentStatus, RunSummary, TranscriptItem } from '@shared/runner-types'
 import {
@@ -12,22 +13,31 @@ import {
   requirePipelineState,
   requirePipelineSummary,
   requireQueueState,
+  requireRemoteFile,
   requireRemoteRun,
+  requireReviewDetail,
+  requireReviewItem,
+  requireReviewList,
   requireRunPage,
   requireRunsPage,
   requireStatusSummary,
   requireTranscriptPage,
   truncateUtf8,
+  utf8Bytes,
   type PipelineCounts,
   type PipelineState,
   type PipelineStatus,
   type PipelineSummary,
+  type RemoteFile,
   type RemoteJob,
   type RemotePage,
   type RemoteQueueItem,
   type RemoteQueueState,
   type RemoteRun,
   type RemoteTranscriptItem,
+  type ReviewDetail,
+  type ReviewItem,
+  type ReviewList,
   type RunPage,
   type StatusSummary
 } from '@shared/remote'
@@ -320,6 +330,101 @@ export function projectPipelineSummary(summary: DesktopPipelineSummary): Pipelin
     startedAt: summary.startedAt,
     finishedAt: summary.finishedAt
   })
+}
+
+// ── review (#31 → #42) ──────────────────────────────────────────────────────────────────────
+
+/** `ReviewItem.runId` / `ReviewDetail.runId` of a result with no recorded run (a fail-closed stand-in). */
+export const NO_RUN = 'none'
+
+const isRemoteFile = (file: string): file is RemoteFile => {
+  try {
+    requireRemoteFile(file)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** One row of `review.list` / `review.needed`. */
+export function projectReviewItem(item: DesktopReviewItem, openGaps: number): ReviewItem {
+  const out: ReviewItem = { applicationId: item.applicationId, runId: item.runId || NO_RUN, title: title(item.title), openGaps: Math.max(0, openGaps), finishedAt: item.at, state: item.state }
+  if (item.reason) out.reason = safeText(item.reason)
+  return requireReviewItem(out)
+}
+
+/** `review.list`: newest first, at most `LIMITS.reviewItems` and the plaintext budget; `more` counts the rest. */
+export function projectReviewList(entries: readonly { item: DesktopReviewItem; openGaps: number }[]): ReviewList {
+  const items: ReviewItem[] = []
+  let bytes = 0
+  for (const e of entries.slice(0, LIMITS.reviewItems)) {
+    const projected = projectReviewItem(e.item, e.openGaps)
+    const size = jsonBytes(projected) + 1
+    if (bytes + size > PAGE_BUDGET) break
+    items.push(projected)
+    bytes += size
+  }
+  const out: ReviewList = { items }
+  if (entries.length > items.length) out.more = entries.length - items.length
+  return requireReviewList(out)
+}
+
+/**
+ * `review.get`: what the desktop's review screen shows, inside the package bounds, under the
+ * desktop's own `revision` (sha256 over the full notes, gaps, reframing ids, verify report,
+ * every artifact's hash and the review state). What does not fit is marked `truncated`:
+ * - a gap or a report is cut; a reframing that does not fit whole is **left out**, never cut,
+ *   so the phone can only tick (and approve) a source fact and wording it was shown in full;
+ * - the PDFs and every page 1 are listed before further pages;
+ * - when the whole detail would not fit one frame, the inline notes go first (the phone then
+ *   fetches review-notes.md with `file.get`), then the report, then list entries from the end.
+ */
+export function projectReviewDetail(d: DesktopReviewDetail): ReviewDetail {
+  let truncated = false
+  const cut = (text: string, max: number): string => {
+    const c = truncateUtf8(text, max)
+    if (c.truncated) truncated = true
+    return c.text
+  }
+  const openGaps = d.openGaps.slice(0, LIMITS.reviewListItems).map((g) => cut(g, LIMITS.reviewEntryBytes))
+  if (d.openGaps.length > openGaps.length) truncated = true
+  const whole = d.proposedReframings.filter((p) => utf8Bytes(p.sourceFact) <= LIMITS.reviewEntryBytes && utf8Bytes(p.wording) <= LIMITS.reviewEntryBytes)
+  const proposedReframings = whole.slice(0, LIMITS.reviewListItems).map((p) => ({ id: p.id, sourceFact: p.sourceFact, wording: p.wording }))
+  if (d.proposedReframings.length > proposedReframings.length) truncated = true
+  const rank = (file: string) => (file.endsWith('.pdf') ? 0 : /-page-1\.jpg$/.test(file) ? 1 : 2)
+  const files = d.artifacts.filter((a): a is typeof a & { file: RemoteFile } => isRemoteFile(a.file))
+  const artifacts = [...files].sort((a, b) => rank(a.file) - rank(b.file)).slice(0, LIMITS.reviewArtifacts).map((a) => ({ file: a.file, bytes: a.bytes, sha256: a.sha256 }))
+  if (d.artifacts.length > artifacts.length) truncated = true
+  const out: ReviewDetail = {
+    applicationId: d.applicationId,
+    runId: d.runId || NO_RUN,
+    title: title(d.title),
+    reviewNotes: d.reviewNotes !== null && utf8Bytes(d.reviewNotes) <= LIMITS.reviewNotesInlineBytes ? d.reviewNotes : null,
+    openGaps,
+    proposedReframings,
+    verify: { ok: d.verify.ok, report: cut(d.verify.report, LIMITS.verifyReportBytes) },
+    artifacts,
+    revision: d.revision,
+    state: d.state
+  }
+  if (d.reason) out.reason = safeText(d.reason)
+  if (d.parseWarning) out.parseWarning = safeText(d.parseWarning)
+  // One frame: JSON escaping can double a text's size, so fit the whole detail to the budget.
+  while (jsonBytes(out) > PAGE_BUDGET) {
+    if (out.reviewNotes !== null) out.reviewNotes = null
+    else if (out.verify.report.length > 0) {
+      out.verify.report = truncateUtf8(out.verify.report, Math.floor(utf8Bytes(out.verify.report) / 2)).text
+      truncated = true
+    } else if (out.proposedReframings.length > 0) {
+      out.proposedReframings.pop()
+      truncated = true
+    } else if (out.openGaps.length > 0) {
+      out.openGaps.pop()
+      truncated = true
+    } else break
+  }
+  if (truncated) out.truncated = true
+  return requireReviewDetail(out)
 }
 
 /** `StatusSummary.pipeline`: the status and, while a limit holds, when it resumes. */

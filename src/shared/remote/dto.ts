@@ -46,6 +46,7 @@ import {
   type RemoteTranscriptItem,
   type ReviewDetail,
   type ReviewItem,
+  type ReviewList,
   type RunPage,
   type StatusSummary
 } from './protocol'
@@ -299,24 +300,51 @@ export function requirePipelineSummary(v: unknown, what = 'pipeline.finished'): 
 
 // ── review ──────────────────────────────────────────────────────────────────────────────────
 
+const REVIEW_STATES = ['unreviewed', 'needs-attention', 'approved', 'discarded'] as const
+
 export function requireReviewItem(v: unknown, what = 'review'): ReviewItem {
   const r = requireRecord(v, what)
-  rejectUnknownKeys(r, ['applicationId', 'runId', 'title', 'openGaps', 'finishedAt'], what)
-  return {
+  rejectUnknownKeys(r, ['applicationId', 'runId', 'title', 'openGaps', 'finishedAt', 'state', 'reason'], what)
+  const out: ReviewItem = {
     applicationId: requireApplicationId(r.applicationId, `${what}.applicationId`),
     runId: requireId(r.runId, `${what}.runId`),
     title: requireTitle(r.title, `${what}.title`),
     openGaps: requireInteger(r.openGaps, `${what}.openGaps`, 0),
     finishedAt: requireIsoDate(r.finishedAt, `${what}.finishedAt`)
   }
+  if (r.state !== undefined) out.state = requireOneOf(r.state, ['unreviewed', 'needs-attention'] as const, `${what}.state`)
+  if (r.reason !== undefined) out.reason = requireError(r.reason, `${what}.reason`)
+  return out
+}
+
+/** `review.list` result body. */
+export function requireReviewList(v: unknown, what = 'review.list'): ReviewList {
+  const r = requireRecord(v, what)
+  rejectUnknownKeys(r, ['items', 'more'], what)
+  const out: ReviewList = { items: requireList(r.items, `${what}.items`, LIMITS.reviewItems, (x, at) => requireReviewItem(x, at)) }
+  if (r.more !== undefined) out.more = requireInteger(r.more, `${what}.more`, 0)
+  return out
 }
 
 /** `review.get` result body: notes inline only up to `LIMITS.reviewNotesInlineBytes`. */
 export function requireReviewDetail(v: unknown, what = 'review.get'): ReviewDetail {
   const r = requireRecord(v, what)
-  rejectUnknownKeys(r, ['applicationId', 'runId', 'title', 'reviewNotes', 'openGaps', 'proposedReframings', 'verify', 'artifacts', 'revision'], what)
+  rejectUnknownKeys(
+    r,
+    ['applicationId', 'runId', 'title', 'reviewNotes', 'openGaps', 'proposedReframings', 'verify', 'artifacts', 'revision', 'state', 'reason', 'parseWarning', 'truncated'],
+    what
+  )
   const verify = requireRecord(r.verify, `${what}.verify`)
   rejectUnknownKeys(verify, ['ok', 'report'], `${what}.verify`)
+  const out = requireReviewDetailCore(r, verify, what)
+  if (r.state !== undefined) out.state = requireOneOf(r.state, REVIEW_STATES, `${what}.state`)
+  if (r.reason !== undefined) out.reason = requireError(r.reason, `${what}.reason`)
+  if (r.parseWarning !== undefined) out.parseWarning = requireError(r.parseWarning, `${what}.parseWarning`)
+  if (r.truncated !== undefined) out.truncated = requireBoolean(r.truncated, `${what}.truncated`)
+  return out
+}
+
+function requireReviewDetailCore(r: Record<string, unknown>, verify: Record<string, unknown>, what: string): ReviewDetail {
   return {
     applicationId: requireApplicationId(r.applicationId, `${what}.applicationId`),
     runId: requireId(r.runId, `${what}.runId`),
