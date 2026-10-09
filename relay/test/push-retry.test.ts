@@ -10,9 +10,11 @@ import { HttpReply, NETWORK_ERROR, Relay, fixture, frame, sleep, type Fixture } 
  *   [down-N]   503 every time
  *   [bad-N]    400 every time (permanent: no retry)
  *   [dying-N]  503 first, then DeviceNotRegistered
+ *   [twin-N]   429 twice with the same Retry-After date, then DeviceNotRegistered, ok after
  */
 let relay: Relay
 const calls = new Map<string, number>()
+const retryDates = new Map<string, string>()
 beforeAll(async () => {
   relay = await Relay.start({
     bindings: { PUSH_RETRY_DELAYS_SECONDS: '1,1,1', PUSH_RECEIPT_DELAY_SECONDS: '600' },
@@ -27,6 +29,11 @@ beforeAll(async () => {
       if (to.includes('[down-')) return new HttpReply(503)
       if (to.includes('[bad-')) return new HttpReply(400)
       if (to.includes('[dying-')) return n === 1 ? new HttpReply(503) : { data: [{ status: 'error', message: 'gone', details: { error: 'DeviceNotRegistered' } }] }
+      if (to.includes('[twin-')) {
+        if (!retryDates.has(to)) retryDates.set(to, new Date(Math.ceil(Date.now() / 1000) * 1000 + 3000).toUTCString())
+        if (n <= 2) return new HttpReply(429, { 'retry-after': retryDates.get(to)! })
+        return n === 3 ? { data: [{ status: 'error', message: 'gone', details: { error: 'DeviceNotRegistered' } }] } : ok
+      }
       return ok
     }
   })
@@ -172,6 +179,21 @@ describe('push retries are cancelled', () => {
     desktop.send(frame(f.deviceId, 'n2', { pushHint: 'needs-reply' }))
     await sleep(500)
     expect(callsTo(t)).toHaveLength(2)
+    await desktop.close()
+  })
+
+  it('by DeviceNotRegistered on an earlier retry of the same alarm', async () => {
+    const f = await fixture(relay)
+    const t = token('twin')
+    await withToken(f, t)
+    const desktop = await f.desktop()
+    // Two categories are rate limited until the same instant, so one alarm finds both retries due;
+    // the first finds the token dead and the second must not go out.
+    desktop.send(frame(f.deviceId, 'w1', { pushHint: 'failed' }))
+    desktop.send(frame(f.deviceId, 'w2', { pushHint: 'needs-reply' }))
+    await waitForCalls(t, 3)
+    await sleep(2500)
+    expect(callsTo(t)).toHaveLength(3)
     await desktop.close()
   })
 })

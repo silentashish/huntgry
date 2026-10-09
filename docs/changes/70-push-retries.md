@@ -13,8 +13,8 @@ the app.
 
 | Area | Files | Why |
 | --- | --- | --- |
-| Classification | `relay/src/push.ts` | `PushOutcome` gains `retry`. Network errors, HTTP 429 and 5xx, and `MessageRateExceeded` tickets are transient; any other 4xx or ticket error stays `failed`. A 429's `Retry-After` (seconds or HTTP date) is read and capped at 1 h (`retryAfterMs`, `MAX_RETRY_AFTER_MS`). |
-| Durable retries | `relay/src/room.ts` | New table `push_retries`: device, category, token, text, attempt and next_at. There is at most one row per device and category, so it survives hibernation and restarts. The room's single alarm sends the due ones (`retryPushes`), and `scheduleAlarm` includes `MIN(next_at)`. |
+| Classification | `relay/src/push.ts` | `PushOutcome` gains `retry`. Network errors, HTTP 429 and 5xx, and `MessageRateExceeded` tickets are transient; any other 4xx or ticket error stays `failed`. A 429's `Retry-After` (seconds or HTTP date) is read and capped at 1 h (`retryAfterMs`, `MAX_RETRY_AFTER_MS`). A request that takes over 15 s is abandoned as `retry` (`PUSH_TIMEOUT_MS`). |
+| Durable retries | `relay/src/room.ts` | New table `push_retries`: device, category, token, text, attempt and next_at. There is at most one row per device and category, so it survives hibernation and restarts. The room's single alarm sends the due ones (`retryPushes`), and `scheduleAlarm` includes `MIN(next_at)`. Due rows are leased for a minute and the alarm is armed for the lease before any request goes out, so a handler cut off mid-request retries a minute later, not never. Each row and its device's token are read again right before its send, so a retry cancelled by an earlier send in the same alarm does not go out. |
 | One attempt | `room.ts` `sendPush` | Each attempt ends in one of five ways:<br>• `ok` records the receipt ticket and, after a retry, the coalescing time.<br>• `DeviceNotRegistered` clears the token.<br>• `retry` schedules the next attempt at `max(delay[attempt], Retry-After)` while the budget lasts.<br>• A permanent failure or a spent budget gives up, and that push does not count for coalescing.<br>• A token that changed while the attempt was in flight drops it. |
 | Coalescing | `room.ts` `maybePush` | A hint that arrives while a retry is pending replaces that retry's body (newest `pushText` wins) instead of starting a second push. |
 | Cancellation | `room.ts` | A new token or `{ pushToken: null }` deletes the retries for the old token, as do `DeviceNotRegistered` (ticket or receipt, via `clearPushToken`) and revocation. |
@@ -30,12 +30,15 @@ the app.
   the newest body.
 - **The coalescing window starts at delivery.** It starts when a retried push is actually
   accepted, so the window measures what the owner sees.
+- **A hint during an in-flight retry that then succeeds is coalesced.** The new body is not
+  sent, exactly as for a hint just after any delivered push: the owner was notified for that
+  category within the window, and the app fetches the current state when it opens.
 - **No retry of the receipts call itself.** It already re-asks one delay later until Expo's
   one-day retention passes.
 
 ## How to test
 
-`npm test -w relay` runs 61 tests. The new ones cover:
+`npm test -w relay` runs 62 tests. The new ones cover:
 
 - a transient failure (`MessageRateExceeded`, network error) followed by success → exactly one
   delivered push;
@@ -44,7 +47,7 @@ the app.
 - a 503 every time → 4 sends, then nothing, and the next hint can try again;
 - a 400 → no retry;
 - cancellation by a new token, by `null`, by revocation, and by `DeviceNotRegistered` on a retry,
-  which also clears the token.
+  which also clears the token, including a second retry due in the same alarm.
 
 ## Follow-ups
 

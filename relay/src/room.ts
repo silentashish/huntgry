@@ -37,7 +37,7 @@ import {
 } from '@huntgry/remote-protocol'
 import { bearerOf, matchesHash } from './auth'
 import { configOf, type Config, type Env } from './env'
-import { EXPO_PUSH_TOKEN, MAX_RETRY_AFTER_MS, RECEIPT_IDS_PER_CALL, RECEIPT_MAX_AGE_MS, fetchReceipts, pushMessage, sendExpoPush } from './push'
+import { EXPO_PUSH_TOKEN, PUSH_TIMEOUT_MS, RECEIPT_IDS_PER_CALL, RECEIPT_MAX_AGE_MS, fetchReceipts, pushMessage, sendExpoPush } from './push'
 import { countFrame, type RateWindow } from './rate'
 
 /** Frames the relay holds per phone; beyond it the oldest events go, results never (ADR). */
@@ -52,6 +52,8 @@ export const MAX_PAIRING_SECONDS = 10 * 60
 const MAX_PENDING_RECEIPTS = 1000
 /** Expired notices kept per sender while it is away. */
 const MAX_NOTICES_PER_OWNER = 100
+/** How long a due push retry is held while its request is out; well past `PUSH_TIMEOUT_MS`. */
+const PUSH_RETRY_LEASE_MS = 4 * PUSH_TIMEOUT_MS
 
 /** Close codes the relay uses; 1008 (policy violation) for protocol errors. */
 export const CLOSE = {
@@ -548,16 +550,34 @@ export class Room extends DurableObject<Env> {
     await this.scheduleAlarm()
   }
 
-  /** Sends the retries that are due, one attempt each; `sendPush` reschedules or settles them. */
+  /**
+   * Sends the retries that are due, one attempt each; `sendPush` reschedules or settles them.
+   * The due rows are leased first, for longer than a request can take, so an alarm firing
+   * meanwhile does not send one twice; the alarm is armed for the lease before any request goes
+   * out, so a handler cut off mid-request picks them up again a minute later. Each row is read
+   * again right before its send, because an earlier send in this loop (or any event while it was
+   * awaited) may have cancelled it, cleared the token or replaced the body.
+   */
   private async retryPushes(now: number): Promise<void> {
-    const due = this.sql<{ device: string; category: NotificationCategory; token: string; text: string | null; attempt: number }>(
-      'SELECT device, category, token, text, attempt FROM push_retries WHERE next_at <= ? ORDER BY next_at ASC LIMIT 50',
-      now
-    )
-    for (const row of due) {
-      // Parked while in flight, so an alarm firing meanwhile does not send it twice.
-      this.sql('UPDATE push_retries SET next_at = ? WHERE device = ? AND category = ?', now + MAX_RETRY_AFTER_MS, row.device, row.category)
-      await this.sendPush(row.device, row.category, row.token, row.text ?? undefined, row.attempt, now)
+    const due = this.sql<{ device: string; category: NotificationCategory }>('SELECT device, category FROM push_retries WHERE next_at <= ? ORDER BY next_at ASC LIMIT 50', now)
+    if (due.length === 0) return
+    const lease = now + PUSH_RETRY_LEASE_MS
+    for (const row of due) this.sql('UPDATE push_retries SET next_at = ? WHERE device = ? AND category = ?', lease, row.device, row.category)
+    await this.scheduleAlarm()
+    for (const { device, category } of due) {
+      const row = this.sql<{ token: string; text: string | null; attempt: number }>(
+        'SELECT token, text, attempt FROM push_retries WHERE device = ? AND category = ? AND next_at = ?',
+        device,
+        category,
+        lease
+      )[0]
+      if (!row) continue
+      const current = this.sql<{ push_token: string | null }>('SELECT push_token FROM devices WHERE id = ?', device)[0]?.push_token
+      if (current !== row.token) {
+        this.sql('DELETE FROM push_retries WHERE device = ? AND category = ? AND token = ?', device, category, row.token)
+        continue
+      }
+      await this.sendPush(device, category, row.token, row.text ?? undefined, row.attempt, now)
     }
   }
 

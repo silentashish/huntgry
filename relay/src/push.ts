@@ -45,6 +45,9 @@ export function retryAfterMs(header: string | null, now: number = Date.now()): n
   return Math.min(ms, MAX_RETRY_AFTER_MS)
 }
 
+/** A push request that takes longer than this is abandoned (and counts as `retry`). */
+export const PUSH_TIMEOUT_MS = 15 * 1000
+
 /** Expo keeps receipts for a day; ids asked per receipts call (Expo allows 1000). */
 export const RECEIPT_MAX_AGE_MS = 24 * 60 * 60 * 1000
 export const RECEIPT_IDS_PER_CALL = 300
@@ -74,7 +77,8 @@ export async function sendExpoPush(url: string, message: PushMessage): Promise<P
     const res = await fetch(url, {
       method: 'POST',
       headers: { accept: 'application/json', 'content-type': 'application/json' },
-      body: JSON.stringify([message])
+      body: JSON.stringify([message]),
+      signal: AbortSignal.timeout(PUSH_TIMEOUT_MS)
     })
     if (res.status === 429) return { outcome: 'retry', retryAfterMs: retryAfterMs(res.headers.get('retry-after')) }
     if (res.status >= 500) return { outcome: 'retry' }
@@ -93,7 +97,7 @@ export async function sendExpoPush(url: string, message: PushMessage): Promise<P
     }
     return { outcome: 'ok', ticketId }
   } catch {
-    // Network error or an unreadable body: transient as far as we can tell.
+    // Network error, timeout or an unreadable body: transient as far as we can tell.
     return { outcome: 'retry' }
   }
 }
