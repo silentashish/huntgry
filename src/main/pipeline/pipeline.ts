@@ -270,10 +270,11 @@ export class Pipeline {
     const free = await this.deps.freeDiskBytes(ws)
     if (free !== null && free < MIN_FREE_DISK_BYTES)
       blockers.push(`Only ${Math.round(free / 1024 / 1024)} MB are free on the workspace disk; ${Math.round(MIN_FREE_DISK_BYTES / 1024 / 1024)} MB are needed.`)
+    // Load this workspace's queue first: its pipeline record, not the previous workspace's, decides.
+    const state = await this.deps.queue.sync(expected)
     if (this.record && this.record.status !== 'finished')
       blockers.push('A pipeline is already running. Stop it, or wait for it to finish.')
 
-    const state = await this.deps.queue.sync(expected)
     const queued = new Set(state.items.filter((i) => ACTIVE.has(i.status) || i.status === 'needs-reply').map((i) => i.jobId))
     const tailored = input.skipTailored ? await this.deps.tailoredJobIds(ws) : new Set<string>()
     const ready: PipelinePlan['ready'] = []
@@ -389,8 +390,10 @@ export class Pipeline {
       runCosts: {},
       estimateMsPerJob: history.medianMs
     }
-    // Before the record is kept: another workspace loaded during the awaits must not inherit it.
+    // Before the record is kept: another workspace loaded during the awaits must not inherit it,
+    // and a pipeline that is already running there must not be overwritten.
     if (expected !== undefined && this.deps.queue.workspace() !== expected) throw new WorkspaceChangedError()
+    if (this.record && this.record.status !== 'finished') throw new Error('A pipeline is already running. Stop it, or wait for it to finish.')
     this.record = record
     this.rejected = null
     this.utilization = undefined

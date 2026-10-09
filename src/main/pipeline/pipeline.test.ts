@@ -996,6 +996,39 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(pipeline.state()!.counts).toMatchObject({ unreviewed: 0, approved: 1 })
   })
 
+  it('checks the opened workspace\'s pipeline, not the previous one\'s, before a start', async () => {
+    await pipeline.init(0)
+    expect(pipeline.state()).toBeNull()
+    // The user opens another workspace whose saved pipeline is paused with a job still queued.
+    const saved = ws
+    ws = await mkdtemp(join(tmpdir(), 'huntgry-pipeline-other-'))
+    try {
+      const at = '2026-10-09T00:00:00.000Z'
+      const id = 'p-20261009-000000-b2c3d4'
+      const itemId = 'q-20261009-000000-c3d4e5'
+      await mkdir(join(ws, '.huntgry'), { recursive: true })
+      await writeFile(
+        queueFile(ws),
+        JSON.stringify({
+          version: 1,
+          concurrency: 1,
+          items: [{ id: itemId, jobId: 'url:x', title: 'x', options, status: 'queued', runId: null, attempts: 0, createdAt: at, updatedAt: at, unattended: true, pipelineId: id }],
+          pipeline: { id, status: 'paused', options: {}, itemIds: [itemId], skipped: [], limits: {}, unparsedStrikes: 0, startedAt: at, runCosts: {} }
+        })
+      )
+      jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
+      const plan = await pipeline.plan(input(['url:a']))
+      expect(plan.blockers).toContain('A pipeline is already running. Stop it, or wait for it to finish.')
+      await expect(pipeline.start(input(['url:a']))).rejects.toThrow(/already running/)
+      expect(JSON.parse(await readFile(queueFile(ws), 'utf8')).pipeline.id).toBe(id)
+    } finally {
+      await pipeline.shutdown()
+      await queue.shutdown()
+      await rm(ws, { recursive: true, force: true })
+      ws = saved
+    }
+  })
+
   it('validates the start input', () => {
     const ok = { jobIds: ['url:a'], options: { coverLetter: true, dateStyle: 'right' } }
     expect(requirePipelineStartInput(ok)).toMatchObject({ agent: 'claude', concurrency: 2, resumeAfterRestart: true, skipTailored: true, stallMinutes: 20 })
