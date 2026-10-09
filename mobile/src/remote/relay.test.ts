@@ -1,5 +1,5 @@
 import { deriveSessionKey, fromHex, toHex, type Envelope } from '@huntgry/remote-protocol'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { commands, NoWorkspaceError } from './commands'
 import { MemoryStorage } from './platform'
 import { RelayClient, type RelayClientEvents } from './relay'
@@ -348,12 +348,10 @@ describe('relay client: the pairing is over', () => {
     const t = await setup()
     t.client.start()
     await t.online()
-    const spy = vi.fn()
     const id = t.client.send({ name: 'review.list' })
     await settle()
     t.sockets.last.receive(t.desktop.result(id, null, { ok: false, error: { code: 'denied', message: 'Open this review first.' } }))
     await settle()
-    spy()
     expect(t.fatal).toEqual([])
     expect(t.received).toHaveLength(1)
   })

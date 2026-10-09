@@ -6,7 +6,6 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "@/*": ["./src/*"],
       // React 19.2 for React Native lives in mobile/node_modules; the root's 19.3 types (for the
       // desktop renderer) must not reach the app through hoisted packages.
       "react": ["./node_modules/@types/react"],

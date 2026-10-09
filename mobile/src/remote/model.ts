@@ -80,6 +80,8 @@ export interface RemoteSnapshot {
   pipeline: PipelineState | null
   lastPipeline: PipelineSummary | null
   runs: Record<string, RunView>
+  /** The last `RemoteRun` seen for each run (run.changed, run.get, replies): durations, tokens, cost for queue cards. */
+  runInfo: Record<string, RemoteRun>
   commands: CommandView[]
   toast: Toast | null
   demo: boolean
@@ -113,6 +115,7 @@ export const INITIAL_SNAPSHOT: RemoteSnapshot = {
   pipeline: null,
   lastPipeline: null,
   runs: {},
+  runInfo: {},
   commands: [],
   toast: null,
   demo: false
@@ -149,7 +152,8 @@ export class RemoteModel {
 
   private setRun(runId: string, patch: Partial<RunView>): void {
     const prev = this.snap.runs[runId] ?? { run: null, items: [], complete: false, loading: false }
-    this.set({ runs: { ...this.snap.runs, [runId]: { ...prev, ...patch } } })
+    const runInfo = patch.run ? { ...this.snap.runInfo, [runId]: patch.run } : this.snap.runInfo
+    this.set({ runs: { ...this.snap.runs, [runId]: { ...prev, ...patch } }, runInfo })
   }
 
   toast(text: string, tone: Toast['tone'] = 'error'): void {
@@ -502,6 +506,7 @@ export class RemoteModel {
         this.set({ queue: event.body })
         return
       case 'run.changed': {
+        this.set({ runInfo: { ...this.snap.runInfo, [event.body.id]: event.body } })
         if (this.snap.runs[event.body.id]) {
           this.setRun(event.body.id, { run: event.body })
           this.refreshRun(event.body.id)
