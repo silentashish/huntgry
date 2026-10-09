@@ -30,19 +30,26 @@ beforeEach(() => {
       written.push(c)
     },
     rotateKeyPair: async () => calls.push('rotateKeyPair'),
+    markAllNeedsRepair: async () => calls.push('markAllNeedsRepair'),
     stopSession: () => calls.push('stopSession'),
     apply: async () => calls.push('apply')
   }
 })
 
 describe('RoomControl', () => {
-  it('Rotate in the relay form clears the unconfirmed-revocation warning', async () => {
+  it('Rotate relay credentials: new room saved, old room deleted, every phone needs re-pair, warning cleared', async () => {
     const rooms = new RoomControl(deps)
     rooms.relayDidNotConfirmRevoke()
     expect(rooms.revokeWarning()).toBe(REVOKE_UNCONFIRMED)
     await rooms.replaceRoom('https://relay.example.com', 'admin', creds('room-old'))
-    expect(calls).toEqual(['createRoom', 'write(room-new)', 'deleteRoom(room-old)', 'rotateKeyPair'])
+    expect(calls).toEqual(['createRoom', 'write(room-new)', 'deleteRoom(room-old)', 'markAllNeedsRepair'])
     expect(rooms.revokeWarning()).toBeNull()
+  })
+
+  it('recovery from unreadable credentials: a new room, nothing to delete, every phone needs re-pair', async () => {
+    const rooms = new RoomControl(deps)
+    await rooms.replaceRoom('https://relay.example.com', 'admin', null, true)
+    expect(calls).toEqual(['createRoom', 'write(room-new)', 'markAllNeedsRepair'])
   })
 
   it('a first Save (no room to replace) keeps the key and any warning', async () => {

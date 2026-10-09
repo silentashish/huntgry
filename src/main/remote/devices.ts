@@ -314,6 +314,15 @@ export class DeviceStore {
     await this.save()
   }
 
+  /** Marks every device as needing re-pair (the relay room their tokens lived in was replaced). */
+  async markAllNeedsRepair(): Promise<void> {
+    let changed = false
+    for (const d of this.devices.values()) {
+      if (!d.needsRepair) changed = d.needsRepair = true
+    }
+    if (changed) await this.save()
+  }
+
   /**
    * The next outgoing `seq`. The checkpoint is written *before* the frame is sent, so a crash
    * between the two can never reuse a number; concurrent reservations share one write.
