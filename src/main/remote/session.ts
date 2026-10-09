@@ -407,18 +407,13 @@ export class RemoteSession {
     await this.sendEvent(device, 'device.revoked', { reason: reason.slice(0, LIMITS.shortStringChars) }, undefined, key)
   }
 
-  /**
-   * `{ ack: ref }` for a frame durably processed with nothing to send back (`RelayClientFrame`),
-   * queued behind earlier sends. Dropped while offline: the relay redelivers and the gateway
-   * answers the redelivery from its audit log.
-   */
   /** `{ ack: ref }` alone, in order with the other sends (pairing frames). */
   ack(ref: string): Promise<void> {
     return this.sendAck(ref)
   }
 
   /**
-   * A frame built elsewhere (the pairing answers, sealed with the pairing secret), queued behind
+   * A frame built elsewhere (the pairing answers, sealed by `sealPairReply`), queued behind
    * earlier sends; resolves `false` when it could not be written (offline).
    */
   sendFrame(frame: RelayFrame): Promise<boolean> {
@@ -433,6 +428,11 @@ export class RemoteSession {
     return this.sending.then(() => sent)
   }
 
+  /**
+   * `{ ack: ref }` for a frame durably processed with nothing to send back (`RelayClientFrame`),
+   * queued behind earlier sends. Dropped while offline: the relay redelivers and the gateway
+   * answers the redelivery from its audit log.
+   */
   private sendAck(ref: string): Promise<void> {
     const task = async () => {
       const socket = this.socket
