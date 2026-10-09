@@ -53,19 +53,26 @@ jobs:
       - name: Build the bundle
         run: sh relay/selfhost/build.sh
 
+      # The host key is pinned so the admin token only ever goes to the real server.
       - name: Set up SSH
         env:
           DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          RELAY_HOST_KEY: ${{ vars.RELAY_HOST_KEY }}
         run: |
+          # Accepts the server's host_key.pub line or an ssh-keyscan line (a leading host is dropped).
+          key=$(printf '%s\n' "$RELAY_HOST_KEY" | awk 'NF && $1 !~ /^#/ { if ($1 !~ /^(ssh-|ecdsa-|sk-)/) $1 = ""; sub(/^ +/, ""); print; exit }')
+          [ -n "$key" ] || { echo "::error::Set the RELAY_HOST_KEY variable to the server's SSH host key (relay/selfhost/README.md)." && exit 1; }
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
+          printf 'relay %s\n' "$key" > ~/.ssh/known_hosts
           cat > ~/.ssh/config <<EOF
           Host relay
             HostName ${HOST}
+            HostKeyAlias relay
             User ubuntu
             IdentityFile ~/.ssh/id_ed25519
-            StrictHostKeyChecking accept-new
+            StrictHostKeyChecking yes
             ConnectTimeout 10
           EOF
 
@@ -102,4 +109,5 @@ jobs:
             [ "$code" = "401" ] && { echo "https://${DOMAIN} answers like the relay (401 without a token)"; exit 0; }
             echo "attempt $i: HTTP ${code:-none}"; sleep 10
           done
-          echo "::warning::https://${DOMAIN} is not reachable yet. Check that its DNS A record points at ${HOST}."
+          echo "::error::https://${DOMAIN} is not reachable. Check that its DNS A record points at ${HOST}."
+          exit 1

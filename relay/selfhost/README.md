@@ -33,7 +33,7 @@ package, and on demand (Actions → relay-deploy → Run workflow). It does five
 2. Fetches the `workerd` build that matches the server's CPU (x86-64 or Arm).
 3. Uploads everything over SSH and runs `install.sh`.
 4. Checks the relay from inside the server.
-5. Checks `https://<domain>/rooms` from outside.
+5. Checks `https://<domain>/rooms` from outside, and fails if it doesn't answer (usually DNS).
 
 The workflow is skipped until `RELAY_HOST` is set.
 
@@ -42,6 +42,7 @@ Repository settings (Settings → Secrets and variables → Actions):
 | Name | Kind | Value |
 | --- | --- | --- |
 | `RELAY_HOST` | variable | The server's IP, e.g. the website VM's reserved IP |
+| `RELAY_HOST_KEY` | variable | The server's SSH host key, so the deploy can't be sent to an impostor. Copy it over a connection you already trust: `ssh ubuntu@<ip> cat /etc/ssh/ssh_host_ed25519_key.pub` |
 | `RELAY_DOMAIN` | variable | `relay.huntgry.tech` |
 | `DEPLOY_SSH_PRIVATE_KEY` | secret | The same deploy key the website repository uses (its public half is on the VM) |
 | `RELAY_ADMIN_TOKEN` | secret | `openssl rand -hex 32`. Paste the same value into Huntgry → Settings → Remote control |

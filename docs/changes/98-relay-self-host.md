@@ -35,8 +35,12 @@ the two deploys never overwrite each other, is a separate PR in silentashish/hun
   shape is replaced, the reserved IP and DNS stay, and both deploys reinstall themselves.
 - **Admin token in a GitHub secret.** The owner pastes the same value into Settings. It never
   sits in the repo. On the server it is a root-only env file read by systemd.
-- **`accept-new` host key** on fresh runners, the same as the website deploy. The key can be
-  pinned in a later change.
+- **Pinned host key** (`RELAY_HOST_KEY`, `StrictHostKeyChecking yes`) instead of `accept-new`,
+  because the deploy sends the admin token over that connection.
+- **Fail-safe install.** `install.sh` refuses a blank admin token, and puts the previous Caddy
+  snippet back if the new one doesn't validate, since a broken snippet would take the website
+  down with it on Caddy's next reload. The outside check fails the run when the domain doesn't
+  answer, so a green deploy means the relay is reachable.
 
 ## How to test
 
@@ -61,6 +65,5 @@ run **relay-deploy**, then `curl -X POST https://relay.huntgry.tech/rooms` shoul
 
 ## Follow-ups
 
-- Pin the server's SSH host key in a variable instead of `accept-new`.
 - Back up `/var/lib/huntgry-relay` (rooms are recreated by **Rotate relay credentials** if lost,
   at the cost of re-pairing).
