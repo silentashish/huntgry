@@ -172,7 +172,12 @@ export class Pipeline {
     this.changed()
   }
 
-  private onLoad(record: PipelineRecord | null): void {
+  private onLoad(loaded: PipelineRecord | null): void {
+    // A start cut short (another workspace loaded during its enqueue) left a record with no jobs:
+    // nothing would ever finish it, and it would block every later start.
+    const stranded = loaded !== null && loaded.status !== 'finished' && loaded.itemIds.length === 0 && this.deps.queue.itemsOf(loaded.id).length === 0
+    if (stranded) this.deps.queue.savePipeline(null)
+    const record = stranded ? null : loaded
     this.record = record
     this.rejected = null
     this.utilization = undefined
@@ -185,6 +190,14 @@ export class Pipeline {
     // Every load (startup, a workspace switch or import): its items may carry review states decided
     // while it was not loaded (#72).
     void this.syncReviews().catch((err: unknown) => console.error('Syncing review states into the queue failed:', err))
+  }
+
+  /** Forgets a pipeline whose start got no jobs, in memory and in the loaded queue file. */
+  private abandon(): void {
+    this.record = null
+    this.lastSaved = ''
+    this.deps.queue.savePipeline(null)
+    this.changed()
   }
 
   /** Before quit: release the keep-awake and stop ticking (the queue saves itself). */
@@ -383,21 +396,34 @@ export class Pipeline {
     this.utilization = undefined
     this.notifiedLimit = null
     this.deps.queue.savePipeline(record)
-    const res = await this.deps.queue.enqueue(
-      {
-        jobIds: plan.ready.map((j) => j.jobId),
-        options: input.options,
-        concurrency: input.concurrency,
-        agent: input.agent,
-        unattended: true,
-        pipelineId: record.id
-      },
-      expected
-    )
+    let res: Awaited<ReturnType<PipelineDeps['queue']['enqueue']>>
+    try {
+      res = await this.deps.queue.enqueue(
+        {
+          jobIds: plan.ready.map((j) => j.jobId),
+          options: input.options,
+          concurrency: input.concurrency,
+          agent: input.agent,
+          unattended: true,
+          pipelineId: record.id
+        },
+        expected
+      )
+    } catch (err) {
+      // The start got no jobs. If this workspace is still loaded the record goes now; if another was
+      // loaded meanwhile, the copy saved here is dropped when this workspace is loaded again (onLoad).
+      if (this.record === record) this.abandon()
+      throw err
+    }
     record.itemIds = res.state.items.filter((i) => i.pipelineId === record.id).map((i) => i.id)
     for (const s of res.skipped) {
       const title = plan.ready.find((j) => j.jobId === s.jobId)?.title ?? s.jobId
       record.skipped.push({ jobId: s.jobId, title, reason: s.reason })
+    }
+    if (record.itemIds.length === 0) {
+      // Every job was skipped between the plan and the enqueue: nothing would ever finish it.
+      this.abandon()
+      throw new Error(`No job could be queued. ${record.skipped[0]?.reason ?? ''}`.trim())
     }
     this.persist()
     this.ensureTimer()

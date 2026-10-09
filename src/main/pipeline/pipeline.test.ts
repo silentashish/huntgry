@@ -704,6 +704,19 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(queue.state().items[0].unattended).toBeUndefined()
   })
 
+  it('drops a pipeline saved without jobs (a start cut short by a workspace switch) instead of blocking every later start', async () => {
+    await mkdir(join(ws, '.huntgry'), { recursive: true })
+    const at = '2026-10-09T00:00:00.000Z'
+    const stranded = { id: 'p-20261009-000000-a1b2c3', status: 'running', options: {}, itemIds: [], skipped: [], limits: {}, unparsedStrikes: 0, startedAt: at, runCosts: {} }
+    await writeFile(queueFile(ws), JSON.stringify({ version: 1, concurrency: 2, items: [], pipeline: stranded }))
+    await pipeline.init(0)
+    expect(pipeline.state()).toBeNull()
+    jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
+    expect((await pipeline.plan(input(['url:a']))).blockers).toEqual([])
+    await pipeline.start(input(['url:a']))
+    await until((p) => p?.status === 'finished' && finished.length > 0)
+  })
+
   it('a run that built and then failed while still running goes to the verify gate, not a retry', async () => {
     jobs.set('url:b', job('url:b', { description: 'BUILT_THEN_ERROR' }))
     await pipeline.start(input(['url:b'], { concurrency: 1 }))
