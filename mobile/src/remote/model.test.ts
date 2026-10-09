@@ -1,8 +1,8 @@
-import type { RemoteQueueItem, RemoteRun, RemoteTranscriptItem } from '@huntgry/remote-protocol'
+import { deriveSessionKey, fromHex, pairingUrl, sealPairMessage, type RemoteQueueItem, type RemoteRun, type RemoteTranscriptItem } from '@huntgry/remote-protocol'
 import { describe, expect, it } from 'vitest'
 import { mergeItems, RemoteModel } from './model'
 import { MemoryStorage } from './platform'
-import { FakeClock, FakeDesktop, NOW, STATUS, Sockets, pairedVault, presence, settle } from './test-helpers'
+import { FakeClock, FakeDesktop, NOW, STATUS, Sockets, fixture, pairedVault, presence, settle } from './test-helpers'
 import { Vault, VAULT_KEYS } from './vault'
 
 const RUN: RemoteRun = {
@@ -204,6 +204,39 @@ describe('mergeItems', () => {
     const a = [text(0), text(1), text(2)]
     expect(mergeItems(a, 2, [{ kind: 'assistant', id: 't2', text: 'updated' }, text(3)]).map((i) => (i.kind === 'assistant' ? i.text : ''))).toEqual(['item 0', 'item 1', 'updated', 'item 3'])
     expect(mergeItems([], 0, a)).toEqual(a)
+  })
+})
+
+describe('pairing from the model', () => {
+  it('connects with the new pairing and tells the desktop the notification categories', async () => {
+    const clock = new FakeClock()
+    const sockets = new Sockets()
+    const storage = new MemoryStorage()
+    const model = new RemoteModel({ vault: new Vault(storage), socket: sockets.factory, clock, appVersion: '0.1.0', deviceName: 'iPhone' })
+    await model.init()
+    const secret = fromHex(fixture.pairingSecret)
+    const done = model.pair(pairingUrl({ v: 1, relay: 'https://relay.example.com', room: 'room-1', pairing: 'p-1', desktopPublicKey: fromHex(fixture.desktopPublicKey), secret, exp: NOW / 1000 + 120 }))
+    await settle()
+    sockets.last.open()
+    sockets.last.receive(presence())
+    await settle()
+    // The desktop seals pair.ok with its side of the session key.
+    const devicePub = (await new Vault(storage).loadIdentity())!.publicKey
+    const key = deriveSessionKey(devicePub, fromHex(fixture.desktopSecretKey))
+    const ok = { deviceId: 'd-1', relayToken: 'ef'.repeat(32), desktopName: 'Mac', protocol: { min: 1, max: 1 }, sid: 'sid-2' }
+    sockets.last.receive({ to: 'p-1', ref: 'r-1', ...sealPairMessage({ pair: 'ok', ok }, key), ttl: 120 })
+    await done
+    expect(model.getSnapshot().phase).toBe('paired')
+    const session = sockets.last
+    expect(session.url).toBe('wss://relay.example.com/ws')
+    session.open()
+    expect(session.json(0)).toEqual({ auth: { room: 'room-1', device: 'd-1', token: 'ef'.repeat(32) } })
+    session.receive(presence())
+    await settle()
+    const envs = session.envelopes(key)
+    expect(envs.map((e) => e.kind)).toEqual(['hello', 'cmd'])
+    expect(envs[1]).toMatchObject({ name: 'device.setNotifications', seq: 2, sid: 'sid-2', body: { categories: ['needs-reply', 'usage-limit', 'pipeline-finished', 'needs-review', 'failed'] } })
+    model.stop()
   })
 })
 

@@ -232,6 +232,8 @@ export class RemoteModel {
       const pairing = await flow.start(qrText)
       this.set({ ...INITIAL_SNAPSHOT, phase: 'paired', pairing, pairingStep: { step: 'idle' }, demo: this.snap.demo })
       this.connect(pairing)
+      // ADR "Pairing", step 12: the desktop learns the phone's notification categories (all on by default).
+      this.dispatch(commands.setNotifications(pairing.categories), { quiet: true })
     } catch (err) {
       if (!(err instanceof PairingError)) this.set({ pairingStep: { step: 'error', message: 'Pairing failed.' } })
     } finally {
