@@ -62,7 +62,7 @@ sequenceDiagram
     S->>M: approvePairing(id)
     M->>R: POST /rooms/{room}/devices {deviceId, sha256(relayToken)}
     M->>M: devices.json: id, name, public key, token hash, sid, paired at
-    M->>R: RelayFrame{ to: pairingId, secretbox(S){pair: ok, deviceId, relayToken, sid} }
+    M->>R: RelayFrame{ to: pairingId, secretbox(sessionKey){pair: ok, deviceId, relayToken, sid} }
     R->>P: forward
     P->>R: { ack }, close, reconnect { auth: { room, device, token } }, box(hello)
     R->>X: forward: opens with the new device's session key → hello + status

@@ -98,6 +98,8 @@ export function RemoteCard() {
   const configured = !!state?.relayUrl
   const urlProblem = relayUrlProblem(relayUrl)
   const ttlChanged = state !== null && (Number(costly) !== savedCostly || Number(standard) !== savedDefault)
+  // The main process accepts 1 minute to 7 days (COMMAND_TTL_BOUNDS); an empty box is not 0.
+  const ttlValid = [costly, standard].every((h) => h !== '' && Number.isFinite(Number(h)) && Math.round(Number(h) * 3600) >= 60 && Math.round(Number(h) * 3600) <= 7 * 24 * 3600)
   const requests = waitingRequests(state)
   const saveLabel = unreadable ? 'Recover' : configured ? 'Replace room' : 'Save'
 
@@ -184,7 +186,7 @@ export function RemoteCard() {
                 <Button
                   size="xs"
                   variant="default"
-                  disabled={busy}
+                  disabled={busy || !ttlValid}
                   onClick={() => void run(() => api.remote.setCommandTtl({ costlySeconds: Math.round(Number(costly) * 3600), defaultSeconds: Math.round(Number(standard) * 3600) }))}
                 >
                   Save TTLs

@@ -15,18 +15,27 @@ export function PairPhoneModal({ opened, onClose, state }: { opened: boolean; on
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const requested = useRef(false)
+  /** Bumped by every request and by close(), so a code that arrives after either is withdrawn, not shown. */
+  const generation = useRef(0)
   const now = useNow(opened)
 
   async function fresh() {
+    const mine = ++generation.current
     setLoading(true)
     setError(null)
     try {
-      setCode(await api.remote.startPairing())
+      const next = await api.remote.startPairing()
+      if (generation.current !== mine) {
+        void api.remote.cancelPairing(next.pairingId).catch(() => undefined)
+        return
+      }
+      setCode(next)
     } catch (e) {
+      if (generation.current !== mine) return
       setCode(null)
       setError(errorText(e))
     } finally {
-      setLoading(false)
+      if (generation.current === mine) setLoading(false)
     }
   }
 
@@ -45,6 +54,8 @@ export function PairPhoneModal({ opened, onClose, state }: { opened: boolean; on
   const expired = status === 'expired' || (status === 'waiting' && code !== null && Date.parse(code.expiresAt) <= now)
 
   function close() {
+    generation.current += 1
+    setLoading(false)
     if (code && status === 'waiting') void api.remote.cancelPairing(code.pairingId).catch(() => undefined)
     setCode(null)
     onClose()
