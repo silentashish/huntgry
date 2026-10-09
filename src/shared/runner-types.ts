@@ -199,6 +199,14 @@ export interface RunnerEnvironment {
   sharedProblems: string[]
 }
 
+/** The latest resume-tailor release against the copy Huntgry installed. */
+export interface SkillUpdateStatus {
+  latest: string
+  /** `null` when the skill is missing or was not installed by Huntgry (its version is unknown). */
+  installed: string | null
+  updateAvailable: boolean
+}
+
 export interface InstallResult {
   ok: boolean
   error?: string
@@ -340,6 +348,10 @@ export interface RunnerApi {
   updateClaude(): Promise<InstallResult>
   /** Download the resume-tailor skill from its latest GitHub release into ~/.claude/skills. `replace` = Reinstall. */
   installSkill(replace?: boolean): Promise<InstallResult & { tag?: string }>
+  /** Asks GitHub for the latest skill release and compares it with the installed one (#96). */
+  checkSkillUpdate(): Promise<SkillUpdateStatus>
+  /** Sync: installs the latest release over the current copy unless it already is that release. */
+  syncSkill(): Promise<InstallResult & { tag?: string; upToDate?: boolean }>
   listRuns(): Promise<RunSummary[]>
   getRun(id: string): Promise<RunDetail>
   start(params: StartRunParams): Promise<RunSummary>
@@ -378,6 +390,8 @@ export const RUNNER_CHANNELS = {
   installClaude: 'runner:install-claude',
   updateClaude: 'runner:update-claude',
   installSkill: 'runner:install-skill',
+  checkSkillUpdate: 'runner:check-skill-update',
+  syncSkill: 'runner:sync-skill',
   listRuns: 'runner:list-runs',
   getRun: 'runner:get-run',
   start: 'runner:start',

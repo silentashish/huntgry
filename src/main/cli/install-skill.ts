@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { cp, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { unzipSync } from 'fflate'
+import type { SkillUpdateStatus } from '@shared/runner-types'
 import { SKILL_ASSET, SKILL_NAME, SKILL_REPO } from '../workspace/constants'
 
 /**
@@ -203,6 +204,8 @@ export interface InstallSkillOptions {
   /** Replace an existing `~/.claude/skills/resume-tailor` (Reinstall). */
   replace?: boolean
   fetchImpl?: FetchLike
+  /** A release already looked up (Sync), so the API is not asked twice. */
+  release?: SkillRelease
 }
 
 export async function installSkill(
@@ -216,8 +219,11 @@ export async function installSkill(
     if ((await exists(target)) && !opts.replace)
       return { ok: false, error: `The skill is already installed at ${target}. Use Reinstall to replace it.` }
 
-    log(`Looking up the latest release of ${SKILL_REPO}…`)
-    const release = await latestSkillRelease(opts.fetchImpl)
+    let release = opts.release
+    if (!release) {
+      log(`Looking up the latest release of ${SKILL_REPO}…`)
+      release = await latestSkillRelease(opts.fetchImpl)
+    }
     log(`Release ${release.tag}: ${SKILL_ASSET} (${release.size.toLocaleString()} bytes)`)
     const zip = await downloadSkillArchive(release, opts.fetchImpl)
     const sha256 = sha256Hex(zip)
@@ -251,5 +257,53 @@ export async function installSkill(
     return { ok: false, error: message }
   } finally {
     if (staging) await rm(staging, { recursive: true, force: true })
+  }
+}
+
+/** The record of the copy at the target, or `null` when Huntgry did not install what is there. */
+async function currentInstall(home: string, recordPath: string): Promise<SkillInstallRecord | null> {
+  const target = join(home, '.claude', 'skills', SKILL_NAME)
+  const record = await readSkillInstall(recordPath)
+  return record && record.path === target && (await exists(join(target, 'SKILL.md'))) ? record : null
+}
+
+function isCurrent(record: SkillInstallRecord | null, release: SkillRelease): boolean {
+  return !!record && record.tag === release.tag && (!record.sha256 || record.sha256 === release.sha256)
+}
+
+/** The installed tag against the latest release, for Settings' update badge (#96). */
+export async function checkSkillUpdate(opts: {
+  home: string
+  recordPath: string
+  fetchImpl?: FetchLike
+}): Promise<SkillUpdateStatus> {
+  const release = await latestSkillRelease(opts.fetchImpl)
+  const record = await currentInstall(opts.home, opts.recordPath)
+  return { latest: release.tag, installed: record?.tag ?? null, updateAvailable: !isCurrent(record, release) }
+}
+
+/**
+ * Sync: installs the latest release over the current copy unless that copy is
+ * already it. A copy Huntgry did not install has no known version, so it is
+ * replaced (and backed up like Reinstall does).
+ */
+export async function syncSkill(
+  log: (line: string) => void,
+  opts: Omit<InstallSkillOptions, 'replace' | 'release'>
+): Promise<{ ok: boolean; error?: string; tag?: string; path?: string; upToDate?: boolean }> {
+  try {
+    log(`Looking up the latest release of ${SKILL_REPO}…`)
+    const release = await latestSkillRelease(opts.fetchImpl)
+    const record = await currentInstall(opts.home, opts.recordPath)
+    if (isCurrent(record, release)) {
+      log(`The skill is already up to date (${release.tag}).`)
+      return { ok: true, tag: release.tag, path: record!.path, upToDate: true }
+    }
+    log(record ? `Updating ${record.tag} → ${release.tag}.` : `Installing ${release.tag}.`)
+    return await installSkill(log, { ...opts, replace: true, release })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    log(message)
+    return { ok: false, error: message }
   }
 }
