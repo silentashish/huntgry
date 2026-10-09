@@ -24,7 +24,8 @@ import {
   type AgentStatus,
   type InstallResult,
   type PreflightItem,
-  type RunnerEnvironment
+  type RunnerEnvironment,
+  type SkillUpdateStatus
 } from '@shared/runner-types'
 import { api, errorText } from '../../api'
 import { RemoteCard } from './RemoteCard'
@@ -40,7 +41,7 @@ const STATUS: Record<PreflightItem['status'], { color: string; label: string }> 
 
 const INSTALL_KIND_LABEL = { native: 'native install', homebrew: 'Homebrew', npm: 'npm', other: '' } as const
 
-type Installer = 'python' | 'claude' | 'update' | 'skill' | 'reinstall-skill' | `link-${AgentId}`
+type Installer = 'python' | 'claude' | 'update' | 'skill' | 'reinstall-skill' | 'sync-skill' | `link-${AgentId}`
 
 /** Where the agent CLIs and the resume-tailor skill are, and whether their dependencies are installed. */
 export function SettingsPage() {
@@ -49,6 +50,7 @@ export function SettingsPage() {
   const [error, setError] = useState<string | null>(null)
   const [installing, setInstalling] = useState<Installer | null>(null)
   const [log, setLog] = useState<string[]>([])
+  const [skillUpdate, setSkillUpdate] = useState<SkillUpdateStatus | null>(null)
   const logEnd = useRef<HTMLDivElement>(null)
 
   const check = useCallback(async () => {
@@ -66,6 +68,20 @@ export function SettingsPage() {
   useEffect(() => {
     void check()
   }, [check])
+
+  // One GitHub lookup per skill folder seen; a failure (offline, rate limit) just hides the badge.
+  const skillDir = env?.skillDir ?? null
+  const checkSkillUpdate = useCallback(async () => {
+    try {
+      setSkillUpdate(await api.runner.checkSkillUpdate())
+    } catch {
+      setSkillUpdate(null)
+    }
+  }, [])
+  useEffect(() => {
+    if (skillDir) void checkSkillUpdate()
+    else setSkillUpdate(null)
+  }, [skillDir, checkSkillUpdate])
 
   useEffect(() => api.on('runner:install-log', (line) => setLog((l) => [...l.slice(-400), line])), [])
   useEffect(() => {
@@ -116,6 +132,10 @@ export function SettingsPage() {
       replace ? 'reinstall-skill' : 'skill',
       () => api.runner.installSkill(replace),
       'Installing the resume-tailor skill failed.'
+    ).then(checkSkillUpdate)
+  const syncSkill = () =>
+    install('sync-skill', () => api.runner.syncSkill(), 'Updating the resume-tailor skill failed.').then(
+      checkSkillUpdate
     )
 
   return (
@@ -234,7 +254,17 @@ export function SettingsPage() {
                 <Row
                   label="resume-tailor skill"
                   value={env.skillDir}
-                  badges={env.skillInstall ? [{ text: `${env.skillInstall.tag} · installed by Huntgry`, color: 'gray' }] : []}
+                  badges={[
+                    ...(env.skillInstall ? [{ text: `${env.skillInstall.tag} · installed by Huntgry`, color: 'gray' }] : []),
+                    // Without a Huntgry install record the local version is unknown, so only the latest tag is shown.
+                    ...(!skillUpdate
+                      ? []
+                      : !skillUpdate.installed
+                        ? [{ text: `latest: ${skillUpdate.latest}`, color: 'gray' }]
+                        : skillUpdate.updateAvailable
+                          ? [{ text: `${skillUpdate.latest} available`, color: 'blue' }]
+                          : [{ text: 'up to date', color: 'green' }])
+                  ]}
                   missing={
                     <Button
                       size="xs"
@@ -246,17 +276,32 @@ export function SettingsPage() {
                     </Button>
                   }
                   action={
-                    env.skillInstall ? (
+                    <Group gap="xs">
                       <Button
                         size="xs"
-                        variant="subtle"
-                        loading={installing === 'reinstall-skill'}
+                        variant="light"
+                        leftSection={<IconRefresh size={14} />}
+                        loading={installing === 'sync-skill'}
                         disabled={!!installing}
-                        onClick={() => installSkill(true)}
+                        onClick={syncSkill}
+                        title={`Install the latest release from GitHub over the copy in ~/.claude/skills (the old one is backed up)`}
                       >
-                        Reinstall
+                        {skillUpdate?.updateAvailable && skillUpdate.installed
+                          ? `Sync to ${skillUpdate.latest}`
+                          : 'Sync from GitHub'}
                       </Button>
-                    ) : undefined
+                      {env.skillInstall && (
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          loading={installing === 'reinstall-skill'}
+                          disabled={!!installing}
+                          onClick={() => installSkill(true)}
+                        >
+                          Reinstall
+                        </Button>
+                      )}
+                    </Group>
                   }
                 />
                 <Row

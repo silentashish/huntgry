@@ -10,6 +10,8 @@ export const runner: RunnerApi = {
   installClaude: () => ipcRenderer.invoke(RUNNER_CHANNELS.installClaude),
   updateClaude: () => ipcRenderer.invoke(RUNNER_CHANNELS.updateClaude),
   installSkill: (replace) => ipcRenderer.invoke(RUNNER_CHANNELS.installSkill, replace === true),
+  checkSkillUpdate: () => ipcRenderer.invoke(RUNNER_CHANNELS.checkSkillUpdate),
+  syncSkill: () => ipcRenderer.invoke(RUNNER_CHANNELS.syncSkill),
   listRuns: () => ipcRenderer.invoke(RUNNER_CHANNELS.listRuns),
   getRun: (id) => ipcRenderer.invoke(RUNNER_CHANNELS.getRun, id),
   start: (params) => ipcRenderer.invoke(RUNNER_CHANNELS.start, params),

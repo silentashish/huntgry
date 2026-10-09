@@ -5,6 +5,7 @@ import { strToU8, zipSync, type Zippable } from 'fflate'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { findSkillDir } from './env'
 import {
+  checkSkillUpdate,
   downloadSkillArchive,
   installSkill,
   parseRelease,
@@ -12,6 +13,7 @@ import {
   readCapped,
   readSkillInstall,
   sha256Hex,
+  syncSkill,
   type FetchLike
 } from './install-skill'
 
@@ -28,9 +30,9 @@ function skillZip(extra: Zippable = {}, skillMd = SKILL_MD): Uint8Array {
   })
 }
 
-function release(zip: Uint8Array, digest: string | null = `sha256:${sha256Hex(zip)}`) {
+function release(zip: Uint8Array, digest: string | null = `sha256:${sha256Hex(zip)}`, tag = 'v3') {
   return {
-    tag_name: 'v3',
+    tag_name: tag,
     assets: [
       { name: 'other.zip', browser_download_url: 'https://example.com/x', size: 1 },
       { name: 'resume-tailor.skill', browser_download_url: DL, size: zip.byteLength, digest }
@@ -186,5 +188,79 @@ describe('installSkill', () => {
   it('reports a rate limit', async () => {
     const res = await installSkill(() => {}, opts(async () => new Response('', { status: 403 })))
     expect(res).toMatchObject({ ok: false, error: expect.stringContaining('rate-limiting') })
+  })
+})
+
+describe('syncSkill (#96)', () => {
+  const opts = (fetchImpl: FetchLike) => ({
+    home: tmp,
+    recordPath: join(tmp, 'userData/skill-install.json'),
+    backupDir: join(tmp, 'userData/skill-backups'),
+    fetchImpl
+  })
+  const target = () => join(tmp, '.claude/skills/resume-tailor')
+
+  it('installs when nothing is there', async () => {
+    const zip = skillZip()
+    const res = await syncSkill(() => {}, opts(fakeFetch(release(zip), zip)))
+    expect(res).toMatchObject({ ok: true, tag: 'v3' })
+    expect(res.upToDate).toBeUndefined()
+    expect(await readFile(join(target(), 'SKILL.md'), 'utf8')).toBe(SKILL_MD)
+  })
+
+  it('reports an older Huntgry install as outdated and updates it, keeping a backup', async () => {
+    const v3 = skillZip()
+    await installSkill(() => {}, opts(fakeFetch(release(v3), v3)))
+    const v4md = SKILL_MD.replace('test', 'v4')
+    const v4 = skillZip({}, v4md)
+    const fetchV4 = fakeFetch(release(v4, undefined, 'v4'), v4)
+
+    expect(await checkSkillUpdate(opts(fetchV4))).toEqual({ latest: 'v4', installed: 'v3', updateAvailable: true })
+    const log: string[] = []
+    const res = await syncSkill((l) => log.push(l), opts(fetchV4))
+    expect(res).toMatchObject({ ok: true, tag: 'v4' })
+    expect(log).toContain('Updating v3 → v4.')
+    expect(await readFile(join(target(), 'SKILL.md'), 'utf8')).toBe(v4md)
+    expect(await readdir(join(tmp, 'userData/skill-backups'))).toHaveLength(1)
+    expect(await readSkillInstall(join(tmp, 'userData/skill-install.json'))).toMatchObject({ tag: 'v4' })
+    expect(await checkSkillUpdate(opts(fetchV4))).toEqual({ latest: 'v4', installed: 'v4', updateAvailable: false })
+  })
+
+  it('leaves the latest release alone', async () => {
+    const zip = skillZip()
+    await installSkill(() => {}, opts(fakeFetch(release(zip), zip)))
+    let downloads = 0
+    const counting: FetchLike = async (url, init) => {
+      if (url === DL) downloads++
+      return fakeFetch(release(zip), zip)(url, init)
+    }
+    const res = await syncSkill(() => {}, opts(counting))
+    expect(res).toMatchObject({ ok: true, tag: 'v3', upToDate: true })
+    expect(downloads).toBe(0)
+    expect(await readdir(join(tmp, 'userData/skill-backups')).catch(() => [])).toEqual([])
+  })
+
+  it('replaces a copy installed by hand (unknown version) and backs it up', async () => {
+    await mkdir(target(), { recursive: true })
+    await writeFile(join(target(), 'SKILL.md'), 'hand-made')
+    const zip = skillZip()
+    expect(await checkSkillUpdate(opts(fakeFetch(release(zip), zip)))).toEqual({
+      latest: 'v3',
+      installed: null,
+      updateAvailable: true
+    })
+    const res = await syncSkill(() => {}, opts(fakeFetch(release(zip), zip)))
+    expect(res.ok).toBe(true)
+    expect(await readFile(join(target(), 'SKILL.md'), 'utf8')).toBe(SKILL_MD)
+    const backups = await readdir(join(tmp, 'userData/skill-backups'))
+    expect(await readFile(join(tmp, 'userData/skill-backups', backups[0], 'SKILL.md'), 'utf8')).toBe('hand-made')
+  })
+
+  it('keeps the current copy when GitHub fails', async () => {
+    await mkdir(target(), { recursive: true })
+    await writeFile(join(target(), 'SKILL.md'), 'old')
+    const res = await syncSkill(() => {}, opts(async () => new Response('', { status: 429 })))
+    expect(res).toMatchObject({ ok: false, error: expect.stringContaining('rate-limiting') })
+    expect(await readFile(join(target(), 'SKILL.md'), 'utf8')).toBe('old')
   })
 })

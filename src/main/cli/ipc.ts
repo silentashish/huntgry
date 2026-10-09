@@ -12,7 +12,7 @@ import { installAgentSkill } from './agents/skills'
 import { findClaude, findSkillDir } from './env'
 import { checkEnvironment, installPythonDeps } from './environment'
 import { claudeInstallKind, exclusive, installClaude, updateClaude } from './install-claude'
-import { installSkill } from './install-skill'
+import { checkSkillUpdate, installSkill, syncSkill } from './install-skill'
 import { listRuns, OUTPUT_FILES, readEvents, readRun, requireRunId } from './runs'
 import { replyThroughQueue } from '../queue/ipc'
 import { WorkspaceChangedError } from '../workspace/changed'
@@ -163,6 +163,20 @@ export function registerRunnerIpc(): void {
         recordPath: skillRecordPath(),
         backupDir: join(app.getPath('userData'), 'skill-backups'),
         replace: replace === true
+      })
+    )
+  )
+
+  ipcMain.handle(RUNNER_CHANNELS.checkSkillUpdate, () =>
+    checkSkillUpdate({ home: homedir(), recordPath: skillRecordPath() })
+  )
+
+  ipcMain.handle(RUNNER_CHANNELS.syncSkill, () =>
+    exclusive(installLog, () =>
+      syncSkill(installLog, {
+        home: homedir(),
+        recordPath: skillRecordPath(),
+        backupDir: join(app.getPath('userData'), 'skill-backups')
       })
     )
   )
