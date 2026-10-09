@@ -89,6 +89,13 @@ sequenceDiagram
   after `exp`, a hello is answered `{ pair: 'denied', reason: 'expired' }` until the relay
   forgets the pairing. A hello the desktop opens is acked at once; pending requests live in
   memory only (a restart forgets them, and the phone shows a new code).
+- **`pair.ok` is sealed with the phone's session key**, not with the QR secret (*refines the
+  ADR*, where every pairing message is `secretbox(S)`). Someone who saw the QR can open a second
+  pairing socket with the same `pairingId`, and the relay keeps one socket per identity, so
+  `pair.ok` could reach them instead of the phone. Under `deriveSessionKey(devicePub,
+  desktopPriv)` only the phone whose hello the owner approved can read the relay token
+  (`sealPairReply` / `openPairReply` in the protocol package). `pair.denied` stays under S,
+  and the phone refuses a `pair.ok` under S, which anyone with the QR could forge.
 - **Approve order.** Relay registration → device record → `pair.ok`. Nothing is written if the
   relay refuses (the request stays open and can be approved again); if `pair.ok` cannot be
   sent (the socket dropped), the record and the token are removed again. Approve is refused
@@ -137,7 +144,7 @@ npm test && npm run typecheck && npm run build
   Approve and a lost `pair.ok` undo everything.
 - `src/main/remote/pairing.e2e.test.ts`: over an in-process relay with per-identity auth and
   routing, a phone built only from the protocol package (`parsePairingUrl`, `generateKeyPair`,
-  `sealPairMessage`, `openPairMessage`, `deriveSessionKey`, `sealEnvelope`, `openEnvelope`)
+  `sealPairMessage`, `openPairReply`, `deriveSessionKey`, `sealEnvelope`, `openEnvelope`)
   scans, sends hello, is approved, receives and acks `pair.ok`, reconnects with its relay token
   and gets `hello` (workspace name and id) and a `status` event; and the Deny path.
 - `validate.test.ts` (IPC validators), `settings.test.ts` (persistence next to `defaultAgent`,
@@ -162,13 +169,6 @@ npm test && npm run typecheck && npm run build
 
 ## Follow-ups
 
-- **Bind `pair.ok` to the hello's key.** Someone who saw the QR can open a second pairing socket
-  with the same `pairingId`; the relay keeps one socket per identity, so `pair.ok` (sealed with
-  the QR secret) would reach them. They would learn a relay token for a device whose session key
-  they cannot derive (the record holds the real phone's public key), so they cannot read or send
-  commands, but they can hold that device's relay socket. Sealing `pair.ok` with
-  `box.before(devicePub, desktopPriv)` instead of `secretbox(S)` closes this; it is a protocol
-  change to agree with #38 before either side ships.
 - Show a short fingerprint of the phone's key in the approve dialog (and on the phone) for
   owners who want to compare.
 - Pending requests do not survive a restart of the app; the phone shows a new code.

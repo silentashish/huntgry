@@ -8,8 +8,9 @@ import {
   deriveSessionKey,
   generateKeyPair,
   openEnvelope,
-  openPairMessage,
+  openPairReply,
   parsePairingUrl,
+  randomBytes,
   requireEnvelope,
   sealEnvelope,
   sealPairMessage,
@@ -242,7 +243,8 @@ describe('pairing end to end', () => {
 
     // The phone gets pair.ok on its pairing socket, acks it and closes.
     const okFrame = await waitFor(() => pairSocket.inbox[0])
-    const message = openPairMessage(okFrame, invite.secret)
+    const sessionKey = deriveSessionKey(invite.desktopPublicKey, phoneKeys.secretKey)
+    const message = openPairReply(okFrame, { secret: invite.secret, sessionKey })
     expect(message?.pair).toBe('ok')
     const ok = (message as { ok: PairOk }).ok
     pairSocket.send(JSON.stringify({ ack: okFrame.ref }))
@@ -250,7 +252,6 @@ describe('pairing end to end', () => {
     expect(relay.acks).toContain(okFrame.ref)
 
     // Reconnect as the device with the relay token, then hello under the agreed sid.
-    const sessionKey = deriveSessionKey(invite.desktopPublicKey, phoneKeys.secretKey)
     const deviceSocket = relay.open()
     await new Promise((r) => setTimeout(r, 0))
     deviceSocket.send(JSON.stringify({ auth: { room: invite.room, device: ok.deviceId, token: ok.relayToken } }))
@@ -283,7 +284,7 @@ describe('pairing end to end', () => {
     const request = await waitFor(() => pairing.list().find((p) => p.status === 'scanned'))
     await pairing.deny(request.id)
     const denied = await waitFor(() => pairSocket.inbox[0])
-    expect(openPairMessage(denied, invite.secret)).toEqual({ pair: 'denied', reason: 'denied' })
+    expect(openPairReply(denied, { secret: invite.secret, sessionKey: randomBytes(32) })).toEqual({ pair: 'denied', reason: 'denied' })
     expect(relay.devices.size).toBe(0)
     expect(devices.list()).toEqual([])
   })

@@ -11,8 +11,14 @@
  * - `exp` is the second after which the desktop refuses `pair.hello` (now + 2 min).
  *
  * Frames: the phone sends `RelayFrame{ to: 'desktop', ref, ...sealPairMessage(hello, S), ttl }`
- * on its pairing socket; the desktop answers `ok` or `denied` addressed `to: pairingId`.
- * The desktop finds the pairing by trying each open secret, as it does with session keys.
+ * on its pairing socket; the desktop answers `ok` or `denied` addressed `to: pairingId`
+ * (`sealPairReply` / `openPairReply`). The desktop finds the pairing by trying each open secret,
+ * as it does with session keys.
+ *
+ * `pair.ok` carries the relay token, so it is sealed with the session key of the phone whose
+ * hello is being approved (`deriveSessionKey`), not with S: anyone else who saw the QR can open
+ * a socket with the same pairing id and take the phone's place on the relay, but cannot read the
+ * token. `pair.denied` carries nothing and stays under S.
  */
 
 import { ProtocolError, invalid, rejectUnknownKeys, requireBase64, requireId, requireProtocolRange, requireRecord } from './check'
@@ -185,4 +191,35 @@ export function openPairMessage(sealed: Sealed, secret: Uint8Array): PairMessage
   const plain = openJson(sealed, secret)
   if (plain === null) return null
   return requirePairMessage(plain)
+}
+
+/** The keys of the desktop's answer: the QR secret S and the approved phone's session key. */
+export interface PairReplyKeys {
+  secret: Uint8Array
+  /** `deriveSessionKey(devicePub, desktopSecretKey)` on the desktop, `(desktopPub, deviceSecretKey)` on the phone. */
+  sessionKey?: Uint8Array
+}
+
+/** The desktop's answer: `pair.ok` under the session key, `pair.denied` under S. */
+export function sealPairReply(message: PairMessage, keys: PairReplyKeys, nonce?: Uint8Array): Sealed {
+  if (message.pair === 'hello') throw new Error('pair.hello is the phone\'s; seal it with sealPairMessage.')
+  if (message.pair === 'denied') return sealPairMessage(message, keys.secret, nonce)
+  if (!keys.sessionKey) throw new Error('pair.ok is sealed with the phone\'s session key.')
+  return sealPairMessage(message, keys.sessionKey, nonce)
+}
+
+/**
+ * Opens the desktop's answer on the phone: `pair.ok` only under the session key, `pair.denied`
+ * only under S (anyone with the QR could forge a `pair.ok` under S). `null` when neither key
+ * opens it; throws `ProtocolError('invalid')` for any other combination.
+ */
+export function openPairReply(sealed: Sealed, keys: Required<PairReplyKeys>): PairMessage | null {
+  const ok = openPairMessage(sealed, keys.sessionKey)
+  if (ok) {
+    if (ok.pair !== 'ok') invalid('Only pair.ok is sealed with the session key.')
+    return ok
+  }
+  const denied = openPairMessage(sealed, keys.secret)
+  if (denied && denied.pair !== 'denied') invalid('Only pair.denied is sealed with the pairing secret.')
+  return denied
 }

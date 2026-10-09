@@ -5,11 +5,13 @@ import {
   PAIRING_TTL_SECONDS,
   PROTOCOL,
   SECRET_BYTES,
+  deriveSessionKey,
+  fromBase64,
   negotiateProtocol,
   openPairMessage,
   pairingUrl,
   randomBytes,
-  sealPairMessage,
+  sealPairReply,
   toHex,
   type PairHello,
   type PairMessage,
@@ -32,7 +34,8 @@ import type { DeviceRecord, DeviceStore } from './devices'
  *    the first still waits is ignored, so it cannot replace the request being shown).
  * 3. `approve()` mints `deviceId`, `relayToken` (32 random bytes, hex) and `sid`, registers
  *    `{ deviceId, sha256(relayToken) }` on the relay, writes the device record, and only then
- *    sends `pair.ok`. `deny()` sends `pair.denied` and keeps nothing.
+ *    sends `pair.ok`, sealed with the phone's session key so that only the phone whose hello
+ *    the owner saw can read the token. `deny()` sends `pair.denied` (under S) and keeps nothing.
  *
  * The relay is told the pairing lives `APPROVAL_SECONDS` longer than the QR, so the phone's
  * pairing socket (closed by the relay at its `exp`, code 4006) stays open while the owner
@@ -243,8 +246,8 @@ export class PairingManager {
     this.changed()
   }
 
-  private async reply(p: Pairing, message: PairMessage): Promise<boolean> {
-    const frame: RelayFrame = { to: p.id, ref: randomUUID(), ...sealPairMessage(message, p.secret), ttl: PAIR_FRAME_TTL }
+  private async reply(p: Pairing, message: PairMessage, sessionKey?: Uint8Array): Promise<boolean> {
+    const frame: RelayFrame = { to: p.id, ref: randomUUID(), ...sealPairReply(message, { secret: p.secret, sessionKey }), ttl: PAIR_FRAME_TTL }
     return this.deps.send(frame)
   }
 
@@ -278,10 +281,12 @@ export class PairingManager {
       await this.deps.registerDevice(deviceId, tokenHash)
       record = { id: deviceId, name: hello.deviceName.slice(0, 200), publicKey: hello.devicePub, tokenHash, sid, pairedAt: new Date(this.now()).toISOString(), lastSeq: 0, categories: [], needsRepair: false }
       await this.deps.devices.add(record)
-      const ok = await this.reply(p, {
-        pair: 'ok',
-        ok: { deviceId, relayToken, desktopName: this.deps.desktopName.slice(0, LIMITS.idChars) || 'Mac', protocol: { ...PROTOCOL }, sid }
-      })
+      const sessionKey = deriveSessionKey(fromBase64(hello.devicePub), keys.secretKey)
+      const ok = await this.reply(
+        p,
+        { pair: 'ok', ok: { deviceId, relayToken, desktopName: this.deps.desktopName.slice(0, LIMITS.idChars) || 'Mac', protocol: { ...PROTOCOL }, sid } },
+        sessionKey
+      )
       if (!ok) throw new Error('The connection to the relay dropped before the phone was told. Approve again once it shows "Connected".')
       p.stage = 'paired'
       this.changed()

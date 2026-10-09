@@ -5,8 +5,10 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   PAIRING_TTL_SECONDS,
+  deriveSessionKey,
   generateKeyPair,
   openPairMessage,
+  openPairReply,
   parsePairingUrl,
   sealPairMessage,
   toBase64,
@@ -101,11 +103,11 @@ function phoneHello(invite: PairingInvite, name = 'Test iPhone', keys: KeyPair =
   return { keys, frame: { to: 'desktop', ref: randomUUID(), ...sealPairMessage(message, invite.secret), ttl: 120 } }
 }
 
-/** Opens the desktop's answer the way the phone does. */
-function answer(invite: PairingInvite, frame: RelayFrame): PairMessage {
+/** Opens the desktop's answer the way the phone does (`keys`: the phone that sent the hello). */
+function answer(invite: PairingInvite, frame: RelayFrame, keys: KeyPair = generateKeyPair()): PairMessage {
   expect(frame.to).toBe(invite.pairing)
-  const message = openPairMessage(frame, invite.secret)
-  expect(message, 'the phone opens the answer with the QR secret').not.toBeNull()
+  const message = openPairReply(frame, { secret: invite.secret, sessionKey: deriveSessionKey(invite.desktopPublicKey, keys.secretKey) })
+  expect(message, 'the phone opens the answer').not.toBeNull()
   return message!
 }
 
@@ -166,8 +168,10 @@ describe('PairingManager', () => {
     const record = await manager.approve(pairingId)
 
     const [ok] = sent
-    const message = answer(invite, ok)
+    const message = answer(invite, ok, keys)
     expect(message.pair).toBe('ok')
+    // Only that phone reads it: the QR secret alone (anyone who saw the code) does not open it.
+    expect(openPairMessage(ok, invite.secret)).toBeNull()
     const pairOk = (message as Extract<PairMessage, { pair: 'ok' }>).ok
     expect(pairOk.relayToken).toMatch(/^[0-9a-f]{64}$/)
     expect(pairOk).toMatchObject({ deviceId: record.id, sid: record.sid, desktopName: 'Ashish’s Mac', protocol: { min: 1, max: 1 } })

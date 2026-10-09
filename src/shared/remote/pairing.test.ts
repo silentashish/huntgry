@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import fixture from './crypto.fixture.json'
 import { ProtocolError } from './check'
-import { fromHex, generateKeyPair, randomBytes, sealJson, toBase64 } from './crypto'
+import { deriveSessionKey, fromHex, generateKeyPair, randomBytes, sealJson, toBase64 } from './crypto'
 import {
   PAIRING_TTL_SECONDS,
   openPairMessage,
+  openPairReply,
   pairingUrl,
   parsePairingUrl,
   requirePairMessage,
   requireRelayUrl,
   sealPairMessage,
+  sealPairReply,
   type PairMessage,
   type PairingInvite
 } from './pairing'
@@ -134,5 +136,35 @@ describe('pairing messages', () => {
 
   it('throws invalid (not null) when the box opens but holds junk', () => {
     expect(code(errorOf(() => openPairMessage(sealJson({ hello: 1 }, secret), secret)))).toBe('invalid')
+  })
+})
+
+describe('the desktop\'s answer', () => {
+  const secret = randomBytes(32)
+  const desktop = generateKeyPair()
+  const phone = generateKeyPair()
+  const desktopKeys = { secret, sessionKey: deriveSessionKey(phone.publicKey, desktop.secretKey) }
+  const phoneKeys = { secret, sessionKey: deriveSessionKey(desktop.publicKey, phone.secretKey) }
+  const ok: PairMessage = { pair: 'ok', ok: { deviceId: 'dev-1', relayToken: 'a'.repeat(64), desktopName: 'MacBook', protocol: { min: 1, max: 1 }, sid: 'sid-1' } }
+  const denied: PairMessage = { pair: 'denied', reason: 'denied' }
+
+  it('seals pair.ok with the session key, so the QR secret alone cannot read the relay token', () => {
+    const sealed = sealPairReply(ok, desktopKeys)
+    expect(openPairReply(sealed, phoneKeys)).toEqual(ok)
+    expect(openPairMessage(sealed, secret)).toBeNull()
+    // Another phone that saw the QR has the secret but not this session key.
+    const intruder = { secret, sessionKey: deriveSessionKey(desktop.publicKey, generateKeyPair().secretKey) }
+    expect(openPairReply(sealed, intruder)).toBeNull()
+  })
+
+  it('seals pair.denied with the QR secret', () => {
+    expect(openPairReply(sealPairReply(denied, { secret }), phoneKeys)).toEqual(denied)
+  })
+
+  it('refuses pair.ok under the QR secret, pair.denied under the session key, and hello as an answer', () => {
+    expect(code(errorOf(() => openPairReply(sealPairMessage(ok, secret), phoneKeys)))).toBe('invalid')
+    expect(code(errorOf(() => openPairReply(sealPairMessage(denied, phoneKeys.sessionKey), phoneKeys)))).toBe('invalid')
+    expect(() => sealPairReply(ok, { secret })).toThrow(/session key/)
+    expect(() => sealPairReply({ pair: 'hello', hello: { devicePub: toBase64(phone.publicKey), deviceName: 'x', appVersion: '1', protocol: { min: 1, max: 1 } } }, desktopKeys)).toThrow(/sealPairMessage/)
   })
 })
