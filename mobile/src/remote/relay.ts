@@ -20,8 +20,10 @@
  * - **Close codes.** 4001 revoked, 4002 unauthorized and 4004 room deleted end the pairing;
  *   4000 (replaced by another socket of this phone) waits for the app to come back; anything
  *   else reconnects with backoff (1 s … 60 s, jitter; 30 s at least after 1008).
- * - **Pair again.** A `denied` answer (rewound counter, device no longer paired) and
- *   `device.revoked` are fatal: the owner of this client wipes the vault.
+ * - **Pair again.** A `denied` answer to a command or `hello` (rewound counter, device no
+ *   longer paired) and `device.revoked` are fatal: the owner of this client wipes the vault.
+ *   `review.*` answers `denied` for a revision it did not serve (#42), which is not fatal, nor
+ *   is a `denied` for a command this client no longer knows (sent before a restart).
  */
 
 import {
@@ -135,6 +137,8 @@ export class RelayClient {
   private readonly acks: string[] = []
   private readonly sent = new Map<string, SentCommand>()
   private readonly seen = new Set<string>()
+  /** Ids of this client's own `hello` / `ping` envelopes: a `denied` answer to one is a re-pair. */
+  private readonly sessionIds = new Set<string>()
   private readonly sendTimes: number[] = []
   private inbound: Promise<void> = Promise.resolve()
   private readonly clock: Clock
@@ -406,9 +410,12 @@ export class RelayClient {
     const sent = env.kind === 'result' && env.re !== undefined ? this.sent.get(env.re) : undefined
 
     if (env.kind === 'result' && env.ok === false && env.error?.code === 'denied') {
-      const name = sent?.command.name ?? ''
-      // A review answers `denied` for a revision it never showed (#42); everything else means "pair again".
-      if (!name.startsWith('review.')) {
+      // A review answers `denied` for a revision it never showed (#42); a command or hello of this
+      // session answered `denied` means "pair again". A result for a command this client no longer
+      // knows (sent before the app restarted) says nothing about the pairing: if the pairing is
+      // gone, the next hello is denied too.
+      const pairAgain = sent ? !sent.command.name.startsWith('review.') : this.sessionIds.has(env.re ?? '')
+      if (pairAgain) {
         this.ack(frame.ref)
         this.flushAcksNow()
         await this.fatal('denied', env.error.message)
@@ -571,6 +578,8 @@ export class RelayClient {
       } else {
         const body: HelloBody | null = item.kind === 'hello' ? { protocol: { ...PROTOCOL }, name: this.pairing.deviceName, appVersion: this.o.appVersion } : null
         env = { v: 1, sid: this.pairing.sid, from: 'phone', seq, ts: new Date(now).toISOString(), ttl: SESSION_TTL_SECONDS, kind: item.kind, id: uuid(), body }
+        this.sessionIds.add(env.id!)
+        if (this.sessionIds.size > 100) this.sessionIds.delete(this.sessionIds.values().next().value as string)
       }
       requireEnvelope(env)
     } catch (err) {

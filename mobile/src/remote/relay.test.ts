@@ -356,6 +356,17 @@ describe('relay client: the pairing is over', () => {
     expect(t.received).toHaveLength(1)
   })
 
+  it('a denied answer to a command sent before a restart is not a re-pair; the next hello decides', async () => {
+    const t = await setup()
+    t.client.start()
+    await t.online()
+    // A review.approve queued at the relay, then the app was killed: this client never saw it.
+    t.sockets.last.receive(t.desktop.result('0e2f6a55-0c4b-4b5e-9a62-1f7d2c3b4a59', null, { ok: false, error: { code: 'denied', message: 'Open this result again before you decide.' } }))
+    await settle()
+    expect(t.fatal).toEqual([])
+    expect(t.sockets.last.acks()).toHaveLength(1)
+  })
+
   it('device.revoked is acked and fatal', async () => {
     const t = await setup()
     t.client.start()

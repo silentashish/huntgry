@@ -9,24 +9,40 @@
 
 import {
   NOTIFICATION_CATEGORIES,
+  ProtocolError,
+  requireFileChunk,
   requireHelloBody,
+  requireJobsPage,
+  requirePipelineState,
   requireQueueState,
+  requireRecord,
+  requireRemoteJob,
   requireRemoteRun,
+  requireReviewDetail,
+  requireReviewList,
   requireRunPage,
   requireStatusSummary,
   requireEvent,
   type Envelope,
   type EnvelopeError,
+  type FileChunk,
   type NotificationCategory,
+  type PipelineStartInput,
   type PipelineState,
   type PipelineSummary,
   type RelayNotice,
+  type RemoteFile,
+  type RemoteJob,
   type RemoteQueueState,
   type RemoteRun,
   type RemoteTranscriptItem,
+  type ReviewDetail,
+  type ReviewItem,
   type StatusSummary
 } from '@huntgry/remote-protocol'
 import { commandLabel, commands, NoWorkspaceError, type Command, type DeliveryState } from './commands'
+import { FileDownload, FileError, fileKey } from './files'
+import { REVIEW_COPY, approvalIds, requiredPreviews } from './review'
 import { PairingFlow, PairingError, type PairingStep } from './pairing'
 import { systemClock, type Clock, type SocketFactory } from './platform'
 import { RelayClient, type ConnectionState, type FatalReason, type SentCommand } from './relay'
@@ -51,6 +67,49 @@ export interface CommandView {
   /** The run it is about (reply / finish / stop). */
   runId?: string
   itemId?: string
+}
+
+/** `jobs.list` pages loaded so far for one filter (#40). */
+export interface JobsView {
+  items: RemoteJob[]
+  filter: string
+  nextCursor?: string
+  loading: boolean
+  error?: string
+}
+
+/** `review.list` (#42). */
+export interface ReviewsView {
+  items: ReviewItem[]
+  more: number
+  loading: boolean
+  error?: string
+}
+
+/** One result's `ReviewDetail` as last served, and what happened to the last decision. */
+export interface ReviewView {
+  detail: ReviewDetail | null
+  loading: boolean
+  error?: string
+  /** Why the detail was reloaded (`stale`, `denied`, a change on the Mac). */
+  notice?: string
+  deciding?: 'approve' | 'rerun' | 'discard'
+}
+
+/** One application file (#40), in memory only. `data` is set once reassembled and hash-checked. */
+export interface FileView {
+  applicationId: string
+  file: RemoteFile
+  state: 'waiting' | 'loading' | 'ready' | 'failed'
+  received: number
+  of: number
+  bytes: number
+  /** The SHA-256 a review listed for this file, when it was fetched for one. */
+  expected?: string
+  /** The verified SHA-256 of `data`. */
+  sha256?: string
+  data?: Uint8Array
+  error?: string
 }
 
 export interface Presence {
@@ -82,6 +141,12 @@ export interface RemoteSnapshot {
   runs: Record<string, RunView>
   /** The last `RemoteRun` seen for each run (run.changed, run.get, replies): durations, tokens, cost for queue cards. */
   runInfo: Record<string, RemoteRun>
+  jobs: JobsView | null
+  reviews: ReviewsView | null
+  /** By application id. */
+  review: Record<string, ReviewView>
+  /** By `fileKey(applicationId, file)`. */
+  files: Record<string, FileView>
   commands: CommandView[]
   toast: Toast | null
   demo: boolean
@@ -100,6 +165,8 @@ export interface ModelDeps {
 /** Pages fetched in a row when a run opens; more come with "Load earlier" / the next change. */
 const AUTO_PAGES = 12
 const COMMAND_HISTORY = 20
+/** Files kept in memory; the oldest go first (previews are fetched again when needed). */
+const FILES_KEPT = 24
 
 export const INITIAL_SNAPSHOT: RemoteSnapshot = {
   phase: 'loading',
@@ -116,6 +183,10 @@ export const INITIAL_SNAPSHOT: RemoteSnapshot = {
   lastPipeline: null,
   runs: {},
   runInfo: {},
+  jobs: null,
+  reviews: null,
+  review: {},
+  files: {},
   commands: [],
   toast: null,
   demo: false
@@ -129,6 +200,12 @@ export class RemoteModel {
   /** Command id → what it was, for results that arrive after `sent` was forgotten. */
   private readonly requests = new Map<string, Command>()
   private readonly runPages = new Map<string, number>()
+  /** File downloads: one at a time, in the order asked (the relay's frame budget is shared). */
+  private readonly downloads = new Map<string, FileDownload>()
+  private readonly downloadQueue: string[] = []
+  private activeDownload: string | null = null
+  /** The result the owner has open: refreshed when the Mac's application folders change. */
+  private openReviewId: string | null = null
   private toastSeq = 0
   protected readonly clock: Clock
 
@@ -255,6 +332,7 @@ export class RemoteModel {
     this.stop()
     await this.deps.vault.wipe()
     this.requests.clear()
+    this.forgetDownloads()
     this.set({ ...INITIAL_SNAPSHOT, phase: 'unpaired', demo: this.snap.demo })
   }
 
@@ -263,6 +341,7 @@ export class RemoteModel {
     // Pair again: every key and counter goes; the next pairing mints a new identity.
     await this.deps.vault.wipe()
     this.requests.clear()
+    this.forgetDownloads()
     this.set({ ...INITIAL_SNAPSHOT, phase: 'unpaired', pairAgain: { reason, message }, demo: this.snap.demo })
   }
 
@@ -307,6 +386,13 @@ export class RemoteModel {
   }
 
   private onDelivery(id: string, state: DeliveryState, error?: EnvelopeError): void {
+    // Expired or too large at the relay, or never sealed: no result will come for it.
+    const lost = state === 'expired' || state === 'too-large' || (state === 'failed' && this.requests.has(id))
+    const command = lost ? this.requests.get(id) : undefined
+    if (command) {
+      this.requests.delete(id)
+      this.settleLost(command, error ?? { code: 'expired', message: state === 'too-large' ? 'That was too large to send.' : 'Expired before your Mac woke up.' })
+    }
     if (!this.snap.commands.some((c) => c.id === id)) return
     this.set({ commands: this.snap.commands.map((c) => (c.id === id ? { ...c, state, error } : c)) })
     if (state === 'expired') this.toast('Expired before your Mac woke up.', 'info')
@@ -356,6 +442,232 @@ export class RemoteModel {
 
   stopRun(runId: string): void {
     this.dispatch(commands.stop(runId), { runId })
+  }
+
+  // ── pipeline (#41) ───────────────────────────────────────────────────────────────────
+
+  /** `pipeline.start` with the start sheet's input (already through `pipelineStartInput`). */
+  startPipeline(input: PipelineStartInput): boolean {
+    try {
+      return this.dispatch(commands.pipelineStart(input)) !== null
+    } catch (err) {
+      this.toast(err instanceof ProtocolError ? err.message : 'That pipeline cannot be started.')
+      return false
+    }
+  }
+
+  /** Saved jobs to the attended queue (`queue.enqueue`) with "Run unattended"'s document options. */
+  enqueueJobs(jobIds: readonly string[]): boolean {
+    try {
+      return this.dispatch(commands.enqueue({ jobIds: [...jobIds], options: { coverLetter: true, dateStyle: 'right' } })) !== null
+    } catch (err) {
+      this.toast(err instanceof ProtocolError ? err.message : 'Those jobs cannot be queued.')
+      return false
+    }
+  }
+
+  // ── jobs (#40) ───────────────────────────────────────────────────────────────────────
+
+  /** The first page for `filter` (search on title, company, location), or the next page with `more`. */
+  loadJobs(filter = this.snap.jobs?.filter ?? '', more = false): void {
+    const f = filter.trim().slice(0, 128)
+    const prev = this.snap.jobs
+    const cursor = more && prev && prev.filter === f ? prev.nextCursor : undefined
+    if (more && !cursor) return
+    if (prev?.loading && prev.filter === f) return
+    this.set({ jobs: { items: prev && prev.filter === f ? prev.items : [], filter: f, nextCursor: prev?.filter === f ? prev.nextCursor : undefined, loading: true } })
+    if (this.dispatch(commands.jobs(f || undefined, cursor), { quiet: true }) === null) this.set({ jobs: { ...this.snap.jobs!, loading: false, error: 'Not connected to your Mac yet.' } })
+  }
+
+  /** `jobs.addUrl`: the package refuses non-http(s), local and private hosts before anything is sent. */
+  addJobUrl(url: string): boolean {
+    let command: Command
+    try {
+      command = commands.addJobUrl(url)
+    } catch (err) {
+      this.toast(err instanceof ProtocolError ? friendlyUrlError(err.message) : 'That is not a job link.')
+      return false
+    }
+    return this.dispatch(command) !== null
+  }
+
+  // ── review (#42) ─────────────────────────────────────────────────────────────────────
+
+  loadReviews(): void {
+    if (this.snap.reviews?.loading) return
+    this.set({ reviews: { items: this.snap.reviews?.items ?? [], more: this.snap.reviews?.more ?? 0, loading: true } })
+    if (this.dispatch(commands.reviews(), { quiet: true }) === null) this.set({ reviews: { ...this.snap.reviews!, loading: false, error: 'Not connected to your Mac yet.' } })
+  }
+
+  private setReview(applicationId: string, patch: Partial<ReviewView>): void {
+    const prev = this.snap.review[applicationId] ?? { detail: null, loading: false }
+    this.set({ review: { ...this.snap.review, [applicationId]: { ...prev, ...patch } } })
+  }
+
+  /** `review.get`: the detail is what a decision is bound to (the gateway records it as served). */
+  openReview(applicationId: string, notice?: string): void {
+    this.openReviewId = applicationId
+    const view = this.snap.review[applicationId]
+    if (view?.loading) {
+      if (notice) this.setReview(applicationId, { notice })
+      return
+    }
+    this.setReview(applicationId, { loading: true, error: undefined, ...(notice ? { notice } : {}) })
+    if (this.dispatch(commands.review(applicationId), { quiet: true }) === null) this.setReview(applicationId, { loading: false, error: 'Not connected to your Mac yet.' })
+  }
+
+  closeReview(applicationId: string): void {
+    if (this.openReviewId === applicationId) this.openReviewId = null
+  }
+
+  dismissReviewNotice(applicationId: string): void {
+    if (this.snap.review[applicationId]?.notice) this.setReview(applicationId, { notice: undefined })
+  }
+
+  /** Approve with the ticked reframings: the served revision and only ids that detail listed. */
+  approve(applicationId: string, ticked: Iterable<string>): boolean {
+    const d = this.snap.review[applicationId]?.detail
+    if (!d) return false
+    return this.decide(applicationId, 'approve', () => commands.approve(applicationId, d.revision, approvalIds(d, ticked)))
+  }
+
+  /** Re-run with answers (≤ 32 KiB): the same run, the same session, through the desktop's reply path. */
+  rerun(applicationId: string, answers: string): boolean {
+    const d = this.snap.review[applicationId]?.detail
+    if (!d) return false
+    return this.decide(applicationId, 'rerun', () => commands.rerun(d.runId, d.revision, answers))
+  }
+
+  /** Discard: the desktop archives the result and keeps every file. */
+  discard(applicationId: string): boolean {
+    const d = this.snap.review[applicationId]?.detail
+    if (!d) return false
+    return this.decide(applicationId, 'discard', () => commands.discard(applicationId, d.revision))
+  }
+
+  private decide(applicationId: string, kind: NonNullable<ReviewView['deciding']>, build: () => Command): boolean {
+    if (this.snap.review[applicationId]?.deciding) return false
+    let command: Command
+    try {
+      command = build()
+    } catch (err) {
+      this.toast(err instanceof ProtocolError ? err.message : 'That cannot be sent.')
+      return false
+    }
+    if (this.dispatch(command) === null) return false
+    this.setReview(applicationId, { deciding: kind, notice: undefined })
+    return true
+  }
+
+  // ── files (#40) ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * Fetches an application file chunk by chunk (`file.get`), reassembles it and keeps it in
+   * memory once its SHA-256 matches (and equals `expected`, the hash a review listed).
+   */
+  fetchFile(applicationId: string, file: RemoteFile, expected?: string): void {
+    const key = fileKey(applicationId, file)
+    const view = this.snap.files[key]
+    if (view && (view.state === 'waiting' || view.state === 'loading')) return
+    if (view?.state === 'ready' && (expected === undefined || view.sha256 === expected)) return
+    this.downloads.set(key, new FileDownload(applicationId, file, expected))
+    this.setFile(key, { applicationId, file, state: 'waiting', received: 0, of: 0, bytes: 0, expected })
+    this.downloadQueue.push(key)
+    this.pumpDownloads()
+  }
+
+  /** The verified SHA-256 of a file the phone holds, or null. */
+  verifiedSha(applicationId: string, file: RemoteFile): string | null {
+    const view = this.snap.files[fileKey(applicationId, file)]
+    return view?.state === 'ready' ? (view.sha256 ?? null) : null
+  }
+
+  private setFile(key: string, view: FileView): void {
+    const files = { ...this.snap.files, [key]: view }
+    const ready = Object.keys(files).filter((k) => files[k].state === 'ready')
+    // Memory only, and bounded: the oldest verified files go first.
+    for (const k of ready.slice(0, Math.max(0, ready.length - FILES_KEPT))) if (k !== key) delete files[k]
+    this.set({ files })
+  }
+
+  private pumpDownloads(): void {
+    while (this.activeDownload === null && this.downloadQueue.length > 0) {
+      const key = this.downloadQueue.shift()!
+      const dl = this.downloads.get(key)
+      if (!dl) continue
+      this.activeDownload = key
+      this.requestChunk(key, dl)
+    }
+  }
+
+  private requestChunk(key: string, dl: FileDownload): void {
+    if (this.dispatch(commands.file(dl.applicationId, dl.file, dl.next), { quiet: true }) === null) this.failDownload(key, 'Not connected to your Mac yet.')
+  }
+
+  private failDownload(key: string, error: string): void {
+    const view = this.snap.files[key]
+    this.downloads.delete(key)
+    if (view) this.setFile(key, { ...view, state: 'failed', data: undefined, sha256: undefined, error })
+    if (this.activeDownload === key) this.activeDownload = null
+    this.pumpDownloads()
+  }
+
+  private onChunk(chunk: FileChunk): void {
+    const key = fileKey(chunk.applicationId, chunk.file)
+    const dl = this.downloads.get(key)
+    // A chunk for a download that was cancelled, or a late duplicate.
+    if (!dl || this.activeDownload !== key || chunk.chunk !== dl.next) return
+    const view = this.snap.files[key]
+    if (!view) return
+    let outcome: ReturnType<FileDownload['add']>
+    try {
+      outcome = dl.add(chunk)
+    } catch (err) {
+      this.failDownload(key, err instanceof FileError ? err.message : 'This file could not be loaded.')
+      return
+    }
+    const progress = dl.progress
+    if (!outcome.done) {
+      this.setFile(key, { ...view, state: 'loading', received: progress.received, of: progress.of, bytes: progress.bytes })
+      this.requestChunk(key, dl)
+      return
+    }
+    this.downloads.delete(key)
+    this.activeDownload = null
+    this.setFile(key, { ...view, state: 'ready', received: progress.of, of: progress.of, bytes: progress.bytes, sha256: dl.sha256 ?? undefined, data: outcome.data, error: undefined })
+    this.pumpDownloads()
+  }
+
+  /** Drops every file held in memory (unpair, pair again). */
+  private forgetDownloads(): void {
+    this.downloads.clear()
+    this.downloadQueue.length = 0
+    this.activeDownload = null
+    this.openReviewId = null
+  }
+
+  /** A command the relay dropped (expired, too large) or the phone could not send: no result will come. */
+  protected settleLost(command: Command, error: EnvelopeError): void {
+    switch (command.name) {
+      case 'file.get':
+        this.failDownload(fileKey(command.args.applicationId, command.args.file), error.message)
+        return
+      case 'jobs.list':
+      case 'review.list':
+      case 'review.get':
+      case 'run.get':
+        this.onFailure(command, error)
+        return
+      case 'review.approve':
+      case 'review.discard':
+        this.setReview(command.args.applicationId, { deciding: undefined })
+        return
+      case 'review.rerun':
+        for (const [id, v] of Object.entries(this.snap.review)) if (v.detail?.runId === command.args.runId && v.deciding) this.setReview(id, { deciding: undefined })
+        return
+      default:
+        return
+    }
   }
 
   async setNotifications(categories: readonly NotificationCategory[]): Promise<void> {
@@ -474,17 +786,132 @@ export class RemoteModel {
         this.refreshRun(run.id)
         return
       }
+      case 'queue.enqueue': {
+        const r = requireRecord(body, 'queue.enqueue')
+        this.set({ queue: requireQueueState(r.queue) })
+        const added = typeof r.added === 'number' ? r.added : 0
+        const skipped = Array.isArray(r.skipped) ? r.skipped.length : 0
+        this.toast(`Queued ${added} job${added === 1 ? '' : 's'}${skipped ? `; ${skipped} skipped (already queued or tailored)` : ''}.`, 'info')
+        return
+      }
+      case 'pipeline.start':
+      case 'pipeline.pause':
+      case 'pipeline.resume':
+      case 'pipeline.stop':
+        // The desktop answers with the pipeline as its panel shows it now.
+        this.set({ pipeline: requirePipelineState(body), ...(command.name === 'pipeline.start' ? { lastPipeline: null } : {}) })
+        return
+      case 'jobs.list': {
+        const page = requireJobsPage(body)
+        const filter = command.args.filter ?? ''
+        const prev = this.snap.jobs
+        // A page for a search the owner has since changed is dropped.
+        if (prev && prev.filter !== filter) return
+        const items = command.args.cursor && prev ? [...prev.items, ...page.items.filter((j) => !prev.items.some((p) => p.id === j.id))] : page.items
+        this.set({ jobs: { items, filter, nextCursor: page.nextCursor, loading: false } })
+        return
+      }
+      case 'jobs.addUrl': {
+        const job = requireRemoteJob(body)
+        const prev = this.snap.jobs
+        if (prev) this.set({ jobs: { ...prev, items: [job, ...prev.items.filter((j) => j.id !== job.id)] } })
+        this.toast(`Saved “${job.title}”${job.company ? ` at ${job.company}` : ''}.`, 'info')
+        return
+      }
+      case 'review.list': {
+        const list = requireReviewList(body)
+        this.set({ reviews: { items: list.items, more: list.more ?? 0, loading: false } })
+        return
+      }
+      case 'review.get': {
+        const detail = requireReviewDetail(body)
+        const prev = this.snap.review[command.args.applicationId]
+        // A new revision the owner did not ask for (a rebuild on the Mac): say so.
+        const changed = prev?.detail && prev.detail.revision !== detail.revision && !prev.notice
+        this.applyDetail(command.args.applicationId, detail)
+        if (changed) this.setReview(command.args.applicationId, { notice: REVIEW_COPY.changed })
+        return
+      }
+      case 'review.approve':
+      case 'review.discard':
+      case 'review.rerun': {
+        const detail = requireReviewDetail(body)
+        this.applyDetail(detail.applicationId, detail)
+        this.toast(command.name === 'review.approve' ? REVIEW_COPY.approved : command.name === 'review.discard' ? REVIEW_COPY.discarded : REVIEW_COPY.rerun, 'info')
+        this.loadReviews()
+        return
+      }
+      case 'file.get':
+        this.onChunk(requireFileChunk(body))
+        return
       default:
         return
     }
   }
 
-  private onFailure(command: Command, error: EnvelopeError | undefined): void {
-    if (command.name === 'run.get') {
-      this.setRun(command.args.runId, { loading: false, error: error?.message ?? 'Could not load this run.' })
+  /** A served detail: shown, and the previews Approve waits for are fetched against its hashes. */
+  private applyDetail(applicationId: string, detail: ReviewDetail): void {
+    this.setReview(applicationId, { detail, loading: false, deciding: undefined, error: undefined })
+    for (const file of requiredPreviews(detail)) {
+      const listed = detail.artifacts.find((a) => a.file === file)
+      if (listed && listed.bytes > 0) this.fetchFile(applicationId, file, listed.sha256)
+    }
+    // Notes too long to travel inline come as a file.
+    if (detail.reviewNotes === null) {
+      const listed = detail.artifacts.find((a) => a.file === 'review-notes.md')
+      this.fetchFile(applicationId, 'review-notes.md', listed?.sha256)
+    }
+  }
+
+  protected onFailure(command: Command, error: EnvelopeError | undefined): void {
+    const message = error?.message ?? 'Your Mac could not do that.'
+    switch (command.name) {
+      case 'run.get':
+        this.setRun(command.args.runId, { loading: false, error: error?.message ?? 'Could not load this run.' })
+        return
+      case 'status.get':
+      case 'queue.get':
+        return
+      case 'jobs.list':
+        if (this.snap.jobs) this.set({ jobs: { ...this.snap.jobs, loading: false, error: message } })
+        return
+      case 'review.list':
+        if (this.snap.reviews) this.set({ reviews: { ...this.snap.reviews, loading: false, error: message } })
+        return
+      case 'review.get':
+        this.setReview(command.args.applicationId, { loading: false, error: message })
+        return
+      case 'file.get':
+        this.failDownload(fileKey(command.args.applicationId, command.args.file), message)
+        return
+      case 'review.approve':
+      case 'review.discard':
+      case 'review.rerun':
+        this.onDecisionFailure(command, error)
+        return
+      default:
+        this.toast(message)
+    }
+  }
+
+  /**
+   * A refused decision. `stale`: the result changed on the Mac; `denied`: this phone was not
+   * served that revision (the Mac restarted, or the phone re-paired). Neither ends the
+   * pairing (the relay client keeps `review.*` out of "pair again"): the detail is fetched
+   * again and the owner decides on what is shown now. Anything else is the desktop's message.
+   */
+  private onDecisionFailure(command: Extract<Command, { name: 'review.approve' | 'review.discard' | 'review.rerun' }>, error: EnvelopeError | undefined): void {
+    const applicationId =
+      command.name === 'review.rerun' ? Object.keys(this.snap.review).find((id) => this.snap.review[id].detail?.runId === command.args.runId) : command.args.applicationId
+    if (!applicationId) {
+      this.toast(error?.message ?? 'Your Mac could not do that.')
       return
     }
-    if (command.name === 'status.get' || command.name === 'queue.get') return
+    this.setReview(applicationId, { deciding: undefined })
+    if (error?.code === 'stale' || error?.code === 'denied') {
+      this.openReview(applicationId, error.code === 'stale' ? REVIEW_COPY.stale : REVIEW_COPY.denied)
+      return
+    }
     this.toast(error?.message ?? 'Your Mac could not do that.')
   }
 
@@ -526,9 +953,29 @@ export class RemoteModel {
       case 'pipeline.finished':
         this.set({ pipeline: null, lastPipeline: event.body })
         return
+      case 'review.needed':
+        if (this.snap.reviews) this.loadReviews()
+        return
+      case 'applications.changed':
+        this.onApplicationsChanged(event.body.ids)
+        return
+      case 'file.chunk':
+        this.onChunk(event.body)
+        return
       default:
-        return // review.needed, applications.changed, file.chunk: #40 / #42
+        return
     }
+  }
+
+  /**
+   * The Mac's application folders changed (`ids: []` means "something changed"): the review list
+   * and the open result are fetched again. A result whose files changed gets a new revision;
+   * its previews are fetched against the new hashes, and the old ones no longer unlock Approve.
+   */
+  private onApplicationsChanged(ids: string[]): void {
+    if (this.snap.reviews) this.loadReviews()
+    const open = this.openReviewId
+    if (open && this.snap.review[open]?.detail && (ids.length === 0 || ids.includes(open)) && !this.snap.review[open].deciding) this.openReview(open)
   }
 }
 
@@ -538,4 +985,11 @@ export class RemoteModel {
  */
 export function mergeItems(existing: RemoteTranscriptItem[], since: number, page: RemoteTranscriptItem[]): RemoteTranscriptItem[] {
   return [...existing.slice(0, since), ...page, ...existing.slice(since + page.length)]
+}
+
+/** The package's URL refusals, in the words of the Jobs screen. */
+export function friendlyUrlError(message: string): string {
+  if (/credentials/.test(message)) return 'Leave the user name and password out of the link.'
+  if (/local|private|public host/.test(message)) return 'That link points at a local or private address. Paste the public job posting.'
+  return 'Paste an http(s) link to a job posting.'
 }
