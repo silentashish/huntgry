@@ -704,6 +704,19 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(queue.state().items[0].unattended).toBeUndefined()
   })
 
+  it('drops a pipeline saved without jobs (a start cut short by a workspace switch) instead of blocking every later start', async () => {
+    await mkdir(join(ws, '.huntgry'), { recursive: true })
+    const at = '2026-10-09T00:00:00.000Z'
+    const stranded = { id: 'p-20261009-000000-a1b2c3', status: 'running', options: {}, itemIds: [], skipped: [], limits: {}, unparsedStrikes: 0, startedAt: at, runCosts: {} }
+    await writeFile(queueFile(ws), JSON.stringify({ version: 1, concurrency: 2, items: [], pipeline: stranded }))
+    await pipeline.init(0)
+    expect(pipeline.state()).toBeNull()
+    jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
+    expect((await pipeline.plan(input(['url:a']))).blockers).toEqual([])
+    await pipeline.start(input(['url:a']))
+    await until((p) => p?.status === 'finished' && finished.length > 0)
+  })
+
   it('a run that built and then failed while still running goes to the verify gate, not a retry', async () => {
     jobs.set('url:b', job('url:b', { description: 'BUILT_THEN_ERROR' }))
     await pipeline.start(input(['url:b'], { concurrency: 1 }))
@@ -981,6 +994,39 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     await queue.sync()
     await until((_p, q) => q.items[0]?.outcome === 'approved')
     expect(pipeline.state()!.counts).toMatchObject({ unreviewed: 0, approved: 1 })
+  })
+
+  it('checks the opened workspace\'s pipeline, not the previous one\'s, before a start', async () => {
+    await pipeline.init(0)
+    expect(pipeline.state()).toBeNull()
+    // The user opens another workspace whose saved pipeline is paused with a job still queued.
+    const saved = ws
+    ws = await mkdtemp(join(tmpdir(), 'huntgry-pipeline-other-'))
+    try {
+      const at = '2026-10-09T00:00:00.000Z'
+      const id = 'p-20261009-000000-b2c3d4'
+      const itemId = 'q-20261009-000000-c3d4e5'
+      await mkdir(join(ws, '.huntgry'), { recursive: true })
+      await writeFile(
+        queueFile(ws),
+        JSON.stringify({
+          version: 1,
+          concurrency: 1,
+          items: [{ id: itemId, jobId: 'url:x', title: 'x', options, status: 'queued', runId: null, attempts: 0, createdAt: at, updatedAt: at, unattended: true, pipelineId: id }],
+          pipeline: { id, status: 'paused', options: {}, itemIds: [itemId], skipped: [], limits: {}, unparsedStrikes: 0, startedAt: at, runCosts: {} }
+        })
+      )
+      jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
+      const plan = await pipeline.plan(input(['url:a']))
+      expect(plan.blockers).toContain('A pipeline is already running. Stop it, or wait for it to finish.')
+      await expect(pipeline.start(input(['url:a']))).rejects.toThrow(/already running/)
+      expect(JSON.parse(await readFile(queueFile(ws), 'utf8')).pipeline.id).toBe(id)
+    } finally {
+      await pipeline.shutdown()
+      await queue.shutdown()
+      await rm(ws, { recursive: true, force: true })
+      ws = saved
+    }
   })
 
   it('validates the start input', () => {
