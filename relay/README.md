@@ -14,11 +14,16 @@ account; on the Workers Free plan it costs nothing.
 | `src/auth.ts`, `src/env.ts` | SHA-256 + constant-time compare; bindings and tunables. |
 | `wrangler.toml` | Worker name, the `ROOM` binding, the SQLite migration, the tunables. |
 | `scripts/deploy.sh` | `wrangler deploy` + `wrangler secret put ADMIN_TOKEN`, prints the token once. |
+| `selfhost/` | The same Worker run by `workerd` on your own server behind Caddy, deployed by `.github/workflows/relay-deploy.yml` ([selfhost/README.md](selfhost/README.md)). |
 | `test/` | Miniflare integration tests (`npm test -w relay`). |
 
 ## Deploying
 
-Once, on your Mac:
+Two ways, same code: **Cloudflare** (below) or **your own server** with `workerd` behind Caddy
+([selfhost/README.md](selfhost/README.md); this is how the owner runs it, on the Oracle Cloud VM
+that serves huntgry.tech, deployed from CI).
+
+Cloudflare, once, on your Mac:
 
 ```sh
 npm install                 # from the repo root; installs wrangler for this workspace
