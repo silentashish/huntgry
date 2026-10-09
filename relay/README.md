@@ -123,7 +123,8 @@ expired pairing with `4006`. After auth:
 A desktop frame with `pushHint` triggers one Expo push **only** when that phone has no live
 socket: title `Huntgry`, the fixed body for the category (`A run needs your reply`,
 `Paused: usage limit`, `Pipeline finished`, `Results need your review`, `Something failed`),
-`data: { category }`, and `pushText` as the body only when present. One push per category per
+`data: { category }`, `channelId: category` (the Android notification channel the app creates
+for that category, #39; iOS ignores it), and `pushText` as the body only when present. One push per category per
 5 minutes per device; a push Expo refuses for any other reason does not count toward that
 window, so the next hint in the category tries again (there is no retry of its own yet).
 

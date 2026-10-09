@@ -27,7 +27,9 @@ export const VAULT_KEYS = {
   pairing: 'huntgry.pairing',
   seq: 'huntgry.seq',
   lastSeq: 'huntgry.lastSeq',
-  status: 'huntgry.status'
+  status: 'huntgry.status',
+  /** The owner's push choice for this pairing (#39): `{ "enabled": true | false }`. */
+  push: 'huntgry.push'
 } as const
 
 export interface Pairing {
@@ -211,6 +213,24 @@ export class Vault {
     } catch {
       return null
     }
+  }
+
+  // ── push choice ───────────────────────────────────────────────────────────────────────
+
+  /** `null` until the owner was asked (after pairing, or in Settings). */
+  async loadPushEnabled(): Promise<boolean | null> {
+    const text = await this.storage.getItem(VAULT_KEYS.push)
+    if (!text) return null
+    try {
+      const v = (JSON.parse(text) as { enabled?: unknown }).enabled
+      return typeof v === 'boolean' ? v : null
+    } catch {
+      return null
+    }
+  }
+
+  async savePushEnabled(enabled: boolean): Promise<void> {
+    await this.storage.setItem(VAULT_KEYS.push, JSON.stringify({ enabled }))
   }
 
   // ── wipe ──────────────────────────────────────────────────────────────────────────────

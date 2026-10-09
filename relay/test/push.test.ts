@@ -58,7 +58,7 @@ describe('push', () => {
     await waitForPushes(before + 1)
     const call = relay.pushes[before]
     expect(call.url).toBe('https://exp.host/--/api/v2/push/send')
-    expect(call.body).toEqual([{ to: TOKEN, title: PUSH_TITLE, body: PUSH_BODIES['pipeline-finished'], data: { category: 'pipeline-finished' }, sound: 'default', priority: 'high' }])
+    expect(call.body).toEqual([{ to: TOKEN, title: PUSH_TITLE, body: PUSH_BODIES['pipeline-finished'], data: { category: 'pipeline-finished' }, sound: 'default', priority: 'high', channelId: 'pipeline-finished' }])
 
     // Without a hint nothing is pushed, with pushText the text is the body.
     desktop.send(frame(f.deviceId, 'e3'))

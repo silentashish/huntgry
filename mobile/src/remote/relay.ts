@@ -22,6 +22,11 @@
  *   else reconnects with backoff (1 s … 60 s, jitter; 30 s at least after 1008).
  * - **Pair again.** A `denied` answer (rewound counter, device no longer paired) and
  *   `device.revoked` are fatal: the owner of this client wipes the vault.
+ * - **Push token (#39).** The clear frame `{ pushToken }` goes out after every authentication
+ *   (the relay keeps it per device; one frame per connection keeps it right after a relay
+ *   restore or a token change) and again whenever it changes; `{ pushToken: null }` when the
+ *   owner turns push off, unpairs (`farewell`) or the pairing ends while the socket is open. The
+ *   token never goes inside an `Envelope`: the desktop never sees it.
  */
 
 import {
@@ -116,7 +121,10 @@ const WINDOW_MS = 60_000
 const SESSION_TTL_SECONDS = 60
 const SEEN_LIMIT = 1000
 
-type OutItem = { kind: 'cmd'; id: string; command: Command } | { kind: 'hello' } | { kind: 'ping' }
+type OutItem = { kind: 'cmd'; id: string; command: Command } | { kind: 'hello' } | { kind: 'ping' } | { kind: 'push' }
+
+/** `undefined`: the phone has no opinion yet (push never asked for), nothing is sent. */
+export type PushTokenState = string | null | undefined
 
 export class RelayClient {
   private socket: SocketLike | null = null
@@ -129,6 +137,7 @@ export class RelayClient {
   private pumpTimer: unknown = null
   private connectTimer: unknown = null
   private pumping = false
+  private pumpAgain = false
   private state: ConnectionState = 'stopped'
   private readonly outbox: OutItem[] = []
   private retransmit: SentCommand[] = []
@@ -140,6 +149,10 @@ export class RelayClient {
   private readonly clock: Clock
   private readonly sessionKey: Uint8Array
   private pairing: Pairing
+  private pushToken: PushTokenState = undefined
+  /** What this socket last told the relay (reset on every connection). */
+  private pushSent: PushTokenState = undefined
+  private authWaiters: (() => void)[] = []
 
   constructor(private readonly o: RelayClientOptions) {
     this.clock = o.clock ?? systemClock
@@ -163,6 +176,20 @@ export class RelayClient {
     this.setState('stopped', {})
   }
 
+  /**
+   * The app went to the background: acks out, socket closed (1000), no reconnect until `wake()`.
+   * The relay pushes only to a phone without a live socket, and iOS suspends an app without
+   * closing its socket, so a suspended phone would otherwise miss its pushes (#39). Unsent and
+   * unanswered commands stay in memory and go out after `wake()`.
+   */
+  sleep(): void {
+    if (this.stopped || !this.socket) return
+    this.flushAcksNow()
+    this.clearTimers()
+    this.detach(1000, 'background')
+    this.setState('stopped', {})
+  }
+
   /** App back in the foreground, network back: reconnect now instead of waiting out the backoff. */
   wake(): void {
     if (this.stopped) return
@@ -175,6 +202,64 @@ export class RelayClient {
     this.retryTimer = null
     this.attempt = 0
     this.connect()
+  }
+
+  /**
+   * The Expo push token the relay should use for this phone, or `null` to remove it. Sent now
+   * when the socket is up and differs from what it last sent, and after every authentication.
+   * A token the relay would refuse (it closes the socket with 1008) is not sent.
+   */
+  setPushToken(token: PushTokenState): void {
+    if (token !== undefined && token !== null) {
+      try {
+        requireRelayClientFrame({ pushToken: token })
+      } catch {
+        return
+      }
+    }
+    this.pushToken = token
+    this.queuePushToken()
+  }
+
+  /**
+   * Unpair: tells the relay to forget the push token (`{ pushToken: null }`), then stops. Waits
+   * up to `timeoutMs` for a socket when there is none right now; without one the token stays
+   * at the relay until the Mac revokes this phone (the owner is told to do that anyway).
+   */
+  async farewell(timeoutMs = 4_000): Promise<boolean> {
+    this.pushToken = null
+    let sent = false
+    if (!this.stopped) {
+      if (!this.authed) {
+        this.wake()
+        await this.waitForAuth(timeoutMs)
+      }
+      const socket = this.socket
+      // The authentication itself may have sent it already (the send loop runs on auth).
+      if (socket && this.authed) sent = this.pushSent === null || this.write(socket, JSON.stringify(requireRelayClientFrame({ pushToken: null })))
+    }
+    this.stop()
+    return sent
+  }
+
+  private waitForAuth(timeoutMs: number): Promise<void> {
+    if (this.authed) return Promise.resolve()
+    return new Promise((resolve) => {
+      const timer = this.clock.setTimeout(done, timeoutMs)
+      const self = this
+      function done() {
+        self.clock.clearTimeout(timer)
+        self.authWaiters = self.authWaiters.filter((w) => w !== done)
+        resolve()
+      }
+      this.authWaiters.push(done)
+    })
+  }
+
+  private queuePushToken(): void {
+    if (!this.authed || this.pushToken === undefined || this.pushToken === this.pushSent) return
+    if (!this.outbox.some((o) => o.kind === 'push')) this.outbox.push({ kind: 'push' })
+    this.pump()
   }
 
   /** The device name sent in the next `hello`. */
@@ -218,6 +303,7 @@ export class RelayClient {
     }
     this.socket = socket
     this.authed = false
+    this.pushSent = undefined
     socket.onopen = () => {
       if (this.socket !== socket) return
       const auth = requireRelayClientFrame({ auth: { room: this.pairing.room, device: this.pairing.deviceId, token: this.pairing.relayToken } })
@@ -304,6 +390,10 @@ export class RelayClient {
   }
 
   private async fatal(reason: FatalReason, message: string): Promise<void> {
+    // Still connected (a `denied` answer, `device.revoked`): the relay may keep this device's
+    // row until the Mac revokes it, so the push token goes first.
+    const socket = this.socket
+    if (socket && this.authed && this.pushSent) this.write(socket, JSON.stringify({ pushToken: null }))
     this.stopped = true
     this.clearTimers()
     this.detach(1000, reason)
@@ -363,6 +453,7 @@ export class RelayClient {
       this.connectTimer = null
       this.setState('online', {})
       this.onAuthed()
+      for (const waiter of [...this.authWaiters]) waiter()
     }
     const delivery = deliveryFromNotice(notice)
     const sent = delivery ? this.sent.get(delivery.ref) : undefined
@@ -461,6 +552,8 @@ export class RelayClient {
         return false
       })
     this.outbox.unshift({ kind: 'hello' })
+    // ADR "Pairing", step 12: `{ pushToken }` right after auth, before anything boxed.
+    if (this.pushToken !== undefined && !this.outbox.some((o) => o.kind === 'push')) this.outbox.unshift({ kind: 'push' })
     this.schedulePing()
     this.pump()
   }
@@ -511,10 +604,16 @@ export class RelayClient {
 
   /** One serial loop: seq assignment, sealing and sending happen in order, never concurrently. */
   private pump(): void {
-    if (this.pumping) return
+    if (this.pumping) {
+      // A drain is finishing (its end runs a microtask later): run again after it, or this call is lost.
+      this.pumpAgain = true
+      return
+    }
     this.pumping = true
+    this.pumpAgain = false
     void this.drain().finally(() => {
       this.pumping = false
+      if (this.pumpAgain) this.pump()
     })
   }
 
@@ -555,6 +654,13 @@ export class RelayClient {
   }
 
   private async sendItem(socket: SocketLike, item: OutItem): Promise<void> {
+    if (item.kind === 'push') {
+      // A clear frame: no envelope, no seq. Whatever the token is now (it may have changed while queued).
+      const token = this.pushToken
+      if (token === undefined || token === this.pushSent) return
+      if (this.write(socket, JSON.stringify(requireRelayClientFrame({ pushToken: token })))) this.pushSent = token
+      return
+    }
     let seq: number
     try {
       seq = await this.o.vault.nextSeq()

@@ -1,0 +1,85 @@
+# Builds the phone app (mobile/) on EAS. Manual only, and a no-op until the repo has an
+# EXPO_TOKEN secret (an Expo access token) and an EAS_PROJECT_ID variable: see
+# mobile/RELEASE.md, "Building from GitHub Actions". The build itself runs on Expo's servers;
+# this job only queues it (and, with "submit", hands the result to App Store Connect / Play).
+name: mobile-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform
+        type: choice
+        options: [ios, android, all]
+        default: ios
+      profile:
+        description: eas.json build profile
+        type: choice
+        options: [preview, production, development]
+        default: preview
+      submit:
+        description: Submit the build when it finishes (TestFlight / Play internal testing)
+        type: boolean
+        default: false
+
+concurrency:
+  group: mobile-build-${{ github.ref }}-${{ inputs.platform }}-${{ inputs.profile }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check for EXPO_TOKEN
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EAS_PROJECT_ID: ${{ vars.EAS_PROJECT_ID }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::notice::No EXPO_TOKEN secret: skipping the EAS build (see mobile/RELEASE.md)."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$EAS_PROJECT_ID" ]; then
+            echo "::notice::No EAS_PROJECT_ID variable: skipping the EAS build (see mobile/RELEASE.md)."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: eas build (${{ inputs.platform }}, ${{ inputs.profile }})
+    needs: check
+    if: needs.check.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EAS_PROJECT_ID: ${{ vars.EAS_PROJECT_ID }}
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Only to evaluate mobile/app.config.ts here; EAS installs again on its own machines.
+      - run: npm ci --ignore-scripts
+
+      - name: Queue the build on EAS
+        working-directory: mobile
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          PROFILE: ${{ inputs.profile }}
+          SUBMIT: ${{ inputs.submit }}
+        run: |
+          args=(build --platform "$PLATFORM" --profile "$PROFILE" --non-interactive --no-wait)
+          if [ "$SUBMIT" = "true" ]; then args+=(--auto-submit); fi
+          npx --yes eas-cli@24 "${args[@]}"

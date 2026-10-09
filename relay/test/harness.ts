@@ -48,7 +48,7 @@ export const ciphertext = (bytes = 48): string => randomBytes(bytes).toString('b
 
 export interface PushCall {
   url: string
-  body: { to: string; title: string; body: string; data: { category: string }; sound?: string; priority?: string }[]
+  body: { to: string; title: string; body: string; data: { category: string }; sound?: string; priority?: string; channelId?: string }[]
 }
 
 export interface RelayOptions {
