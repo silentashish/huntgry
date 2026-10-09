@@ -52,6 +52,12 @@ export const MAX_PAIRING_SECONDS = 10 * 60
 const MAX_PENDING_RECEIPTS = 1000
 /** Expired notices kept per sender while it is away. */
 const MAX_NOTICES_PER_OWNER = 100
+/**
+ * Push retries sent per alarm. One: the alarm also runs the auth deadlines and the heartbeat
+ * check, so it never waits on more than one Expo request; the next due retry gets an alarm
+ * right after (`scheduleAlarm` sees it due).
+ */
+const PUSH_RETRIES_PER_ALARM = 1
 /** How long a due push retry is held while its request is out; well past `PUSH_TIMEOUT_MS`. */
 const PUSH_RETRY_LEASE_MS = 4 * PUSH_TIMEOUT_MS
 
@@ -551,7 +557,8 @@ export class Room extends DurableObject<Env> {
   }
 
   /**
-   * Sends the retries that are due, one attempt each; `sendPush` reschedules or settles them.
+   * Sends the oldest due retries (`PUSH_RETRIES_PER_ALARM`), one attempt each; `sendPush`
+   * reschedules or settles them.
    * The due rows are leased first, for longer than a request can take, so an alarm firing
    * meanwhile does not send one twice; the alarm is armed for the lease before any request goes
    * out, so a handler cut off mid-request picks them up again a minute later. Each row is read
@@ -559,7 +566,7 @@ export class Room extends DurableObject<Env> {
    * awaited) may have cancelled it, cleared the token or replaced the body.
    */
   private async retryPushes(now: number): Promise<void> {
-    const due = this.sql<{ device: string; category: NotificationCategory }>('SELECT device, category FROM push_retries WHERE next_at <= ? ORDER BY next_at ASC LIMIT 50', now)
+    const due = this.sql<{ device: string; category: NotificationCategory }>('SELECT device, category FROM push_retries WHERE next_at <= ? ORDER BY next_at ASC LIMIT ?', now, PUSH_RETRIES_PER_ALARM)
     if (due.length === 0) return
     const lease = now + PUSH_RETRY_LEASE_MS
     for (const row of due) this.sql('UPDATE push_retries SET next_at = ? WHERE device = ? AND category = ?', lease, row.device, row.category)
