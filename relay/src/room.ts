@@ -17,6 +17,7 @@
  *   notices   `{ expired, ref }` notices waiting for a sender that is not connected
  *   pushes    last push time per device and category (coalescing)
  *   receipts  Expo ticket ids of accepted pushes, until their receipt is read (DeviceNotRegistered)
+ *   push_retries  one pending retry per device and category after a transient push failure (#70)
  */
 import { DurableObject } from 'cloudflare:workers'
 import {
@@ -36,7 +37,7 @@ import {
 } from '@huntgry/remote-protocol'
 import { bearerOf, matchesHash } from './auth'
 import { configOf, type Config, type Env } from './env'
-import { EXPO_PUSH_TOKEN, RECEIPT_IDS_PER_CALL, RECEIPT_MAX_AGE_MS, fetchReceipts, pushMessage, sendExpoPush } from './push'
+import { EXPO_PUSH_TOKEN, MAX_RETRY_AFTER_MS, RECEIPT_IDS_PER_CALL, RECEIPT_MAX_AGE_MS, fetchReceipts, pushMessage, sendExpoPush } from './push'
 import { countFrame, type RateWindow } from './rate'
 
 /** Frames the relay holds per phone; beyond it the oldest events go, results never (ADR). */
@@ -91,6 +92,8 @@ CREATE TABLE IF NOT EXISTS notices (seq INTEGER PRIMARY KEY AUTOINCREMENT, owner
 CREATE TABLE IF NOT EXISTS pushes (device TEXT NOT NULL, category TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (device, category));
 CREATE TABLE IF NOT EXISTS receipts (ticket TEXT PRIMARY KEY, device TEXT NOT NULL, token TEXT NOT NULL, sent_at INTEGER NOT NULL, check_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS receipts_check ON receipts (check_at);
+CREATE TABLE IF NOT EXISTS push_retries (device TEXT NOT NULL, category TEXT NOT NULL, token TEXT NOT NULL, text TEXT, attempt INTEGER NOT NULL, next_at INTEGER NOT NULL, PRIMARY KEY (device, category));
+CREATE INDEX IF NOT EXISTS push_retries_next ON push_retries (next_at);
 `
 
 const json = (value: unknown, status = 200): Response =>
@@ -265,6 +268,7 @@ export class Room extends DurableObject<Env> {
       if (attachment && !attachment.pending && attachment.kind === 'pairing' && this.pairingExp(attachment.id) <= now) ws.close(CLOSE.pairingExpired, 'pairing expired')
     }
     this.sql('DELETE FROM pairings WHERE exp <= ?', now)
+    await this.retryPushes(now)
     await this.checkReceipts(now)
     await this.scheduleAlarm()
   }
@@ -327,6 +331,8 @@ export class Room extends DurableObject<Env> {
     }
     if (session.kind !== 'device') return ws.close(CLOSE.policy, 'pushToken is for paired phones only')
     if (frame.pushToken !== null && !EXPO_PUSH_TOKEN.test(frame.pushToken)) return ws.close(CLOSE.policy, 'pushToken is not an Expo push token')
+    // A new token (or none) cancels retries meant for the old one.
+    this.sql('DELETE FROM push_retries WHERE device = ? AND token IS NOT ?', session.id, frame.pushToken)
     this.sql('UPDATE devices SET push_token = ? WHERE id = ?', frame.pushToken, session.id)
   }
 
@@ -484,22 +490,75 @@ export class Room extends DurableObject<Env> {
   private maybePush(deviceId: string, category: NotificationCategory, text: string | undefined, now: number): void {
     const token = this.sql<{ push_token: string | null }>('SELECT push_token FROM devices WHERE id = ?', deviceId)[0]?.push_token
     if (!token) return
+    // A retry is already pending for this category: the newest hint replaces its body, no second push.
+    const pending = this.sql<{ attempt: number }>('SELECT attempt FROM push_retries WHERE device = ? AND category = ?', deviceId, category)[0]
+    if (pending) {
+      this.sql('UPDATE push_retries SET text = ?, token = ? WHERE device = ? AND category = ?', text ?? null, token, deviceId, category)
+      return
+    }
     const last = this.sql<{ at: number }>('SELECT at FROM pushes WHERE device = ? AND category = ?', deviceId, category)[0]?.at
     if (last !== undefined && now - last < this.config.pushCoalesceMs) return
     this.sql('INSERT OR REPLACE INTO pushes (device, category, at) VALUES (?, ?, ?)', deviceId, category, now)
-    this.ctx.waitUntil(
-      sendExpoPush(this.config.expoPushUrl, pushMessage(token, category, text)).then(async ({ outcome, ticketId }) => {
-        if (outcome === 'DeviceNotRegistered') this.clearPushToken(deviceId, token)
-        // A failed attempt does not count for coalescing, so the next hint may try again.
-        else if (outcome === 'failed') this.sql('DELETE FROM pushes WHERE device = ? AND category = ? AND at = ?', deviceId, category, now)
-        else if (ticketId) {
-          const sentAt = Date.now()
-          this.sql('INSERT OR REPLACE INTO receipts (ticket, device, token, sent_at, check_at) VALUES (?, ?, ?, ?, ?)', ticketId, deviceId, token, sentAt, sentAt + this.config.pushReceiptDelayMs)
-          this.sql('DELETE FROM receipts WHERE ticket NOT IN (SELECT ticket FROM receipts ORDER BY sent_at DESC LIMIT ?)', MAX_PENDING_RECEIPTS)
-          await this.scheduleAlarm()
-        }
-      })
+    this.ctx.waitUntil(this.sendPush(deviceId, category, token, text, 0, now))
+  }
+
+  /**
+   * One attempt (0 = the first send). `ok` records the ticket for its receipt; `DeviceNotRegistered`
+   * clears the token; `retry` schedules the next attempt while the budget lasts
+   * (`pushRetryDelaysMs`, honouring a 429's `Retry-After`); anything else gives up. A failed or
+   * abandoned push does not count for coalescing, so a later hint can try again.
+   */
+  private async sendPush(deviceId: string, category: NotificationCategory, token: string, text: string | undefined, attempt: number, at: number): Promise<void> {
+    const { outcome, ticketId, retryAfterMs } = await sendExpoPush(this.config.expoPushUrl, pushMessage(token, category, text))
+    const now = Date.now()
+    // The token changed, was removed or the device was revoked while this attempt was in flight.
+    const current = this.sql<{ push_token: string | null }>('SELECT push_token FROM devices WHERE id = ?', deviceId)[0]?.push_token
+    if (current !== token) {
+      this.sql('DELETE FROM push_retries WHERE device = ? AND category = ? AND token = ?', deviceId, category, token)
+      return
+    }
+    if (outcome === 'ok') {
+      this.sql('DELETE FROM push_retries WHERE device = ? AND category = ?', deviceId, category)
+      if (attempt > 0) this.sql('INSERT OR REPLACE INTO pushes (device, category, at) VALUES (?, ?, ?)', deviceId, category, now)
+      if (ticketId) {
+        this.sql('INSERT OR REPLACE INTO receipts (ticket, device, token, sent_at, check_at) VALUES (?, ?, ?, ?, ?)', ticketId, deviceId, token, now, now + this.config.pushReceiptDelayMs)
+        this.sql('DELETE FROM receipts WHERE ticket NOT IN (SELECT ticket FROM receipts ORDER BY sent_at DESC LIMIT ?)', MAX_PENDING_RECEIPTS)
+      }
+    } else if (outcome === 'DeviceNotRegistered') {
+      this.clearPushToken(deviceId, token)
+    } else if (outcome === 'retry' && attempt < this.config.pushRetryDelaysMs.length) {
+      const wait = Math.max(this.config.pushRetryDelaysMs[attempt], retryAfterMs ?? 0)
+      // Keep the newest body if a hint replaced it while this attempt was in flight.
+      this.sql(
+        `INSERT INTO push_retries (device, category, token, text, attempt, next_at) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (device, category) DO UPDATE SET attempt = excluded.attempt, next_at = excluded.next_at`,
+        deviceId,
+        category,
+        token,
+        text ?? null,
+        attempt + 1,
+        now + wait
+      )
+      this.sql('DELETE FROM pushes WHERE device = ? AND category = ? AND at = ?', deviceId, category, at)
+    } else {
+      // Permanent failure, or the retry budget is spent.
+      this.sql('DELETE FROM push_retries WHERE device = ? AND category = ?', deviceId, category)
+      this.sql('DELETE FROM pushes WHERE device = ? AND category = ? AND at = ?', deviceId, category, at)
+    }
+    await this.scheduleAlarm()
+  }
+
+  /** Sends the retries that are due, one attempt each; `sendPush` reschedules or settles them. */
+  private async retryPushes(now: number): Promise<void> {
+    const due = this.sql<{ device: string; category: NotificationCategory; token: string; text: string | null; attempt: number }>(
+      'SELECT device, category, token, text, attempt FROM push_retries WHERE next_at <= ? ORDER BY next_at ASC LIMIT 50',
+      now
     )
+    for (const row of due) {
+      // Parked while in flight, so an alarm firing meanwhile does not send it twice.
+      this.sql('UPDATE push_retries SET next_at = ? WHERE device = ? AND category = ?', now + MAX_RETRY_AFTER_MS, row.device, row.category)
+      await this.sendPush(row.device, row.category, row.token, row.text ?? undefined, row.attempt, now)
+    }
   }
 
   /**
@@ -527,6 +586,7 @@ export class Room extends DurableObject<Env> {
   private clearPushToken(deviceId: string, token: string): void {
     this.sql('UPDATE devices SET push_token = NULL WHERE id = ? AND push_token = ?', deviceId, token)
     this.sql('DELETE FROM receipts WHERE device = ? AND token = ?', deviceId, token)
+    this.sql('DELETE FROM push_retries WHERE device = ? AND token = ?', deviceId, token)
   }
 
   // ── Revocation ───────────────────────────────────────────────────────────────────────────
@@ -537,6 +597,7 @@ export class Room extends DurableObject<Env> {
     this.sql('DELETE FROM notices WHERE owner = ?', deviceId)
     this.sql('DELETE FROM pushes WHERE device = ?', deviceId)
     this.sql('DELETE FROM receipts WHERE device = ?', deviceId)
+    this.sql('DELETE FROM push_retries WHERE device = ?', deviceId)
     for (const ws of this.socketsOf('device', deviceId)) ws.close(CLOSE.revoked, 'device revoked')
   }
 
@@ -583,7 +644,7 @@ export class Room extends DurableObject<Env> {
 
   /**
    * One alarm for everything time-based: auth deadlines, pairing expiry, the desktop heartbeat
-   * check, the next frame expiry and the next push receipt to read. No sockets and nothing queued means no alarm, so an idle room never wakes.
+   * check, the next frame expiry, the next push retry and the next push receipt to read. No sockets and nothing queued means no alarm, so an idle room never wakes.
    */
   private async scheduleAlarm(): Promise<void> {
     let next = Infinity
@@ -602,6 +663,8 @@ export class Room extends DurableObject<Env> {
     if (soonest !== null && soonest !== undefined) next = Math.min(next, soonest)
     const receipt = this.sql<{ t: number | null }>('SELECT MIN(check_at) AS t FROM receipts')[0]?.t
     if (receipt !== null && receipt !== undefined) next = Math.min(next, receipt)
+    const retry = this.sql<{ t: number | null }>('SELECT MIN(next_at) AS t FROM push_retries')[0]?.t
+    if (retry !== null && retry !== undefined) next = Math.min(next, retry)
     if (next === Infinity) {
       await this.ctx.storage.deleteAlarm()
       return
