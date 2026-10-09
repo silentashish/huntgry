@@ -131,7 +131,7 @@ describe('RemoteCard', () => {
   it('saves the TTL fields as seconds', async () => {
     await renderCard()
     const costly = [...container.querySelectorAll<HTMLInputElement>('input')].find((i) => i.closest('.mantine-NumberInput-root')?.textContent?.includes('Costly'))!
-    expect(costly.value).toBe('2')
+    expect(costly.value).toBe('2 h')
     await act(async () => type(costly, '0.5'))
     await act(async () => button('Save TTLs').click())
     expect(remote.setCommandTtl).toHaveBeenCalledWith({ costlySeconds: 1800, defaultSeconds: 86400 })

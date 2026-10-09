@@ -104,13 +104,13 @@ export function RemoteCard() {
   return (
     <Card withBorder radius="md" padding="lg">
       <Group justify="space-between" align="flex-start" wrap="nowrap" mb="xs">
-        <div>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <Title order={4}>Remote control</Title>
           <Text size="sm" c="dimmed">
             Control the queue from your phone through your own end-to-end encrypted relay. Huntgry only connects out to the relay; nothing listens on this Mac.
           </Text>
         </div>
-        <Group gap="xs" wrap="nowrap">
+        <Group gap="xs" wrap="nowrap" style={{ flex: 'none' }}>
           {status && (
             <Badge color={status.color} variant="light">
               {status.label}
@@ -141,7 +141,7 @@ export function RemoteCard() {
           <>
             <Switch label="Enable remote control" checked={state.connection !== 'disabled'} disabled={busy} onChange={(e) => void run(() => api.remote.setEnabled(e.currentTarget.checked))} />
             <Group align="flex-start" gap="sm" grow>
-              <TextInput label="Relay URL" placeholder="https://huntgry-relay.example.workers.dev" value={relayUrl} error={urlProblem} onChange={(e) => setRelayUrl(e.currentTarget.value)} ff="monospace" />
+              <TextInput label="Relay URL" placeholder="https://huntgry-relay.example.workers.dev" value={relayUrl} error={urlProblem} onChange={(e) => setRelayUrl(e.currentTarget.value)} styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }} />
               <PasswordInput
                 label="Admin token"
                 placeholder={configured ? 'Saved (never shown again)' : 'From wrangler secret put ADMIN_TOKEN'}
@@ -153,7 +153,9 @@ export function RemoteCard() {
             {(adminToken.trim() || !configured) && (
               <Group justify="space-between" wrap="nowrap">
                 <Text size="xs" c="dimmed">
-                  {configured ? 'Saving creates a new room on this relay; every phone must pair again.' : 'Saving creates your room on the relay once. The token is stored encrypted in the Keychain.'}
+                  {configured || unreadable
+                    ? 'This creates a new room on the relay; every phone must pair again. The token is stored encrypted in the Keychain.'
+                    : 'Saving creates your room on the relay once. The token is stored encrypted in the Keychain.'}
                 </Text>
                 <Button
                   size="xs"
@@ -176,8 +178,8 @@ export function RemoteCard() {
               <Switch label="Show transcripts on the phone" checked={state.transcripts} disabled={busy} onChange={(e) => void run(() => api.remote.setTranscripts(e.currentTarget.checked))} />
             </Group>
             <Group align="flex-end" gap="sm">
-              <NumberInput label="Costly commands expire after (hours)" description="Enqueue, reply, start pipeline, approve" min={1 / 60} max={168} step={0.5} decimalScale={2} value={costly} onChange={setCostly} w={250} />
-              <NumberInput label="Other commands expire after (hours)" description="Reads, pause, cancel, retry, stop" min={1 / 60} max={168} step={1} decimalScale={2} value={standard} onChange={setStandard} w={250} />
+              <NumberInput label="Costly commands expire after" description="Enqueue, reply, start pipeline, approve" suffix=" h" min={1 / 60} max={168} step={0.5} decimalScale={2} value={costly} onChange={setCostly} w={260} />
+              <NumberInput label="Other commands expire after" description="Reads, pause, cancel, retry, stop" suffix=" h" min={1 / 60} max={168} step={1} decimalScale={2} value={standard} onChange={setStandard} w={260} />
               {ttlChanged && (
                 <Button
                   size="xs"

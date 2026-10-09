@@ -72,15 +72,15 @@ export function PairPhoneModal({ opened, onClose, state }: { opened: boolean; on
         )}
         <Group align="center" gap="lg" wrap="nowrap">
           <Box bg="white" p={8} style={{ borderRadius: 12, width: 196, height: 196, flex: 'none', position: 'relative' }}>
-            {code && !expired && status === 'waiting' ? (
-              <Image src={code.qrDataUrl} alt="Pairing code" w={180} h={180} style={{ imageRendering: 'pixelated' }} />
+            {code && !expired && (status === 'waiting' || status === 'scanned' || status === 'approving') ? (
+              <Image src={code.qrDataUrl} alt="Pairing code" w={180} h={180} style={{ imageRendering: 'pixelated', opacity: status === 'waiting' ? 1 : 0.25 }} />
             ) : (
               <Center h="100%">
                 {loading ? (
                   <Loader size="sm" />
                 ) : (
                   <Text size="sm" c="dark.6" ta="center">
-                    {status === 'paired' ? 'Paired' : status === 'scanned' || status === 'approving' ? 'Scanned' : status === 'denied' ? 'Denied' : 'Code expired'}
+                    {status === 'paired' ? 'Paired' : status === 'denied' ? 'Denied' : 'Code expired'}
                   </Text>
                 )}
               </Center>

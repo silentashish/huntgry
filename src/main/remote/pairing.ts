@@ -87,9 +87,9 @@ interface Pairing {
 
 export const sha256Hex = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex')
 
-/** The QR as an SVG data URL: black on white with a quiet zone, medium error correction. */
+/** The QR as an SVG data URL: black on white with a quiet zone, low error correction (a screen is not damaged; fewer modules scan more easily). */
 export function renderQrSvg(text: string): string {
-  const svg = renderSVG(text, { ecc: 'M', border: 2, pixelSize: 8 })
+  const svg = renderSVG(text, { ecc: 'L', border: 2, pixelSize: 8 })
   return `data:image/svg+xml;base64,${Buffer.from(svg, 'utf8').toString('base64')}`
 }
 
