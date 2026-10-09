@@ -94,7 +94,7 @@ jobs:
         env:
           RELAY_ADMIN_TOKEN: ${{ secrets.RELAY_ADMIN_TOKEN }}
         run: |
-          if [ -z "$RELAY_ADMIN_TOKEN" ] || [ -z "$DOMAIN" ]; then
+          if [ -z "$(printf '%s' "$RELAY_ADMIN_TOKEN" | tr -d '[:space:]')" ] || [ -z "$DOMAIN" ]; then
             echo "::error::Set the RELAY_ADMIN_TOKEN secret and the RELAY_DOMAIN variable (relay/selfhost/README.md)." && exit 1
           fi
           ssh relay 'rm -rf /tmp/huntgry-relay && mkdir -m 700 /tmp/huntgry-relay'

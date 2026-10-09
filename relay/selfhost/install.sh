@@ -15,7 +15,10 @@ install -d -m 700 /etc/huntgry-relay
 # The admin token only lives in this root-only env file (and in the GitHub secret it came from).
 if [ -s "$SRC/admin-token" ]; then
   token=$(cat "$SRC/admin-token")
-  [ -n "$token" ] || { echo "The admin token is blank: set the RELAY_ADMIN_TOKEN secret." >&2; exit 1; }
+  case "$token" in
+    *[![:space:]]*) ;;
+    *) echo "The admin token is blank: set the RELAY_ADMIN_TOKEN secret." >&2; exit 1 ;;
+  esac
   printf 'ADMIN_TOKEN=%s\n' "$token" > /etc/huntgry-relay/env.new
   chmod 600 /etc/huntgry-relay/env.new
   mv /etc/huntgry-relay/env.new /etc/huntgry-relay/env
