@@ -376,11 +376,12 @@ export class Pipeline {
       runCosts: {},
       estimateMsPerJob: history.medianMs
     }
+    // Before the record is kept: another workspace loaded during the awaits must not inherit it.
+    if (expected !== undefined && this.deps.queue.workspace() !== expected) throw new WorkspaceChangedError()
     this.record = record
     this.rejected = null
     this.utilization = undefined
     this.notifiedLimit = null
-    if (expected !== undefined && this.deps.queue.workspace() !== expected) throw new WorkspaceChangedError()
     this.deps.queue.savePipeline(record)
     const res = await this.deps.queue.enqueue(
       {
