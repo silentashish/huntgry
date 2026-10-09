@@ -33,6 +33,7 @@ import {
 import {
   REMOTE_AGENT_IDS,
   type FileChunk,
+  type PipelineCounts,
   type PipelineState,
   type PipelineSummary,
   type RemoteEvent,
@@ -45,6 +46,7 @@ import {
   type RemoteTranscriptItem,
   type ReviewDetail,
   type ReviewItem,
+  type ReviewList,
   type RunPage,
   type StatusSummary
 } from './protocol'
@@ -256,18 +258,21 @@ export function requireRunPage(v: unknown, what = 'run.get'): RunPage {
 
 // ── pipeline (#31) ──────────────────────────────────────────────────────────────────────────
 
-function requireCounts(v: unknown, what: string): PipelineState['counts'] {
+const COUNT_KEYS = ['total', 'done', 'running', 'queued', 'failed', 'unreviewed'] as const
+const OPTIONAL_COUNT_KEYS = ['needsAttention', 'needsReply', 'cancelled', 'skipped'] as const
+
+function requireCounts(v: unknown, what: string): PipelineCounts {
   const c = requireRecord(v, what)
-  const keys = ['total', 'done', 'running', 'queued', 'failed', 'unreviewed'] as const
-  rejectUnknownKeys(c, keys, what)
-  const out = {} as PipelineState['counts']
-  for (const k of keys) out[k] = requireInteger(c[k], `${what}.${k}`, 0)
+  rejectUnknownKeys(c, [...COUNT_KEYS, ...OPTIONAL_COUNT_KEYS], what)
+  const out = {} as PipelineCounts
+  for (const k of COUNT_KEYS) out[k] = requireInteger(c[k], `${what}.${k}`, 0)
+  for (const k of OPTIONAL_COUNT_KEYS) if (c[k] !== undefined) out[k] = requireInteger(c[k], `${what}.${k}`, 0)
   return out
 }
 
 export function requirePipelineState(v: unknown, what = 'pipeline.changed'): PipelineState {
   const r = requireRecord(v, what)
-  rejectUnknownKeys(r, ['status', 'agent', 'counts', 'waitingLimitUntil', 'eta', 'startedAt', 'updatedAt'], what)
+  rejectUnknownKeys(r, ['status', 'agent', 'counts', 'waitingLimitUntil', 'eta', 'reason', 'startedAt', 'updatedAt'], what)
   const out: PipelineState = {
     status: requireOneOf(r.status, PIPELINE_STATUSES, `${what}.status`),
     agent: requireAgentId(r.agent, `${what}.agent`),
@@ -277,6 +282,7 @@ export function requirePipelineState(v: unknown, what = 'pipeline.changed'): Pip
   }
   if (r.waitingLimitUntil !== undefined) out.waitingLimitUntil = requireIsoDate(r.waitingLimitUntil, `${what}.waitingLimitUntil`)
   if (r.eta !== undefined) out.eta = requireIsoDate(r.eta, `${what}.eta`)
+  if (r.reason !== undefined) out.reason = requireError(r.reason, `${what}.reason`)
   return out
 }
 
@@ -294,24 +300,51 @@ export function requirePipelineSummary(v: unknown, what = 'pipeline.finished'): 
 
 // ── review ──────────────────────────────────────────────────────────────────────────────────
 
+const REVIEW_STATES = ['unreviewed', 'needs-attention', 'approved', 'discarded'] as const
+
 export function requireReviewItem(v: unknown, what = 'review'): ReviewItem {
   const r = requireRecord(v, what)
-  rejectUnknownKeys(r, ['applicationId', 'runId', 'title', 'openGaps', 'finishedAt'], what)
-  return {
+  rejectUnknownKeys(r, ['applicationId', 'runId', 'title', 'openGaps', 'finishedAt', 'state', 'reason'], what)
+  const out: ReviewItem = {
     applicationId: requireApplicationId(r.applicationId, `${what}.applicationId`),
     runId: requireId(r.runId, `${what}.runId`),
     title: requireTitle(r.title, `${what}.title`),
     openGaps: requireInteger(r.openGaps, `${what}.openGaps`, 0),
     finishedAt: requireIsoDate(r.finishedAt, `${what}.finishedAt`)
   }
+  if (r.state !== undefined) out.state = requireOneOf(r.state, ['unreviewed', 'needs-attention'] as const, `${what}.state`)
+  if (r.reason !== undefined) out.reason = requireError(r.reason, `${what}.reason`)
+  return out
+}
+
+/** `review.list` result body. */
+export function requireReviewList(v: unknown, what = 'review.list'): ReviewList {
+  const r = requireRecord(v, what)
+  rejectUnknownKeys(r, ['items', 'more'], what)
+  const out: ReviewList = { items: requireList(r.items, `${what}.items`, LIMITS.reviewItems, (x, at) => requireReviewItem(x, at)) }
+  if (r.more !== undefined) out.more = requireInteger(r.more, `${what}.more`, 0)
+  return out
 }
 
 /** `review.get` result body: notes inline only up to `LIMITS.reviewNotesInlineBytes`. */
 export function requireReviewDetail(v: unknown, what = 'review.get'): ReviewDetail {
   const r = requireRecord(v, what)
-  rejectUnknownKeys(r, ['applicationId', 'runId', 'title', 'reviewNotes', 'openGaps', 'proposedReframings', 'verify', 'artifacts', 'revision'], what)
+  rejectUnknownKeys(
+    r,
+    ['applicationId', 'runId', 'title', 'reviewNotes', 'openGaps', 'proposedReframings', 'verify', 'artifacts', 'revision', 'state', 'reason', 'parseWarning', 'truncated'],
+    what
+  )
   const verify = requireRecord(r.verify, `${what}.verify`)
   rejectUnknownKeys(verify, ['ok', 'report'], `${what}.verify`)
+  const out = requireReviewDetailCore(r, verify, what)
+  if (r.state !== undefined) out.state = requireOneOf(r.state, REVIEW_STATES, `${what}.state`)
+  if (r.reason !== undefined) out.reason = requireError(r.reason, `${what}.reason`)
+  if (r.parseWarning !== undefined) out.parseWarning = requireError(r.parseWarning, `${what}.parseWarning`)
+  if (r.truncated !== undefined) out.truncated = requireBoolean(r.truncated, `${what}.truncated`)
+  return out
+}
+
+function requireReviewDetailCore(r: Record<string, unknown>, verify: Record<string, unknown>, what: string): ReviewDetail {
   return {
     applicationId: requireApplicationId(r.applicationId, `${what}.applicationId`),
     runId: requireId(r.runId, `${what}.runId`),
@@ -337,12 +370,13 @@ export function requireReviewDetail(v: unknown, what = 'review.get'): ReviewDeta
 
 export function requireRemoteJob(v: unknown, what = 'job'): RemoteJob {
   const r = requireRecord(v, what)
-  rejectUnknownKeys(r, ['id', 'title', 'company', 'location', 'source', 'tailored', 'savedAt'], what)
+  rejectUnknownKeys(r, ['id', 'title', 'company', 'location', 'source', 'tailored', 'dismissed', 'savedAt'], what)
   const out: RemoteJob = { id: requireJobId(r.id, `${what}.id`), title: requireTitle(r.title, `${what}.title`), savedAt: requireIsoDate(r.savedAt, `${what}.savedAt`) }
   if (r.company !== undefined) out.company = requireTitle(r.company, `${what}.company`)
   if (r.location !== undefined) out.location = requireTitle(r.location, `${what}.location`)
   if (r.source !== undefined) out.source = requireId(r.source, `${what}.source`, 32)
   if (r.tailored !== undefined) out.tailored = requireBoolean(r.tailored, `${what}.tailored`)
+  if (r.dismissed !== undefined) out.dismissed = requireBoolean(r.dismissed, `${what}.dismissed`)
   return out
 }
 

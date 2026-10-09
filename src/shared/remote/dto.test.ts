@@ -10,6 +10,7 @@ import {
   requireRemoteRun,
   requireReviewDetail,
   requireReviewItem,
+  requireReviewList,
   requireRunPage,
   requireRunsPage,
   requireStatusSummary,
@@ -86,11 +87,21 @@ describe('accepts every DTO and returns only its known fields', () => {
     expect(requireTranscriptPage({ runId: 'r1', items: [text], seq: 4 })).toEqual({ runId: 'r1', items: [text], seq: 4 })
     expect(requireRunPage({ run, items: [tool], nextSeq: 9 })).toEqual({ run, items: [tool], nextSeq: 9 })
     expect(requirePipelineState(pipeline)).toEqual(pipeline)
+    // #41: the optional counts and the reason.
+    const split = { ...pipeline, counts: { ...pipeline.counts, needsAttention: 1, needsReply: 0, cancelled: 2, skipped: 3 }, reason: 'Stopped by you.' }
+    expect(requirePipelineState(split)).toEqual(split)
     expect(requirePipelineSummary({ status: 'budget', counts: pipeline.counts, costUsd: 3, startedAt: ISO, finishedAt: ISO })).toMatchObject({ status: 'budget' })
     expect(requireReviewItem({ applicationId: 'a', runId: 'r', title: 't', openGaps: 1, finishedAt: ISO })).toMatchObject({ openGaps: 1 })
     expect(requireReviewDetail(review)).toEqual(review)
     expect(requireReviewDetail({ ...review, reviewNotes: null }).reviewNotes).toBeNull()
+    // #42: what else the desktop's review screen shows.
+    const full: ReviewDetail = { ...review, state: 'needs-attention', reason: 'page_count failed', parseWarning: 'not the format', truncated: true }
+    expect(requireReviewDetail(full)).toEqual(full)
+    const row = { applicationId: 'a/b/c', runId: 'r', title: 't', openGaps: 2, finishedAt: ISO, state: 'needs-attention' as const, reason: 'x' }
+    expect(requireReviewList({ items: [row], more: 3 })).toEqual({ items: [row], more: 3 })
     expect(requireJobsPage({ items: [{ id: 'url:1', title: 'x', savedAt: ISO, tailored: true }], nextCursor: 'c' })).toMatchObject({ nextCursor: 'c' })
+    // #40: the dismissed flag.
+    expect(requireJobsPage({ items: [{ id: 'url:1', title: 'x', savedAt: ISO, dismissed: true }] }).items[0].dismissed).toBe(true)
     expect(requireRunsPage({ items: [run] })).toEqual({ items: [run] })
     expect(requireEventBody('status', status)).toEqual({ name: 'status', body: status })
     expect(requireEventBody('review.needed', { count: 1, latest: { applicationId: 'a', runId: 'r', title: 't', openGaps: 0, finishedAt: ISO } })).toMatchObject({ name: 'review.needed' })
@@ -128,6 +139,9 @@ describe('refuses the first value over each limit, wrong enums and unknown field
     ['run page: more than transcriptPageItems', () => requireRunPage({ run, items: Array.from({ length: LIMITS.transcriptPageItems + 1 }, () => text) })],
     ['pipeline: negative count', () => requirePipelineState({ ...pipeline, counts: { ...pipeline.counts, failed: -1 } })],
     ['pipeline: missing count', () => requirePipelineState({ ...pipeline, counts: { total: 1 } })],
+    ['pipeline: unknown count', () => requirePipelineState({ ...pipeline, counts: { ...pipeline.counts, approvedByPhone: 1 } })],
+    ['pipeline: negative skipped', () => requirePipelineState({ ...pipeline, counts: { ...pipeline.counts, skipped: -1 } })],
+    ['pipeline: reason over errorBytes', () => requirePipelineState({ ...pipeline, reason: over(LIMITS.errorBytes) })],
     ['pipeline summary: status', () => requirePipelineSummary({ status: 'running', counts: pipeline.counts, costUsd: 0, startedAt: ISO, finishedAt: ISO })],
     ['review: notes over reviewNotesInlineBytes', () => requireReviewDetail({ ...review, reviewNotes: over(LIMITS.reviewNotesInlineBytes) })],
     ['review: too many gaps', () => requireReviewDetail({ ...review, openGaps: Array.from({ length: LIMITS.reviewListItems + 1 }, () => 'g') })],
@@ -137,7 +151,17 @@ describe('refuses the first value over each limit, wrong enums and unknown field
     ['review: too many artifacts', () => requireReviewDetail({ ...review, artifacts: Array.from({ length: LIMITS.reviewArtifacts + 1 }, () => review.artifacts[0]) })],
     ['review: artifact outside the folder', () => requireReviewDetail({ ...review, artifacts: [{ file: '../master-profile.md', bytes: 1, sha256: SHA }] })],
     ['review: revision not sha256', () => requireReviewDetail({ ...review, revision: 'v1' })],
+    ['review: unknown state', () => requireReviewDetail({ ...review, state: 'applied' })],
+    ['review: reason over errorBytes', () => requireReviewDetail({ ...review, reason: over(LIMITS.errorBytes) })],
+    ['review: parseWarning over errorBytes', () => requireReviewDetail({ ...review, parseWarning: over(LIMITS.errorBytes) })],
+    ['review: truncated not a boolean', () => requireReviewDetail({ ...review, truncated: 1 })],
+    ['review: reframing with a requirement field', () => requireReviewDetail({ ...review, proposedReframings: [{ ...review.proposedReframings[0], requirement: 'x' }] })],
+    ['review item: approved state in the list', () => requireReviewItem({ applicationId: 'a', runId: 'r', title: 't', openGaps: 0, finishedAt: ISO, state: 'approved' })],
+    ['review list: more than reviewItems', () => requireReviewList({ items: Array.from({ length: LIMITS.reviewItems + 1 }, () => ({ applicationId: 'a', runId: 'r', title: 't', openGaps: 0, finishedAt: ISO })) })],
+    ['review list: unknown field', () => requireReviewList({ items: [], total: 3 })],
     ['jobs page: more than jobsPageItems', () => requireJobsPage({ items: Array.from({ length: LIMITS.jobsPageItems + 1 }, () => ({ id: 'url:1', title: 'x', savedAt: ISO })) })],
+    ['job: dismissed not a boolean', () => requireJobsPage({ items: [{ id: 'url:1', title: 'x', savedAt: ISO, dismissed: 'yes' }] })],
+    ['job: description', () => requireJobsPage({ items: [{ id: 'url:1', title: 'x', savedAt: ISO, description: 'full posting' }] })],
     ['runs page: more than runsPageItems', () => requireRunsPage({ items: Array.from({ length: LIMITS.runsPageItems + 1 }, () => run) })],
     ['page: cursor over cursorChars', () => requireRunsPage({ items: [], nextCursor: over(LIMITS.cursorChars) })],
     ['review.needed: latest not a ReviewItem', () => requireEventBody('review.needed', { count: 1, latest: { title: 'x' } })],
