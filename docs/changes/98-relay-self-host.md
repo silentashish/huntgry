@@ -18,7 +18,7 @@ huntgry.tech (deployed from silentashish/huntgry-website), not in a Cloudflare a
 | Service | `relay/selfhost/huntgry-relay.service` | systemd with `DynamicUser`, a private state directory, read-only system and no privileges. It restarts on failure. |
 | Install | `relay/selfhost/install.sh` | An idempotent root script on the server. It writes the files and the token env file (600), and adds `import /etc/caddy/conf.d/*.caddy` if the site's Caddyfile lacks it. It restarts and reloads, then waits for `401` on `POST /rooms`. It cleans the upload. |
 | Build | `relay/selfhost/build.sh`, `relay/selfhost/.gitignore` | `wrangler deploy --dry-run --outdir` bundles the Worker without uploading anything. |
-| CI | `.github/workflows/relay-deploy.yml` | It runs on `main` pushes touching `relay/` or the protocol, and on demand. Steps: test, build, fetch the `workerd` build for the server's CPU (`uname -m` over SSH), upload, install, then check inside and outside. It is skipped until `RELAY_HOST` is set. |
+| CI | `.github/workflows/relay-deploy.yml` | It runs on `main` pushes touching `relay/`, the protocol or `package-lock.json` (which pins `workerd`), and on demand. Steps: test, build, fetch the `workerd` build for the server's CPU (`uname -m` over SSH), upload, install, then check inside and outside. It is skipped until `RELAY_HOST` is set. |
 | Docs | `relay/selfhost/README.md`, `relay/README.md` | Setup (variables, secrets, DNS), the by-hand path, and what the server can see. `wrangler deploy` stays documented for Cloudflare users. |
 
 The website side, a one-line `import /etc/caddy/conf.d/*.caddy` in its Caddyfile template so

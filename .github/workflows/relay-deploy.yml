@@ -9,6 +9,8 @@ on:
     paths:
       - 'relay/**'
       - 'src/shared/remote/**'
+      # The lockfile pins workerd and wrangler, which the bundle and the server runtime come from.
+      - 'package-lock.json'
       - '.github/workflows/relay-deploy.yml'
   workflow_dispatch:
 

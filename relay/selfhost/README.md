@@ -26,8 +26,8 @@ phone / desktop ──wss/https──▶ Caddy (TLS, :443, relay.huntgry.tech)
 
 ## Deploy from CI
 
-`.github/workflows/relay-deploy.yml` runs on pushes to `main` that touch `relay/` or the protocol
-package, and on demand (Actions → relay-deploy → Run workflow). It does five things:
+`.github/workflows/relay-deploy.yml` runs on pushes to `main` that touch `relay/`, the protocol
+package or `package-lock.json` (which pins `workerd`), and on demand (Actions → relay-deploy → Run workflow). It does five things:
 
 1. Tests and builds the relay.
 2. Fetches the `workerd` build that matches the server's CPU (x86-64 or Arm).
