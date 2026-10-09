@@ -86,6 +86,9 @@ describe('accepts every DTO and returns only its known fields', () => {
     expect(requireTranscriptPage({ runId: 'r1', items: [text], seq: 4 })).toEqual({ runId: 'r1', items: [text], seq: 4 })
     expect(requireRunPage({ run, items: [tool], nextSeq: 9 })).toEqual({ run, items: [tool], nextSeq: 9 })
     expect(requirePipelineState(pipeline)).toEqual(pipeline)
+    // #41: the optional counts and the reason.
+    const split = { ...pipeline, counts: { ...pipeline.counts, needsAttention: 1, needsReply: 0, cancelled: 2, skipped: 3 }, reason: 'Stopped by you.' }
+    expect(requirePipelineState(split)).toEqual(split)
     expect(requirePipelineSummary({ status: 'budget', counts: pipeline.counts, costUsd: 3, startedAt: ISO, finishedAt: ISO })).toMatchObject({ status: 'budget' })
     expect(requireReviewItem({ applicationId: 'a', runId: 'r', title: 't', openGaps: 1, finishedAt: ISO })).toMatchObject({ openGaps: 1 })
     expect(requireReviewDetail(review)).toEqual(review)
@@ -128,6 +131,9 @@ describe('refuses the first value over each limit, wrong enums and unknown field
     ['run page: more than transcriptPageItems', () => requireRunPage({ run, items: Array.from({ length: LIMITS.transcriptPageItems + 1 }, () => text) })],
     ['pipeline: negative count', () => requirePipelineState({ ...pipeline, counts: { ...pipeline.counts, failed: -1 } })],
     ['pipeline: missing count', () => requirePipelineState({ ...pipeline, counts: { total: 1 } })],
+    ['pipeline: unknown count', () => requirePipelineState({ ...pipeline, counts: { ...pipeline.counts, approvedByPhone: 1 } })],
+    ['pipeline: negative skipped', () => requirePipelineState({ ...pipeline, counts: { ...pipeline.counts, skipped: -1 } })],
+    ['pipeline: reason over errorBytes', () => requirePipelineState({ ...pipeline, reason: over(LIMITS.errorBytes) })],
     ['pipeline summary: status', () => requirePipelineSummary({ status: 'running', counts: pipeline.counts, costUsd: 0, startedAt: ISO, finishedAt: ISO })],
     ['review: notes over reviewNotesInlineBytes', () => requireReviewDetail({ ...review, reviewNotes: over(LIMITS.reviewNotesInlineBytes) })],
     ['review: too many gaps', () => requireReviewDetail({ ...review, openGaps: Array.from({ length: LIMITS.reviewListItems + 1 }, () => 'g') })],

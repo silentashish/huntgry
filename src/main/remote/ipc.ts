@@ -15,12 +15,13 @@ import { requireCurrentWorkspace, settingsFile } from '../current-workspace'
 import { emit, onEvent } from '../events'
 import { loadAndExtract } from '../jobs/loader'
 import { addByUrl, listJobs } from '../jobs/service'
+import { pipelineForRemote } from '../pipeline/ipc'
 import { queueForRemote } from '../queue/ipc'
 import { loadSettings, saveSettings } from '../workspace'
 import { CredentialStore, newOwnerSecret, normalizeRelayUrl, relayRequest, type Cipher, type CredentialsRead, type RelayCredentials } from './credentials'
 import { DeviceStore } from './devices'
-import { Gateway, type GatewayServices } from './gateway'
-import { projectQueue, projectRun, projectStatus } from './project'
+import { RemoteEvents } from './events'
+import { Gateway, statusOf, type GatewayServices } from './gateway'
 import { revokeDevice } from './revoke'
 import { RoomControl } from './rooms'
 import { RemoteSession, type SocketLike } from './session'
@@ -249,13 +250,11 @@ async function init(): Promise<void> {
     runs: runsForRemote,
     jobs: { list: listJobs, addUrl: (ws, url) => addByUrl(ws, url, loadAndExtract) },
     files: { resolve: resolveApplicationFile },
+    pipeline: pipelineForRemote,
     transcripts: () => transcriptsOn
   }
   gateway = new Gateway(services, devices)
-  const status = async () => {
-    const workspace = await services.workspace()
-    return projectStatus({ desktopName: services.desktopName, appVersion: services.appVersion, workspace, queue: await queueForRemote.state(workspace.path), agents: await agentsReady() })
-  }
+  const status = async () => statusOf(services, await services.workspace())
   session = new RemoteSession({
     connect,
     devices,
@@ -267,18 +266,10 @@ async function init(): Promise<void> {
     notificationDetails: () => detailsOn,
     onState: () => void publish().catch((err: unknown) => console.error('[remote] publishing the state failed:', err))
   })
+  const events = new RemoteEvents({ broadcast: (name, body, pushText, hint) => session.broadcast(name, body, pushText, hint), status })
   onEvent((channel, payload) => {
     if (!session.isOnline()) return
-    if (channel === 'queue:changed') {
-      const state = payload as Parameters<typeof projectQueue>[0]
-      void session.broadcast('queue.changed', projectQueue(state))
-      void status().then((s) => session.broadcast('status', s)).catch(() => undefined)
-    } else if (channel === 'runner:run') {
-      const run = payload as Parameters<typeof projectRun>[0]
-      void session.broadcast('run.changed', projectRun(run), run.title)
-    } else if (channel === 'applications:changed') {
-      void session.broadcast('applications.changed', { ids: [] })
-    }
+    void events.handle(channel, payload)
   })
   powerMonitor.on('resume', () => session.reconnectNow())
   powerMonitor.on('unlock-screen', () => session.reconnectNow())

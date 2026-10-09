@@ -276,15 +276,36 @@ export interface StatusSummary {
 
 export type PipelineStatus = 'idle' | 'running' | 'paused' | 'waiting-limit' | 'finished'
 
+/**
+ * #31 / #41: a pipeline's counts. `total` includes skipped jobs; `done` = built (every result,
+ * reviewed or not); `unreviewed` = built and waiting for review. The optional fields (added in
+ * #41) split the rest the way the desktop panel does: results that need attention, runs that
+ * stopped with a question, cancelled jobs and jobs the pre-flight skipped.
+ */
+export interface PipelineCounts {
+  total: number
+  done: number
+  running: number
+  queued: number
+  failed: number
+  unreviewed: number
+  needsAttention?: number
+  needsReply?: number
+  cancelled?: number
+  skipped?: number
+}
+
 /** #31: what the Pipeline panel shows. */
 export interface PipelineState {
   status: PipelineStatus
   agent: RemoteAgentId
-  counts: { total: number; done: number; running: number; queued: number; failed: number; unreviewed: number }
+  counts: PipelineCounts
   /** ISO; set while `waiting-limit`. */
   waitingLimitUntil?: string
   /** ISO estimate of when the pipeline finishes. */
   eta?: string
+  /** Why it is paused, stopped or waiting (budget, spend limit, start error, Stop, the agent's limit message); ≤ `LIMITS.errorBytes`. */
+  reason?: string
   startedAt: string
   updatedAt: string
 }

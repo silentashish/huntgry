@@ -166,7 +166,16 @@ const status: StatusSummary = {
     { id: 'antigravity', ready: true }
   ]
 }
-const pipeline: PipelineState = { status: 'running', agent: 'claude', counts: { total: 100, done: 50, running: 4, queued: 40, failed: 6, unreviewed: 50 }, waitingLimitUntil: ISO, eta: ISO, startedAt: ISO, updatedAt: ISO }
+const pipeline: PipelineState = {
+  status: 'running',
+  agent: 'claude',
+  counts: { total: 1e9, done: 1e9, running: 4, queued: 1e9, failed: 1e9, unreviewed: 1e9, needsAttention: 1e9, needsReply: 1e9, cancelled: 1e9, skipped: 1e9 },
+  waitingLimitUntil: ISO,
+  eta: ISO,
+  reason: errorMax,
+  startedAt: ISO,
+  updatedAt: ISO
+}
 const review: ReviewDetail = {
   applicationId: APP_ID,
   runId: ID,

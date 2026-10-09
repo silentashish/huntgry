@@ -23,17 +23,20 @@ import {
   type FileChunk,
   type NotificationCategory,
   type RemoteCommand,
-  type RemoteCommandName
+  type RemoteCommandName,
+  type StatusSummary
 } from '@shared/remote'
+import type { PipelineState as DesktopPipelineState } from '@shared/pipeline-types'
 import { MAX_TEXT } from '../cli/command'
 import { assertPublicUrl, type ResolveHost } from '../cli/public-url'
 import { requireRunId } from '../cli/runs'
+import { requirePipelineStartInput } from '../pipeline/service'
 import { requireEnqueueInput, requireItemId } from '../queue/queue'
 import { WorkspaceChangedError } from '../workspace/changed'
 import type { AgentId } from '@shared/runner-types'
 import { AuditLog, type Known } from './audit'
 import type { DeviceRecord, DeviceStore } from './devices'
-import { projectJobsPage, projectQueue, projectRun, projectRunPage, projectRunsPage, projectStatus } from './project'
+import { projectJobsPage, projectPipeline, projectQueue, projectRun, projectRunPage, projectRunsPage, projectStatus, safeText } from './project'
 import type { WorkspaceIdentity } from './workspace'
 
 /**
@@ -85,6 +88,19 @@ export interface GatewayServices {
     /** Absolute path of a phone-fetchable file, resolved with the applications' safe-path rules. */
     resolve(workspace: string, applicationId: string, file: string): Promise<string>
   }
+  /**
+   * #31's pipeline (#41): the app's one `Pipeline`, the same methods as the desktop's
+   * "Run unattended", Pause, Resume and Stop, each bound to the workspace the gateway checked.
+   * Absent (tests, an older wiring): `pipeline.*` answer `unsupported`.
+   */
+  pipeline?: {
+    state(workspace: string): Promise<DesktopPipelineState | null>
+    /** Takes what `requirePipelineStartInput` returned, exactly like `pipeline/ipc.ts`. */
+    start(workspace: string, input: ReturnType<typeof requirePipelineStartInput>): Promise<DesktopPipelineState>
+    pause(workspace: string): Promise<DesktopPipelineState>
+    resume(workspace: string): Promise<DesktopPipelineState>
+    stop(workspace: string): Promise<DesktopPipelineState>
+  }
   /** Transcripts may be sent to phones (Settings, default on). */
   transcripts(): boolean
   /** DNS for `assertPublicUrl` (tests inject one). */
@@ -120,8 +136,36 @@ const RATE = {
   readsPerMinute: 30
 } as const
 
-/** Commands that touch the review queue or the pipeline (#31): not on this desktop yet. */
-const NOT_YET: readonly RemoteCommandName[] = ['pipeline.start', 'pipeline.pause', 'pipeline.resume', 'pipeline.stop', 'review.list', 'review.get', 'review.approve', 'review.rerun', 'review.discard']
+/** Commands that touch the review queue (#31): not on this desktop yet. */
+const NOT_YET: readonly RemoteCommandName[] = ['review.list', 'review.get', 'review.approve', 'review.rerun', 'review.discard']
+const PIPELINE_COMMANDS: readonly RemoteCommandName[] = ['pipeline.start', 'pipeline.pause', 'pipeline.resume', 'pipeline.stop']
+const UNSUPPORTED = 'Pipelines and reviews are not available on this Mac yet. Update Huntgry.'
+
+/** "Run unattended"'s defaults when the phone sends no options (BulkTailorModal). */
+const PIPELINE_OPTIONS = { coverLetter: true, dateStyle: 'right' } as const
+
+/**
+ * A desktop service's own refusal ("A pipeline is already running", a pre-flight blocker) is
+ * shown on the phone as it is on the Mac, minus any path; anything else is left to `errorOf`.
+ */
+async function desktopCall<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call()
+  } catch (err) {
+    if (err instanceof ProtocolError || err instanceof WorkspaceChangedError || !(err instanceof Error)) throw err
+    throw new ProtocolError('failed', safeText(err.message) || 'The command failed on your Mac.')
+  }
+}
+
+/** The status the phone sees (`status.get`, `hello`, heartbeats): queue, pipeline and agents of `workspace`. */
+export async function statusOf(s: GatewayServices, workspace: WorkspaceIdentity): Promise<StatusSummary> {
+  const [queue, agents, pipeline] = await Promise.all([
+    s.queue.state(workspace.path),
+    s.agents(),
+    s.pipeline ? s.pipeline.state(workspace.path).catch(() => null) : Promise.resolve(null)
+  ])
+  return projectStatus({ desktopName: s.desktopName, appVersion: s.appVersion, workspace, queue, agents, pipeline })
+}
 
 /** Outcome of `Gateway.admit` for a non-command envelope. */
 export type Admission = { status: 'new' | 'redelivered'; device: DeviceRecord } | { status: 'rejected'; error: EnvelopeError }
@@ -279,8 +323,8 @@ export class Gateway {
       }
       // Not checkpointed yet: the audit entry is the commit. A crash before it persists nothing, so
       // the relay's redelivery runs the command exactly once (ADR "Commit order on the desktop").
-      if ((NOT_YET as readonly string[]).includes(command.name)) {
-        throw new ProtocolError('unsupported', 'Pipelines and reviews are not available on this Mac yet. Update Huntgry.')
+      if (NOT_YET.includes(command.name) || (PIPELINE_COMMANDS.includes(command.name) && !this.services.pipeline)) {
+        throw new ProtocolError('unsupported', UNSUPPORTED)
       }
       this.checkTtl(envelope, command.name)
       this.checkRate(device.id, command)
@@ -442,7 +486,7 @@ export class Gateway {
     const ws = workspace.path
     switch (command.name) {
       case 'status.get':
-        return projectStatus({ desktopName: s.desktopName, appVersion: s.appVersion, workspace, queue: await s.queue.state(ws), agents: await s.agents() })
+        return statusOf(s, workspace)
       case 'queue.get':
         return projectQueue(await s.queue.state(ws))
       case 'queue.setPaused':
@@ -506,16 +550,53 @@ export class Gateway {
       case 'device.setNotifications':
         await this.devices.update(device.id, { categories: command.args.categories })
         return { categories: command.args.categories }
-      case 'pipeline.start':
+      case 'pipeline.start': {
+        const pipeline = this.pipeline()
+        const input = await this.pipelineInput(command.args)
+        return projectPipeline(await desktopCall(() => pipeline.start(ws, input)), this.now())
+      }
       case 'pipeline.pause':
+        return projectPipeline(await desktopCall(() => this.pipeline().pause(ws)), this.now())
       case 'pipeline.resume':
+        return projectPipeline(await desktopCall(() => this.pipeline().resume(ws)), this.now())
       case 'pipeline.stop':
+        return projectPipeline(await desktopCall(() => this.pipeline().stop(ws)), this.now())
       case 'review.list':
       case 'review.get':
       case 'review.approve':
       case 'review.rerun':
       case 'review.discard':
-        throw new ProtocolError('unsupported', 'Pipelines and reviews are not available on this Mac yet. Update Huntgry.')
+        throw new ProtocolError('unsupported', UNSUPPORTED)
+    }
+  }
+
+  private pipeline(): NonNullable<GatewayServices['pipeline']> {
+    if (!this.services.pipeline) throw new ProtocolError('unsupported', UNSUPPORTED)
+    return this.services.pipeline
+  }
+
+  /**
+   * The phone's `PipelineStartInput` (already through the package guard: saved-job id shapes,
+   * enum agents, concurrency 1–4, a numeric budget, no other field) onto the desktop's input,
+   * then through the desktop's own `requirePipelineStartInput`, exactly as "Run unattended"
+   * sends it. Restart, skip and stall options keep the desktop's defaults.
+   */
+  private async pipelineInput(args: Extract<RemoteCommand, { name: 'pipeline.start' }>['args']): Promise<ReturnType<typeof requirePipelineStartInput>> {
+    const budget = args.budget ? { maxCostUsd: args.budget.maxCostUsd, maxJobs: args.budget.maxRuns } : undefined
+    try {
+      return requirePipelineStartInput(
+        {
+          jobIds: args.jobIds,
+          options: args.options ?? PIPELINE_OPTIONS,
+          agent: args.agent,
+          concurrency: args.concurrency,
+          ...(args.fallback ? { fallbackAgent: args.fallback } : {}),
+          ...(budget ? { budget } : {})
+        },
+        await this.services.defaultAgent()
+      )
+    } catch (err) {
+      throw new ProtocolError('invalid', safeText((err as Error).message))
     }
   }
 

@@ -1,4 +1,5 @@
 import type { Job } from '@shared/jobs-types'
+import type { PipelineCounts as DesktopCounts, PipelineState as DesktopPipelineState, PipelineSummary as DesktopPipelineSummary } from '@shared/pipeline-types'
 import type { QueueItem, QueueState } from '@shared/queue-types'
 import type { AgentStatus, RunSummary, TranscriptItem } from '@shared/runner-types'
 import {
@@ -8,6 +9,8 @@ import {
   LIMITS,
   jsonBytes,
   requireJobsPage,
+  requirePipelineState,
+  requirePipelineSummary,
   requireQueueState,
   requireRemoteRun,
   requireRunPage,
@@ -15,6 +18,10 @@ import {
   requireStatusSummary,
   requireTranscriptPage,
   truncateUtf8,
+  type PipelineCounts,
+  type PipelineState,
+  type PipelineStatus,
+  type PipelineSummary,
   type RemoteJob,
   type RemotePage,
   type RemoteQueueItem,
@@ -237,12 +244,96 @@ export function projectRunsPage(runs: readonly RunSummary[], cursor?: string): R
   return requireRunsPage(pageBy(runs, (r) => r.id, cursor, LIMITS.runsPageItems, projectRun))
 }
 
+/**
+ * Desktop text that may name a file on the Mac (a start error, an agent's message): absolute
+ * and home-relative paths are replaced, and the text is cut to `LIMITS.errorBytes`.
+ */
+export function safeText(s: string): string {
+  const scrubbed = s.replace(/(^|[\s('"`=:,])(~?\/[^\s'"`),]*\/[^\s'"`),]*)/g, '$1…')
+  return truncateUtf8(scrubbed, LIMITS.errorBytes).text
+}
+
+// ── pipeline (#31 → #41) ────────────────────────────────────────────────────────────────────
+
+/**
+ * The desktop's statuses onto the phone's closed set: a budget stop is a pause (Resume after
+ * raising it on the Mac), and `stopping` is still running until the runs have ended.
+ */
+const PIPELINE_STATUS: Record<DesktopPipelineState['status'], PipelineStatus> = {
+  running: 'running',
+  stopping: 'running',
+  paused: 'paused',
+  'stopped-budget': 'paused',
+  'waiting-limit': 'waiting-limit',
+  finished: 'finished'
+}
+
+/**
+ * #31's counts onto the DTO: `done` = built (every result, whatever its review state),
+ * `unreviewed` = built and waiting for review; the rest as the desktop panel splits them.
+ */
+export function projectPipelineCounts(c: DesktopCounts): PipelineCounts {
+  return {
+    total: c.total,
+    done: c.unreviewed + c.needsAttention + c.approved + c.discarded,
+    running: c.running,
+    queued: c.queued,
+    failed: c.failed,
+    unreviewed: c.unreviewed,
+    needsAttention: c.needsAttention,
+    needsReply: c.needsReply,
+    cancelled: c.cancelled,
+    skipped: c.skipped
+  }
+}
+
+/** `pipeline.changed` and the result of `pipeline.*`: #31's `PipelineState` for the phone. */
+export function projectPipeline(state: DesktopPipelineState, now: number = Date.now()): PipelineState {
+  const status = PIPELINE_STATUS[state.status]
+  const out: PipelineState = {
+    status,
+    agent: state.agent,
+    counts: projectPipelineCounts(state.counts),
+    startedAt: state.startedAt,
+    updatedAt: new Date(now).toISOString()
+  }
+  if (state.until) out.waitingLimitUntil = state.until
+  if (state.etaMinutes !== null && status !== 'finished') out.eta = new Date(now + state.etaMinutes * 60_000).toISOString()
+  const reason = state.stopReason ?? (state.status === 'waiting-limit' ? state.limitMessage : undefined)
+  if (reason) out.reason = safeText(reason)
+  return requirePipelineState(out)
+}
+
+/** `pipeline.finished`: the summary counts (built / needs review / failed / skipped). */
+export function projectPipelineSummary(summary: DesktopPipelineSummary): PipelineSummary {
+  const reason = summary.stopReason ?? ''
+  return requirePipelineSummary({
+    status: !reason ? 'finished' : /^Budget reached/.test(reason) ? 'budget' : 'stopped',
+    counts: projectPipelineCounts(summary.counts),
+    costUsd: Number.isFinite(summary.costUsd) && summary.costUsd >= 0 ? summary.costUsd : 0,
+    startedAt: summary.startedAt,
+    finishedAt: summary.finishedAt
+  })
+}
+
+/** `StatusSummary.pipeline`: the status and, while a limit holds, when it resumes. */
+export function projectPipelineStatus(state: DesktopPipelineState | null): StatusSummary['pipeline'] {
+  if (!state) return null
+  const out: NonNullable<StatusSummary['pipeline']> = { status: PIPELINE_STATUS[state.status] }
+  if (state.until) out.until = state.until
+  return out
+}
+
 export interface StatusInput {
   desktopName: string
   appVersion: string
   workspace: { id: string; name: string }
   queue: QueueState
   agents: readonly Pick<AgentStatus, 'id' | 'ready'>[]
+  /** #31's pipeline of this workspace (`null` or absent: none, or no pipeline service). */
+  pipeline?: DesktopPipelineState | null
+  /** Results waiting for review (Unreviewed or Needs attention), #42. */
+  unreviewed?: number
 }
 
 export function projectStatus(input: StatusInput): StatusSummary {
@@ -260,9 +351,8 @@ export function projectStatus(input: StatusInput): StatusSummary {
       failed: items.filter((i) => i.status === 'failed').length,
       paused: input.queue.paused
     },
-    // #31: no pipeline and no review queue on this desktop yet.
-    pipeline: null,
-    review: { unreviewed: 0 },
+    pipeline: projectPipelineStatus(input.pipeline ?? null),
+    review: { unreviewed: Math.max(0, Math.floor(input.unreviewed ?? 0)) },
     agents: input.agents.map((a) => ({ id: a.id, ready: a.ready }))
   }
   return requireStatusSummary(out)

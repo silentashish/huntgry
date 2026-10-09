@@ -33,6 +33,7 @@ import {
 import {
   REMOTE_AGENT_IDS,
   type FileChunk,
+  type PipelineCounts,
   type PipelineState,
   type PipelineSummary,
   type RemoteEvent,
@@ -256,18 +257,21 @@ export function requireRunPage(v: unknown, what = 'run.get'): RunPage {
 
 // ── pipeline (#31) ──────────────────────────────────────────────────────────────────────────
 
-function requireCounts(v: unknown, what: string): PipelineState['counts'] {
+const COUNT_KEYS = ['total', 'done', 'running', 'queued', 'failed', 'unreviewed'] as const
+const OPTIONAL_COUNT_KEYS = ['needsAttention', 'needsReply', 'cancelled', 'skipped'] as const
+
+function requireCounts(v: unknown, what: string): PipelineCounts {
   const c = requireRecord(v, what)
-  const keys = ['total', 'done', 'running', 'queued', 'failed', 'unreviewed'] as const
-  rejectUnknownKeys(c, keys, what)
-  const out = {} as PipelineState['counts']
-  for (const k of keys) out[k] = requireInteger(c[k], `${what}.${k}`, 0)
+  rejectUnknownKeys(c, [...COUNT_KEYS, ...OPTIONAL_COUNT_KEYS], what)
+  const out = {} as PipelineCounts
+  for (const k of COUNT_KEYS) out[k] = requireInteger(c[k], `${what}.${k}`, 0)
+  for (const k of OPTIONAL_COUNT_KEYS) if (c[k] !== undefined) out[k] = requireInteger(c[k], `${what}.${k}`, 0)
   return out
 }
 
 export function requirePipelineState(v: unknown, what = 'pipeline.changed'): PipelineState {
   const r = requireRecord(v, what)
-  rejectUnknownKeys(r, ['status', 'agent', 'counts', 'waitingLimitUntil', 'eta', 'startedAt', 'updatedAt'], what)
+  rejectUnknownKeys(r, ['status', 'agent', 'counts', 'waitingLimitUntil', 'eta', 'reason', 'startedAt', 'updatedAt'], what)
   const out: PipelineState = {
     status: requireOneOf(r.status, PIPELINE_STATUSES, `${what}.status`),
     agent: requireAgentId(r.agent, `${what}.agent`),
@@ -277,6 +281,7 @@ export function requirePipelineState(v: unknown, what = 'pipeline.changed'): Pip
   }
   if (r.waitingLimitUntil !== undefined) out.waitingLimitUntil = requireIsoDate(r.waitingLimitUntil, `${what}.waitingLimitUntil`)
   if (r.eta !== undefined) out.eta = requireIsoDate(r.eta, `${what}.eta`)
+  if (r.reason !== undefined) out.reason = requireError(r.reason, `${what}.reason`)
   return out
 }
 
