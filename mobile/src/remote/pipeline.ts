@@ -99,3 +99,11 @@ export const SUMMARY_TITLE: Record<PipelineSummary['status'], string> = {
   stopped: 'Pipeline stopped',
   budget: 'Pipeline stopped at its budget'
 }
+
+/** "about 40 min left", "about 2 h left"; null when there is no estimate or it has passed. */
+export function etaText(eta: string | undefined, now: number): string | null {
+  if (!eta) return null
+  const min = Math.round((Date.parse(eta) - now) / 60_000)
+  if (min <= 0) return null
+  return min >= 90 ? `about ${Math.round(min / 60)} h left` : `about ${Math.max(1, min)} min left`
+}

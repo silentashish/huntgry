@@ -282,11 +282,17 @@ describe('review (#42)', () => {
     expect(t.sent('review.get')).toHaveLength(2)
     await t.answer(t.last('review.get'), { ...DETAIL, revision: '6'.repeat(64) })
     expect(t.model.getSnapshot().review[APP].notice).toBe(REVIEW_COPY.changed)
-    // A closed result is not fetched again.
+    // Its Files screen keeps watching it; a closed result is not fetched again.
+    t.model.closeReview(APP)
+    t.model.watchReview(APP)
+    t.sockets.last.receive(t.desktop.event('applications.changed', { ids: [] }))
+    await settle()
+    expect(t.sent('review.get')).toHaveLength(3)
+    await t.answer(t.last('review.get'), { ...DETAIL, revision: '6'.repeat(64) })
     t.model.closeReview(APP)
     t.sockets.last.receive(t.desktop.event('applications.changed', { ids: [] }))
     await settle()
-    expect(t.sent('review.get')).toHaveLength(2)
+    expect(t.sent('review.get')).toHaveLength(3)
   })
 
   it('review.needed refreshes the list', async () => {

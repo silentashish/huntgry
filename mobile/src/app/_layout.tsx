@@ -1,5 +1,6 @@
 import { BricolageGrotesque_600SemiBold } from '@expo-google-fonts/bricolage-grotesque/600SemiBold'
 import { BricolageGrotesque_700Bold } from '@expo-google-fonts/bricolage-grotesque/700Bold'
+import { BricolageGrotesque_800ExtraBold } from '@expo-google-fonts/bricolage-grotesque/800ExtraBold'
 import { Geist_400Regular } from '@expo-google-fonts/geist/400Regular'
 import { Geist_500Medium } from '@expo-google-fonts/geist/500Medium'
 import { Geist_600SemiBold } from '@expo-google-fonts/geist/600SemiBold'
@@ -46,6 +47,7 @@ export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     BricolageGrotesque_600SemiBold,
     BricolageGrotesque_700Bold,
+    BricolageGrotesque_800ExtraBold,
     Geist_400Regular,
     Geist_500Medium,
     Geist_600SemiBold,

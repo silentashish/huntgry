@@ -1,7 +1,7 @@
 import { requirePipelineStartInput } from '@huntgry/remote-protocol'
 import { describe, expect, it } from 'vitest'
 import { commands } from './commands'
-import { countBadges, pipelineStartInput, summaryLine, type PipelineForm } from './pipeline'
+import { countBadges, etaText, pipelineStartInput, summaryLine, type PipelineForm } from './pipeline'
 
 const FORM: PipelineForm = { jobIds: ['url:0123456789abcdef', 'indeed:abc123'], agent: 'claude', fallback: null, concurrency: 2, maxCostUsd: '', maxRuns: '' }
 
@@ -35,6 +35,14 @@ describe('pipeline start sheet', () => {
 describe('pipeline labels', () => {
   it('count badges show only what is above zero', () => {
     expect(countBadges({ total: 20, done: 5, running: 3, queued: 12, failed: 0, unreviewed: 2, needsAttention: 1 }).map((b) => b.label)).toEqual(['12 queued', '3 working', '2 unreviewed', '1 attention'])
+  })
+
+  it('the ETA reads in minutes, then hours, and disappears once passed', () => {
+    const now = Date.parse('2026-10-09T12:00:00.000Z')
+    expect(etaText('2026-10-09T12:40:00.000Z', now)).toBe('about 40 min left')
+    expect(etaText('2026-10-09T14:00:00.000Z', now)).toBe('about 2 h left')
+    expect(etaText('2026-10-09T11:59:00.000Z', now)).toBeNull()
+    expect(etaText(undefined, now)).toBeNull()
   })
 
   it('the summary carries built / needs review / failed / skipped', () => {

@@ -1,6 +1,6 @@
 /**
  * Home = the #38 "Status" screen (Figma `19:32` / `19:702`): Mac presence, the workspace name,
- * what needs the owner, the pipeline card, queue counts, agent readiness. When the relay
+ * what needs the owner, the pipeline card (opens Pipeline, #41), queue counts, agent readiness. When the relay
  * says the Mac is offline it becomes the Offline screen (`19:614` / `19:1284`).
  */
 
@@ -17,6 +17,7 @@ import { FadeIn } from '../ui/FadeIn'
 import { AGENT_LABEL, ago, clock, dayLine, queueCounts } from '../ui/format'
 import { Icon, type IconName } from '../ui/Icon'
 import { Progress } from '../ui/Progress'
+import { PIPELINE_STATUS, SUMMARY_TITLE, etaText, summaryLine } from '../remote/pipeline'
 import { Screen, ScreenHeader } from '../ui/Screen'
 import { radius, useColors } from '../ui/theme'
 import { Txt } from '../ui/Txt'
@@ -98,38 +99,41 @@ function NeedsYou({ snap }: { snap: RemoteSnapshot }) {
   )
 }
 
-// ── pipeline (#41 adds the full Pipeline screen) ─────────────────────────────────────────
-
-const PIPELINE_BADGE = {
-  idle: { label: 'Idle', tone: 'neutral' },
-  running: { label: 'Running', tone: 'trail' },
-  paused: { label: 'Paused', tone: 'warning' },
-  'waiting-limit': { label: 'Waiting', tone: 'warning' },
-  finished: { label: 'Finished', tone: 'success' }
-} as const
+// ── pipeline (#41: the card opens the Pipeline screen) ───────────────────────────────────
 
 function PipelineCard({ snap, now }: { snap: RemoteSnapshot; now: number }) {
   const model = useModel()
   const colors = useColors()
   const state = snap.pipeline
   const status = state?.status ?? snap.status?.pipeline?.status ?? 'idle'
-  const badge = PIPELINE_BADGE[status]
+  const badge = PIPELINE_STATUS[status]
+  const last = snap.lastPipeline
+  const open = () => router.push('/pipeline')
   const head = (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
       <Icon name="cpu" size={16} color={colors.accentSecondary} />
       <Txt variant="headingSm" style={{ flex: 1 }}>
         Unattended pipeline
       </Txt>
-      <Badge size="md" tone={badge.tone} dot live={status === 'running'} label={badge.label} />
+      <Badge size="md" tone={badge.tone} dot live={badge.live} label={status === 'waiting-limit' ? 'Waiting' : badge.label} />
     </View>
   )
   if (!state) {
+    const until = snap.status?.pipeline?.until
+    const text =
+      status === 'idle' || status === 'finished'
+        ? last
+          ? `${SUMMARY_TITLE[last.status]} at ${clock(last.finishedAt)}: ${summaryLine(last)}.`
+          : 'No pipeline running. Pick saved jobs on Jobs to run them unattended.'
+        : status === 'waiting-limit' && until
+          ? `Waiting for the usage limit until ${clock(until)}.`
+          : 'Progress shows with the next change your Mac sends.'
     return (
       <FadeIn index={1}>
-        <Card>
+        <Card onPress={open} accessibilityLabel="Pipeline">
           {head}
           <Txt variant="bodySm" color="textSecondary">
-            {status === 'idle' ? 'No pipeline running. Start one from Tailor on your Mac.' : 'Progress and controls arrive with the next update of Huntgry on your Mac.'}
+            {text}
           </Txt>
         </Card>
       </FadeIn>
@@ -137,18 +141,25 @@ function PipelineCard({ snap, now }: { snap: RemoteSnapshot; now: number }) {
   }
   const c = state.counts
   const meta = [`${c.done} of ${c.total}`]
-  if (state.eta && Date.parse(state.eta) > now) meta.push(`~${Math.max(1, Math.round((Date.parse(state.eta) - now) / 60_000))} min`)
+  const eta = etaText(state.eta, now)
+  if (status === 'waiting-limit' && state.waitingLimitUntil) meta.push(`resumes ${clock(state.waitingLimitUntil)}`)
+  else if (eta) meta.push(eta.replace('about ', '~').replace(' left', ''))
   if (c.running > 0) meta.push(`${c.running} running`)
   meta.push(AGENT_LABEL[state.agent])
   const live = status === 'running' || status === 'waiting-limit'
   return (
     <FadeIn index={1}>
-      <Card>
+      <Card onPress={open} accessibilityLabel="Pipeline">
         {head}
         <Progress value={c.total > 0 ? c.done / c.total : 0} />
         <Txt variant="monoSm" color="textMuted" numberOfLines={1}>
           {meta.join(' · ')}
         </Txt>
+        {state.reason && status === 'paused' ? (
+          <Txt variant="bodyXs" color="danger" numberOfLines={2}>
+            {state.reason}
+          </Txt>
+        ) : null}
         {(live || status === 'paused') && (
           <View style={{ flexDirection: 'row', gap: 8 }}>
             {status === 'paused' ? (
@@ -156,7 +167,7 @@ function PipelineCard({ snap, now }: { snap: RemoteSnapshot; now: number }) {
             ) : (
               <Button grow variant="outline" icon="pause" label="Pause" onPress={() => model.pipelinePause()} />
             )}
-            <Button grow variant="danger" icon="stop" label="Stop" onPress={() => model.pipelineStop()} />
+            <Button grow variant="ghost" label="Details" onPress={open} />
           </View>
         )}
       </Card>

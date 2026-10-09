@@ -146,3 +146,24 @@ export function fileSize(bytes: number): string {
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`
   return `${bytes} B`
 }
+
+/** UTF-8 bytes → text (review-notes.md; demo SVG pages). Invalid sequences become U+FFFD. */
+export function utf8Text(bytes: Uint8Array): string {
+  const TD = (globalThis as { TextDecoder?: new () => { decode(b: Uint8Array): string } }).TextDecoder
+  if (TD) return new TD().decode(bytes)
+  let out = ''
+  for (let i = 0; i < bytes.length; ) {
+    const b = bytes[i]
+    const n = b < 0x80 ? 0 : b >= 0xf0 ? 3 : b >= 0xe0 ? 2 : b >= 0xc0 ? 1 : -1
+    if (n < 0 || i + n >= bytes.length + (n === 0 ? 1 : 0)) {
+      out += '�'
+      i++
+      continue
+    }
+    let cp = n === 0 ? b : b & (0x3f >> n)
+    for (let k = 1; k <= n; k++) cp = (cp << 6) | (bytes[i + k] & 0x3f)
+    out += String.fromCodePoint(cp)
+    i += n + 1
+  }
+  return out
+}

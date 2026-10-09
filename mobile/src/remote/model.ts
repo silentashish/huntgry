@@ -516,6 +516,15 @@ export class RemoteModel {
     if (this.dispatch(commands.review(applicationId), { quiet: true }) === null) this.setReview(applicationId, { loading: false, error: 'Not connected to your Mac yet.' })
   }
 
+  /** The Files screen of a result already loaded: refreshed on `applications.changed` like the detail. */
+  watchReview(applicationId: string): void {
+    if (!this.snap.review[applicationId]?.detail) {
+      this.openReview(applicationId)
+      return
+    }
+    this.openReviewId = applicationId
+  }
+
   closeReview(applicationId: string): void {
     if (this.openReviewId === applicationId) this.openReviewId = null
   }

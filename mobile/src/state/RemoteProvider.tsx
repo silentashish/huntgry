@@ -5,6 +5,7 @@ import { Vault } from '../remote/vault'
 import { APP_VERSION, DEMO } from './config'
 import { DemoModel } from './demo'
 import { defaultDeviceName, socketFactory, storage } from './native'
+import { clearSharedFiles } from './share'
 
 const ModelContext = createContext<RemoteModel | null>(null)
 
@@ -18,8 +19,13 @@ export function RemoteProvider({ children }: { children: ReactNode }) {
   const [model] = useState(createModel)
   useEffect(() => {
     void model.init()
+    // Copies handed to the OS viewer (#40) never outlive the moment they were opened.
+    clearSharedFiles()
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') model.wake()
+      if (state === 'active') {
+        clearSharedFiles()
+        model.wake()
+      }
     })
     return () => sub.remove()
   }, [model])

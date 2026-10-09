@@ -1,12 +1,16 @@
 /**
  * Demo mode (`EXPO_PUBLIC_DEMO=1`): the Figma file's sample data, no relay, nothing stored.
  * Commands are answered by a pretend Mac a moment later, so every screen can be tried and
- * screenshotted without a desktop. On the web, `?demo=offline|unpaired|waiting|denied`
- * shows the other states.
+ * screenshotted without a desktop. On the web, `?demo=offline|unpaired|waiting|denied|again`
+ * shows the other states, `?demo=limit` a pipeline waiting for a usage limit and `?demo=idle` none. Jobs, review
+ * results and their files (#40, #42) and the pipeline (#41) are answered through the model's
+ * own result handlers, so file reassembly, the hash check and the review rules run as with a Mac.
  */
 
 import { NOTIFICATION_CATEGORIES, type PipelineState, type RemoteQueueItem, type RemoteRun, type RemoteTranscriptItem, type StatusSummary } from '@huntgry/remote-protocol'
 import type { Command } from '../remote/commands'
+import { chunksOf } from '../remote/files'
+import { demoJobs, demoPipeline, demoResults, served } from './demo-content'
 import { INITIAL_SNAPSHOT, RemoteModel, type RemoteSnapshot } from '../remote/model'
 import { MemoryStorage } from '../remote/platform'
 import { Vault, type Pairing } from '../remote/vault'
@@ -47,8 +51,8 @@ export function demoData(now: number) {
   const status: StatusSummary = {
     desktop: { name: "Ashish's MacBook Pro", appVersion: '0.1.0', workspaceName: 'The den', workspaceId: 'd'.repeat(32) },
     queue: { active: 14, needsReply: 2, failed: 1, paused: false },
-    pipeline: { status: 'running' },
-    review: { unreviewed: 4 },
+    pipeline: variant() === 'idle' ? null : variant() === 'limit' ? { status: 'waiting-limit', until: today(now, 14, 5) } : { status: 'running' },
+    review: { unreviewed: 3 },
     agents: [
       { id: 'claude', ready: true },
       { id: 'codex', ready: true },
@@ -90,21 +94,13 @@ export function demoData(now: number) {
     item({ id: 'item-ramp', title: 'Ramp · Backend Engineer', agent: 'codex', status: 'queued' }),
     ...doneTitles.map((title, i) => item({ id: `item-done-${i}`, title, agent: i % 3 === 0 ? 'codex' : 'claude', status: 'done', built: true, runId: null, updatedAt: at(now, -(i + 1) * 9 * MIN) }))
   ]
-  const pipeline: PipelineState = {
-    status: 'running',
-    agent: 'claude',
-    counts: { total: 20, done: 5, running: 3, queued: 12, failed: 0, unreviewed: 4 },
-    waitingLimitUntil: today(now, 14, 5),
-    eta: at(now, 40 * MIN),
-    startedAt: at(now, -50 * MIN),
-    updatedAt: at(now, -MIN)
-  }
+  const pipeline: PipelineState = demoPipeline(now, variant() === 'limit')
   const transcript: RemoteTranscriptItem[] = [
     { kind: 'assistant', id: 'demo-1', text: 'Gap analysis done. R1 · Kafka → SQS/SNS pipeline. R2 · Ledger correctness → billing ledger at Notion. Open gaps: gRPC, Rust.\n\nApprove R1 and R2 as worded?' },
     { kind: 'user', id: 'demo-2', text: 'Approve R1. R2: say “contributed to”.' },
     { kind: 'tool', id: 'demo-3', name: 'Bash', summary: 'building resume.pdf', status: 'running' }
   ]
-  return { pairing, status, runs, items, pipeline, transcript }
+  return { pairing, status, runs, items, pipeline, transcript, jobs: demoJobs(now), results: demoResults(now) }
 }
 
 export class DemoModel extends RemoteModel {
@@ -128,7 +124,7 @@ export class DemoModel extends RemoteModel {
       statusAt: at(now, -10_000),
       workspace: { id: this.data.status.desktop.workspaceId, name: 'The den' },
       queue: { items: this.data.items, concurrency: 2, paused: false, more: 10 },
-      pipeline: this.data.pipeline,
+      pipeline: v === 'idle' ? null : this.data.pipeline,
       runInfo: this.data.runs
     }
     if (v === 'offline') {
@@ -166,7 +162,7 @@ export class DemoModel extends RemoteModel {
     const id = `demo-${Math.random().toString(36).slice(2)}`
     this.track(id, command, meta)
     this.setCommand(id, 'sent')
-    setTimeout(() => this.answer(id, command), 450)
+    setTimeout(() => this.answer(id, command), command.name === 'file.get' ? 40 : 450)
     return id
   }
 
@@ -190,9 +186,11 @@ export class DemoModel extends RemoteModel {
       case 'pipeline.resume':
         if (this.snap.pipeline) this.set({ pipeline: { ...this.snap.pipeline, status: command.name === 'pipeline.pause' ? 'paused' : 'running' } })
         break
-      case 'pipeline.stop':
-        this.set({ pipeline: null })
+      case 'pipeline.stop': {
+        const p = this.snap.pipeline
+        if (p) this.set({ pipeline: null, lastPipeline: { status: 'stopped', counts: { ...p.counts, running: 0, queued: 0, cancelled: p.counts.queued + p.counts.running }, costUsd: 3.2, startedAt: p.startedAt, finishedAt: new Date().toISOString() } })
         break
+      }
       case 'run.get': {
         const run = this.data.runs[command.args.runId] ?? this.data.runs['run-stripe']
         const items = command.args.runId === 'run-stripe' ? this.data.transcript : []
@@ -211,6 +209,60 @@ export class DemoModel extends RemoteModel {
       case 'run.stop': {
         const view = this.snap.runs[command.args.runId]
         if (view?.run) this.set({ runs: { ...this.snap.runs, [command.args.runId]: { ...view, run: { ...view.run, status: command.name === 'run.finish' ? 'finished' : 'stopped', live: false } } } })
+        break
+      }
+      case 'pipeline.start': {
+        const n = command.args.jobIds.length
+        const now = Date.now()
+        void this.onResult(command, { status: 'running', agent: command.args.agent, counts: { total: n, done: 0, running: Math.min(n, command.args.concurrency), queued: Math.max(0, n - command.args.concurrency), failed: 0, unreviewed: 0 }, startedAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() } satisfies PipelineState)
+        break
+      }
+      case 'queue.enqueue':
+        if (queue) void this.onResult(command, { added: command.args.jobIds.length, skipped: [], queue })
+        break
+      case 'jobs.list': {
+        const f = (command.args.filter ?? '').toLowerCase()
+        const items = this.data.jobs.filter((j) => !f || [j.title, j.company, j.location].some((x) => x?.toLowerCase().includes(f)))
+        void this.onResult(command, { items })
+        break
+      }
+      case 'jobs.addUrl': {
+        const host = command.args.url.replace(/^https?:\/\//, '').split('/')[0]
+        const job = { id: `url:${Math.random().toString(16).slice(2, 18).padEnd(16, '0')}`, title: 'Software Engineer', company: host.split('.').slice(-2, -1)[0] ?? host, source: 'url', savedAt: new Date().toISOString() }
+        this.data.jobs.unshift(job)
+        void this.onResult(command, job)
+        break
+      }
+      case 'review.list':
+        void this.onResult(command, { items: this.data.results.filter((r) => r.detail.state === 'unreviewed' || r.detail.state === 'needs-attention').map((r) => r.item) })
+        break
+      case 'review.get': {
+        const r = this.data.results.find((x) => x.item.applicationId === command.args.applicationId)
+        if (r) void this.onResult(command, served(r))
+        else this.onFailure(command, { code: 'invalid', message: 'This result is not in the open workspace.' })
+        break
+      }
+      case 'review.approve':
+      case 'review.discard':
+      case 'review.rerun': {
+        const r = this.data.results.find((x) => (command.name === 'review.rerun' ? x.detail.runId === command.args.runId : x.item.applicationId === command.args.applicationId))
+        if (!r) break
+        if (served(r).revision !== command.args.revision) {
+          this.onFailure(command, { code: 'stale', message: 'This result changed since you opened it.' })
+          break
+        }
+        if (command.name !== 'review.rerun') r.detail = { ...r.detail, state: command.name === 'review.approve' ? 'approved' : 'discarded' }
+        void this.onResult(command, served(r))
+        break
+      }
+      case 'file.get': {
+        const r = this.data.results.find((x) => x.item.applicationId === command.args.applicationId)
+        const bytes = r?.files[command.args.file]
+        if (!bytes) {
+          this.onFailure(command, { code: 'invalid', message: `${command.args.file} of this application cannot be sent.` })
+          break
+        }
+        void this.onResult(command, chunksOf(command.args.applicationId, command.args.file, bytes)[command.args.chunk])
         break
       }
       default:
