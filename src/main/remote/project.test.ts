@@ -117,14 +117,27 @@ describe('project.ts', () => {
     expect(() => requireEvent('queue.changed', q)).not.toThrow()
   })
 
-  it('pages jobs and runs by cursor, skipping dismissed jobs and applying the filter', () => {
-    const jobs = Array.from({ length: 120 }, (_, i) => job(`url:${i.toString(16).padStart(6, '0')}`, { dismissed: i % 10 === 0, title: i % 2 ? 'Backend' : 'Frontend' }))
+  it('pages jobs and runs by cursor, flagging dismissed and tailored jobs and applying the filter', () => {
+    const jobs = Array.from({ length: 120 }, (_, i) =>
+      job(`url:${i.toString(16).padStart(6, '0')}`, { dismissed: i % 10 === 0, tailoredAt: i % 7 === 0 ? '2026-09-30T00:00:00.000Z' : undefined, title: i % 2 ? 'Backend' : 'Frontend' })
+    )
     const p1 = projectJobsPage(jobs)
     expect(p1.items).toHaveLength(LIMITS.jobsPageItems)
     expect(p1.nextCursor).toBe(p1.items[49].id)
     const p2 = projectJobsPage(jobs, p1.nextCursor)
-    expect(p2.items[0].id).not.toBe(p1.items[49].id)
-    expect(p1.items.some((j) => j.id === 'url:000000')).toBe(false)
+    expect(p2.items[0].id).toBe(jobs[50].id)
+    const p3 = projectJobsPage(jobs, p2.nextCursor)
+    expect(p3.items).toHaveLength(20)
+    expect(p3.nextCursor).toBeUndefined()
+    // Every saved job exactly once across the pages, in the desktop's order.
+    expect([...p1.items, ...p2.items, ...p3.items].map((j) => j.id)).toEqual(jobs.map((j) => j.id))
+    expect(p1.items[0]).toEqual({ id: 'url:000000', title: 'Frontend', company: 'Co 000000', location: 'Remote', source: 'url', tailored: true, dismissed: true, savedAt: '2026-09-30T00:00:00.000Z' })
+    expect(p1.items[1]).not.toHaveProperty('dismissed')
+    expect(p1.items[1]).not.toHaveProperty('tailored')
+    // Never the description or the posting URL.
+    expect(JSON.stringify(p1)).not.toMatch(/MARKER_DESCRIPTION|jobs\.example\.com/)
+    // An unknown cursor (the job was removed) restarts at the top.
+    expect(projectJobsPage(jobs, 'url:gone').items[0].id).toBe('url:000000')
     const filtered = projectJobsPage(jobs, undefined, 'backend')
     expect(filtered.items.every((j) => j.title === 'Backend')).toBe(true)
     const runs = Array.from({ length: 60 }, (_, i) => run({ id: `20260930-010203-${i.toString(16).padStart(6, '0')}` }))

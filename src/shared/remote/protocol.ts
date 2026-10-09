@@ -425,14 +425,17 @@ export interface RunPage {
   nextSeq?: number
 }
 
-/** One row of `jobs.list`. */
+/** One row of `jobs.list` (never the description, the posting URL or the board's facts). */
 export interface RemoteJob {
+  /** The canonical id: copies of one job from several boards are merged under it. */
   id: string
   title: string
   company?: string
   location?: string
   source?: string
   tailored?: boolean
+  /** #40: dismissed (archived on the Board); listed and flagged, like the desktop's list. */
+  dismissed?: boolean
   savedAt: string
 }
 

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { createReadStream } from 'node:fs'
-import { open } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { open, type FileHandle } from 'node:fs/promises'
 import type { Job } from '@shared/jobs-types'
 import type { EnqueueResult, QueueState } from '@shared/queue-types'
 import type { AgentStatus, RunSummary, TranscriptItem } from '@shared/runner-types'
@@ -14,6 +14,7 @@ import {
   requireFileChunk,
   requireFresh,
   requireNextSeq,
+  requireRemoteJob,
   requireWorkspace,
   jsonBytes,
   toBase64,
@@ -36,7 +37,7 @@ import { WorkspaceChangedError } from '../workspace/changed'
 import type { AgentId } from '@shared/runner-types'
 import { AuditLog, type Known } from './audit'
 import type { DeviceRecord, DeviceStore } from './devices'
-import { projectJobsPage, projectPipeline, projectQueue, projectRun, projectRunPage, projectRunsPage, projectStatus, safeText } from './project'
+import { projectJob, projectJobsPage, projectPipeline,projectQueue, projectRun, projectRunPage, projectRunsPage, projectStatus, safeText } from './project'
 import type { WorkspaceIdentity } from './workspace'
 
 /**
@@ -122,6 +123,13 @@ const UNATTENDED_REPLY = 'This unattended run cannot be continued now. Try again
 
 /** Largest application file a phone may fetch (generated PDFs and notes are far smaller). */
 export const MAX_REMOTE_FILE_BYTES = 32 * 1024 * 1024
+/** A file chunk waits at the relay at most this long for the phone (#40); the phone asks again. */
+export const FILE_CHUNK_TTL_SECONDS = 10 * 60
+
+/** The relay ttl of a result: the command's own, except file chunks (24 KiB each) which are dropped after 10 minutes. */
+export function resultTtl(commandTtl: number, name: RemoteCommandName): number {
+  return name === 'file.get' ? Math.min(commandTtl, FILE_CHUNK_TTL_SECONDS) : commandTtl
+}
 const HASH_CACHE_SIZE = 32
 
 /** Plaintext left for a queue projection inside a result envelope (envelope fields take the rest). */
@@ -332,14 +340,14 @@ export class Gateway {
       if (rerunRead || seq === undefined) {
         await this.requireSameWorkspace(workspace)
         const body = await this.execute(device, command, workspace)
-        return { result: { kind: 'result', re: envelope.id, ok: true, body, ttl: envelope.ttl }, ack }
+        return { result: { kind: 'result', re: envelope.id, ok: true, body, ttl: resultTtl(envelope.ttl, command.name) }, ack }
       }
       if (isReadCommand(command.name)) {
         await this.requireSameWorkspace(workspace)
         const body = await this.execute(device, command, workspace)
         await durable(audit.finish({ id: envelope.id, deviceId: device.id, sid: device.sid, seq, name: command.name, ok: true, read: true, digest, ts: at }))
         await durable(this.devices.accept(device.id, seq, at))
-        return { result: { kind: 'result', re: envelope.id, ok: true, body, ttl: envelope.ttl }, ack }
+        return { result: { kind: 'result', re: envelope.id, ok: true, body, ttl: resultTtl(envelope.ttl, command.name) }, ack }
       }
 
       this.services.crashAt?.('before-start', command.name)
@@ -516,9 +524,14 @@ export class Gateway {
         return projectJobsPage(await s.jobs.list(workspace.path), command.args.cursor, command.args.filter)
       case 'jobs.addUrl': {
         // The shape check happened in the package guard; this is the desktop's DNS-resolving public-host check.
-        const target = await assertPublicUrl(command.args.url, s.resolveHost)
-        const job = await s.jobs.addUrl(workspace.path, target.url.href)
-        return projectJobsPage([job]).items[0]
+        const target = await assertPublicUrl(command.args.url, s.resolveHost).catch((err: Error) => {
+          throw new ProtocolError('invalid', safeText(err.message))
+        })
+        // The desktop's add-by-URL (its loader checks every hop too); its refusals are shown as on the Mac.
+        const job = await desktopCall(() => s.jobs.addUrl(ws, target.url.href))
+        // The saved job as the Jobs page lists it: under its canonical id when it merged with a copy from another board.
+        const canonical = (await s.jobs.list(ws)).find((j) => j.id === job.id || j.aliases?.includes(job.id)) ?? job
+        return requireRemoteJob(projectJob(canonical))
       }
       case 'runs.list':
         return projectRunsPage(await s.runs.list(ws), command.args.cursor)
@@ -609,8 +622,18 @@ export class Gateway {
    * the requested range is read; the hash is streamed once per file version.
    */
   private async fileChunk(workspace: string, args: { applicationId: string; file: string; chunk: number }): Promise<FileChunk> {
-    const path = await this.services.files.resolve(workspace, args.applicationId, args.file)
-    const handle = await open(path, 'r')
+    let path: string
+    let handle: FileHandle
+    try {
+      // The applications' safe-path rules (#24): an id inside the workspace, a real folder, a known
+      // regular file, symlinks refused. The package guard already allowed only the phone's file names.
+      path = await this.services.files.resolve(workspace, args.applicationId, args.file)
+      // O_NOFOLLOW: a symlink swapped in after the check is refused, never followed.
+      handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    } catch (err) {
+      if (err instanceof WorkspaceChangedError || err instanceof ProtocolError) throw err
+      throw new ProtocolError('invalid', `${args.file} of this application cannot be sent: it does not exist, or it is not a regular file inside the workspace.`)
+    }
     try {
       const info = await handle.stat()
       if (!info.isFile()) throw new ProtocolError('invalid', 'This file cannot be sent.')
@@ -627,7 +650,7 @@ export class Gateway {
         if (bytesRead === 0) break
         read += bytesRead
       }
-      const sha256 = await this.fileHash(path, `${path}\u0000${info.size}\u0000${info.mtimeMs}\u0000${info.ino}`)
+      const sha256 = await this.fileHash(handle, info.size, `${path}\u0000${info.size}\u0000${info.mtimeMs}\u0000${info.ino}`)
       return requireFileChunk({
         applicationId: args.applicationId,
         file: args.file,
@@ -642,16 +665,22 @@ export class Gateway {
     }
   }
 
-  private fileHash(path: string, identity: string): Promise<string> {
+  /** Hashes the file through the handle already opened (the bytes the chunks come from), never by path again. */
+  private fileHash(handle: FileHandle, size: number, identity: string): Promise<string> {
     const cached = this.hashes.get(identity)
     if (cached) return cached
-    const pending = new Promise<string>((resolve, reject) => {
+    const pending = (async () => {
       const hash = createHash('sha256')
-      createReadStream(path)
-        .on('data', (chunk) => hash.update(chunk))
-        .on('error', reject)
-        .on('end', () => resolve(hash.digest('hex')))
-    })
+      const buffer = Buffer.alloc(Math.min(Math.max(size, 1), 256 * 1024))
+      let position = 0
+      for (;;) {
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, position)
+        if (bytesRead === 0) break
+        hash.update(buffer.subarray(0, bytesRead))
+        position += bytesRead
+      }
+      return hash.digest('hex')
+    })()
     this.hashes.set(identity, pending)
     pending.catch(() => this.hashes.delete(identity))
     if (this.hashes.size > HASH_CACHE_SIZE) this.hashes.delete(this.hashes.keys().next().value!)

@@ -342,12 +342,13 @@ export function requireReviewDetail(v: unknown, what = 'review.get'): ReviewDeta
 
 export function requireRemoteJob(v: unknown, what = 'job'): RemoteJob {
   const r = requireRecord(v, what)
-  rejectUnknownKeys(r, ['id', 'title', 'company', 'location', 'source', 'tailored', 'savedAt'], what)
+  rejectUnknownKeys(r, ['id', 'title', 'company', 'location', 'source', 'tailored', 'dismissed', 'savedAt'], what)
   const out: RemoteJob = { id: requireJobId(r.id, `${what}.id`), title: requireTitle(r.title, `${what}.title`), savedAt: requireIsoDate(r.savedAt, `${what}.savedAt`) }
   if (r.company !== undefined) out.company = requireTitle(r.company, `${what}.company`)
   if (r.location !== undefined) out.location = requireTitle(r.location, `${what}.location`)
   if (r.source !== undefined) out.source = requireId(r.source, `${what}.source`, 32)
   if (r.tailored !== undefined) out.tailored = requireBoolean(r.tailored, `${what}.tailored`)
+  if (r.dismissed !== undefined) out.dismissed = requireBoolean(r.dismissed, `${what}.dismissed`)
   return out
 }
 

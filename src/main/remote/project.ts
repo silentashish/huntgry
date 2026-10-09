@@ -204,6 +204,7 @@ export function projectJob(job: Job): RemoteJob {
   if (job.location) out.location = title(job.location)
   if (job.source) out.source = job.source.slice(0, 32)
   if (job.tailoredAt) out.tailored = true
+  if (job.dismissed) out.dismissed = true
   return out
 }
 
@@ -234,9 +235,14 @@ export function pageBy<T, R>(items: readonly T[], idOf: (item: T) => string, cur
   return out
 }
 
+/**
+ * `jobs.list`: the saved jobs as the desktop lists them (canonical, newest posting first),
+ * dismissed ones included and flagged (#40), narrowed by `filter` (title, company, location),
+ * 50 per page or the plaintext budget.
+ */
 export function projectJobsPage(jobs: readonly Job[], cursor?: string, filter?: string): RemotePage<RemoteJob> {
   const needle = filter?.trim().toLowerCase()
-  const visible = jobs.filter((j) => !j.dismissed && (!needle || `${j.title} ${j.company} ${j.location}`.toLowerCase().includes(needle)))
+  const visible = needle ? jobs.filter((j) => `${j.title} ${j.company} ${j.location}`.toLowerCase().includes(needle)) : jobs
   return requireJobsPage(pageBy(visible, (j) => j.id, cursor, LIMITS.jobsPageItems, projectJob))
 }
 

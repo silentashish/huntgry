@@ -94,6 +94,8 @@ describe('accepts every DTO and returns only its known fields', () => {
     expect(requireReviewDetail(review)).toEqual(review)
     expect(requireReviewDetail({ ...review, reviewNotes: null }).reviewNotes).toBeNull()
     expect(requireJobsPage({ items: [{ id: 'url:1', title: 'x', savedAt: ISO, tailored: true }], nextCursor: 'c' })).toMatchObject({ nextCursor: 'c' })
+    // #40: the dismissed flag.
+    expect(requireJobsPage({ items: [{ id: 'url:1', title: 'x', savedAt: ISO, dismissed: true }] }).items[0].dismissed).toBe(true)
     expect(requireRunsPage({ items: [run] })).toEqual({ items: [run] })
     expect(requireEventBody('status', status)).toEqual({ name: 'status', body: status })
     expect(requireEventBody('review.needed', { count: 1, latest: { applicationId: 'a', runId: 'r', title: 't', openGaps: 0, finishedAt: ISO } })).toMatchObject({ name: 'review.needed' })
@@ -144,6 +146,8 @@ describe('refuses the first value over each limit, wrong enums and unknown field
     ['review: artifact outside the folder', () => requireReviewDetail({ ...review, artifacts: [{ file: '../master-profile.md', bytes: 1, sha256: SHA }] })],
     ['review: revision not sha256', () => requireReviewDetail({ ...review, revision: 'v1' })],
     ['jobs page: more than jobsPageItems', () => requireJobsPage({ items: Array.from({ length: LIMITS.jobsPageItems + 1 }, () => ({ id: 'url:1', title: 'x', savedAt: ISO })) })],
+    ['job: dismissed not a boolean', () => requireJobsPage({ items: [{ id: 'url:1', title: 'x', savedAt: ISO, dismissed: 'yes' }] })],
+    ['job: description', () => requireJobsPage({ items: [{ id: 'url:1', title: 'x', savedAt: ISO, description: 'full posting' }] })],
     ['runs page: more than runsPageItems', () => requireRunsPage({ items: Array.from({ length: LIMITS.runsPageItems + 1 }, () => run) })],
     ['page: cursor over cursorChars', () => requireRunsPage({ items: [], nextCursor: over(LIMITS.cursorChars) })],
     ['review.needed: latest not a ReviewItem', () => requireEventBody('review.needed', { count: 1, latest: { title: 'x' } })],
