@@ -239,6 +239,24 @@ describe('review (#42)', () => {
     expect(t.model.verifiedSha(APP, 'cover-page-1.jpg')).toBe(sha256Hex(COVER_P1))
   })
 
+  it('keeps the open result’s verified previews while other downloads fill the memory cap', async () => {
+    const t = await opened()
+    await serveFile(t, 'resume-page-1.jpg', RESUME_P1)
+    await serveFile(t, 'cover-page-1.jpg', COVER_P1)
+    // More verified files than the phone keeps (24), from other results.
+    for (let i = 0; i < 26; i++) {
+      const app = `em-platform/co${i}/url-0123456789abcdef`
+      t.model.fetchFile(app, 'resume.pdf')
+      await settle()
+      for (const c of chunksOf(app, 'resume.pdf', page(1_000, 100 + i))) await t.answer(t.last('file.get'), c)
+      expect(t.model.getSnapshot().files[fileKey(app, 'resume.pdf')]?.state).toBe('ready')
+      await t.clock.advance(3_000) // under the 24 reads a minute
+    }
+    expect(Object.values(t.model.getSnapshot().files).filter((f) => f.state === 'ready')).toHaveLength(24)
+    expect(t.model.verifiedSha(APP, 'resume-page-1.jpg')).toBe(sha256Hex(RESUME_P1))
+    expect(t.model.verifiedSha(APP, 'cover-page-1.jpg')).toBe(sha256Hex(COVER_P1))
+  })
+
   it('a preview that is not the one the revision listed never counts', async () => {
     const t = await opened()
     // The first chunk already carries another hash: refused before the rest is asked for.

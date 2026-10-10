@@ -618,9 +618,15 @@ export class RemoteModel {
 
   private setFile(key: string, view: FileView): void {
     const files = { ...this.snap.files, [key]: view }
+    // The open result's page-1 previews stay: Approve waits on them and nothing would fetch them again.
+    const open = this.openReviewId
+    const detail = open ? this.snap.review[open]?.detail : null
+    const kept = new Set(open && detail ? requiredPreviews(detail).map((f) => fileKey(open, f)) : [])
+    kept.add(key)
     const ready = Object.keys(files).filter((k) => files[k].state === 'ready')
+    const evictable = ready.filter((k) => !kept.has(k))
     // Memory only, and bounded: the oldest verified files go first.
-    for (const k of ready.slice(0, Math.max(0, ready.length - FILES_KEPT))) if (k !== key) delete files[k]
+    for (const k of evictable.slice(0, Math.max(0, ready.length - FILES_KEPT))) delete files[k]
     this.set({ files })
   }
 

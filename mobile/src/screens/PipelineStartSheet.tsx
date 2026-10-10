@@ -40,6 +40,10 @@ export function PipelineStartSheet({ jobIds, visible, onClose, onStarted }: { jo
   const ready = (id: RemoteAgentId) => agents.some((a) => a.id === id && a.ready)
   const firstReady = REMOTE_AGENT_IDS.find(ready) ?? 'claude'
   const [agent, setAgent] = useState<RemoteAgentId>(firstReady)
+  // The status can arrive after the sheet mounted: an agent it marks as not set up is not kept.
+  useEffect(() => {
+    if (!agents.some((a) => a.id === agent && a.ready)) setAgent(firstReady)
+  }, [agents, agent, firstReady])
   const [fallback, setFallback] = useState<RemoteAgentId | 'none'>('none')
   const [concurrency, setConcurrency] = useState(DEFAULT_CONCURRENCY)
   const [maxCostUsd, setMaxCost] = useState('')

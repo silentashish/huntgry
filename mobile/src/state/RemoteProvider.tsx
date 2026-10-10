@@ -5,7 +5,7 @@ import { Vault } from '../remote/vault'
 import { APP_VERSION, DEMO } from './config'
 import { DemoModel } from './demo'
 import { defaultDeviceName, socketFactory, storage } from './native'
-import { clearSharedFiles } from './share'
+import { SHARE_GRACE_MS, clearSharedFiles } from './share'
 
 const ModelContext = createContext<RemoteModel | null>(null)
 
@@ -23,7 +23,8 @@ export function RemoteProvider({ children }: { children: ReactNode }) {
     clearSharedFiles()
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
-        clearSharedFiles()
+        // Not the one just opened: the app that received it may still be reading it.
+        clearSharedFiles(SHARE_GRACE_MS)
         model.wake()
       }
     })

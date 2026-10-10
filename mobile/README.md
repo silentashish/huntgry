@@ -127,8 +127,8 @@ first unlock): its keypair, the pairing (device id, relay token, desktop public 
 session key, sid, relay URL, room, the names and the chosen notification categories), its
 outgoing `seq` and the desktop's `lastSeq`, and the last `StatusSummary`. Transcripts, the
 queue, jobs, review results and application files are kept in memory only. A file you
-**Open** is written to the app's cache for the OS viewer and deleted when the app comes back
-to the foreground or starts. Unpair, a revoke on the Mac (`device.revoked` or
+**Open** is written to the app's cache for the OS viewer and deleted when the app starts, or
+when it comes back to the foreground at least 5 minutes later. Unpair, a revoke on the Mac (`device.revoked` or
 relay close 4001) and a "pair again" answer delete all of it.
 
 ## Monorepo notes
