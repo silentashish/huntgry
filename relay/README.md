@@ -129,8 +129,24 @@ A desktop frame with `pushHint` triggers one Expo push **only** when that phone 
 socket: title `Huntgry`, the fixed body for the category (`A run needs your reply`,
 `Paused: usage limit`, `Pipeline finished`, `Results need your review`, `Something failed`),
 `data: { category }`, and `pushText` as the body only when present. One push per category per
-5 minutes per device; a push Expo refuses for any other reason does not count toward that
-window, so the next hint in the category tries again (there is no retry of its own yet).
+5 minutes per device.
+
+**Retries (#70).** These failures are transient:
+
+- a network error;
+- HTTP 429, honouring `Retry-After` up to 1 h;
+- HTTP 5xx;
+- a `MessageRateExceeded` ticket.
+
+A transient failure is retried after `PUSH_RETRY_DELAYS_SECONDS`: 30 s, then 2 min, then 8 min.
+That is a budget of 3 retries, so at most 4 sends per hint, all from the room's single alarm.
+
+A hint that arrives while a retry is pending replaces its body; it does not add a second push.
+A token change, `{ pushToken: null }`, `DeviceNotRegistered` or revocation cancels the pending
+retry. Other failures are permanent and are not retried.
+
+A permanent failure, or a spent budget, does not count toward the coalescing window, so the
+next hint in the category tries again.
 
 A dead token is deleted in two places. A `DeviceNotRegistered` *ticket* deletes it at once.
 An `ok` ticket only means Expo accepted the message: APNs or FCM may report the token dead
