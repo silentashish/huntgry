@@ -170,6 +170,16 @@ describe('pairing flow', () => {
     expect(((await done) as PairingError).step.step).toBe('expired')
   })
 
+  it('fails the flow when the phone cannot create its key', async () => {
+    const t = setup()
+    t.vault.createIdentity = () => Promise.reject(new Error('keychain locked'))
+    const err = await t.flow.start(qr()).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(PairingError)
+    expect((err as PairingError).step).toMatchObject({ step: 'error' })
+    expect(t.steps.at(-1)).toBe('error')
+    expect(t.sockets.all).toHaveLength(0)
+  })
+
   it('mints a new identity for every pairing', async () => {
     const t = setup()
     void t.flow.start(qr()).catch(() => undefined)

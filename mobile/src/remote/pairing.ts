@@ -93,7 +93,8 @@ export class PairingFlow {
       else this.fail({ step: 'error', message: err instanceof Error ? err.message : 'This is not a Huntgry pairing code.' })
       return done
     }
-    void this.run(invite)
+    // The vault can reject (wipe, a new identity): that ends the flow like any other failure.
+    this.run(invite).catch(() => this.fail({ step: 'error', message: 'Could not create a key on this phone.' }))
     return done
   }
 
