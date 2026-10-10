@@ -1,0 +1,10 @@
+# Installed as /etc/caddy/conf.d/huntgry-relay.caddy by the relay deploy; the site's Caddyfile
+# imports /etc/caddy/conf.d/*.caddy. Caddy gets the certificate for @DOMAIN@ on first request.
+@DOMAIN@ {
+	reverse_proxy @LISTEN@ {
+		# The Worker refuses plain http and rate-limits room creation per client IP.
+		header_up X-Forwarded-Proto https
+		header_up CF-Connecting-IP {remote_host}
+	}
+	header -Server
+}

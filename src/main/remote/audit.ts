@@ -36,6 +36,8 @@ export interface AuditStart {
   digest?: string
   /** The pairing (`DeviceRecord.sid`) the frame came under. */
   sid?: string
+  /** What a review decision acted on (#42): the application or run, the revision and the reframing ids. */
+  detail?: Record<string, unknown>
   started: true
 }
 

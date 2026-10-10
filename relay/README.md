@@ -14,11 +14,16 @@ account; on the Workers Free plan it costs nothing.
 | `src/auth.ts`, `src/env.ts` | SHA-256 + constant-time compare; bindings and tunables. |
 | `wrangler.toml` | Worker name, the `ROOM` binding, the SQLite migration, the tunables. |
 | `scripts/deploy.sh` | `wrangler deploy` + `wrangler secret put ADMIN_TOKEN`, prints the token once. |
+| `selfhost/` | The same Worker run by `workerd` on your own server behind Caddy, deployed by `.github/workflows/relay-deploy.yml` ([selfhost/README.md](selfhost/README.md)). |
 | `test/` | Miniflare integration tests (`npm test -w relay`). |
 
 ## Deploying
 
-Once, on your Mac:
+Two ways, same code: **Cloudflare** (below) or **your own server** with `workerd` behind Caddy
+([selfhost/README.md](selfhost/README.md); this is how the owner runs it, on the Oracle Cloud VM
+that serves huntgry.tech, deployed from CI).
+
+Cloudflare, once, on your Mac:
 
 ```sh
 npm install                 # from the repo root; installs wrangler for this workspace
@@ -124,9 +129,25 @@ A desktop frame with `pushHint` triggers one Expo push **only** when that phone 
 socket: title `Huntgry`, the fixed body for the category (`A run needs your reply`,
 `Paused: usage limit`, `Pipeline finished`, `Results need your review`, `Something failed`),
 `data: { category }`, `channelId: category` (the Android notification channel the app creates
-for that category, #39; iOS ignores it), and `pushText` as the body only when present. One push per category per
-5 minutes per device; a push Expo refuses for any other reason does not count toward that
-window, so the next hint in the category tries again (there is no retry of its own yet).
+for that category, #39; iOS ignores it), and `pushText` as the body only when present. One push
+per category per 5 minutes per device.
+
+**Retries (#70).** These failures are transient:
+
+- a network error;
+- HTTP 429, honouring `Retry-After` up to 1 h;
+- HTTP 5xx;
+- a `MessageRateExceeded` ticket.
+
+A transient failure is retried after `PUSH_RETRY_DELAYS_SECONDS`: 30 s, then 2 min, then 8 min.
+That is a budget of 3 retries, so at most 4 sends per hint, all from the room's single alarm.
+
+A hint that arrives while a retry is pending replaces its body; it does not add a second push.
+A token change, `{ pushToken: null }`, `DeviceNotRegistered` or revocation cancels the pending
+retry. Other failures are permanent and are not retried.
+
+A permanent failure, or a spent budget, does not count toward the coalescing window, so the
+next hint in the category tries again.
 
 A dead token is deleted in two places. A `DeviceNotRegistered` *ticket* deletes it at once.
 An `ok` ticket only means Expo accepted the message: APNs or FCM may report the token dead

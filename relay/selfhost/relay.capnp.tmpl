@@ -1,0 +1,34 @@
+# Self-hosted relay: the same Worker and Durable Object as `wrangler deploy`, run by workerd
+# (Cloudflare's open-source runtime) behind Caddy. Rendered by selfhost/build.sh: @LISTEN@ and
+# @DATA_DIR@ are replaced, worker.js is wrangler's bundle (`wrangler deploy --dry-run`).
+using Workerd = import "/workerd/workerd.capnp";
+
+const config :Workerd.Config = (
+  services = [
+    (name = "relay", worker = .relayWorker),
+    # One SQLite database per room lives here; keep it on persistent disk and back it up with the VM.
+    (name = "room-storage", disk = (path = "@DATA_DIR@", writable = true)),
+    # Outbound fetch (Expo push) to public addresses only.
+    (name = "internet", network = (allow = ["public"], tlsOptions = (trustBrowserCas = true))),
+  ],
+  sockets = [
+    # Loopback only: Caddy terminates TLS and sets X-Forwarded-Proto, so the Worker sees
+    # https:// URLs (it refuses plain http) and CF-Connecting-IP for its admin rate limit.
+    (name = "http", address = "@LISTEN@", http = (forwardedProtoHeader = "X-Forwarded-Proto"), service = "relay"),
+  ],
+);
+
+const relayWorker :Workerd.Worker = (
+  modules = [(name = "worker.js", esModule = embed "worker.js")],
+  compatibilityDate = "2025-06-01",
+  bindings = [
+    (name = "ROOM", durableObjectNamespace = "Room"),
+    (name = "ADMIN_TOKEN", fromEnvironment = "ADMIN_TOKEN"),
+    (name = "HEARTBEAT_SECONDS", text = "30"),
+    (name = "AUTH_TIMEOUT_MS", text = "5000"),
+    (name = "PUSH_COALESCE_SECONDS", text = "300"),
+  ],
+  durableObjectNamespaces = [(className = "Room", uniqueKey = "huntgry-relay-room", enableSql = true)],
+  durableObjectStorage = (localDisk = "room-storage"),
+  globalOutbound = "internet",
+);

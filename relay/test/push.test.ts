@@ -15,7 +15,7 @@ beforeAll(async () => {
         m.to.includes('[dead')
           ? { status: 'error', message: 'gone', details: { error: 'DeviceNotRegistered' } }
           : m.to.includes('[flaky') && !flakySeen.has(m.to) && flakySeen.add(m.to)
-            ? { status: 'error', message: 'slow down', details: { error: 'MessageRateExceeded' } } // fails once per token
+            ? { status: 'error', message: 'bad credentials', details: { error: 'InvalidCredentials' } } // a permanent failure, once per token (transient ones are retried: push-retry.test.ts)
             : { status: 'ok', id: `ticket-${m.to}-${Date.now()}` }
       )
     }),
@@ -163,7 +163,7 @@ describe('push', () => {
 })
 
 describe('push failures', () => {
-  it('do not count for coalescing: the next hint in the category tries again', async () => {
+  it('a permanent one does not count for coalescing: the next hint in the category tries again', async () => {
     const f = await fixture(relay)
     await registered(f, 'ExponentPushToken[flaky-token]')
     const desktop = await f.desktop()

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { createReadStream } from 'node:fs'
-import { open } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { open, type FileHandle } from 'node:fs/promises'
 import type { Job } from '@shared/jobs-types'
 import type { EnqueueResult, QueueState } from '@shared/queue-types'
 import type { AgentStatus, RunSummary, TranscriptItem } from '@shared/runner-types'
@@ -14,6 +14,7 @@ import {
   requireFileChunk,
   requireFresh,
   requireNextSeq,
+  requireRemoteJob,
   requireWorkspace,
   jsonBytes,
   toBase64,
@@ -23,17 +24,32 @@ import {
   type FileChunk,
   type NotificationCategory,
   type RemoteCommand,
-  type RemoteCommandName
+  type RemoteCommandName,
+  type ReviewDetail,
+  type ReviewItem,
+  type StatusSummary
 } from '@shared/remote'
+import type { PipelineState as DesktopPipelineState } from '@shared/pipeline-types'
+import type {
+  ApproveReviewInput,
+  DiscardReviewInput,
+  RerunReviewInput,
+  ReviewDetail as DesktopReviewDetail,
+  ReviewItem as DesktopReviewItem,
+  ReviewOutcome,
+  ReviewVia
+} from '@shared/review-types'
+import { isSettledReview } from '../review/service'
 import { MAX_TEXT } from '../cli/command'
 import { assertPublicUrl, type ResolveHost } from '../cli/public-url'
 import { requireRunId } from '../cli/runs'
+import { requirePipelineStartInput } from '../pipeline/service'
 import { requireEnqueueInput, requireItemId } from '../queue/queue'
 import { WorkspaceChangedError } from '../workspace/changed'
 import type { AgentId } from '@shared/runner-types'
 import { AuditLog, type Known } from './audit'
 import type { DeviceRecord, DeviceStore } from './devices'
-import { projectJobsPage, projectQueue, projectRun, projectRunPage, projectRunsPage, projectStatus } from './project'
+import { projectJob, projectJobsPage, projectPipeline, projectQueue, projectReviewDetail, projectReviewItem, projectReviewList, projectRun, projectRunPage, projectRunsPage, projectStatus, safeText } from './project'
 import type { WorkspaceIdentity } from './workspace'
 
 /**
@@ -85,6 +101,33 @@ export interface GatewayServices {
     /** Absolute path of a phone-fetchable file, resolved with the applications' safe-path rules. */
     resolve(workspace: string, applicationId: string, file: string): Promise<string>
   }
+  /**
+   * #31's pipeline (#41): the app's one `Pipeline`, the same methods as the desktop's
+   * "Run unattended", Pause, Resume and Stop, each bound to the workspace the gateway checked.
+   * Absent (tests, an older wiring): `pipeline.*` answer `unsupported`.
+   */
+  pipeline?: {
+    state(workspace: string): Promise<DesktopPipelineState | null>
+    /** Takes what `requirePipelineStartInput` returned, exactly like `pipeline/ipc.ts`. */
+    start(workspace: string, input: ReturnType<typeof requirePipelineStartInput>): Promise<DesktopPipelineState>
+    pause(workspace: string): Promise<DesktopPipelineState>
+    resume(workspace: string): Promise<DesktopPipelineState>
+    stop(workspace: string): Promise<DesktopPipelineState>
+  }
+  /**
+   * #31's review service (#42): the desktop's list, detail and decisions, each bound to the
+   * workspace the gateway checked; decisions use the desktop's `ReviewDeps` (the same reply
+   * path, `afterReviewDecision`). Absent: `review.*` answer `unsupported`.
+   */
+  review?: {
+    list(workspace: string): Promise<{ item: DesktopReviewItem; openGaps: number }[]>
+    detail(workspace: string, applicationId: string): Promise<DesktopReviewDetail>
+    approve(workspace: string, input: ApproveReviewInput, via: ReviewVia): Promise<ReviewOutcome>
+    rerun(workspace: string, input: RerunReviewInput, via: ReviewVia): Promise<ReviewOutcome>
+    discard(workspace: string, input: DiscardReviewInput, via: ReviewVia): Promise<ReviewOutcome>
+    /** Results waiting for review whose run is done with them (the status count). */
+    unreviewed(workspace: string): Promise<number>
+  }
   /** Transcripts may be sent to phones (Settings, default on). */
   transcripts(): boolean
   /** Settings' command TTLs in seconds (default `COMMAND_TTL_SECONDS`: 2 h costly, 24 h the rest). */
@@ -108,6 +151,13 @@ const UNATTENDED_REPLY = 'This unattended run cannot be continued now. Try again
 
 /** Largest application file a phone may fetch (generated PDFs and notes are far smaller). */
 export const MAX_REMOTE_FILE_BYTES = 32 * 1024 * 1024
+/** A file chunk waits at the relay at most this long for the phone (#40); the phone asks again. */
+export const FILE_CHUNK_TTL_SECONDS = 10 * 60
+
+/** The relay ttl of a result: the command's own, except file chunks (24 KiB each) which are dropped after 10 minutes. */
+export function resultTtl(commandTtl: number, name: RemoteCommandName): number {
+  return name === 'file.get' ? Math.min(commandTtl, FILE_CHUNK_TTL_SECONDS) : commandTtl
+}
 const HASH_CACHE_SIZE = 32
 
 /** Plaintext left for a queue projection inside a result envelope (envelope fields take the rest). */
@@ -122,8 +172,72 @@ const RATE = {
   readsPerMinute: 30
 } as const
 
-/** Commands that touch the review queue or the pipeline (#31): not on this desktop yet. */
-const NOT_YET: readonly RemoteCommandName[] = ['pipeline.start', 'pipeline.pause', 'pipeline.resume', 'pipeline.stop', 'review.list', 'review.get', 'review.approve', 'review.rerun', 'review.discard']
+const REVIEW_COMMANDS: readonly RemoteCommandName[] = ['review.list', 'review.get', 'review.approve', 'review.rerun', 'review.discard']
+const PIPELINE_COMMANDS: readonly RemoteCommandName[] = ['pipeline.start', 'pipeline.pause', 'pipeline.resume', 'pipeline.stop']
+const UNSUPPORTED = 'Pipelines and reviews are not available on this Mac yet. Update Huntgry.'
+
+/** Revisions remembered per device (a phone looks at a few results, not hundreds). */
+const SERVED_PER_DEVICE = 64
+const NOT_SERVED = 'This phone was not shown this version of the result. Open it again.'
+const UNKNOWN_REFRAMING = 'One of the ticked reframings is not part of this result. Reload it and decide again.'
+
+/** What one device was shown under one revision (`review.get`, or the detail a decision answered with). */
+interface Served {
+  applicationId: string
+  runId: string
+  /** The reframing ids listed in full on the phone: the only ones it may approve. */
+  ids: Set<string>
+}
+
+/** The revision and ids of a review decision, kept in the write-ahead audit entry. */
+function auditDetail(command: RemoteCommand): Record<string, unknown> | undefined {
+  switch (command.name) {
+    case 'review.approve':
+      return { applicationId: command.args.applicationId, revision: command.args.revision, ids: command.args.approvedReframingIds ?? [] }
+    case 'review.rerun':
+      return { runId: command.args.runId, revision: command.args.revision }
+    case 'review.discard':
+      return { applicationId: command.args.applicationId, revision: command.args.revision }
+    default:
+      return undefined
+  }
+}
+
+/**
+ * The review list for events (`review.needed`): every listed result as the phone sees it, and
+ * whether its run is done with it (not still building, not re-running with the owner's answers).
+ */
+export async function pendingReviews(s: GatewayServices, workspace: WorkspaceIdentity): Promise<{ item: ReviewItem; settled: boolean }[]> {
+  if (!s.review) return []
+  return (await s.review.list(workspace.path)).map((e) => ({ item: projectReviewItem(e.item, e.openGaps), settled: isSettledReview(e.item) }))
+}
+
+/** "Run unattended"'s defaults when the phone sends no options (BulkTailorModal). */
+const PIPELINE_OPTIONS = { coverLetter: true, dateStyle: 'right' } as const
+
+/**
+ * A desktop service's own refusal ("A pipeline is already running", a pre-flight blocker) is
+ * shown on the phone as it is on the Mac, minus any path; anything else is left to `errorOf`.
+ */
+async function desktopCall<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call()
+  } catch (err) {
+    if (err instanceof ProtocolError || err instanceof WorkspaceChangedError || !(err instanceof Error)) throw err
+    throw new ProtocolError('failed', safeText(err.message) || 'The command failed on your Mac.')
+  }
+}
+
+/** The status the phone sees (`status.get`, `hello`, heartbeats): queue, pipeline and agents of `workspace`. */
+export async function statusOf(s: GatewayServices, workspace: WorkspaceIdentity): Promise<StatusSummary> {
+  const [queue, agents, pipeline, unreviewed] = await Promise.all([
+    s.queue.state(workspace.path),
+    s.agents(),
+    s.pipeline ? s.pipeline.state(workspace.path).catch(() => null) : Promise.resolve(null),
+    s.review ? s.review.unreviewed(workspace.path).catch(() => 0) : Promise.resolve(0)
+  ])
+  return projectStatus({ desktopName: s.desktopName, appVersion: s.appVersion, workspace, queue, agents, pipeline, unreviewed })
+}
 
 /** Outcome of `Gateway.admit` for a non-command envelope. */
 export type Admission = { status: 'new' | 'redelivered'; device: DeviceRecord } | { status: 'rejected'; error: EnvelopeError }
@@ -281,8 +395,8 @@ export class Gateway {
       }
       // Not checkpointed yet: the audit entry is the commit. A crash before it persists nothing, so
       // the relay's redelivery runs the command exactly once (ADR "Commit order on the desktop").
-      if ((NOT_YET as readonly string[]).includes(command.name)) {
-        throw new ProtocolError('unsupported', 'Pipelines and reviews are not available on this Mac yet. Update Huntgry.')
+      if ((REVIEW_COMMANDS.includes(command.name) && !this.services.review) || (PIPELINE_COMMANDS.includes(command.name) && !this.services.pipeline)) {
+        throw new ProtocolError('unsupported', UNSUPPORTED)
       }
       this.checkTtl(envelope, command.name)
       this.checkRate(device.id, command)
@@ -290,18 +404,19 @@ export class Gateway {
       if (rerunRead || seq === undefined) {
         await this.requireSameWorkspace(workspace)
         const body = await this.execute(device, command, workspace)
-        return { result: { kind: 'result', re: envelope.id, ok: true, body, ttl: envelope.ttl }, ack }
+        return { result: { kind: 'result', re: envelope.id, ok: true, body, ttl: resultTtl(envelope.ttl, command.name) }, ack }
       }
       if (isReadCommand(command.name)) {
         await this.requireSameWorkspace(workspace)
         const body = await this.execute(device, command, workspace)
         await durable(audit.finish({ id: envelope.id, deviceId: device.id, sid: device.sid, seq, name: command.name, ok: true, read: true, digest, ts: at }))
         await durable(this.devices.accept(device.id, seq, at))
-        return { result: { kind: 'result', re: envelope.id, ok: true, body, ttl: envelope.ttl }, ack }
+        return { result: { kind: 'result', re: envelope.id, ok: true, body, ttl: resultTtl(envelope.ttl, command.name) }, ack }
       }
 
       this.services.crashAt?.('before-start', command.name)
-      await durable(audit.start({ id: envelope.id, deviceId: device.id, sid: device.sid, seq, name: command.name, digest, ts: at }))
+      const detail = auditDetail(command)
+      await durable(audit.start({ id: envelope.id, deviceId: device.id, sid: device.sid, seq, name: command.name, digest, ts: at, ...(detail ? { detail } : {}) }))
       await durable(this.devices.accept(device.id, seq, at))
       this.services.crashAt?.('after-start', command.name)
       let body: unknown
@@ -444,7 +559,7 @@ export class Gateway {
     const ws = workspace.path
     switch (command.name) {
       case 'status.get':
-        return projectStatus({ desktopName: s.desktopName, appVersion: s.appVersion, workspace, queue: await s.queue.state(ws), agents: await s.agents() })
+        return statusOf(s, workspace)
       case 'queue.get':
         return projectQueue(await s.queue.state(ws))
       case 'queue.setPaused':
@@ -474,9 +589,14 @@ export class Gateway {
         return projectJobsPage(await s.jobs.list(workspace.path), command.args.cursor, command.args.filter)
       case 'jobs.addUrl': {
         // The shape check happened in the package guard; this is the desktop's DNS-resolving public-host check.
-        const target = await assertPublicUrl(command.args.url, s.resolveHost)
-        const job = await s.jobs.addUrl(workspace.path, target.url.href)
-        return projectJobsPage([job]).items[0]
+        const target = await assertPublicUrl(command.args.url, s.resolveHost).catch((err: Error) => {
+          throw new ProtocolError('invalid', safeText(err.message))
+        })
+        // The desktop's add-by-URL (its loader checks every hop too); its refusals are shown as on the Mac.
+        const job = await desktopCall(() => s.jobs.addUrl(ws, target.url.href))
+        // The saved job as the Jobs page lists it: under its canonical id when it merged with a copy from another board.
+        const canonical = (await s.jobs.list(ws)).find((j) => j.id === job.id || j.aliases?.includes(job.id)) ?? job
+        return requireRemoteJob(projectJob(canonical))
       }
       case 'runs.list':
         return projectRunsPage(await s.runs.list(ws), command.args.cursor)
@@ -508,16 +628,118 @@ export class Gateway {
       case 'device.setNotifications':
         await this.devices.update(device.id, { categories: command.args.categories })
         return { categories: command.args.categories }
-      case 'pipeline.start':
+      case 'pipeline.start': {
+        const pipeline = this.pipeline()
+        const input = await this.pipelineInput(command.args)
+        return projectPipeline(await desktopCall(() => pipeline.start(ws, input)), this.now())
+      }
       case 'pipeline.pause':
+        return projectPipeline(await desktopCall(() => this.pipeline().pause(ws)), this.now())
       case 'pipeline.resume':
+        return projectPipeline(await desktopCall(() => this.pipeline().resume(ws)), this.now())
       case 'pipeline.stop':
+        return projectPipeline(await desktopCall(() => this.pipeline().stop(ws)), this.now())
       case 'review.list':
-      case 'review.get':
-      case 'review.approve':
-      case 'review.rerun':
-      case 'review.discard':
-        throw new ProtocolError('unsupported', 'Pipelines and reviews are not available on this Mac yet. Update Huntgry.')
+        return projectReviewList(await desktopCall(() => this.review().list(ws)))
+      case 'review.get': {
+        const detail = projectReviewDetail(await desktopCall(() => this.review().detail(ws, command.args.applicationId)))
+        this.serve(device, detail)
+        return detail
+      }
+      case 'review.approve': {
+        const a = command.args
+        const served = this.servedFor(device, a.revision, (x) => x.applicationId === a.applicationId)
+        const ids = [...new Set(a.approvedReframingIds ?? [])]
+        // One id the phone was not shown in full fails the whole command, before anything is written.
+        if (ids.some((id) => !served.ids.has(id))) throw new ProtocolError('invalid', UNKNOWN_REFRAMING)
+        // The review service rebuilds the detail from disk: a different revision is `stale`; it
+        // writes only the on-disk source fact → wording pairs of these ids, clears Unreviewed and
+        // calls `afterReviewDecision` (via its deps), exactly like the desktop's Approve.
+        const outcome = await desktopCall(() => this.review().approve(ws, { applicationId: a.applicationId, revision: a.revision, approvedReframingIds: ids }, `phone:${device.id}`))
+        return this.decided(device, outcome)
+      }
+      case 'review.rerun': {
+        const a = command.args
+        const served = this.servedFor(device, a.revision, (x) => x.runId === a.runId)
+        const answers = a.answers.trim()
+        if (!answers || a.answers.length > MAX_TEXT) throw new ProtocolError('invalid', 'Type your answers first.')
+        // The desktop's Re-run: the answers go to the result's own run through the queue (same session, same sandbox).
+        const outcome = await desktopCall(() => this.review().rerun(ws, { applicationId: served.applicationId, revision: a.revision, answers, approvedReframingIds: [] }, `phone:${device.id}`))
+        return this.decided(device, outcome)
+      }
+      case 'review.discard': {
+        const a = command.args
+        this.servedFor(device, a.revision, (x) => x.applicationId === a.applicationId)
+        // The desktop's Discard: the result is archived and blocked from Apply; no file is deleted.
+        const outcome = await desktopCall(() => this.review().discard(ws, { applicationId: a.applicationId, revision: a.revision }, `phone:${device.id}`))
+        return this.decided(device, outcome)
+      }
+    }
+  }
+
+  private review(): NonNullable<GatewayServices['review']> {
+    if (!this.services.review) throw new ProtocolError('unsupported', UNSUPPORTED)
+    return this.services.review
+  }
+
+  /** Revisions served per device and pairing: kept for the gateway's life, so a reconnect does not forget them. */
+  private served = new Map<string, Map<string, Served>>()
+
+  private servedKey(device: DeviceRecord): string {
+    return `${device.id}\u0000${device.sid}`
+  }
+
+  private serve(device: DeviceRecord, detail: ReviewDetail): void {
+    const key = this.servedKey(device)
+    const map = this.served.get(key) ?? new Map<string, Served>()
+    map.delete(detail.revision)
+    map.set(detail.revision, { applicationId: detail.applicationId, runId: detail.runId, ids: new Set(detail.proposedReframings.map((p) => p.id)) })
+    if (map.size > SERVED_PER_DEVICE) map.delete(map.keys().next().value!)
+    this.served.set(key, map)
+  }
+
+  /** The detail this device was shown under `revision` (for this result), else `denied`. */
+  private servedFor(device: DeviceRecord, revision: string, same: (served: Served) => boolean): Served {
+    const served = this.served.get(this.servedKey(device))?.get(revision)
+    if (!served || !same(served)) throw new ProtocolError('denied', NOT_SERVED)
+    return served
+  }
+
+  /** A decision's outcome: `stale` / `invalid` as the service said, else the new detail (served, so the phone can decide again). */
+  private decided(device: DeviceRecord, outcome: ReviewOutcome): ReviewDetail {
+    if (!outcome.ok) throw new ProtocolError(outcome.error, outcome.message)
+    const detail = projectReviewDetail(outcome.detail)
+    this.serve(device, detail)
+    return detail
+  }
+
+  private pipeline(): NonNullable<GatewayServices['pipeline']> {
+    if (!this.services.pipeline) throw new ProtocolError('unsupported', UNSUPPORTED)
+    return this.services.pipeline
+  }
+
+  /**
+   * The phone's `PipelineStartInput` (already through the package guard: saved-job id shapes,
+   * enum agents, concurrency 1–4, a numeric budget, no other field) onto the desktop's input,
+   * then through the desktop's own `requirePipelineStartInput`, exactly as "Run unattended"
+   * sends it. Restart, skip and stall options keep the desktop's defaults.
+   */
+  private async pipelineInput(args: Extract<RemoteCommand, { name: 'pipeline.start' }>['args']): Promise<ReturnType<typeof requirePipelineStartInput>> {
+    const budget = args.budget ? { maxCostUsd: args.budget.maxCostUsd, maxJobs: args.budget.maxRuns } : undefined
+    try {
+      return requirePipelineStartInput(
+        {
+          jobIds: args.jobIds,
+          options: args.options ?? PIPELINE_OPTIONS,
+          agent: args.agent,
+          concurrency: args.concurrency,
+          ...(args.fallback ? { fallbackAgent: args.fallback } : {}),
+          ...(budget ? { budget } : {})
+        },
+        await this.services.defaultAgent()
+      )
+    } catch (err) {
+      throw new ProtocolError('invalid', safeText((err as Error).message))
     }
   }
 
@@ -530,8 +752,18 @@ export class Gateway {
    * the requested range is read; the hash is streamed once per file version.
    */
   private async fileChunk(workspace: string, args: { applicationId: string; file: string; chunk: number }): Promise<FileChunk> {
-    const path = await this.services.files.resolve(workspace, args.applicationId, args.file)
-    const handle = await open(path, 'r')
+    let path: string
+    let handle: FileHandle
+    try {
+      // The applications' safe-path rules (#24): an id inside the workspace, a real folder, a known
+      // regular file, symlinks refused. The package guard already allowed only the phone's file names.
+      path = await this.services.files.resolve(workspace, args.applicationId, args.file)
+      // O_NOFOLLOW: a symlink swapped in after the check is refused, never followed.
+      handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    } catch (err) {
+      if (err instanceof WorkspaceChangedError || err instanceof ProtocolError) throw err
+      throw new ProtocolError('invalid', `${args.file} of this application cannot be sent: it does not exist, or it is not a regular file inside the workspace.`)
+    }
     try {
       const info = await handle.stat()
       if (!info.isFile()) throw new ProtocolError('invalid', 'This file cannot be sent.')
@@ -548,7 +780,7 @@ export class Gateway {
         if (bytesRead === 0) break
         read += bytesRead
       }
-      const sha256 = await this.fileHash(path, `${path}\u0000${info.size}\u0000${info.mtimeMs}\u0000${info.ino}`)
+      const sha256 = await this.fileHash(handle, info.size, `${path}\u0000${info.size}\u0000${info.mtimeMs}\u0000${info.ino}`)
       return requireFileChunk({
         applicationId: args.applicationId,
         file: args.file,
@@ -563,16 +795,22 @@ export class Gateway {
     }
   }
 
-  private fileHash(path: string, identity: string): Promise<string> {
+  /** Hashes the file through the handle already opened (the bytes the chunks come from), never by path again. */
+  private fileHash(handle: FileHandle, size: number, identity: string): Promise<string> {
     const cached = this.hashes.get(identity)
     if (cached) return cached
-    const pending = new Promise<string>((resolve, reject) => {
+    const pending = (async () => {
       const hash = createHash('sha256')
-      createReadStream(path)
-        .on('data', (chunk) => hash.update(chunk))
-        .on('error', reject)
-        .on('end', () => resolve(hash.digest('hex')))
-    })
+      const buffer = Buffer.alloc(Math.min(Math.max(size, 1), 256 * 1024))
+      let position = 0
+      for (;;) {
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, position)
+        if (bytesRead === 0) break
+        hash.update(buffer.subarray(0, bytesRead))
+        position += bytesRead
+      }
+      return hash.digest('hex')
+    })()
     this.hashes.set(identity, pending)
     pending.catch(() => this.hashes.delete(identity))
     if (this.hashes.size > HASH_CACHE_SIZE) this.hashes.delete(this.hashes.keys().next().value!)
