@@ -197,6 +197,75 @@ describe('remote model', () => {
     await settle()
     expect(t.model.getSnapshot().toast?.text).toMatch(/not available on this Mac yet/)
   })
+
+  it('leaves a status it could not store unacked and unchecked, so the relay delivers it again', async () => {
+    const t = await connected()
+    const seq = t.vault.desktopLastSeq
+    const origSet = t.storage.setItem.bind(t.storage)
+    t.storage.setItem = async (k, v) => {
+      if (k === VAULT_KEYS.status) throw new Error('keychain locked')
+      return origSet(k, v)
+    }
+    const frame = t.desktop.event('status', { ...STATUS, queue: { ...STATUS.queue, active: 5 } })
+    t.sockets.last.receive(frame)
+    await settle()
+    await t.clock.advance(5_000)
+    expect(t.sockets.last.acks()).not.toContain(frame.ref)
+    expect(t.vault.desktopLastSeq).toBe(seq)
+
+    // Redelivered once the store works again: stored, checkpointed and acked.
+    t.storage.setItem = origSet
+    t.sockets.last.receive(frame)
+    await settle()
+    await t.clock.advance(5_000)
+    expect(t.sockets.last.acks()).toContain(frame.ref)
+    expect(t.vault.desktopLastSeq).toBeGreaterThan(seq)
+    expect(JSON.parse(t.storage.data.get(VAULT_KEYS.status)!).status.queue.active).toBe(5)
+  })
+
+  it('stops at the automatic page limit and loads more on request', async () => {
+    const t = await connected()
+    t.model.openRun('run-1')
+    await settle()
+    for (let page = 0; page < 12; page++) {
+      const cmd = t.sentCmd('run.get')
+      t.sockets.last.receive(t.desktop.result(cmd.id!, { run: RUN, items: [text(page)], nextSeq: page + 1 }))
+      await settle()
+    }
+    expect(t.model.getSnapshot().runs['run-1']).toMatchObject({ loading: false, complete: false })
+    const asked = t.sockets.last.envelopes().filter((e) => e.name === 'run.get').length
+    expect(asked).toBe(12)
+
+    t.model.loadMoreRun('run-1')
+    await settle()
+    const more = t.sentCmd('run.get')
+    expect(more.body).toEqual({ runId: 'run-1', sinceSeq: 12 })
+    expect(t.model.getSnapshot().runs['run-1'].loading).toBe(true)
+    t.sockets.last.receive(t.desktop.result(more.id!, { run: RUN, items: [text(12)] }))
+    await settle()
+    const view = t.model.getSnapshot().runs['run-1']
+    expect(view).toMatchObject({ loading: false, complete: true })
+    expect(view.items).toHaveLength(13)
+  })
+
+  it('clears a run’s loading state when its quiet run.get expires, and can try again', async () => {
+    const t = await connected()
+    t.model.openRun('run-1')
+    await settle()
+    const first = t.sentCmd('run.get')
+    t.sockets.last.receive({ expired: true, ref: first.id })
+    await settle()
+    expect(t.model.getSnapshot().runs['run-1']).toMatchObject({ loading: false, complete: false, error: expect.any(String) })
+
+    t.model.loadMoreRun('run-1')
+    await settle()
+    const again = t.sentCmd('run.get')
+    expect(again.id).not.toBe(first.id)
+    expect(t.model.getSnapshot().runs['run-1']).toMatchObject({ loading: true, error: undefined })
+    t.sockets.last.receive(t.desktop.result(again.id!, { run: RUN, items: [text(0)] }))
+    await settle()
+    expect(t.model.getSnapshot().runs['run-1']).toMatchObject({ loading: false, complete: true })
+  })
 })
 
 describe('mergeItems', () => {

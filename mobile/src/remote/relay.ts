@@ -80,6 +80,17 @@ export interface SentCommand {
   state: DeliveryState
 }
 
+/**
+ * Thrown by `onEnvelope` when the phone could not store what the frame carried (the secure
+ * store refused a write). The frame stays unacked and unchecked so the relay delivers it again.
+ */
+export class StorageError extends Error {
+  constructor(message = 'The phone could not store this.') {
+    super(message)
+    this.name = 'StorageError'
+  }
+}
+
 export interface RelayClientEvents {
   onState?(state: ConnectionState, detail: { retryInMs?: number; code?: number }): void
   /** Presence and every other clear notice from the relay. */
@@ -88,7 +99,8 @@ export interface RelayClientEvents {
   onDelivery?(id: string, state: DeliveryState, error?: EnvelopeError): void
   /**
    * A fresh desktop envelope (`hello`, `result`, `event`, `pong`), after the session, `seq`,
-   * freshness and duplicate checks. The frame is acked once this resolves.
+   * freshness and duplicate checks. The frame is acked once this resolves; a `StorageError`
+   * leaves it unacked for redelivery, any other rejection is a body the screens refuse.
    */
   onEnvelope(envelope: Envelope, sent: SentCommand | undefined): Promise<void> | void
   /** The pairing is over: wipe and pair again. */
@@ -528,7 +540,9 @@ export class RelayClient {
     }
     try {
       await this.o.events.onEnvelope(env, sent)
-    } catch {
+    } catch (err) {
+      // Not stored: no checkpoint, no ack, so the relay delivers it again.
+      if (err instanceof StorageError) return
       // A body the screens refuse is not retried by the relay either.
     }
     if (env.kind === 'result' && env.re !== undefined) {

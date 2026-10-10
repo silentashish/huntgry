@@ -198,6 +198,11 @@ export function RunScreen({ runId }: { runId: string }) {
             {view.error}
           </Txt>
         )}
+        {view && !view.loading && !view.complete && (
+          <View style={{ alignItems: 'flex-start' }}>
+            <Button variant="ghost" icon="refresh" label={view.error ? 'Try again' : 'Load more'} onPress={() => model.loadMoreRun(runId)} />
+          </View>
+        )}
         {view && view.complete && view.items.length === 0 && (
           <Txt variant="bodyXs" color="textMuted">
             No transcript on the phone for this run. It shows here when “Show transcripts on phone” is on in desktop Settings.
