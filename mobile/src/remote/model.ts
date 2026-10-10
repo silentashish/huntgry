@@ -45,7 +45,7 @@ import { FileDownload, FileError, fileKey } from './files'
 import { REVIEW_COPY, approvalIds, requiredPreviews } from './review'
 import { PairingFlow, PairingError, type PairingStep } from './pairing'
 import { systemClock, type Clock, type SocketFactory } from './platform'
-import { RelayClient, StorageError, type ConnectionState, type FatalReason, type SentCommand } from './relay'
+import { RelayClient, StorageError, type ConnectionState, type FatalReason, type PushTokenState, type SentCommand } from './relay'
 import type { Pairing, Vault } from './vault'
 
 export interface RunView {
@@ -223,6 +223,11 @@ export class RemoteModel {
   /** The result the owner has open: refreshed when the Mac's application folders change. */
   private openReviewId: string | null = null
   private toastSeq = 0
+  /** The Expo push token for the relay (#39); `undefined` until the push module has an answer. */
+  private pushToken: PushTokenState = undefined
+  /** False from an unpair (or "pair again") until the next pairing connects: a token fetched for the old pairing is dropped. */
+  private pushOpen = true
+  private sleepTimer: unknown = null
   protected readonly clock: Clock
 
   constructor(protected readonly deps: ModelDeps) {
@@ -289,12 +294,28 @@ export class RemoteModel {
       }
     })
     this.client = client
+    this.pushOpen = true
+    client.setPushToken(this.pushToken)
     client.start()
   }
 
   /** App foregrounded / network back. */
   wake(): void {
+    if (this.sleepTimer !== null) this.clock.clearTimeout(this.sleepTimer)
+    this.sleepTimer = null
     this.client?.wake()
+  }
+
+  /**
+   * App in the background: after a short grace (a reply just sent still leaves), the socket
+   * closes so the relay pushes instead of writing to a suspended app. `wake()` reconnects.
+   */
+  background(graceMs = 2_000): void {
+    if (this.sleepTimer !== null) this.clock.clearTimeout(this.sleepTimer)
+    this.sleepTimer = this.clock.setTimeout(() => {
+      this.sleepTimer = null
+      this.client?.sleep()
+    }, graceMs)
   }
 
   /** Stops the socket (tests, sign-out). */
@@ -343,9 +364,29 @@ export class RemoteModel {
     if (!this.flow) this.set({ pairingStep: { step: 'idle' } })
   }
 
-  /** The owner unpairs this phone (revoke it on the Mac too). */
+  /**
+   * The Expo push token the relay should push to (#39), `null` to remove it (push turned off or
+   * not allowed). Travels as the clear `{ pushToken }` frame after every authentication, never
+   * to the desktop.
+   */
+  setPushToken(token: PushTokenState): void {
+    if (!this.pushOpen) return
+    this.pushToken = token
+    this.client?.setPushToken(token)
+  }
+
+  /** Where the push choice is kept: with the pairing, so unpairing forgets it. */
+  pushPrefs(): { load(): Promise<boolean | null>; save(enabled: boolean): Promise<void> } {
+    return { load: () => this.deps.vault.loadPushEnabled(), save: (enabled) => this.deps.vault.savePushEnabled(enabled) }
+  }
+
+  /** The owner unpairs this phone (revoke it on the Mac too). The relay forgets the push token first. */
   async unpair(): Promise<void> {
-    this.stop()
+    const client = this.client
+    this.client = null
+    this.pushToken = undefined
+    this.pushOpen = false
+    if (client) await client.farewell()
     await this.deps.vault.wipe()
     this.requests.clear()
     this.forgetDownloads()
@@ -354,6 +395,8 @@ export class RemoteModel {
 
   private async onFatal(reason: FatalReason, message: string): Promise<void> {
     this.client = null
+    this.pushToken = undefined
+    this.pushOpen = false
     // Pair again: every key and counter goes; the next pairing mints a new identity.
     await this.deps.vault.wipe()
     this.requests.clear()

@@ -14,7 +14,7 @@ function createModel(): RemoteModel {
   return new RemoteModel({ vault: new Vault(storage), socket: socketFactory, appVersion: APP_VERSION, deviceName: defaultDeviceName() })
 }
 
-/** One model for the app's lifetime; reconnects when the app comes back to the foreground. */
+/** One model for the app's lifetime; disconnects in the background, reconnects in the foreground. */
 export function RemoteProvider({ children }: { children: ReactNode }) {
   const [model] = useState(createModel)
   useEffect(() => {
@@ -26,6 +26,9 @@ export function RemoteProvider({ children }: { children: ReactNode }) {
         // Not the one just opened: the app that received it may still be reading it.
         clearSharedFiles(SHARE_GRACE_MS)
         model.wake()
+      } else if (state === 'background') {
+        // The relay pushes only to a phone without a socket (#39).
+        model.background()
       }
     })
     return () => sub.remove()

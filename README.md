@@ -318,3 +318,48 @@ See [docs/changes/2-electron-workspace-shell.md](docs/changes/2-electron-workspa
 [docs/changes/10-job-boards.md](docs/changes/10-job-boards.md),
 [docs/changes/11-knowledge-graph.md](docs/changes/11-knowledge-graph.md)
 and [docs/changes/12-profile-insights.md](docs/changes/12-profile-insights.md) for the design notes.
+
+## Remote control (phone)
+
+Huntgry can be watched and steered from a phone: status, the queue, a run's transcript and
+reply, push notifications when a run needs you. The phone talks to the Mac through a small
+relay you run in your own Cloudflare account; every message is end-to-end encrypted per
+device, the Mac only makes outbound connections, and nothing on the phone can submit an
+application. Design and threat model: [ADR-0001](docs/adr/0001-mobile-remote-control-relay.md).
+
+1. **Deploy the relay** (once): `npx -w relay wrangler login`, then `npm run deploy -w relay`.
+   It prints the relay URL (`https://huntgry-relay.<you>.workers.dev`) and an admin token,
+   once. Details in [relay/README.md](relay/README.md).
+2. **Connect the Mac:** Settings → Remote control → paste the **Relay URL** and **Admin
+   token**, turn on **Enable remote control**. The Mac stores both encrypted and uses the
+   token only to create its room.
+3. **Install the app** on the phone: TestFlight or an Android APK, see
+   [mobile/RELEASE.md](mobile/RELEASE.md); or a local build, see [mobile/README.md](mobile/README.md).
+4. **Pair:** Settings → Remote control → **Pair a phone** shows a QR for 2 minutes; scan it in
+   the app and approve "A phone wants to pair" on the Mac. The app then asks whether it may
+   send notifications.
+
+**Revoke** a phone in the device list on the Mac: the relay forgets its token and push token
+at once and the phone deletes its keys the next time it connects. **Unpair** on the phone
+deletes its keys and push token too (revoke it on the Mac as well). **Rotate relay
+credentials** removes every phone and gives the Mac a new identity and room; pair again
+afterwards. Lost the admin token? Run the deploy script again; existing rooms keep working.
+
+**What leaves the laptop, and who sees it** (ADR-0001, "Security model"):
+
+| Party | Sees | Never sees |
+| --- | --- | --- |
+| Phone | Decrypted status, transcripts and PDFs it asked for. | `master-profile.md`, paths, credentials. |
+| Relay (your Cloudflare account) | Ciphertext, sizes, timing, room and device ids, IPs, push tokens, push categories, the notification text if details are on. | Plaintext of any message. |
+| Expo push service, then Apple (APNs) / Google (FCM) | Push token, the fixed generic body ("A run needs your reply") and the category, the notification text if details are on, delivery timing. | The encrypted channel. |
+
+Job and company names reach Expo, Apple and Google only with **Show details in
+notifications** on (off by default).
+
+**Costs:** the relay runs on the Cloudflare Workers Free plan (100k requests a day; hibernated
+Durable Objects are not billed for duration; Paid is $5/month if ever exceeded). Expo push is
+free, and EAS Build's free plan includes 15 iOS and 15 Android builds a month. iPhone push and
+TestFlight need the Apple Developer Program ($99/year); without it a local build on a free
+Apple ID works without push and expires after 7 days. TestFlight internal builds expire after
+**90 days**. Google Play internal testing needs a Play Console account ($25 once); a preview
+APK needs none.

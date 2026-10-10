@@ -11,6 +11,7 @@ import * as SplashScreen from 'expo-splash-screen'
 import { StatusBar } from 'expo-status-bar'
 import { useEffect } from 'react'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
+import { PushProvider } from '../notifications/PushProvider'
 import { RemoteProvider, useRemote } from '../state/RemoteProvider'
 import { dark, light, useScheme } from '../ui/theme'
 
@@ -57,7 +58,9 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <RemoteProvider>
-        <Routes />
+        <PushProvider>
+          <Routes />
+        </PushProvider>
       </RemoteProvider>
     </SafeAreaProvider>
   )

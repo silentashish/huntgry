@@ -48,7 +48,7 @@ export const ciphertext = (bytes = 48): string => randomBytes(bytes).toString('b
 
 export interface PushCall {
   url: string
-  body: { to: string; title: string; body: string; data: { category: string }; sound?: string; priority?: string }[]
+  body: { to: string; title: string; body: string; data: { category: string }; sound?: string; priority?: string; channelId?: string }[]
 }
 
 /** A fake Expo answer with an HTTP status other than 200 (and optional headers), e.g. 503 or 429 + Retry-After. */
