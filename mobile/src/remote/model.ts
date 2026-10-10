@@ -167,6 +167,16 @@ const AUTO_PAGES = 12
 const COMMAND_HISTORY = 20
 /** Files kept in memory; the oldest go first (previews are fetched again when needed). */
 const FILES_KEPT = 24
+/**
+ * The desktop answers at most 30 reads a minute per phone (`RATE.readsPerMinute` in the gateway),
+ * and every `file.get` chunk is one read. Chunks are paced to this many a minute, which leaves
+ * room for the lists and details the owner opens meanwhile; a 1 MB PDF takes about two minutes.
+ */
+const CHUNK_READS_PER_MINUTE = 24
+/** A chunk the desktop refused as `rate-limited` is asked for again after this, progress kept. */
+const CHUNK_RETRY_MS = 10_000
+/** Refusals in a row before the download gives up (about two minutes of a busy desktop). */
+const CHUNK_RETRIES = 12
 
 export const INITIAL_SNAPSHOT: RemoteSnapshot = {
   phase: 'loading',
@@ -204,6 +214,12 @@ export class RemoteModel {
   private readonly downloads = new Map<string, FileDownload>()
   private readonly downloadQueue: string[] = []
   private activeDownload: string | null = null
+  /** Which download each `file.get` was sent for: answers to a superseded one are ignored. */
+  private readonly chunkOwner = new WeakMap<Command, FileDownload>()
+  /** When recent `file.get`s were sent (the last minute), for pacing under the desktop's read limit. */
+  private chunkStamps: number[] = []
+  private chunkTimer: unknown = null
+  private chunkRetries = 0
   /** The result the owner has open: refreshed when the Mac's application folders change. */
   private openReviewId: string | null = null
   private toastSeq = 0
@@ -577,11 +593,20 @@ export class RemoteModel {
   fetchFile(applicationId: string, file: RemoteFile, expected?: string): void {
     const key = fileKey(applicationId, file)
     const view = this.snap.files[key]
-    if (view && (view.state === 'waiting' || view.state === 'loading')) return
+    const inFlight = view !== undefined && (view.state === 'waiting' || view.state === 'loading') && this.downloads.has(key)
+    // In flight for the same hash: nothing to do. For another hash (a refreshed review), it is replaced.
+    if (inFlight && (expected === undefined || view.expected === expected)) return
     if (view?.state === 'ready' && (expected === undefined || view.sha256 === expected)) return
-    this.downloads.set(key, new FileDownload(applicationId, file, expected))
+    const dl = new FileDownload(applicationId, file, expected)
+    this.downloads.set(key, dl)
     this.setFile(key, { applicationId, file, state: 'waiting', received: 0, of: 0, bytes: 0, expected })
-    this.downloadQueue.push(key)
+    if (this.activeDownload === key) {
+      // The old download's outstanding chunk is ignored when it arrives (`chunkOwner`).
+      this.restartChunks()
+      this.requestChunk(key, dl)
+      return
+    }
+    if (!this.downloadQueue.includes(key)) this.downloadQueue.push(key)
     this.pumpDownloads()
   }
 
@@ -610,22 +635,67 @@ export class RemoteModel {
   }
 
   private requestChunk(key: string, dl: FileDownload): void {
-    if (this.dispatch(commands.file(dl.applicationId, dl.file, dl.next), { quiet: true }) === null) this.failDownload(key, 'Not connected to your Mac yet.')
+    const now = this.clock.now()
+    this.chunkStamps = this.chunkStamps.filter((t) => now - t < 60_000)
+    if (this.chunkStamps.length >= CHUNK_READS_PER_MINUTE) {
+      // Over the pace: ask when the oldest request of the minute has aged out.
+      this.chunkLater(key, dl, this.chunkStamps[0] + 60_000 - now)
+      return
+    }
+    const command = commands.file(dl.applicationId, dl.file, dl.next)
+    this.chunkOwner.set(command, dl)
+    this.chunkStamps.push(now)
+    if (this.dispatch(command, { quiet: true }) === null) this.failDownload(key, 'Not connected to your Mac yet.')
+  }
+
+  private chunkLater(key: string, dl: FileDownload, ms: number): void {
+    this.restartChunks()
+    this.chunkTimer = this.clock.setTimeout(() => {
+      this.chunkTimer = null
+      if (this.activeDownload === key && this.downloads.get(key) === dl) this.requestChunk(key, dl)
+    }, Math.max(0, ms))
+  }
+
+  /** Drops a pending paced or retried request (the download it was for ended or was replaced). */
+  private restartChunks(): void {
+    if (this.chunkTimer !== null) this.clock.clearTimeout(this.chunkTimer)
+    this.chunkTimer = null
+    this.chunkRetries = 0
+  }
+
+  /**
+   * A `file.get` that got no chunk. One sent for a download since replaced is ignored; a
+   * `rate-limited` refusal asks for the same chunk again later and keeps what has arrived.
+   */
+  private chunkFailed(command: Extract<Command, { name: 'file.get' }>, error: EnvelopeError | undefined, message: string): void {
+    const key = fileKey(command.args.applicationId, command.args.file)
+    const dl = this.downloads.get(key)
+    const owner = this.chunkOwner.get(command)
+    if (!dl || (owner !== undefined && owner !== dl)) return
+    if (error?.code === 'rate-limited' && this.activeDownload === key && this.chunkRetries < CHUNK_RETRIES) {
+      const retries = this.chunkRetries + 1
+      this.chunkLater(key, dl, CHUNK_RETRY_MS)
+      this.chunkRetries = retries
+      return
+    }
+    this.failDownload(key, message)
   }
 
   private failDownload(key: string, error: string): void {
     const view = this.snap.files[key]
+    if (this.activeDownload === key) this.restartChunks()
     this.downloads.delete(key)
     if (view) this.setFile(key, { ...view, state: 'failed', data: undefined, sha256: undefined, error })
     if (this.activeDownload === key) this.activeDownload = null
     this.pumpDownloads()
   }
 
-  private onChunk(chunk: FileChunk): void {
+  private onChunk(chunk: FileChunk, owner?: FileDownload): void {
     const key = fileKey(chunk.applicationId, chunk.file)
     const dl = this.downloads.get(key)
-    // A chunk for a download that was cancelled, or a late duplicate.
-    if (!dl || this.activeDownload !== key || chunk.chunk !== dl.next) return
+    // A chunk for a download that was cancelled or replaced, or a late duplicate.
+    if (!dl || this.activeDownload !== key || chunk.chunk !== dl.next || (owner !== undefined && owner !== dl)) return
+    this.chunkRetries = 0
     const view = this.snap.files[key]
     if (!view) return
     let outcome: ReturnType<FileDownload['add']>
@@ -643,6 +713,7 @@ export class RemoteModel {
     }
     this.downloads.delete(key)
     this.activeDownload = null
+    this.restartChunks()
     this.setFile(key, { ...view, state: 'ready', received: progress.of, of: progress.of, bytes: progress.bytes, sha256: dl.sha256 ?? undefined, data: outcome.data, error: undefined })
     this.pumpDownloads()
   }
@@ -652,6 +723,7 @@ export class RemoteModel {
     this.downloads.clear()
     this.downloadQueue.length = 0
     this.activeDownload = null
+    this.restartChunks()
     this.openReviewId = null
   }
 
@@ -659,7 +731,7 @@ export class RemoteModel {
   protected settleLost(command: Command, error: EnvelopeError): void {
     switch (command.name) {
       case 'file.get':
-        this.failDownload(fileKey(command.args.applicationId, command.args.file), error.message)
+        this.chunkFailed(command, error, error.message)
         return
       case 'jobs.list':
       case 'review.list':
@@ -851,7 +923,7 @@ export class RemoteModel {
         return
       }
       case 'file.get':
-        this.onChunk(requireFileChunk(body))
+        this.onChunk(requireFileChunk(body), this.chunkOwner.get(command))
         return
       default:
         return
@@ -891,7 +963,7 @@ export class RemoteModel {
         this.setReview(command.args.applicationId, { loading: false, error: message })
         return
       case 'file.get':
-        this.failDownload(fileKey(command.args.applicationId, command.args.file), message)
+        this.chunkFailed(command, error, message)
         return
       case 'review.approve':
       case 'review.discard':

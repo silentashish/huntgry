@@ -3,7 +3,7 @@
  * the fixture session key: what the phone sends, and what it does with each answer.
  */
 
-import type { Envelope, PipelineState, RemoteJob, ReviewDetail } from '@huntgry/remote-protocol'
+import { LIMITS, type Envelope, type PipelineState, type RemoteJob, type ReviewDetail } from '@huntgry/remote-protocol'
 import { describe, expect, it } from 'vitest'
 import { chunksOf, fileKey, sha256Hex } from './files'
 import { RemoteModel } from './model'
@@ -188,6 +188,31 @@ describe('files (#40)', () => {
     await settle()
     expect(t.model.getSnapshot().files[fileKey(APP, 'cover.pdf')].state).toBe('failed')
   })
+
+  it('paces chunks under the desktop read limit and resumes after a rate-limited refusal', async () => {
+    const t = await connected()
+    const data = page(40 * LIMITS.fileChunkBytes, 3)
+    const chunks = chunksOf(APP, 'resume.pdf', data)
+    const key = fileKey(APP, 'resume.pdf')
+    t.model.fetchFile(APP, 'resume.pdf')
+    await settle()
+    for (let i = 0; i < 24; i++) await t.answer(t.last('file.get'), chunks[i])
+    // 24 chunks in the minute (the desktop allows 30 reads): the next waits for the minute to pass.
+    expect(t.sent('file.get')).toHaveLength(24)
+    expect(t.model.getSnapshot().files[key]).toMatchObject({ state: 'loading', received: 24, of: 40 })
+    await t.clock.advance(60_000)
+    expect(t.sent('file.get')).toHaveLength(25)
+    // Other reads used up the Mac's minute: the chunk is asked for again later, nothing is lost.
+    await t.refuse(t.last('file.get'), 'rate-limited', 'At most 30 reads per minute.')
+    expect(t.model.getSnapshot().files[key]).toMatchObject({ state: 'loading', received: 24 })
+    await t.clock.advance(10_000)
+    expect(t.sent('file.get')).toHaveLength(26)
+    expect(t.last('file.get').body).toEqual({ applicationId: APP, file: 'resume.pdf', chunk: 24 })
+    for (let i = 24; i < 40; i++) await t.answer(t.last('file.get'), chunks[i])
+    const view = t.model.getSnapshot().files[key]
+    expect(view).toMatchObject({ state: 'ready', received: 40, sha256: sha256Hex(data) })
+    expect(view.data).toEqual(data)
+  })
 })
 
 describe('review (#42)', () => {
@@ -220,6 +245,32 @@ describe('review (#42)', () => {
     expect(t.sent('file.get').filter((e) => (e.body as { file: string }).file === 'resume-page-1.jpg')).toHaveLength(1)
     expect(t.model.getSnapshot().files[fileKey(APP, 'resume-page-1.jpg')]).toMatchObject({ state: 'failed', error: expect.stringMatching(/not the one/) })
     expect(t.model.verifiedSha(APP, 'resume-page-1.jpg')).toBeNull()
+  })
+
+  it('a refreshed revision replaces previews still loading, so Approve waits on the new hashes', async () => {
+    const t = await opened()
+    const oldReq = t.last('file.get')
+    const R2 = page(30_000, 13)
+    const C2 = page(10_000, 17)
+    const next: ReviewDetail = {
+      ...DETAIL,
+      revision: '6'.repeat(64),
+      artifacts: [DETAIL.artifacts[0], { file: 'resume-page-1.jpg', bytes: R2.length, sha256: sha256Hex(R2) }, { file: 'cover-page-1.jpg', bytes: C2.length, sha256: sha256Hex(C2) }]
+    }
+    t.sockets.last.receive(t.desktop.event('applications.changed', { ids: [APP] }))
+    await settle()
+    await t.answer(t.last('review.get'), next)
+    const asked = (file: string) => t.sent('file.get').filter((e) => (e.body as { file: string }).file === file)
+    expect(asked('resume-page-1.jpg')).toHaveLength(2)
+    expect(t.model.getSnapshot().files[fileKey(APP, 'resume-page-1.jpg')]).toMatchObject({ state: 'waiting', expected: sha256Hex(R2) })
+    // The old revision's chunk arrives late: ignored, the new download goes on.
+    await t.answer(oldReq, chunksOf(APP, 'resume-page-1.jpg', RESUME_P1)[0])
+    expect(t.model.getSnapshot().files[fileKey(APP, 'resume-page-1.jpg')]).toMatchObject({ state: 'waiting', expected: sha256Hex(R2) })
+    for (const c of chunksOf(APP, 'resume-page-1.jpg', R2)) await t.answer(t.last('file.get'), c)
+    for (const c of chunksOf(APP, 'cover-page-1.jpg', C2)) await t.answer(t.last('file.get'), c)
+    expect(asked('cover-page-1.jpg')).toHaveLength(1)
+    expect(t.model.verifiedSha(APP, 'resume-page-1.jpg')).toBe(sha256Hex(R2))
+    expect(t.model.verifiedSha(APP, 'cover-page-1.jpg')).toBe(sha256Hex(C2))
   })
 
   it('approve sends the served revision and only the ticked ids that detail listed', async () => {

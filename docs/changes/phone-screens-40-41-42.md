@@ -10,7 +10,8 @@ app from #38 still showed "Coming with the next update" on Review and Jobs, and 
 pipeline card could only pause or stop. This change is the phone side of the three issues:
 
 - **#41:** a Pipeline screen with live progress, the usage-limit wait and its reset time, why
-  it paused or failed, Pause / Resume / Stop, the finished summary, and a start sheet for
+  it paused or failed, Pause / Resume / Stop (offered from the status snapshot too, since the
+  desktop sends no `pipeline.changed` until the state changes), the finished summary, and a start sheet for
   selected saved jobs.
 - **#40:** a Jobs screen (`jobs.list` paged by 50, dismissed jobs flagged, search, **Add by
   URL**), and application files fetched with `file.get`, reassembled from their chunks,
@@ -63,7 +64,11 @@ checks everything, and the phone never offers what it would refuse.
   never unpairs; #38's split stays, plus the restart fix above.
 - **One download at a time, chunk after chunk.** The relay closes a socket at 60 frames a
   minute. A 300 KB preview is 13 requests (acks ride on them when the client's ack queue
-  allows), and the rate limiter in the client keeps room for the owner's commands. Files live in memory (at most 24,
+  allows), and the rate limiter in the client keeps room for the owner's commands. The desktop
+  also answers at most 30 reads a minute per phone, and each chunk is one, so chunks are paced
+  to 24 a minute (a 1 MB PDF takes about two minutes) and a chunk refused as `rate-limited` is
+  asked for again 10 s later with the progress kept. A download for a hash a refreshed review
+  no longer lists is replaced, and a late chunk of the old one is ignored. Files live in memory (at most 24,
   oldest first out), never in the secure store. A copy for the OS viewer lives in the cache
   until the app is next foregrounded or launched.
 - **SHA-256 from `@noble/hashes`.** It is pure JavaScript, so the same code runs on Hermes and

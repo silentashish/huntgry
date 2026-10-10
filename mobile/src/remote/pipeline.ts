@@ -68,6 +68,17 @@ export const PIPELINE_STATUS: Record<PipelineStatus, { label: string; tone: 'neu
   finished: { label: 'Finished', tone: 'success', live: false }
 }
 
+/**
+ * Which pause/resume control a pipeline in `status` offers (Stop goes with either), or null when
+ * nothing is live. Works from the `StatusSummary` alone: a pipeline paused before the phone
+ * connected sends no `pipeline.changed` until it changes, and its controls are needed now.
+ */
+export function pipelineControl(status: PipelineStatus | undefined): 'resume' | 'pause' | null {
+  if (status === 'paused') return 'resume'
+  if (status === 'running' || status === 'waiting-limit') return 'pause'
+  return null
+}
+
 export type CountTone = 'neutral' | 'info' | 'warning' | 'ember' | 'danger' | 'success'
 
 /** The count badges under the progress card, only those above zero. */

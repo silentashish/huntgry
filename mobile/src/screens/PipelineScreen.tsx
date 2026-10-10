@@ -6,12 +6,12 @@
  * on Jobs (pick saved jobs first). Nothing here approves, applies or submits.
  */
 
-import type { PipelineState, PipelineSummary } from '@huntgry/remote-protocol'
+import type { PipelineState, PipelineStatus, PipelineSummary } from '@huntgry/remote-protocol'
 import { router } from 'expo-router'
 import { Pressable, View } from 'react-native'
 import { DELIVERY_COPY } from '../remote/commands'
 import type { RemoteSnapshot } from '../remote/model'
-import { PIPELINE_STATUS, SUMMARY_TITLE, countBadges, etaText, summaryLine } from '../remote/pipeline'
+import { PIPELINE_STATUS, SUMMARY_TITLE, countBadges, etaText, pipelineControl, summaryLine } from '../remote/pipeline'
 import { useModel, useNow, useRemote } from '../state/RemoteProvider'
 import { Alert } from '../ui/Alert'
 import { Badge } from '../ui/Badge'
@@ -75,15 +75,15 @@ function Counts({ p }: { p: PipelineState }) {
   )
 }
 
-function Controls({ p, snap }: { p: PipelineState; snap: RemoteSnapshot }) {
+function Controls({ status, snap }: { status: PipelineStatus; snap: RemoteSnapshot }) {
   const model = useModel()
   const pending = pendingPipeline(snap)
   const busy = pending?.state === 'sending' || pending?.state === 'sent'
-  const live = p.status === 'running' || p.status === 'waiting-limit' || p.status === 'paused'
-  if (!live) return null
+  const control = pipelineControl(status)
+  if (!control) return null
   return (
     <FadeIn index={2} style={{ gap: 8 }}>
-      {p.status === 'paused' ? (
+      {control === 'resume' ? (
         <Button size="md" variant="primary" icon="play" label="Resume pipeline" busy={busy && pending?.name === 'pipeline.resume'} onPress={() => model.pipelineResume()} />
       ) : (
         <Button size="md" variant="outline" icon="pause" label="Pause pipeline" busy={busy && pending?.name === 'pipeline.pause'} onPress={() => model.pipelinePause()} />
@@ -152,15 +152,18 @@ export function PipelineScreen() {
               The pipeline carries on with the rest. Retry them from the queue.
             </Alert>
           ) : null}
-          <Controls p={p} snap={snap} />
+          <Controls status={p.status} snap={snap} />
         </>
       ) : fromStatus && fromStatus.status !== 'idle' && fromStatus.status !== 'finished' ? (
-        <Card gap={8}>
-          <Txt variant="headingSm">{fromStatus.status === 'waiting-limit' && fromStatus.until ? `Waiting for the usage limit until ${clock(fromStatus.until)}` : `The pipeline is ${badge.label.toLowerCase()}`}</Txt>
-          <Txt variant="bodySm" color="textSecondary">
-            Progress and controls show with the next change your Mac sends.
-          </Txt>
-        </Card>
+        <>
+          <Card gap={8}>
+            <Txt variant="headingSm">{fromStatus.status === 'waiting-limit' && fromStatus.until ? `Waiting for the usage limit until ${clock(fromStatus.until)}` : `The pipeline is ${badge.label.toLowerCase()}`}</Txt>
+            <Txt variant="bodySm" color="textSecondary">
+              Progress shows with the next change your Mac sends.
+            </Txt>
+          </Card>
+          <Controls status={fromStatus.status} snap={snap} />
+        </>
       ) : (
         <Card gap={10}>
           <Txt variant="headingSm">No pipeline running</Txt>

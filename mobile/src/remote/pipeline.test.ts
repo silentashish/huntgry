@@ -1,7 +1,7 @@
 import { requirePipelineStartInput } from '@huntgry/remote-protocol'
 import { describe, expect, it } from 'vitest'
 import { commands } from './commands'
-import { countBadges, etaText, pipelineStartInput, summaryLine, type PipelineForm } from './pipeline'
+import { countBadges, etaText, pipelineControl, pipelineStartInput, summaryLine, type PipelineForm } from './pipeline'
 
 const FORM: PipelineForm = { jobIds: ['url:0123456789abcdef', 'indeed:abc123'], agent: 'claude', fallback: null, concurrency: 2, maxCostUsd: '', maxRuns: '' }
 
@@ -49,5 +49,16 @@ describe('pipeline labels', () => {
     expect(summaryLine({ status: 'finished', counts: { total: 20, done: 18, running: 0, queued: 0, failed: 1, unreviewed: 3, needsAttention: 1, skipped: 1 }, costUsd: 4.2, startedAt: '2026-10-09T10:00:00.000Z', finishedAt: '2026-10-09T11:00:00.000Z' })).toBe(
       '18 built · 4 need review · 1 failed · 1 skipped'
     )
+  })
+})
+
+describe('pipeline controls', () => {
+  it('come from the status alone, so a pipeline paused before the phone connected can be resumed or stopped', () => {
+    expect(pipelineControl('paused')).toBe('resume')
+    expect(pipelineControl('running')).toBe('pause')
+    expect(pipelineControl('waiting-limit')).toBe('pause')
+    expect(pipelineControl('idle')).toBeNull()
+    expect(pipelineControl('finished')).toBeNull()
+    expect(pipelineControl(undefined)).toBeNull()
   })
 })
