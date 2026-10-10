@@ -13,13 +13,15 @@ function createModel(): RemoteModel {
   return new RemoteModel({ vault: new Vault(storage), socket: socketFactory, appVersion: APP_VERSION, deviceName: defaultDeviceName() })
 }
 
-/** One model for the app's lifetime; reconnects when the app comes back to the foreground. */
+/** One model for the app's lifetime; disconnects in the background, reconnects in the foreground. */
 export function RemoteProvider({ children }: { children: ReactNode }) {
   const [model] = useState(createModel)
   useEffect(() => {
     void model.init()
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') model.wake()
+      // The relay pushes only to a phone without a socket (#39).
+      else if (state === 'background') model.background()
     })
     return () => sub.remove()
   }, [model])

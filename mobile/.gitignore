@@ -18,3 +18,13 @@ expo-env.d.ts
 
 # Metro
 .metro-health-check*
+
+# Release credentials (EAS keeps them; see RELEASE.md). Never committed.
+google-services.json
+GoogleService-Info.plist
+*.keystore
+credentials.json
+credentials/
+service-account*.json
+.env
+.env.*

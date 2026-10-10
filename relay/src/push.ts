@@ -59,10 +59,12 @@ export interface PushMessage {
   data: { category: NotificationCategory }
   sound: 'default'
   priority: 'high'
+  /** Android: the app creates one notification channel per category, named by the category (#39); iOS ignores it. */
+  channelId: NotificationCategory
 }
 
 export function pushMessage(token: string, category: NotificationCategory, text?: string): PushMessage {
-  return { to: token, title: PUSH_TITLE, body: text ?? PUSH_BODIES[category], data: { category }, sound: 'default', priority: 'high' }
+  return { to: token, title: PUSH_TITLE, body: text ?? PUSH_BODIES[category], data: { category }, sound: 'default', priority: 'high', channelId: category }
 }
 
 /**
