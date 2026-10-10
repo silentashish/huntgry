@@ -99,7 +99,14 @@ sequenceDiagram
 - **Approve order.** Relay registration → device record → `pair.ok`. Nothing is written if the
   relay refuses (the request stays open and can be approved again); if `pair.ok` cannot be
   sent (the socket dropped), the record and the token are removed again. Approve is refused
-  while the session is offline.
+  while the session is offline. After each await the request is checked again (not withdrawn,
+  not past the relay's expiry, same room and desktop key); otherwise the token and record are
+  rolled back and no `pair.ok` goes out.
+- **Re-pairing replaces.** A phone that pairs again with the same key gets a new record and
+  `sid`; once `pair.ok` is sent its older records (including ones marked *needs re-pair*) are
+  removed and their tokens deleted, since both records' keys would open the same frames. Only
+  records added before the new one go, so of two overlapping approvals for one key the later one
+  keeps its record.
 - **QR carries `pairing`.** *Deviates from the ADR's QR*, which lists `relay`, `room`, `pk`, `s`
   and `exp`: the phone must authenticate with `{ auth: { room, pairing } }`, so the pairing id
   travels in the URL (`ff3358e`).
@@ -141,7 +148,9 @@ npm test && npm run typecheck && npm run build
   waiting is ignored and one after the decision is refused as expired; a hello after expiry is
   refused; an undecided request is dropped at the relay's expiry; a frame sealed with another
   secret is left alone (no ack); a failed registration writes nothing and can be retried; offline
-  Approve and a lost `pair.ok` undo everything.
+  Approve and a lost `pair.ok` undo everything; a request withdrawn, expired or moved to another
+  room while the relay registers the token is rolled back; re-pairing the same phone key
+  replaces its old record and token, and two overlapping approvals for one key keep the newer.
 - `src/main/remote/pairing.e2e.test.ts`: over an in-process relay with per-identity auth and
   routing, a phone built only from the protocol package (`parsePairingUrl`, `generateKeyPair`,
   `sealPairMessage`, `openPairReply`, `deriveSessionKey`, `sealEnvelope`, `openEnvelope`)
