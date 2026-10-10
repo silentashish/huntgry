@@ -107,6 +107,20 @@ describe('push registration', () => {
     expect(t.sunk).toEqual([TOKEN, null, TOKEN])
   })
 
+  it('turning push off when the choice cannot be saved still removes the token and says it may come back', async () => {
+    const t = setup({}, true)
+    t.port.permission = { status: 'granted', canAskAgain: true }
+    await t.registrar.start()
+    t.registrar['o'].prefs.save = async () => {
+      throw new Error('keychain locked')
+    }
+    await t.registrar.disable()
+    expect(t.sunk).toEqual([TOKEN, null])
+    const summary = describePush(t.registrar.getSnapshot())
+    expect(summary.on).toBe(false)
+    expect(summary.line).toMatch(/could not save/)
+  })
+
   it('on launch with push on, registers the current token; a withdrawn permission removes it', async () => {
     const t = setup({}, true)
     t.port.permission = { status: 'granted', canAskAgain: true }

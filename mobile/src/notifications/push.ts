@@ -84,6 +84,8 @@ export const INITIAL_PUSH_STATE: PushState = {
   busy: false
 }
 
+const NOT_SAVED = 'Off for now, but the phone could not save that, so push may turn back on after a restart. Turn it off again to retry.'
+
 export class PushRegistrar {
   private state: PushState = INITIAL_PUSH_STATE
   private readonly listeners = new Set<() => void>()
@@ -151,8 +153,12 @@ export class PushRegistrar {
   /** Settings → Push notifications off: the relay forgets the token. */
   disable(): Promise<void> {
     return this.serial(async () => {
-      await this.o.prefs.save(false).catch(() => undefined)
-      this.set({ enabled: false, token: null, error: null })
+      const saved = await this.o.prefs.save(false).then(
+        () => true,
+        () => false
+      )
+      // Off for now either way; an unsaved choice is said, since the next launch would load the old "on".
+      this.set({ enabled: false, token: null, error: saved ? null : NOT_SAVED })
       this.emit(null)
     })
   }
@@ -268,7 +274,7 @@ export interface PushSummary {
 /** What Settings says about push, from the registrar's state. */
 export function describePush(s: PushState): PushSummary {
   if (!s.available) return { on: false, canToggle: false, line: s.unavailableReason ?? 'Push notifications are not available.', openSettings: false }
-  if (s.enabled !== true) return { on: false, canToggle: true, line: 'Off. Turn on to hear when a run needs you while the app is closed.', openSettings: false }
+  if (s.enabled !== true) return { on: false, canToggle: true, line: s.error ?? 'Off. Turn on to hear when a run needs you while the app is closed.', openSettings: false }
   if (s.permission === 'denied' || (s.permission === 'undetermined' && !s.canAskAgain)) {
     return { on: false, canToggle: true, line: 'Notifications are turned off for Huntgry in the system Settings.', openSettings: !s.canAskAgain }
   }
