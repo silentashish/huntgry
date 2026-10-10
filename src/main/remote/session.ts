@@ -366,19 +366,21 @@ export class RemoteSession {
   /**
    * An event to every paired device, with `pushHint` only for devices that asked for its
    * category and `pushText` only when the owner enabled details. Dropped while offline.
+   * `hint` overrides `categoryOf` (`null`: no push) for events whose push depends on what
+   * changed, not on the body alone (a pipeline entering a limit wait, #41).
    */
-  async broadcast<N extends RemoteEventName>(name: N, body: RemoteEventBody<N>, pushText?: string): Promise<void> {
+  async broadcast<N extends RemoteEventName>(name: N, body: RemoteEventBody<N>, pushText?: string, hint?: NotificationCategory | null): Promise<void> {
     if (!this.isOnline()) return
-    for (const d of this.deps.devices.active()) await this.sendEventTo(d.id, name, body, pushText)
+    for (const d of this.deps.devices.active()) await this.sendEventTo(d.id, name, body, pushText, hint)
   }
 
-  async sendEventTo<N extends RemoteEventName>(deviceId: string, name: N, body: RemoteEventBody<N>, pushText?: string): Promise<void> {
+  async sendEventTo<N extends RemoteEventName>(deviceId: string, name: N, body: RemoteEventBody<N>, pushText?: string, hint?: NotificationCategory | null): Promise<void> {
     const device = this.deps.devices.get(deviceId)
     if (!device || device.needsRepair) return
-    await this.sendEvent(device, name, body, pushText)
+    await this.sendEvent(device, name, body, pushText, undefined, hint)
   }
 
-  private async sendEvent<N extends RemoteEventName>(device: DeviceRecord, name: N, body: RemoteEventBody<N>, pushText?: string, key?: Uint8Array): Promise<void> {
+  private async sendEvent<N extends RemoteEventName>(device: DeviceRecord, name: N, body: RemoteEventBody<N>, pushText?: string, key?: Uint8Array, hint?: NotificationCategory | null): Promise<void> {
     let event
     try {
       event = requireEvent(name, body)
@@ -388,7 +390,7 @@ export class RemoteSession {
     }
     const out: Outgoing = { kind: 'event', name: event.name, body: event.body, ttl: this.deps.eventTtl ?? 24 * 60 * 60 }
     if (name === 'status') out.ttl = 60
-    const category = categoryOf(event)
+    const category = hint === undefined ? categoryOf(event) : hint
     if (category && device.categories.includes(category)) {
       out.pushHint = category
       if (pushText && this.deps.notificationDetails()) out.pushText = [...pushText].slice(0, LIMITS.pushTextChars).join('')
