@@ -185,8 +185,8 @@ function Tiles({ snap, now }: { snap: RemoteSnapshot; now: number }) {
   const counts = snap.queue ? queueCounts(snap.queue.items, snap.queue.more ?? 0, now) : null
   return (
     <View style={{ flexDirection: 'row', gap: 10 }}>
-      <Tile index={2} label="Queued" value={counts ? counts.queued : status!.queue.active} />
-      <Tile index={3} label="Working" value={counts ? counts.working : status!.queue.needsReply} />
+      <Tile index={2} label="Queued" value={counts ? counts.queued : '–'} />
+      <Tile index={3} label="Working" value={counts ? counts.working : '–'} />
       <Tile index={4} label="Done today" value={counts ? counts.doneToday : '–'} />
     </View>
   )

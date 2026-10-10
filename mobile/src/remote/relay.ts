@@ -308,8 +308,9 @@ export class RelayClient {
     const min = this.o.backoffMinMs ?? 1_000
     const max = this.o.backoffMaxMs ?? 60_000
     let delay = Math.min(max, min * 2 ** this.attempt)
-    if (code === CLOSE_CODES.policy) delay = Math.max(delay, Math.min(max, 30_000)) // rate limited: let the minute pass
     delay = Math.round(delay * (0.8 + 0.4 * (this.o.random ?? Math.random)()))
+    // After the jitter, so it cannot pull the wait below the floor.
+    if (code === CLOSE_CODES.policy) delay = Math.max(delay, Math.min(max, 30_000)) // rate limited: let the minute pass
     this.attempt++
     this.setState('retrying', { retryInMs: delay, code })
     this.retryTimer = this.clock.setTimeout(() => this.connect(), delay)
