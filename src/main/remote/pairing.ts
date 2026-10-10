@@ -328,10 +328,17 @@ export class PairingManager {
     }
   }
 
-  /** Removes the records an earlier pairing of the same phone key left (best effort; the new one is in place). */
+  /**
+   * Removes the records an earlier pairing of the same phone key left (best effort; the new one is
+   * in place). Only records added before this one go (the store keeps insertion order), so of two
+   * overlapping approvals for one key the later-added record survives; nothing goes if this
+   * record was itself already replaced.
+   */
   private async replaceOlder(record: DeviceRecord): Promise<void> {
-    for (const old of this.deps.devices.list()) {
-      if (old.id === record.id || old.publicKey !== record.publicKey) continue
+    const all = this.deps.devices.list()
+    const at = all.findIndex((d) => d.id === record.id)
+    for (const old of all.slice(0, Math.max(at, 0))) {
+      if (old.publicKey !== record.publicKey) continue
       await this.deps.devices.remove(old.id).catch((err: unknown) => console.warn(`[remote] removing the replaced device ${old.id} failed:`, (err as Error).message))
       await this.deps.unregisterDevice(old.id).catch(() => undefined)
     }

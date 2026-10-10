@@ -104,7 +104,9 @@ sequenceDiagram
   rolled back and no `pair.ok` goes out.
 - **Re-pairing replaces.** A phone that pairs again with the same key gets a new record and
   `sid`; once `pair.ok` is sent its older records (including ones marked *needs re-pair*) are
-  removed and their tokens deleted, since both records' keys would open the same frames.
+  removed and their tokens deleted, since both records' keys would open the same frames. Only
+  records added before the new one go, so of two overlapping approvals for one key the later one
+  keeps its record.
 - **QR carries `pairing`.** *Deviates from the ADR's QR*, which lists `relay`, `room`, `pk`, `s`
   and `exp`: the phone must authenticate with `{ auth: { room, pairing } }`, so the pairing id
   travels in the URL (`ff3358e`).
@@ -148,7 +150,7 @@ npm test && npm run typecheck && npm run build
   secret is left alone (no ack); a failed registration writes nothing and can be retried; offline
   Approve and a lost `pair.ok` undo everything; a request withdrawn, expired or moved to another
   room while the relay registers the token is rolled back; re-pairing the same phone key
-  replaces its old record and token.
+  replaces its old record and token, and two overlapping approvals for one key keep the newer.
 - `src/main/remote/pairing.e2e.test.ts`: over an in-process relay with per-identity auth and
   routing, a phone built only from the protocol package (`parsePairingUrl`, `generateKeyPair`,
   `sealPairMessage`, `openPairReply`, `deriveSessionKey`, `sealEnvelope`, `openEnvelope`)

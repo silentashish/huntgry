@@ -297,6 +297,21 @@ describe('PairingManager', () => {
     expect(calls).not.toContain(`unregisterDevice(${record.id})`)
   })
 
+  it('two overlapping approvals for the same phone key keep the newer record and its token', async () => {
+    const keys = generateKeyPair()
+    const first = await scanned()
+    await manager.receive(phoneHello(first.invite, 'iPhone', keys).frame)
+    const second = await scanned()
+    await manager.receive(phoneHello(second.invite, 'iPhone', keys).frame)
+
+    const [a, b] = await Promise.all([manager.approve(first.pairingId), manager.approve(second.pairingId)])
+    const added = calls.filter((c) => c.startsWith('add(')).map((c) => c.slice('add('.length, -1))
+    const [older, newer] = added[0] === a.id ? [a, b] : [b, a]
+    expect(devices.list().map((d) => d.id)).toEqual([newer.id])
+    expect(calls).toContain(`unregisterDevice(${older.id})`)
+    expect(calls).not.toContain(`unregisterDevice(${newer.id})`)
+  })
+
   it('a pairing withdrawn, expired or moved to another room while the relay registers the token is rolled back, and no pair.ok is sent', async () => {
     const invalidations: [string, () => void][] = [
       ['cancelAll', () => manager.cancelAll()],
