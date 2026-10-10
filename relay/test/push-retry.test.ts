@@ -138,6 +138,25 @@ describe('push retries', () => {
     await desktop.close()
   })
 
+  it('a hint for a new token goes out at once while a send to the old one is still in flight', async () => {
+    const f = await fixture(relay)
+    const slow = token('slow')
+    await withToken(f, slow)
+    const desktop = await f.desktop()
+    desktop.send(frame(f.deviceId, 'i1', { pushHint: 'failed' }))
+    await waitForCalls(slow, 1)
+    const fresh = token('fresh')
+    await withToken(f, fresh)
+    desktop.send(frame(f.deviceId, 'i2', { pushHint: 'failed' })) // the first request has not settled yet
+    await waitForCalls(fresh, 1, 600)
+    expect(callsTo(fresh)).toHaveLength(1)
+    await sleep(1000) // the old request fails; the new token's slot stays
+    desktop.send(frame(f.deviceId, 'i3', { pushHint: 'failed' }))
+    await sleep(300)
+    expect(callsTo(fresh)).toHaveLength(1)
+    await desktop.close()
+  })
+
   it('does not retry a permanent failure', async () => {
     const f = await fixture(relay)
     const t = token('bad')
@@ -208,6 +227,21 @@ describe('push retries are cancelled', () => {
     await sleep(3500)
     expect(callsTo(t)).toHaveLength(1)
     await phone.close()
+    await desktop.close()
+  })
+
+  it('by the phone connecting and leaving while the first request is in flight', async () => {
+    const f = await fixture(relay)
+    const t = token('lag')
+    await withToken(f, t)
+    const desktop = await f.desktop()
+    desktop.send(frame(f.deviceId, 'h1', { pushHint: 'failed' }))
+    await waitForCalls(t, 1)
+    const phone = await f.phone() // gets the queued frame, then goes away before Expo answers 503
+    await phone.next()
+    await phone.close()
+    await sleep(3500)
+    expect(callsTo(t)).toHaveLength(1)
     await desktop.close()
   })
 

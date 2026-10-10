@@ -343,8 +343,12 @@ export class Room extends DurableObject<Env> {
     }
     if (session.kind !== 'device') return ws.close(CLOSE.policy, 'pushToken is for paired phones only')
     if (frame.pushToken !== null && !EXPO_PUSH_TOKEN.test(frame.pushToken)) return ws.close(CLOSE.policy, 'pushToken is not an Expo push token')
+    const old = this.sql<{ push_token: string | null }>('SELECT push_token FROM devices WHERE id = ?', session.id)[0]?.push_token ?? null
     // A new token (or none) cancels retries meant for the old one.
     this.sql('DELETE FROM push_retries WHERE device = ? AND token IS NOT ?', session.id, frame.pushToken)
+    // The old token's coalescing slots go too, so a hint for the new one goes out at once, even
+    // while a send to the old one is still in flight (that send only ever removes its own slot).
+    if (old !== frame.pushToken) this.sql('DELETE FROM pushes WHERE device = ?', session.id)
     this.sql('UPDATE devices SET push_token = ? WHERE id = ?', frame.pushToken, session.id)
   }
 
@@ -524,13 +528,15 @@ export class Room extends DurableObject<Env> {
     const { outcome, ticketId, retryAfterMs } = await sendExpoPush(this.config.expoPushUrl, pushMessage(token, category, text))
     const now = Date.now()
     // The token changed, was removed or the device was revoked while this attempt was in flight.
-    const current = this.sql<{ push_token: string | null }>('SELECT push_token FROM devices WHERE id = ?', deviceId)[0]?.push_token
-    if (current !== token) {
+    const device = this.sql<{ push_token: string | null; last_seen: number | null }>('SELECT push_token, last_seen FROM devices WHERE id = ?', deviceId)[0]
+    if (device?.push_token !== token) {
+      // Its coalescing slot went with the token change.
       this.sql('DELETE FROM push_retries WHERE device = ? AND category = ? AND token = ?', deviceId, category, token)
-      // A failed attempt for the old token must not hold back hints to the new one.
-      if (outcome !== 'ok') this.sql('DELETE FROM pushes WHERE device = ? AND category = ? AND at = ?', deviceId, category, at)
       return
     }
+    // The phone connected while this attempt was in flight and got the queued frames itself:
+    // no retry (its connect already deleted the pending one).
+    const reconnected = device.last_seen !== null && device.last_seen >= at
     if (outcome === 'ok') {
       this.sql('DELETE FROM push_retries WHERE device = ? AND category = ?', deviceId, category)
       if (attempt > 0) this.sql('INSERT OR REPLACE INTO pushes (device, category, at) VALUES (?, ?, ?)', deviceId, category, now)
@@ -540,7 +546,7 @@ export class Room extends DurableObject<Env> {
       }
     } else if (outcome === 'DeviceNotRegistered') {
       this.clearPushToken(deviceId, token)
-    } else if (outcome === 'retry' && attempt < this.config.pushRetryDelaysMs.length) {
+    } else if (outcome === 'retry' && attempt < this.config.pushRetryDelaysMs.length && !reconnected) {
       const wait = Math.max(this.config.pushRetryDelaysMs[attempt], retryAfterMs ?? 0)
       // Keep the newest body if a hint replaced it while this attempt was in flight.
       this.sql(
@@ -555,7 +561,7 @@ export class Room extends DurableObject<Env> {
       )
       this.sql('DELETE FROM pushes WHERE device = ? AND category = ? AND at = ?', deviceId, category, at)
     } else {
-      // Permanent failure, or the retry budget is spent.
+      // Permanent failure, the retry budget is spent, or the phone has the frames already.
       this.sql('DELETE FROM push_retries WHERE device = ? AND category = ?', deviceId, category)
       this.sql('DELETE FROM pushes WHERE device = ? AND category = ? AND at = ?', deviceId, category, at)
     }

@@ -15,9 +15,9 @@ the app.
 | --- | --- | --- |
 | Classification | `relay/src/push.ts` | `PushOutcome` gains `retry`. Network errors, HTTP 429 and 5xx, and `MessageRateExceeded` tickets are transient; any other 4xx or ticket error stays `failed`. A 429's `Retry-After` (seconds or HTTP date) is read and capped at 1 h (`retryAfterMs`, `MAX_RETRY_AFTER_MS`). A request that takes over 15 s is abandoned as `retry` (`PUSH_TIMEOUT_MS`). |
 | Durable retries | `relay/src/room.ts` | New table `push_retries`: device, category, token, text, attempt and next_at. There is at most one row per device and category, so it survives hibernation and restarts. The room's single alarm sends the due ones (`retryPushes`), and `scheduleAlarm` includes `MIN(next_at)`. Each alarm sends at most one retry, so the alarm's other duties never wait on more than one Expo request; the next due one gets its own alarm right after. Due rows are leased for a minute and the alarm is armed for the lease before any request goes out, so a handler cut off mid-request retries a minute later, not never. Each row and its device's token are read again right before its send, so a retry cancelled by an earlier send in the same alarm does not go out. |
-| One attempt | `room.ts` `sendPush` | Each attempt ends in one of five ways:<br>• `ok` records the receipt ticket and, after a retry, the coalescing time.<br>• `DeviceNotRegistered` clears the token.<br>• `retry` schedules the next attempt at `max(delay[attempt], Retry-After)` while the budget lasts.<br>• A permanent failure or a spent budget gives up, and that push does not count for coalescing.<br>• A token that changed while the attempt was in flight drops it; if it failed, its coalescing slot is released so the new token is not held back. |
+| One attempt | `room.ts` `sendPush` | Each attempt ends in one of five ways:<br>• `ok` records the receipt ticket and, after a retry, the coalescing time.<br>• `DeviceNotRegistered` clears the token.<br>• `retry` schedules the next attempt at `max(delay[attempt], Retry-After)` while the budget lasts.<br>• A permanent failure or a spent budget gives up, and that push does not count for coalescing.<br>• A token that changed while the attempt was in flight drops it.<br>• A phone that connected while the attempt was in flight (it got the frames itself) gets no retry. |
 | Coalescing | `room.ts` `maybePush` | A hint that arrives while a retry is pending replaces that retry's body (newest `pushText` wins) instead of starting a second push. |
-| Cancellation | `room.ts` | A new token or `{ pushToken: null }` deletes the retries for the old token, as do `DeviceNotRegistered` (ticket or receipt, via `clearPushToken`) and revocation. A phone that connects gets the queued frames over its socket, so its retries are deleted then, and a retry that comes due while the phone is connected is dropped instead of sent. |
+| Cancellation | `room.ts` | A new token or `{ pushToken: null }` deletes the retries for the old token and its coalescing slots (so a hint for the new token goes out at once, even while a send to the old one is in flight), as do `DeviceNotRegistered` (ticket or receipt, via `clearPushToken`) and revocation. A phone that connects gets the queued frames over its socket, so its retries are deleted then, and a retry that comes due while the phone is connected is dropped instead of sent. |
 | Tunable | `relay/src/env.ts` | `PUSH_RETRY_DELAYS_SECONDS` (default `30,120,480`): the waits, whose count is the budget; `""` disables retries. |
 | Tests | `relay/test/push-retry.test.ts`, `relay/test/harness.ts`, `relay/test/push.test.ts` | The harness's fake Expo can return an HTTP status (`HttpReply`) or a network error (`NETWORK_ERROR`). The existing coalescing test now uses a permanent ticket error, because a rate-limit error is retried. |
 
@@ -38,7 +38,7 @@ the app.
 
 ## How to test
 
-`npm test -w relay` runs 65 tests. The new ones cover:
+`npm test -w relay` runs 67 tests. The new ones cover:
 
 - a transient failure (`MessageRateExceeded`, network error) followed by success → exactly one
   delivered push;
@@ -46,9 +46,10 @@ the app.
 - a 429 with `Retry-After: 2` → the retry waits at least 2 s;
 - a 503 every time → 4 sends, then nothing, and the next hint can try again;
 - a 400 → no retry;
-- a token replaced while a send to it is in flight and then fails → the next hint reaches the new token at once;
+- a token replaced while a send to it is in flight → a hint for the new token goes out at once, before
+  or after the old send fails;
 - cancellation by a new token, by `null`, by revocation, by the phone reconnecting (or being connected
-  when the retry is due), and by `DeviceNotRegistered` on a retry,
+  when the retry is due, or connecting and leaving while the first request is in flight), and by `DeviceNotRegistered` on a retry,
   which also clears the token, including a second retry due in the same alarm.
 
 ## Follow-ups
