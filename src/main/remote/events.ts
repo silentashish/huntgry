@@ -27,6 +27,8 @@ export interface EventsDeps {
   status(): Promise<StatusSummary>
   /** #42: the open workspace's listed results (`pendingReviews`); absent, no `review.needed`. */
   reviews?(): Promise<{ workspaceId: string; items: { item: ReviewItem; settled: boolean }[] }>
+  /** Drops any cached review count (`invalidateUnreviewed`): a build settling changes it, not only a decision. */
+  reviewsChanged?(): void
   /** Wait after a change before listing the results again (default 500 ms; bursts fold into one). */
   reviewDelayMs?: number
   now?(): number
@@ -57,10 +59,23 @@ export class RemoteEvents {
     return this.deps.now?.() ?? Date.now()
   }
 
+  /**
+   * Takes the review baseline before any live event is forwarded: otherwise the first event's
+   * listing would be the baseline, and a result completed by that event would never be announced.
+   * Never rejects.
+   */
+  start(): Promise<void> {
+    return this.checkReviews()
+  }
+
   /** One desktop event (`onEvent(channel, payload)`). Never rejects. */
   async handle(channel: string, payload: unknown): Promise<void> {
     try {
-      if (channel === 'queue:changed' || channel === 'applications:changed' || channel === 'pipeline:finished') this.scheduleReviews()
+      if (channel === 'queue:changed' || channel === 'applications:changed' || channel === 'pipeline:finished') {
+        // A build that settled changes the count: the status sent below must not reuse a cached one.
+        this.deps.reviewsChanged?.()
+        this.scheduleReviews()
+      }
       switch (channel) {
         case 'queue:changed':
           await this.deps.broadcast('queue.changed', projectQueue(payload as QueueState))
@@ -155,7 +170,10 @@ export class RemoteEvents {
       if (!seen) return
       const fresh = settled.filter((i) => !seen.has(key(i))).sort((a, b) => b.finishedAt.localeCompare(a.finishedAt))
       if (fresh.length > 0) await this.deps.broadcast('review.needed', { count: settled.length, latest: fresh[0] }, fresh[0].title)
-      if (fresh.length > 0 || keys.size !== seen.size) await this.status()
+      if (fresh.length > 0 || keys.size !== seen.size) {
+        this.deps.reviewsChanged?.()
+        await this.status()
+      }
     }
     this.reviewScan = this.reviewScan.then(run).catch((err: unknown) => console.error('[remote] listing reviews failed:', err))
     return this.reviewScan
