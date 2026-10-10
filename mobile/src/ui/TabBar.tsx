@@ -14,8 +14,8 @@ export const TABS: { name: string; label: string; icon: IconName }[] = [
   { name: 'settings', label: 'Settings', icon: 'settings' }
 ]
 
-/** Routes that live under a tab without a button of their own (the run view belongs to Queue). */
-const PARENT_TAB: Record<string, string> = { 'run/[id]': 'queue' }
+/** Routes that live under a tab without a button of their own (run and pipeline under Queue, as in the Figma frames; a result and its files under Review). */
+const PARENT_TAB: Record<string, string> = { 'run/[id]': 'queue', pipeline: 'queue', result: 'review', files: 'review' }
 
 /** The Figma tab bar: surface, top hairline, five 64 pt items, 22 pt icons, the active one in ember. */
 export function TabBar({ state, navigation }: BottomTabBarProps) {

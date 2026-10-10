@@ -25,6 +25,9 @@ export default function TabsLayout() {
         <Tabs.Screen name="jobs" options={{ title: 'Jobs' }} />
         <Tabs.Screen name="settings" options={{ title: 'Settings' }} />
         <Tabs.Screen name="run/[id]" options={{ href: null, title: 'Run' }} />
+        <Tabs.Screen name="pipeline" options={{ href: null, title: 'Pipeline' }} />
+        <Tabs.Screen name="result" options={{ href: null, title: 'Result' }} />
+        <Tabs.Screen name="files" options={{ href: null, title: 'Files' }} />
       </Tabs>
       <Toast toast={snap.toast} onDismiss={dismiss} bottom={Math.max(insets.bottom, 28) + 72} />
     </View>

@@ -17,7 +17,9 @@ import {
   type RemoteCommand,
   type RemoteCommandArgs,
   type RemoteCommandName,
+  type PipelineStartInput,
   type RemoteEnqueueInput,
+  type RemoteFile,
   type RelayNotice
 } from '@huntgry/remote-protocol'
 
@@ -35,6 +37,7 @@ export const commands = {
   cancel: (itemId: string) => build('queue.cancel', { itemId }),
   retry: (itemId: string) => build('queue.retry', { itemId }),
   enqueue: (input: RemoteEnqueueInput) => build('queue.enqueue', input),
+  pipelineStart: (input: PipelineStartInput) => build('pipeline.start', input),
   pipelinePause: () => build('pipeline.pause'),
   pipelineResume: () => build('pipeline.resume'),
   pipelineStop: () => build('pipeline.stop'),
@@ -43,6 +46,15 @@ export const commands = {
   reply: (runId: string, text: string) => build('run.reply', { runId, text }),
   finish: (runId: string) => build('run.finish', { runId }),
   stop: (runId: string) => build('run.stop', { runId }),
+  jobs: (filter?: string, cursor?: string) => build('jobs.list', { ...(filter ? { filter } : {}), ...(cursor ? { cursor } : {}) }),
+  addJobUrl: (url: string) => build('jobs.addUrl', { url: url.trim() }),
+  reviews: () => build('review.list'),
+  review: (applicationId: string) => build('review.get', { applicationId }),
+  /** The revision and ids the phone was served: never text, never an id from elsewhere (see `review.ts`). */
+  approve: (applicationId: string, revision: string, approvedReframingIds: readonly string[]) => build('review.approve', { applicationId, revision, approvedReframingIds: [...approvedReframingIds] }),
+  rerun: (runId: string, revision: string, answers: string) => build('review.rerun', { runId, revision, answers }),
+  discard: (applicationId: string, revision: string) => build('review.discard', { applicationId, revision }),
+  file: (applicationId: string, file: RemoteFile, chunk: number) => build('file.get', { applicationId, file, chunk }),
   setNotifications: (categories: readonly NotificationCategory[]) =>
     // Sent in the package's order so the same choice always reads the same.
     build('device.setNotifications', { categories: NOTIFICATION_CATEGORIES.filter((c) => categories.includes(c)) })
@@ -129,6 +141,8 @@ export function commandLabel(command: Command, runTitle?: (runId: string) => str
       return 'Retry job'
     case 'queue.enqueue':
       return `Queue ${command.args.jobIds.length} job${command.args.jobIds.length === 1 ? '' : 's'}`
+    case 'pipeline.start':
+      return `Start pipeline · ${command.args.jobIds.length} job${command.args.jobIds.length === 1 ? '' : 's'}`
     case 'pipeline.pause':
       return 'Pause pipeline'
     case 'pipeline.resume':
@@ -145,6 +159,14 @@ export function commandLabel(command: Command, runTitle?: (runId: string) => str
       return 'Stop run'
     case 'device.setNotifications':
       return 'Notification settings'
+    case 'jobs.addUrl':
+      return 'Add job by URL'
+    case 'review.approve':
+      return 'Approve result'
+    case 'review.rerun':
+      return 'Re-run with answers'
+    case 'review.discard':
+      return 'Discard result'
     default:
       return command.name
   }

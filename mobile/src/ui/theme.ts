@@ -177,6 +177,7 @@ export const radius = { xs: 4, sm: 6, md: 10, lg: 14, xl: 20, '2xl': 28, full: 9
 
 /** Font family names as registered with expo-font (one family per weight, as React Native needs). */
 export const fonts = {
+  displayExtraBold: 'BricolageGrotesque_800ExtraBold',
   displayBold: 'BricolageGrotesque_700Bold',
   displaySemiBold: 'BricolageGrotesque_600SemiBold',
   ui: 'Geist_400Regular',
@@ -190,6 +191,8 @@ export const fonts = {
  * = 0.66 px); React Native wants points.
  */
 export const type = {
+  /** display/xl: the Pipeline screen's limit reset time. */
+  displayXl: { fontFamily: fonts.displayExtraBold, fontSize: 56, lineHeight: 60, letterSpacing: -1.4 },
   displayLg: { fontFamily: fonts.displayBold, fontSize: 40, lineHeight: 46, letterSpacing: -0.8 },
   displayMd: { fontFamily: fonts.displayBold, fontSize: 32, lineHeight: 38, letterSpacing: -0.48 },
   headingXl: { fontFamily: fonts.displaySemiBold, fontSize: 24, lineHeight: 30, letterSpacing: -0.24 },

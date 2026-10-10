@@ -5,6 +5,7 @@ import { Vault } from '../remote/vault'
 import { APP_VERSION, DEMO } from './config'
 import { DemoModel } from './demo'
 import { defaultDeviceName, socketFactory, storage } from './native'
+import { SHARE_GRACE_MS, clearSharedFiles } from './share'
 
 const ModelContext = createContext<RemoteModel | null>(null)
 
@@ -18,10 +19,17 @@ export function RemoteProvider({ children }: { children: ReactNode }) {
   const [model] = useState(createModel)
   useEffect(() => {
     void model.init()
+    // Copies handed to the OS viewer (#40) never outlive the moment they were opened.
+    clearSharedFiles()
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') model.wake()
-      // The relay pushes only to a phone without a socket (#39).
-      else if (state === 'background') model.background()
+      if (state === 'active') {
+        // Not the one just opened: the app that received it may still be reading it.
+        clearSharedFiles(SHARE_GRACE_MS)
+        model.wake()
+      } else if (state === 'background') {
+        // The relay pushes only to a phone without a socket (#39).
+        model.background()
+      }
     })
     return () => sub.remove()
   }, [model])

@@ -16,6 +16,7 @@ import { Card } from '../ui/Card'
 import { FadeIn } from '../ui/FadeIn'
 import { AGENT_LABEL, QUEUE_STATUS, canCancel, canRetry, isToday, queueCounts, queueMeta } from '../ui/format'
 import { Icon } from '../ui/Icon'
+import { PIPELINE_STATUS } from '../remote/pipeline'
 import { Screen, ScreenHeader } from '../ui/Screen'
 import { useColors } from '../ui/theme'
 import { Txt } from '../ui/Txt'
@@ -90,6 +91,28 @@ function QueueCard({ item, all, index }: { item: RemoteQueueItem; all: readonly 
   )
 }
 
+/** The pipeline lives under Queue (as in the Figma frames): one row to its screen while one exists. */
+function PipelineLink() {
+  const snap = useRemote()
+  const colors = useColors()
+  const status = snap.pipeline?.status ?? snap.status?.pipeline?.status ?? 'idle'
+  if (status === 'idle' && !snap.lastPipeline) return null
+  const badge = PIPELINE_STATUS[status]
+  const c = snap.pipeline?.counts
+  return (
+    <Card padding={12} onPress={() => router.push('/pipeline')} accessibilityLabel="Unattended pipeline">
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Icon name="cpu" size={16} color={colors.accentSecondary} />
+        <Txt variant="labelMd" style={{ flex: 1 }}>
+          Unattended pipeline{c ? ` · ${c.done} of ${c.total}` : ''}
+        </Txt>
+        <Badge tone={badge.tone} dot live={badge.live} label={badge.label} />
+        <Icon name="chevron-right" size={14} color={colors.textMuted} />
+      </View>
+    </Card>
+  )
+}
+
 export function QueueScreen() {
   const snap = useRemote()
   const model = useModel()
@@ -121,6 +144,7 @@ export function QueueScreen() {
           The queue is paused: running jobs finish, nothing new starts.
         </Txt>
       )}
+      <PipelineLink />
       {open.map((item, i) => (
         <QueueCard key={item.id} item={item} all={items} index={i} />
       ))}
