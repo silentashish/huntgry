@@ -35,7 +35,9 @@ import type { DeviceRecord, DeviceStore } from './devices'
  * 3. `approve()` mints `deviceId`, `relayToken` (32 random bytes, hex) and `sid`, registers
  *    `{ deviceId, sha256(relayToken) }` on the relay, writes the device record, and only then
  *    sends `pair.ok`, sealed with the phone's session key so that only the phone whose hello
- *    the owner saw can read the token. `deny()` sends `pair.denied` (under S) and keeps nothing.
+ *    the owner saw can read the token. A phone pairing again with the same key replaces its old
+ *    record (both would open the same frames). `deny()` sends `pair.denied` (under S) and keeps
+ *    nothing.
  *
  * The relay is told the pairing lives `APPROVAL_SECONDS` longer than the QR, so the phone's
  * pairing socket (closed by the relay at its `exp`, code 4006) stays open while the owner
@@ -49,7 +51,7 @@ export const APPROVAL_SECONDS = 5 * 60
 const PAIR_FRAME_TTL = 120
 
 export interface PairingDeps {
-  devices: Pick<DeviceStore, 'keyPair' | 'add' | 'remove'>
+  devices: Pick<DeviceStore, 'keyPair' | 'add' | 'remove' | 'list'>
   /** The relay URL and room of the saved credentials; `null` while not set up. */
   relay(): { relayUrl: string; roomId: string } | null
   /** `POST /rooms/{room}/pairings`. */
@@ -78,6 +80,8 @@ interface Pairing {
   secret: Uint8Array
   /** Hex of the desktop key the QR carried. */
   desktopKey: string
+  /** The relay room the QR carried. */
+  roomId: string
   /** ms: hello refused after this. */
   exp: number
   /** ms: the relay forgets the pairing; the entry is dropped. */
@@ -121,7 +125,7 @@ export class PairingManager {
     const id = randomUUID()
     const secret = randomBytes(SECRET_BYTES)
     const expSeconds = Math.floor(now / 1000) + PAIRING_TTL_SECONDS
-    const pairing: Pairing = { id, secret, desktopKey: toHex(keys.publicKey), exp: expSeconds * 1000, relayExp: (expSeconds + APPROVAL_SECONDS) * 1000, stage: 'waiting' }
+    const pairing: Pairing = { id, secret, desktopKey: toHex(keys.publicKey), roomId: relay.roomId, exp: expSeconds * 1000, relayExp: (expSeconds + APPROVAL_SECONDS) * 1000, stage: 'waiting' }
     const text = pairingUrl({ v: 1, relay: relay.relayUrl, room: relay.roomId, pairing: id, desktopPublicKey: keys.publicKey, secret, exp: expSeconds })
     await this.deps.registerPairing(id, new Date(pairing.relayExp).toISOString())
     this.pairings.set(id, pairing)
@@ -259,9 +263,26 @@ export class PairingManager {
   }
 
   /**
+   * After each await of `approve()`: the request must still be the one the owner approved (not
+   * cancelled, not past the relay's expiry) and the QR's room and desktop key still current.
+   */
+  private async revalidate(p: Pairing): Promise<Uint8Array> {
+    const keys = await this.deps.devices.keyPair()
+    if (this.pairings.get(p.id) !== p || p.stage !== 'approving' || this.now() >= p.relayExp) {
+      throw new Error('This pairing request expired or was withdrawn while it was being approved. Show a new code on this Mac.')
+    }
+    if (this.deps.relay()?.roomId !== p.roomId || !keys || toHex(keys.publicKey) !== p.desktopKey) {
+      throw new Error("This Mac's identity changed since the code was shown. Show a new code.")
+    }
+    return keys.secretKey
+  }
+
+  /**
    * Approve: registration on the relay, then the device record, then `pair.ok`. Nothing is
-   * written before the relay accepted the token; if `pair.ok` cannot be sent, the record and the
-   * token are removed again and the request stays open.
+   * written before the relay accepted the token; if `pair.ok` cannot be sent, or the request was
+   * withdrawn or expired meanwhile, the record and the token are removed again (the request
+   * stays open if it still exists). Once `pair.ok` is sent, older records with the phone's key
+   * are removed and their tokens deleted on the relay (best effort).
    */
   async approve(id: string): Promise<DeviceRecord> {
     const p = this.waiting(id)
@@ -271,17 +292,20 @@ export class PairingManager {
     p.error = undefined
     this.changed()
     const deviceId = randomUUID()
+    let registered = false
     let record: DeviceRecord | null = null
     try {
-      const keys = await this.deps.devices.keyPair()
-      if (!keys || toHex(keys.publicKey) !== p.desktopKey) throw new Error("This Mac's identity changed since the code was shown. Show a new code.")
+      await this.revalidate(p)
       const relayToken = toHex(randomBytes(32))
       const tokenHash = sha256Hex(relayToken)
       const sid = randomUUID()
       await this.deps.registerDevice(deviceId, tokenHash)
+      registered = true
+      await this.revalidate(p)
       record = { id: deviceId, name: hello.deviceName.slice(0, 200), publicKey: hello.devicePub, tokenHash, sid, pairedAt: new Date(this.now()).toISOString(), lastSeq: 0, categories: [], needsRepair: false }
       await this.deps.devices.add(record)
-      const sessionKey = deriveSessionKey(fromBase64(hello.devicePub), keys.secretKey)
+      const secretKey = await this.revalidate(p)
+      const sessionKey = deriveSessionKey(fromBase64(hello.devicePub), secretKey)
       const ok = await this.reply(
         p,
         { pair: 'ok', ok: { deviceId, relayToken, desktopName: this.deps.desktopName.slice(0, LIMITS.idChars) || 'Mac', protocol: { ...PROTOCOL }, sid } },
@@ -289,19 +313,27 @@ export class PairingManager {
       )
       if (!ok) throw new Error('The connection to the relay dropped before the phone was told. Approve again once it shows "Connected".')
       p.stage = 'paired'
+      await this.replaceOlder(record)
       this.changed()
       return record
     } catch (err) {
-      if (record) {
-        await this.deps.devices.remove(deviceId).catch(() => undefined)
-        await this.deps.unregisterDevice(deviceId).catch(() => undefined)
-      }
+      if (record) await this.deps.devices.remove(deviceId).catch(() => undefined)
+      if (registered) await this.deps.unregisterDevice(deviceId).catch(() => undefined)
       if (this.pairings.get(id) === p) {
         p.stage = 'scanned'
         p.error = (err as Error).message
       }
       this.changed()
       throw err
+    }
+  }
+
+  /** Removes the records an earlier pairing of the same phone key left (best effort; the new one is in place). */
+  private async replaceOlder(record: DeviceRecord): Promise<void> {
+    for (const old of this.deps.devices.list()) {
+      if (old.id === record.id || old.publicKey !== record.publicKey) continue
+      await this.deps.devices.remove(old.id).catch((err: unknown) => console.warn(`[remote] removing the replaced device ${old.id} failed:`, (err as Error).message))
+      await this.deps.unregisterDevice(old.id).catch(() => undefined)
     }
   }
 
