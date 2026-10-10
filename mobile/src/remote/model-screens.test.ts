@@ -211,7 +211,8 @@ describe('files (#40)', () => {
     for (let i = 24; i < 40; i++) await t.answer(t.last('file.get'), chunks[i])
     const view = t.model.getSnapshot().files[key]
     expect(view).toMatchObject({ state: 'ready', received: 40, sha256: sha256Hex(data) })
-    expect(view.data).toEqual(data)
+    // A hash, not toEqual: a deep compare of the 960 KB array alone takes seconds.
+    expect(view.data && sha256Hex(view.data)).toBe(sha256Hex(data))
   })
 })
 
