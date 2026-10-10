@@ -22,7 +22,7 @@ const imports = (file: string) =>
 describe('import boundary', () => {
   it('covers the package', () => {
     const names = sources.map((f) => f.slice(DIR.length + 1)).sort()
-    expect(names).toEqual(['check.ts', 'crypto.ts', 'dto.ts', 'guards.ts', 'index.ts', 'limits.ts', 'protocol.ts', 'relay-http.ts', 'text.ts'])
+    expect(names).toEqual(['check.ts', 'crypto.ts', 'dto.ts', 'guards.ts', 'index.ts', 'limits.ts', 'pairing.ts', 'protocol.ts', 'relay-http.ts', 'text.ts'])
   })
 
   for (const file of sources) {

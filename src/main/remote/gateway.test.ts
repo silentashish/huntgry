@@ -249,6 +249,22 @@ describe('Gateway: replay and expiry', () => {
     expect(queue.state().items).toHaveLength(0)
   })
 
+  it('honours the TTLs set in Settings (#37): a shorter costly TTL refuses what the default would run', async () => {
+    let ttl = { costly: 30 * 60, default: 60 * 60 }
+    services.commandTtl = () => ttl
+    gateway = new Gateway(services, devices)
+    jobs.set('url:a', job('url:a'))
+    const enqueue = { jobIds: ['url:a'], options: { coverLetter: false, dateStyle: 'right' } }
+    const late = await send('queue.enqueue', enqueue, { ts: new Date(now - 45 * 60 * 1000).toISOString(), ttl: 7200 })
+    expect(late.result.error).toMatchObject({ code: 'expired', message: expect.stringMatching(/1800 s limit/) })
+    const read = await send('queue.get', undefined, { ts: new Date(now - 90 * 60 * 1000).toISOString(), ttl: 24 * 3600 })
+    expect(read.result.error?.code).toBe('expired')
+    // Read on every frame: a change in Settings applies to the next command.
+    ttl = { costly: 2 * 3600, default: 24 * 3600 }
+    const ok = await send('queue.get', undefined, { ts: new Date(now - 90 * 60 * 1000).toISOString(), ttl: 24 * 3600 })
+    expect(ok.result.ok).toBe(true)
+  })
+
   it('derives lastSeq from the audit log on start: a fresh checkpoint cannot replay', async () => {
     expect((await send('queue.setPaused', { paused: true })).result.ok).toBe(true)
     expect((await send('queue.get')).result.ok).toBe(true)

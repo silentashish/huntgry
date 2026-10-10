@@ -130,6 +130,8 @@ export interface GatewayServices {
   }
   /** Transcripts may be sent to phones (Settings, default on). */
   transcripts(): boolean
+  /** Settings' command TTLs in seconds (default `COMMAND_TTL_SECONDS`: 2 h costly, 24 h the rest). */
+  commandTtl?(): { costly: number; default: number }
   /** DNS for `assertPublicUrl` (tests inject one). */
   resolveHost?: ResolveHost
   now?(): number
@@ -513,7 +515,7 @@ export class Gateway {
 
   /** The desktop's own copy of the relay's expiry: a costly command older than its class TTL never runs. */
   private checkTtl(envelope: Envelope, name: RemoteCommandName): void {
-    const max = ttlFor(name, COMMAND_TTL_SECONDS)
+    const max = ttlFor(name, this.services.commandTtl?.() ?? COMMAND_TTL_SECONDS)
     const age = (this.now() - Date.parse(envelope.ts)) / 1000
     if (age > max) throw new ProtocolError('expired', `${name} was sent ${Math.round(age)} s ago, above its ${max} s limit.`)
   }

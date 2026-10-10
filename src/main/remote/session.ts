@@ -65,6 +65,11 @@ export interface SessionDeps {
   status(): Promise<StatusSummary>
   /** "Show details in notifications" (default off). */
   notificationDetails(): boolean
+  /**
+   * Pairing (#37): a frame no paired device's key opens is offered to the open pairing secrets;
+   * `true` when one of them took it (it acks the frame itself).
+   */
+  pairing?: { receive(frame: RelayFrame): Promise<boolean> }
   onState?(state: SessionState): void
   now?(): number
   /** Defaults: 30 s heartbeat to devices active in the last 5 min; backoff 1 s … 60 s. */
@@ -256,6 +261,7 @@ export class RemoteSession {
     // The frame does not say which phone sent it; only the right session key opens the box (Poly1305).
     const opened = await this.open(frame)
     if (!opened) {
+      if (this.deps.pairing && (await this.deps.pairing.receive(frame))) return
       console.warn(`[remote] frame ${frame.ref} opened with no paired device's key; dropped`)
       return
     }
@@ -401,6 +407,27 @@ export class RemoteSession {
     const key = await this.deps.devices.sessionKeyFor(device)
     if (!key) return
     await this.sendEvent(device, 'device.revoked', { reason: reason.slice(0, LIMITS.shortStringChars) }, undefined, key)
+  }
+
+  /** `{ ack: ref }` alone, in order with the other sends (pairing frames). */
+  ack(ref: string): Promise<void> {
+    return this.sendAck(ref)
+  }
+
+  /**
+   * A frame built elsewhere (the pairing answers, sealed by `sealPairReply`), queued behind
+   * earlier sends; resolves `false` when it could not be written (offline).
+   */
+  sendFrame(frame: RelayFrame): Promise<boolean> {
+    let sent = false
+    const task = async () => {
+      const socket = this.socket
+      if (!socket || !this.isOnline()) return
+      socket.send(JSON.stringify(requireRelayFrame(frame)))
+      sent = true
+    }
+    this.sending = this.sending.then(task, task).catch((err) => console.error('[remote] send failed:', err))
+    return this.sending.then(() => sent)
   }
 
   /**
