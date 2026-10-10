@@ -292,6 +292,16 @@ describe('relay client: reconnect', () => {
     expect(t.sockets.all).toHaveLength(4)
   })
 
+  it('keeps the 30 s after a rate-limit close even when the jitter is at its lowest', async () => {
+    const t = await setup({ random: () => 0 })
+    t.client.start()
+    t.sockets.last.serverClose(1008)
+    await t.clock.advance(29_999)
+    expect(t.sockets.all).toHaveLength(1)
+    await t.clock.advance(1)
+    expect(t.sockets.all).toHaveLength(2)
+  })
+
   it('does not fight a replacing socket (4000) until woken', async () => {
     const t = await setup()
     t.client.start()
