@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PipelineCounts, PipelineState as DesktopPipelineState, PipelineSummary as DesktopPipelineSummary } from '@shared/pipeline-types'
-import { requireEvent, type NotificationCategory, type RemoteEventName, type StatusSummary } from '@shared/remote'
+import { requireEvent, type NotificationCategory, type RemoteEventName, type ReviewItem, type StatusSummary } from '@shared/remote'
 import { RemoteEvents } from './events'
 import { projectPipeline, projectPipelineStatus, projectPipelineSummary, projectStatus, safeText } from './project'
 import { queueState, run } from './test-helpers'
@@ -169,5 +169,57 @@ describe('RemoteEvents push hints (#41)', () => {
     await h.events.handle('runner:run', run({ status: 'failed', error: 'boom', params: { ...run().params, unattended: true } }))
     expect(h.sent.map((e) => e.hint)).toEqual(['needs-reply', 'usage-limit', null, null])
     expect(JSON.stringify(h.sent)).not.toContain('MARKER_')
+  })
+})
+
+describe('RemoteEvents review baseline and count (#42)', () => {
+  const item = (applicationId: string, finishedAt: string): ReviewItem => ({ applicationId, runId: '20261009-120000-aaaaaa', title: 'Platform Engineer · Initech', openGaps: 0, finishedAt })
+
+  function reviewHarness() {
+    const log: string[] = []
+    const items: { item: ReviewItem; settled: boolean }[] = []
+    const events = new RemoteEvents({
+      broadcast: async (name, body) => {
+        requireEvent(name, body)
+        log.push(name === 'review.needed' ? `review.needed:${(body as { count: number }).count}` : name)
+      },
+      status: async () => {
+        log.push('read status')
+        return projectStatus({ desktopName: 'Mac', appVersion: '1', workspace: { id: 'w'.repeat(32), name: 'cv' }, queue: queueState(), agents: [] })
+      },
+      reviews: async () => ({ workspaceId: 'w'.repeat(32), items: [...items] }),
+      reviewsChanged: () => log.push('invalidate'),
+      reviewDelayMs: 0,
+      now: () => NOW
+    })
+    return { events, log, items }
+  }
+
+  it('start() takes the baseline, so a result completed by the first live event is announced', async () => {
+    const h = reviewHarness()
+    h.items.push({ item: item('a', ISO), settled: true })
+    await h.events.start()
+    expect(h.log).toEqual([]) // what was already waiting is the baseline
+    // A pipeline already running when remote control connected finishes its next result.
+    h.items.push({ item: item('b', '2026-10-09T12:05:00.000Z'), settled: true })
+    await h.events.handle('pipeline:finished', { id: 'p-1', startedAt: ISO, finishedAt: ISO, counts: counts(), costUsd: 0, items: [], skipped: [] })
+    await new Promise((r) => setTimeout(r, 10))
+    await h.events.checkReviews()
+    expect(h.log.filter((l) => l.startsWith('review.needed'))).toEqual(['review.needed:2'])
+  })
+
+  it('drops the cached review count before every status a settled build can change', async () => {
+    const h = reviewHarness()
+    await h.events.start()
+    await h.events.handle('queue:changed', queueState())
+    // The queue event's own status is read after the cache was dropped.
+    expect(h.log.slice(0, 3)).toEqual(['invalidate', 'queue.changed', 'read status'])
+    await new Promise((r) => setTimeout(r, 10)) // its debounced listing (nothing new)
+    await h.events.checkReviews()
+    h.log.length = 0
+    h.items.push({ item: item('b', ISO), settled: true })
+    await h.events.checkReviews()
+    // review.needed carries the new count; the status after it must not reuse the old one.
+    expect(h.log).toEqual(['review.needed:1', 'invalidate', 'read status', 'status'])
   })
 })

@@ -16,7 +16,7 @@ import { emit, onEvent } from '../events'
 import { loadAndExtract } from '../jobs/loader'
 import { addByUrl, listJobs } from '../jobs/service'
 import { pipelineForRemote } from '../pipeline/ipc'
-import { reviewForRemote } from '../review/ipc'
+import { invalidateUnreviewed, reviewForRemote } from '../review/ipc'
 import { queueForRemote } from '../queue/ipc'
 import { AuditLog } from './audit'
 import { CredentialStore, newOwnerSecret, relayRequest, type Cipher, type CredentialsRead, type RelayCredentials } from './credentials'
@@ -351,8 +351,11 @@ async function init(): Promise<void> {
     reviews: async () => {
       const workspace = await services.workspace()
       return { workspaceId: workspace.id, items: await pendingReviews(services, workspace) }
-    }
+    },
+    reviewsChanged: invalidateUnreviewed
   })
+  // The review baseline comes before any live event (a running pipeline's next result is news).
+  void events.start()
   onEvent((channel, payload) => {
     if (!session.isOnline()) return
     void events.handle(channel, payload)

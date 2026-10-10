@@ -42,7 +42,7 @@ const workspace = async () => (await requireCurrentWorkspace()).path
  * `ReviewDeps.changed` must call this too, so a phone decision refreshes the Tailor page.
  */
 export function afterReviewDecision(): void {
-  unreviewedCache = null
+  invalidateUnreviewed()
   emit('applications:changed', null)
   void pipeline.syncReviews().catch((err: unknown) => console.error('Syncing review states into the queue failed:', err))
 }
@@ -85,8 +85,13 @@ export function reviewDepsFor(ws: string): ReviewDeps {
   }
 }
 
-/** Results waiting for review per workspace, for the phone's status (cached briefly; a decision clears it). */
+/** Results waiting for review per workspace, for the phone's status (cached briefly; a decision or a settled build clears it). */
 let unreviewedCache: { ws: string; at: number; count: Promise<number> } | null = null
+
+/** Drops the cached count: after a decision, and when a build settles (the remote forwarder's `reviewsChanged`). */
+export function invalidateUnreviewed(): void {
+  unreviewedCache = null
+}
 
 /** Review for the phone's gateway (#42): the same service calls as the handlers below, bound to the checked workspace. */
 export const reviewForRemote = {
