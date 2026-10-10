@@ -19,7 +19,11 @@ export interface TapModel {
 
 export interface TapRouterOptions {
   model: TapModel
-  navigate(href: string): void
+  /**
+   * Opens `href`; false when the navigator is not mounted yet (a cold start). The tap then
+   * waits for `navigatorReady()` or the next model change and tries again.
+   */
+  navigate(href: string): boolean
   clock?: Clock
   /** How long a "needs reply" tap may still move on to the run once it is known. */
   settleMs?: number
@@ -30,6 +34,7 @@ const HANDLED_LIMIT = 50
 export class TapRouter {
   private readonly handled = new Set<string>()
   private cancelPending: (() => void) | null = null
+  private retryPending: (() => void) | null = null
   private readonly clock: Clock
 
   constructor(private readonly o: TapRouterOptions) {
@@ -56,10 +61,12 @@ export class TapRouter {
     let unsubscribe: (() => void) | null = null
     let started = false
     let last: string | null = null
-    const go = (href: string) => {
-      if (href === last) return
+    /** True once `href` is on screen (now or by an earlier step). */
+    const go = (href: string): boolean => {
+      if (href === last) return true
+      if (!navigate(href)) return false
       last = href
-      navigate(href)
+      return true
     }
     const finish = () => {
       unsubscribe?.()
@@ -67,6 +74,7 @@ export class TapRouter {
       if (timer !== null) this.clock.clearTimeout(timer)
       timer = null
       if (this.cancelPending === finish) this.cancelPending = null
+      if (this.retryPending === step) this.retryPending = null
     }
     const step = () => {
       const snap = model.getSnapshot()
@@ -79,14 +87,19 @@ export class TapRouter {
         model.refreshQueue()
       }
       const route = routeFor(category, snap)
-      go(route.href)
-      if (route.settled) finish()
+      if (go(route.href) && route.settled) finish()
     }
     this.cancelPending = finish
+    this.retryPending = step
     unsubscribe = model.subscribe(step)
     timer = this.clock.setTimeout(finish, this.o.settleMs ?? 15_000)
     step()
     return true
+  }
+
+  /** The navigator just mounted: a tap that could not navigate yet tries again. */
+  navigatorReady(): void {
+    this.retryPending?.()
   }
 
   /** Stops waiting for a better screen (another tap, the owner navigated, unmount). */

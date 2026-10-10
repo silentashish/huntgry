@@ -30,8 +30,14 @@ function setup() {
   const model = new FakeModel()
   const clock = new FakeClock()
   const visited: string[] = []
-  const router = new TapRouter({ model, clock, navigate: (href) => void visited.push(href), settleMs: 15_000 })
-  return { model, clock, visited, router }
+  const nav = { mounted: true }
+  const navigate = (href: string) => {
+    if (!nav.mounted) return false
+    visited.push(href)
+    return true
+  }
+  const router = new TapRouter({ model, clock, navigate, settleMs: 15_000 })
+  return { model, clock, visited, router, nav }
 }
 
 const waiting = (runId: string) => ({ queue: { items: [{ runId, status: 'needs-reply', updatedAt: '2026-10-09T12:00:00.000Z' }] } })
@@ -79,6 +85,23 @@ describe('tapping a push', () => {
     expect(t.visited).toEqual([])
     t.model.set({ phase: 'paired' })
     expect(t.visited).toEqual(['/'])
+    expect(t.model.calls).toEqual(['wake', 'status.get', 'queue.get'])
+  })
+
+  it('a cold start retries once the navigator mounts, even for a settled category', () => {
+    const t = setup()
+    t.model.snap = { ...t.model.snap, phase: 'loading' }
+    t.nav.mounted = false
+    t.router.open('n1', { category: 'needs-review' })
+    t.model.set({ phase: 'paired' }) // the model is paired before React mounts the Stack
+    expect(t.visited).toEqual([])
+    expect(t.model.listening).toBe(1)
+    t.nav.mounted = true
+    t.router.navigatorReady()
+    expect(t.visited).toEqual(['/review'])
+    expect(t.model.listening).toBe(0)
+    t.router.navigatorReady() // later navigation changes do nothing
+    expect(t.visited).toEqual(['/review'])
     expect(t.model.calls).toEqual(['wake', 'status.get', 'queue.get'])
   })
 

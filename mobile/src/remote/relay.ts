@@ -183,7 +183,10 @@ export class RelayClient {
    * unanswered commands stay in memory and go out after `wake()`.
    */
   sleep(): void {
-    if (this.stopped || !this.socket) return
+    if (this.stopped) return
+    // Between reconnect attempts there is no socket, only a retry timer: cancel it too, or it
+    // reconnects in the background and the relay stops pushing.
+    if (!this.socket && this.retryTimer === null) return
     this.flushAcksNow()
     this.clearTimers()
     this.detach(1000, 'background')

@@ -180,6 +180,20 @@ describe('background: no live socket, so the relay pushes', () => {
     expect(t.sockets.last.envelopes().map((e) => e.name ?? e.kind)).toEqual(['hello', 'status.get'])
   })
 
+  it('sleep between reconnect attempts cancels the retry; wake reconnects', async () => {
+    const t = await client()
+    t.client.start()
+    await t.online()
+    t.sockets.last.serverClose(1006) // a retry is scheduled, no socket meanwhile
+    expect(t.client.connection).toBe('retrying')
+    t.client.sleep()
+    expect(t.client.connection).toBe('stopped')
+    await t.clock.advance(10 * 60_000)
+    expect(t.sockets.all).toHaveLength(1)
+    t.client.wake()
+    expect(t.sockets.all).toHaveLength(2)
+  })
+
   it('the model sleeps after a short grace, and a quick return cancels it', async () => {
     const clock = new FakeClock()
     const sockets = new Sockets()

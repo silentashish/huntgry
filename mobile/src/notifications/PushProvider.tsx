@@ -4,7 +4,7 @@
  * unpair), the app coming back to the foreground, and expo-notifications' taps.
  */
 
-import { router, type Href } from 'expo-router'
+import { router, useNavigationContainerRef, type Href } from 'expo-router'
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { AppState } from 'react-native'
 import type { RemoteModel } from '../remote/model'
@@ -38,16 +38,23 @@ function createRegistrar(model: RemoteModel): PushRegistrar {
 
 export function PushProvider({ children }: { children: ReactNode }) {
   const model = useModel()
+  const navigation = useNavigationContainerRef()
   const [registrar] = useState(() => createRegistrar(model))
   const [taps] = useState(
     () =>
       new TapRouter({
         model,
         navigate: (href) => {
+          // A cold start: the model turns `paired` before React mounts the root Stack (the
+          // root layout renders nothing while loading). The tap waits for the next state change.
+          if (!navigation.isReady()) return false
+          const root = navigation.getRootState()
+          if (root?.routes[root.index ?? 0]?.state === undefined) return false
           try {
             router.navigate(href as Href)
+            return true
           } catch {
-            // The navigator is not mounted yet (a cold start); the next model change tries again.
+            return false
           }
         }
       })
@@ -84,6 +91,9 @@ export function PushProvider({ children }: { children: ReactNode }) {
     })
     return () => sub.remove()
   }, [model, registrar])
+
+  // The root Stack mounted (or the navigation state changed): a tap that could not navigate yet goes now.
+  useEffect(() => navigation.addListener('state', () => taps.navigatorReady()), [navigation, taps])
 
   // Taps open their screen; a push while the app is open becomes a toast.
   useEffect(
