@@ -1,0 +1,115 @@
+# Deploys the relay to the owner's own server (the Oracle Cloud VM that also serves the website):
+# the same Worker and Durable Object as `wrangler deploy`, run by workerd behind Caddy at
+# RELAY_DOMAIN. See relay/selfhost/README.md. Skipped until the RELAY_HOST variable is set.
+name: relay-deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'relay/**'
+      - 'src/shared/remote/**'
+      # The lockfile pins workerd and wrangler, which the bundle and the server runtime come from.
+      - 'package-lock.json'
+      - '.github/workflows/relay-deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: relay-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 26
+
+jobs:
+  deploy:
+    name: deploy relay
+    runs-on: ubuntu-latest
+    if: vars.RELAY_HOST != ''
+    timeout-minutes: 15
+    environment:
+      name: relay
+      url: https://${{ vars.RELAY_DOMAIN }}
+    env:
+      HOST: ${{ vars.RELAY_HOST }}
+      DOMAIN: ${{ vars.RELAY_DOMAIN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # Electron's postinstall and binary are not needed to build the relay.
+      - run: npm ci --ignore-scripts
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      - name: Test the relay
+        run: npm test --workspace relay
+
+      - name: Build the bundle
+        run: sh relay/selfhost/build.sh
+
+      # The host key is pinned so the admin token only ever goes to the real server.
+      - name: Set up SSH
+        env:
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          RELAY_HOST_KEY: ${{ vars.RELAY_HOST_KEY }}
+        run: |
+          # Accepts the server's host_key.pub line or an ssh-keyscan line (a leading host is dropped).
+          key=$(printf '%s\n' "$RELAY_HOST_KEY" | awk 'NF && $1 !~ /^#/ { if ($1 !~ /^(ssh-|ecdsa-|sk-)/) $1 = ""; sub(/^ +/, ""); print; exit }')
+          [ -n "$key" ] || { echo "::error::Set the RELAY_HOST_KEY variable to the server's SSH host key (relay/selfhost/README.md)." && exit 1; }
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf 'relay %s\n' "$key" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host relay
+            HostName ${HOST}
+            HostKeyAlias relay
+            User ubuntu
+            IdentityFile ~/.ssh/id_ed25519
+            StrictHostKeyChecking yes
+            ConnectTimeout 10
+          EOF
+
+      - name: Fetch workerd for the server's CPU
+        run: |
+          version=$(node -p "require('./node_modules/workerd/package.json').version")
+          case "$(ssh relay uname -m)" in
+            x86_64) pkg=@cloudflare/workerd-linux-64 ;;
+            aarch64) pkg=@cloudflare/workerd-linux-arm64 ;;
+            *) echo "::error::Unsupported server CPU" && exit 1 ;;
+          esac
+          mkdir -p /tmp/workerd && (cd /tmp/workerd && npm pack --silent "$pkg@$version" | xargs tar -xzf)
+          install -m 755 /tmp/workerd/package/bin/workerd relay/selfhost/dist/workerd
+          echo "workerd $version ($pkg)"
+
+      - name: Upload and install
+        env:
+          RELAY_ADMIN_TOKEN: ${{ secrets.RELAY_ADMIN_TOKEN }}
+        run: |
+          if [ -z "$(printf '%s' "$RELAY_ADMIN_TOKEN" | tr -d '[:space:]')" ] || [ -z "$DOMAIN" ]; then
+            echo "::error::Set the RELAY_ADMIN_TOKEN secret and the RELAY_DOMAIN variable (relay/selfhost/README.md)." && exit 1
+          fi
+          ssh relay 'rm -rf /tmp/huntgry-relay && mkdir -m 700 /tmp/huntgry-relay'
+          rsync -az relay/selfhost/dist/ relay:/tmp/huntgry-relay/
+          printf '%s' "$RELAY_ADMIN_TOKEN" | ssh relay 'umask 077 && cat > /tmp/huntgry-relay/admin-token'
+          # shellcheck disable=SC2029 # DOMAIN is meant to expand here, on the runner
+          ssh relay "sudo sh /tmp/huntgry-relay/install.sh '${DOMAIN}'"
+
+      - name: Check from outside
+        run: |
+          # Needs DNS for RELAY_DOMAIN → RELAY_HOST; Caddy gets the certificate on this first request.
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST "https://${DOMAIN}/rooms" || true)
+            [ "$code" = "401" ] && { echo "https://${DOMAIN} answers like the relay (401 without a token)"; exit 0; }
+            echo "attempt $i: HTTP ${code:-none}"; sleep 10
+          done
+          echo "::error::https://${DOMAIN} is not reachable. Check that its DNS A record points at ${HOST}."
+          exit 1

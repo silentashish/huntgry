@@ -15,13 +15,15 @@ import { requireCurrentWorkspace, settingsFile } from '../current-workspace'
 import { emit, onEvent } from '../events'
 import { loadAndExtract } from '../jobs/loader'
 import { addByUrl, listJobs } from '../jobs/service'
+import { pipelineForRemote } from '../pipeline/ipc'
+import { invalidateUnreviewed, reviewForRemote } from '../review/ipc'
 import { queueForRemote } from '../queue/ipc'
 import { AuditLog } from './audit'
 import { CredentialStore, newOwnerSecret, relayRequest, type Cipher, type CredentialsRead, type RelayCredentials } from './credentials'
 import { DeviceStore } from './devices'
-import { Gateway, type GatewayServices } from './gateway'
+import { RemoteEvents } from './events'
+import { Gateway, pendingReviews, statusOf, type GatewayServices } from './gateway'
 import { PairingManager } from './pairing'
-import { projectQueue, projectRun, projectStatus } from './project'
 import { revokeDevice } from './revoke'
 import { RoomControl } from './rooms'
 import { RemoteSession, type SocketLike } from './session'
@@ -303,14 +305,13 @@ async function init(): Promise<void> {
     runs: runsForRemote,
     jobs: { list: listJobs, addUrl: (ws, url) => addByUrl(ws, url, loadAndExtract) },
     files: { resolve: resolveApplicationFile },
+    pipeline: pipelineForRemote,
+    review: reviewForRemote,
     transcripts: () => transcriptsOn,
     commandTtl: () => commandTtl
   }
   gateway = new Gateway(services, devices)
-  const status = async () => {
-    const workspace = await services.workspace()
-    return projectStatus({ desktopName: services.desktopName, appVersion: services.appVersion, workspace, queue: await queueForRemote.state(workspace.path), agents: await agentsReady() })
-  }
+  const status = async () => statusOf(services, await services.workspace())
   session = new RemoteSession({
     connect,
     devices,
@@ -344,18 +345,20 @@ async function init(): Promise<void> {
     desktopName: services.desktopName,
     onChange: publishLater
   })
+  const events = new RemoteEvents({
+    broadcast: (name, body, pushText, hint) => session.broadcast(name, body, pushText, hint),
+    status,
+    reviews: async () => {
+      const workspace = await services.workspace()
+      return { workspaceId: workspace.id, items: await pendingReviews(services, workspace) }
+    },
+    reviewsChanged: invalidateUnreviewed
+  })
+  // The review baseline comes before any live event (a running pipeline's next result is news).
+  void events.start()
   onEvent((channel, payload) => {
     if (!session.isOnline()) return
-    if (channel === 'queue:changed') {
-      const state = payload as Parameters<typeof projectQueue>[0]
-      void session.broadcast('queue.changed', projectQueue(state))
-      void status().then((s) => session.broadcast('status', s)).catch(() => undefined)
-    } else if (channel === 'runner:run') {
-      const run = payload as Parameters<typeof projectRun>[0]
-      void session.broadcast('run.changed', projectRun(run), run.title)
-    } else if (channel === 'applications:changed') {
-      void session.broadcast('applications.changed', { ids: [] })
-    }
+    void events.handle(channel, payload)
   })
   powerMonitor.on('resume', () => session.reconnectNow())
   powerMonitor.on('unlock-screen', () => session.reconnectNow())

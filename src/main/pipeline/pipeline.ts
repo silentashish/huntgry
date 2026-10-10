@@ -25,6 +25,7 @@ import { summarizeBuild } from '../applications/scan'
 import { getReview, updateReview, type RecordedReview } from '../review/authority'
 import { folderSlug, newRunId } from '../cli/runs'
 import { PASTE_HINT, type FailureDecision, type Settlement, type TailorQueue } from '../queue/queue'
+import { WorkspaceChangedError } from '../workspace/changed'
 import { HUNTGRY_DIR } from '../workspace/constants'
 import {
   backoffDelay,
@@ -171,7 +172,12 @@ export class Pipeline {
     this.changed()
   }
 
-  private onLoad(record: PipelineRecord | null): void {
+  private onLoad(loaded: PipelineRecord | null): void {
+    // A start cut short (another workspace loaded during its enqueue) left a record with no jobs:
+    // nothing would ever finish it, and it would block every later start.
+    const stranded = loaded !== null && loaded.status !== 'finished' && loaded.itemIds.length === 0 && this.deps.queue.itemsOf(loaded.id).length === 0
+    if (stranded) this.deps.queue.savePipeline(null)
+    const record = stranded ? null : loaded
     this.record = record
     this.rejected = null
     this.utilization = undefined
@@ -184,6 +190,14 @@ export class Pipeline {
     // Every load (startup, a workspace switch or import): its items may carry review states decided
     // while it was not loaded (#72).
     void this.syncReviews().catch((err: unknown) => console.error('Syncing review states into the queue failed:', err))
+  }
+
+  /** Forgets a pipeline whose start got no jobs, in memory and in the loaded queue file. */
+  private abandon(): void {
+    this.record = null
+    this.lastSaved = ''
+    this.deps.queue.savePipeline(null)
+    this.changed()
   }
 
   /** Before quit: release the keep-awake and stop ticking (the queue saves itself). */
@@ -231,8 +245,17 @@ export class Pipeline {
 
   // ---------------------------------------------------------------- API
 
-  async plan(input: Required<Omit<PipelineStartInput, 'fallbackAgent' | 'budget'>> & { fallbackAgent?: AgentId; budget?: PipelineBudget }): Promise<PipelinePlan> {
+  /**
+   * `expected` binds a call to one workspace (the phone's gateway, #41): another open workspace
+   * throws `WorkspaceChangedError` instead of planning, starting or changing its pipeline. The
+   * desktop passes nothing and acts on the open workspace, as before.
+   */
+  async plan(
+    input: Required<Omit<PipelineStartInput, 'fallbackAgent' | 'budget'>> & { fallbackAgent?: AgentId; budget?: PipelineBudget },
+    expected?: string
+  ): Promise<PipelinePlan> {
     const ws = await this.deps.workspace()
+    if (expected !== undefined && ws !== expected) throw new WorkspaceChangedError()
     const blockers: string[] = []
     const warnings: string[] = []
     const env = await this.deps.environment()
@@ -247,10 +270,11 @@ export class Pipeline {
     const free = await this.deps.freeDiskBytes(ws)
     if (free !== null && free < MIN_FREE_DISK_BYTES)
       blockers.push(`Only ${Math.round(free / 1024 / 1024)} MB are free on the workspace disk; ${Math.round(MIN_FREE_DISK_BYTES / 1024 / 1024)} MB are needed.`)
+    // Load this workspace's queue first: its pipeline record, not the previous workspace's, decides.
+    const state = await this.deps.queue.sync(expected)
     if (this.record && this.record.status !== 'finished')
       blockers.push('A pipeline is already running. Stop it, or wait for it to finish.')
 
-    const state = await this.deps.queue.sync()
     const queued = new Set(state.items.filter((i) => ACTIVE.has(i.status) || i.status === 'needs-reply').map((i) => i.jobId))
     const tailored = input.skipTailored ? await this.deps.tailoredJobIds(ws) : new Set<string>()
     const ready: PipelinePlan['ready'] = []
@@ -326,22 +350,23 @@ export class Pipeline {
    * active are separated by awaits (plan, history), so a second start (a double click, the phone)
    * is refused while the first is between them.
    */
-  async start(input: Parameters<Pipeline['plan']>[0]): Promise<PipelineState> {
+  async start(input: Parameters<Pipeline['plan']>[0], expected?: string): Promise<PipelineState> {
     if (this.starting) throw new Error('A pipeline is already starting.')
     this.starting = true
     try {
-      return await this.startNow(input)
+      return await this.startNow(input, expected)
     } finally {
       this.starting = false
     }
   }
 
-  private async startNow(input: Parameters<Pipeline['plan']>[0]): Promise<PipelineState> {
-    const plan = await this.plan(input)
+  private async startNow(input: Parameters<Pipeline['plan']>[0], expected?: string): Promise<PipelineState> {
+    const plan = await this.plan(input, expected)
     if (plan.blockers.length > 0) throw new Error(plan.blockers[0])
     if (plan.ready.length === 0)
       throw new Error(`No job can run unattended. ${plan.skipped[0]?.reason ?? 'Select at least one saved job.'}`)
     const ws = await this.deps.workspace()
+    if (expected !== undefined && ws !== expected) throw new WorkspaceChangedError()
     const history = await this.deps.runHistory(ws)
     const now = this.now()
     const record: PipelineRecord = {
@@ -365,23 +390,43 @@ export class Pipeline {
       runCosts: {},
       estimateMsPerJob: history.medianMs
     }
+    // Before the record is kept: another workspace loaded during the awaits must not inherit it,
+    // and a pipeline that is already running there must not be overwritten.
+    if (expected !== undefined && this.deps.queue.workspace() !== expected) throw new WorkspaceChangedError()
+    if (this.record && this.record.status !== 'finished') throw new Error('A pipeline is already running. Stop it, or wait for it to finish.')
     this.record = record
     this.rejected = null
     this.utilization = undefined
     this.notifiedLimit = null
     this.deps.queue.savePipeline(record)
-    const res = await this.deps.queue.enqueue({
-      jobIds: plan.ready.map((j) => j.jobId),
-      options: input.options,
-      concurrency: input.concurrency,
-      agent: input.agent,
-      unattended: true,
-      pipelineId: record.id
-    })
+    let res: Awaited<ReturnType<PipelineDeps['queue']['enqueue']>>
+    try {
+      res = await this.deps.queue.enqueue(
+        {
+          jobIds: plan.ready.map((j) => j.jobId),
+          options: input.options,
+          concurrency: input.concurrency,
+          agent: input.agent,
+          unattended: true,
+          pipelineId: record.id
+        },
+        expected
+      )
+    } catch (err) {
+      // The start got no jobs. If this workspace is still loaded the record goes now; if another was
+      // loaded meanwhile, the copy saved here is dropped when this workspace is loaded again (onLoad).
+      if (this.record === record) this.abandon()
+      throw err
+    }
     record.itemIds = res.state.items.filter((i) => i.pipelineId === record.id).map((i) => i.id)
     for (const s of res.skipped) {
       const title = plan.ready.find((j) => j.jobId === s.jobId)?.title ?? s.jobId
       record.skipped.push({ jobId: s.jobId, title, reason: s.reason })
+    }
+    if (record.itemIds.length === 0) {
+      // Every job was skipped between the plan and the enqueue: nothing would ever finish it.
+      this.abandon()
+      throw new Error(`No job could be queued. ${record.skipped[0]?.reason ?? ''}`.trim())
     }
     this.persist()
     this.ensureTimer()
@@ -390,8 +435,8 @@ export class Pipeline {
     return this.state()!
   }
 
-  async pause(): Promise<PipelineState> {
-    const r = this.require()
+  async pause(expected?: string): Promise<PipelineState> {
+    const r = this.require(expected)
     if (r.status === 'running' || r.status === 'waiting-limit') {
       r.status = 'paused'
       r.stopReason = undefined
@@ -402,8 +447,12 @@ export class Pipeline {
     return this.state()!
   }
 
-  async resume(options: { budget?: PipelineBudget } = {}): Promise<PipelineState> {
-    const r = this.require()
+  async resume(options: { budget?: PipelineBudget } = {}, expected?: string): Promise<PipelineState> {
+    this.require(expected)
+    // The queue itself may be paused (a restart without resume-after-restart, or a start error).
+    // Unpaused first: if another workspace is loaded meanwhile this throws before the record changes.
+    if (this.deps.queue.isPaused()) await this.deps.queue.setPaused(false, expected)
+    const r = this.require(expected)
     if (options.budget) r.options.budget = options.budget
     if (r.status === 'paused' || r.status === 'stopped-budget') {
       r.status = 'running'
@@ -411,16 +460,14 @@ export class Pipeline {
       r.interruptedAt = undefined
     }
     this.persist()
-    // The queue itself may be paused (a restart without resume-after-restart, or a start error).
-    if (this.deps.queue.isPaused()) await this.deps.queue.setPaused(false)
     this.reconcile()
     this.deps.queue.kick()
     this.changed()
     return this.state()!
   }
 
-  async stop(): Promise<PipelineState> {
-    const r = this.require()
+  async stop(expected?: string): Promise<PipelineState> {
+    const r = this.require(expected)
     if (r.status !== 'finished') {
       r.status = 'stopping'
       r.stopReason = 'Stopped by you.'
@@ -791,7 +838,9 @@ export class Pipeline {
 
   // ---------------------------------------------------------------- internals
 
-  private require(): PipelineRecord {
+  /** The current record; with `expected`, only when the loaded queue is that workspace's. */
+  private require(expected?: string): PipelineRecord {
+    if (expected !== undefined && this.deps.queue.workspace() !== expected) throw new WorkspaceChangedError()
     if (!this.record) throw new Error('No pipeline is running.')
     return this.record
   }

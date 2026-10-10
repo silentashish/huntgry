@@ -1,7 +1,7 @@
 import { app, ipcMain } from 'electron'
 import { statfs } from 'node:fs/promises'
 import { join } from 'node:path'
-import { PIPELINE_CHANNELS } from '@shared/pipeline-types'
+import { PIPELINE_CHANNELS, type PipelineState } from '@shared/pipeline-types'
 import { scanApplications } from '../applications/scan'
 import { skillStatus } from '../cli/agents/skills'
 import { findCli, findSkillDir, findTexBin, loginShellPath, buildChildEnv } from '../cli/env'
@@ -70,6 +70,32 @@ export const pipeline = new Pipeline({
   emitFinished: (summary) => emit('pipeline:finished', summary)
 })
 onRunChange((run) => pipeline.onRun(run))
+
+/**
+ * The pipeline for the phone's gateway (#41): the same instance and methods the renderer's
+ * handlers call ("Run unattended", Pause, Resume, Stop), each bound to the workspace the
+ * gateway checked (`WorkspaceChangedError` when another one is open by the time it acts).
+ * `start` takes what `requirePipelineStartInput` returned, exactly like `PIPELINE_CHANNELS.start`.
+ */
+export const pipelineForRemote = {
+  state: async (workspace: string): Promise<PipelineState | null> => {
+    await queue.sync(workspace)
+    return pipeline.state()
+  },
+  start: async (workspace: string, input: ReturnType<typeof requirePipelineStartInput>): Promise<PipelineState> => pipeline.start(input, workspace),
+  pause: async (workspace: string): Promise<PipelineState> => {
+    await queue.sync(workspace)
+    return pipeline.pause(workspace)
+  },
+  resume: async (workspace: string): Promise<PipelineState> => {
+    await queue.sync(workspace)
+    return pipeline.resume({}, workspace)
+  },
+  stop: async (workspace: string): Promise<PipelineState> => {
+    await queue.sync(workspace)
+    return pipeline.stop(workspace)
+  }
+}
 
 /** Quick readiness check of an agent's CLI and skill (used by the fallback switch and the modal). */
 export async function agentReady(agent: Parameters<typeof skillStatus>[0]): Promise<boolean> {

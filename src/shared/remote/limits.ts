@@ -38,6 +38,8 @@ export const LIMITS = {
   verifyReportBytes: 4 * 1024,
   /** `ReviewDetail.artifacts`: resume.pdf, cover.pdf and up to 14 page previews. */
   reviewArtifacts: 16,
+  /** `review.list` items (#42); `more` counts the rest. */
+  reviewItems: 50,
   /** `queue.changed` / `queue.get` carry at most this many items (active first); `more` counts the rest. */
   queueItems: 20,
   /** Run, queue item, device and session ids, command ids, revisions. */

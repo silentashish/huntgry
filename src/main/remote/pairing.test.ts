@@ -35,6 +35,9 @@ let sent: RelayFrame[]
 let acks: string[]
 let qrText: string
 let relayDown: boolean
+let roomId: string
+/** Runs while `registerDevice` is pending (the relay call is in flight). */
+let duringRegister: (() => void) | null
 let manager: PairingManager
 
 beforeEach(async () => {
@@ -48,9 +51,12 @@ beforeEach(async () => {
   acks = []
   qrText = ''
   relayDown = false
+  roomId = 'room-1'
+  duringRegister = null
   const deps: PairingDeps = {
     devices: {
       keyPair: () => devices.keyPair(),
+      list: () => devices.list(),
       add: async (record) => {
         calls.push(`add(${record.id})`)
         await devices.add(record)
@@ -60,13 +66,14 @@ beforeEach(async () => {
         return devices.remove(id)
       }
     },
-    relay: () => ({ relayUrl: 'https://relay.example.com', roomId: 'room-1' }),
+    relay: () => ({ relayUrl: 'https://relay.example.com', roomId }),
     registerPairing: async (pairingId, exp) => {
       calls.push(`registerPairing(${pairingId},${exp})`)
     },
     registerDevice: async (deviceId, tokenHash) => {
       calls.push(`registerDevice(${deviceId},${tokenHash})`)
       if (relayDown) throw new Error('The relay answered 503 for POST /rooms/room-1/devices.')
+      duringRegister?.()
     },
     unregisterDevice: async (deviceId) => {
       calls.push(`unregisterDevice(${deviceId})`)
@@ -271,6 +278,62 @@ describe('PairingManager', () => {
     expect(calls).toContain(`unregisterDevice(${id})`)
     expect(devices.list()).toEqual([])
     manager['deps'].send = send
+  })
+
+  it('a phone pairing again with the same key replaces its old record and token (also one marked needs re-pair)', async () => {
+    const keys = generateKeyPair()
+    const first = await scanned()
+    await manager.receive(phoneHello(first.invite, 'iPhone', keys).frame)
+    const old = await manager.approve(first.pairingId)
+    await devices.markAllNeedsRepair()
+
+    const second = await scanned()
+    await manager.receive(phoneHello(second.invite, 'iPhone', keys).frame)
+    const record = await manager.approve(second.pairingId)
+    expect(record.sid).not.toBe(old.sid)
+    expect(devices.list().map((d) => d.id)).toEqual([record.id])
+    expect(calls).toContain(`remove(${old.id})`)
+    expect(calls).toContain(`unregisterDevice(${old.id})`)
+    expect(calls).not.toContain(`unregisterDevice(${record.id})`)
+  })
+
+  it('two overlapping approvals for the same phone key keep the newer record and its token', async () => {
+    const keys = generateKeyPair()
+    const first = await scanned()
+    await manager.receive(phoneHello(first.invite, 'iPhone', keys).frame)
+    const second = await scanned()
+    await manager.receive(phoneHello(second.invite, 'iPhone', keys).frame)
+
+    const [a, b] = await Promise.all([manager.approve(first.pairingId), manager.approve(second.pairingId)])
+    const added = calls.filter((c) => c.startsWith('add(')).map((c) => c.slice('add('.length, -1))
+    const [older, newer] = added[0] === a.id ? [a, b] : [b, a]
+    expect(devices.list().map((d) => d.id)).toEqual([newer.id])
+    expect(calls).toContain(`unregisterDevice(${older.id})`)
+    expect(calls).not.toContain(`unregisterDevice(${newer.id})`)
+  })
+
+  it('a pairing withdrawn, expired or moved to another room while the relay registers the token is rolled back, and no pair.ok is sent', async () => {
+    const invalidations: [string, () => void][] = [
+      ['cancelAll', () => manager.cancelAll()],
+      ['relay expiry', () => void (now += (PAIRING_TTL_SECONDS + APPROVAL_SECONDS) * 1000)],
+      ['room replaced', () => void (roomId = 'room-2')]
+    ]
+    for (const [label, invalidate] of invalidations) {
+      now = T0
+      roomId = 'room-1'
+      calls = []
+      const { pairingId, invite } = await scanned()
+      await manager.receive(phoneHello(invite).frame)
+      duringRegister = invalidate
+      await expect(manager.approve(pairingId), label).rejects.toThrow(/expired or was withdrawn|identity changed/)
+      duringRegister = null
+      const id = calls.find((c) => c.startsWith('registerDevice'))!.slice('registerDevice('.length).split(',')[0]
+      expect(calls, label).toContain(`unregisterDevice(${id})`)
+      expect(calls.some((c) => c.startsWith('add(') || c.startsWith('send(')), label).toBe(false)
+      expect(devices.list(), label).toEqual([])
+      expect(sent, label).toEqual([])
+      manager.cancelAll()
+    }
   })
 
   it('closing the modal withdraws an unscanned code but keeps a scanned request', async () => {

@@ -276,15 +276,36 @@ export interface StatusSummary {
 
 export type PipelineStatus = 'idle' | 'running' | 'paused' | 'waiting-limit' | 'finished'
 
+/**
+ * #31 / #41: a pipeline's counts. `total` includes skipped jobs; `done` = built (every result,
+ * reviewed or not); `unreviewed` = built and waiting for review. The optional fields (added in
+ * #41) split the rest the way the desktop panel does: results that need attention, runs that
+ * stopped with a question, cancelled jobs and jobs the pre-flight skipped.
+ */
+export interface PipelineCounts {
+  total: number
+  done: number
+  running: number
+  queued: number
+  failed: number
+  unreviewed: number
+  needsAttention?: number
+  needsReply?: number
+  cancelled?: number
+  skipped?: number
+}
+
 /** #31: what the Pipeline panel shows. */
 export interface PipelineState {
   status: PipelineStatus
   agent: RemoteAgentId
-  counts: { total: number; done: number; running: number; queued: number; failed: number; unreviewed: number }
+  counts: PipelineCounts
   /** ISO; set while `waiting-limit`. */
   waitingLimitUntil?: string
   /** ISO estimate of when the pipeline finishes. */
   eta?: string
+  /** Why it is paused, stopped or waiting (budget, spend limit, start error, Stop, the agent's limit message); ≤ `LIMITS.errorBytes`. */
+  reason?: string
   startedAt: string
   updatedAt: string
 }
@@ -298,6 +319,9 @@ export interface PipelineSummary {
   finishedAt: string
 }
 
+/** #31's review states (`ReviewDetail.state`); the list holds only the first two. */
+export type RemoteReviewState = 'unreviewed' | 'needs-attention' | 'approved' | 'discarded'
+
 /** One row of the Unreviewed list. */
 export interface ReviewItem {
   applicationId: string
@@ -307,6 +331,16 @@ export interface ReviewItem {
   /** Number of open gaps, for the badge. */
   openGaps: number
   finishedAt: string
+  /** #42: Unreviewed, or Needs attention (failed checks, no notes, a question). */
+  state?: 'unreviewed' | 'needs-attention'
+  /** #42: why it needs attention; ≤ `LIMITS.errorBytes`. */
+  reason?: string
+}
+
+/** `review.list` result: newest first, at most `LIMITS.reviewItems` and the plaintext budget; `more` counts the rest. */
+export interface ReviewList {
+  items: ReviewItem[]
+  more?: number
 }
 
 /** Everything the desktop review screen (#31) shows, so the phone approves what it has seen. */
@@ -329,6 +363,18 @@ export interface ReviewDetail {
    * one immutable snapshot of what the phone was shown. approve / rerun / discard must echo it.
    */
   revision: string
+  /** #42: the review state, as the desktop's review screen shows it. */
+  state?: RemoteReviewState
+  /** #42: why it needs attention; ≤ `LIMITS.errorBytes`. */
+  reason?: string
+  /** #42: review-notes.md did not follow the format (nothing can be ticked); ≤ `LIMITS.errorBytes`. */
+  parseWarning?: string
+  /**
+   * #42: some of the result did not fit the bounds above (a gap, reframing or report cut, more
+   * artifacts than listed). The full text is in review-notes.md (`file.get`) and on the Mac; a
+   * reframing that is not listed cannot be approved from the phone.
+   */
+  truncated?: boolean
 }
 
 export type RemoteRunStatus = 'running' | 'waiting' | 'finished' | 'failed' | 'stopped'
@@ -404,14 +450,17 @@ export interface RunPage {
   nextSeq?: number
 }
 
-/** One row of `jobs.list`. */
+/** One row of `jobs.list` (never the description, the posting URL or the board's facts). */
 export interface RemoteJob {
+  /** The canonical id: copies of one job from several boards are merged under it. */
   id: string
   title: string
   company?: string
   location?: string
   source?: string
   tailored?: boolean
+  /** #40: dismissed (archived on the Board); listed and flagged, like the desktop's list. */
+  dismissed?: boolean
   savedAt: string
 }
 

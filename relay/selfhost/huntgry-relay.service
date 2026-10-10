@@ -1,0 +1,31 @@
+# The self-hosted relay: workerd running relay.capnp, listening on loopback only (Caddy in front).
+[Unit]
+Description=Huntgry relay (workerd)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/huntgry-relay/workerd serve /opt/huntgry-relay/relay.capnp
+# ADMIN_TOKEN=… (written by install.sh, mode 600); only room creation needs it.
+EnvironmentFile=/etc/huntgry-relay/env
+DynamicUser=yes
+StateDirectory=huntgry-relay
+StateDirectoryMode=0700
+Restart=always
+RestartSec=2
+# workerd needs no privileges: loopback socket, its state directory, outbound HTTPS for Expo push.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

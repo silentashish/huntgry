@@ -23,6 +23,7 @@ import { readApplication, scanApplications } from '../applications/scan'
 import { updateTracking } from '../applications/tracking'
 import { MAX_TEXT } from '../cli/command'
 import { RUN_ID_PATTERN } from '../cli/runs'
+import { IN_PROGRESS_REASON } from '../pipeline/pipeline'
 import { HUNTGRY_DIR } from '../workspace/constants'
 import { getReview, sameReview, updateReview, type RecordedReview } from './authority'
 import { addApprovals, approvalsForPrompt, loadApprovals, removeAllApprovals, removeApproval } from './approvals'
@@ -124,6 +125,20 @@ export async function listReviews(workspace: string): Promise<ReviewItem[]> {
       }
     })
     .sort((a, b) => b.at.localeCompare(a.at) || a.applicationId.localeCompare(b.applicationId))
+}
+
+/**
+ * Open gaps listed in a result's review-notes.md (the phone's list badge, #42); 0 when the file is
+ * missing, unreadable or too large. Reads the notes only, never hashes the PDFs.
+ */
+export async function openGapCount(workspace: string, applicationId: string): Promise<number> {
+  try {
+    const folder = await resolveApplicationFolder(workspace, applicationId)
+    const notes = await boundedText(join(folder, REVIEW_NOTES_FILE), MAX_NOTES_BYTES)
+    return notes && 'text' in notes ? parseReviewNotes(notes.text).openGaps.length : 0
+  } catch {
+    return 0
+  }
 }
 
 /** Largest review-notes.md / build-report.json read; bigger ones are reported, not parsed. */
@@ -385,6 +400,18 @@ export function approveReview(deps: ReviewDeps, input: ApproveReviewInput, via: 
   )
 }
 
+/** The reason a result carries while its run works on the user's answers (it is Unreviewed, not settled). */
+export const RERUN_REASON = 'Re-running with your answers.'
+
+/**
+ * A listed result whose run has finished with it: not one marked Unreviewed while its unattended
+ * run still works (`IN_PROGRESS_REASON`) or works on the user's answers (`RERUN_REASON`). What the
+ * phone counts and is told about as waiting for review (#42).
+ */
+export function isSettledReview(item: Pick<ReviewItem, 'reason'>): boolean {
+  return item.reason !== IN_PROGRESS_REASON && item.reason !== RERUN_REASON
+}
+
 /** What the agent is told on a re-run: the user's decisions, plus the ticked reframings as approved. */
 export function rerunMessage(answers: string, approved: { sourceFact: string; wording: string }[]): string {
   const lines = ['The user reviewed the notes.']
@@ -410,7 +437,7 @@ export function rerunReview(deps: ReviewDeps, input: RerunReviewInput, via: Revi
       const now = deps.now?.() ?? new Date()
       const at = now.toISOString()
       // Unreviewed before the reply leaves: from here on the files are the agent's again.
-      const rerunning: RecordedReview = { state: 'unreviewed', runId: detail.runId, at, reason: 'Re-running with your answers.', via }
+      const rerunning: RecordedReview = { state: 'unreviewed', runId: detail.runId, at, reason: RERUN_REASON, via }
       const before = await getReview(workspace, input.applicationId)
       if (!(await decide(workspace, input.applicationId, p.review, rerunning))) return STALE
       try {

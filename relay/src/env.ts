@@ -18,6 +18,8 @@ export interface Env {
   EXPO_RECEIPTS_URL?: string
   /** How long after a push its receipt is looked up (Expo suggests about 15 min). Default 900. */
   PUSH_RECEIPT_DELAY_SECONDS?: string
+  /** Waits before each retry of a transiently failed push, comma-separated seconds; their count is the retry budget. Default "30,120,480". */
+  PUSH_RETRY_DELAYS_SECONDS?: string
 }
 
 export const DEFAULTS = {
@@ -26,7 +28,8 @@ export const DEFAULTS = {
   pushCoalesceSeconds: 5 * 60,
   expoPushUrl: 'https://exp.host/--/api/v2/push/send',
   expoReceiptsUrl: 'https://exp.host/--/api/v2/push/getReceipts',
-  pushReceiptDelaySeconds: 15 * 60
+  pushReceiptDelaySeconds: 15 * 60,
+  pushRetryDelaysSeconds: [30, 120, 480]
 } as const
 
 export interface Config {
@@ -36,11 +39,21 @@ export interface Config {
   expoPushUrl: string
   expoReceiptsUrl: string
   pushReceiptDelayMs: number
+  /** One entry per retry: the wait before it. */
+  pushRetryDelaysMs: number[]
 }
 
 function positive(raw: string | undefined, fallback: number): number {
   const n = raw === undefined ? NaN : Number(raw)
   return Number.isFinite(n) && n > 0 ? n : fallback
+}
+
+/** `"30,120,480"` → `[30, 120, 480]`; anything malformed falls back to the default; `""` means no retries. */
+function delays(raw: string | undefined, fallback: readonly number[]): number[] {
+  if (raw === undefined) return [...fallback]
+  if (raw.trim() === '') return []
+  const parts = raw.split(',').map((p) => Number(p.trim()))
+  return parts.length <= 10 && parts.every((n) => Number.isFinite(n) && n > 0) ? parts : [...fallback]
 }
 
 export function configOf(env: Env): Config {
@@ -50,6 +63,7 @@ export function configOf(env: Env): Config {
     pushCoalesceMs: positive(env.PUSH_COALESCE_SECONDS, DEFAULTS.pushCoalesceSeconds) * 1000,
     expoPushUrl: env.EXPO_PUSH_URL || DEFAULTS.expoPushUrl,
     expoReceiptsUrl: env.EXPO_RECEIPTS_URL || DEFAULTS.expoReceiptsUrl,
-    pushReceiptDelayMs: positive(env.PUSH_RECEIPT_DELAY_SECONDS, DEFAULTS.pushReceiptDelaySeconds) * 1000
+    pushReceiptDelayMs: positive(env.PUSH_RECEIPT_DELAY_SECONDS, DEFAULTS.pushReceiptDelaySeconds) * 1000,
+    pushRetryDelaysMs: delays(env.PUSH_RETRY_DELAYS_SECONDS, DEFAULTS.pushRetryDelaysSeconds).map((s) => s * 1000)
   }
 }
