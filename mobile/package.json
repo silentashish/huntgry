@@ -1,0 +1,50 @@
+{
+  "name": "@huntgry/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Huntgry remote: the Expo (React Native) phone app that watches and steers the desktop through the end-to-end encrypted relay (ADR-0001, #38)",
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "web": "expo start --web",
+    "demo:web": "EXPO_PUBLIC_DEMO=1 expo start --web",
+    "export:web": "EXPO_PUBLIC_DEMO=1 expo export --platform web --output-dir dist",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@expo-google-fonts/bricolage-grotesque": "^0.4.1",
+    "@expo-google-fonts/geist": "^0.4.2",
+    "@expo-google-fonts/geist-mono": "^0.4.3",
+    "@huntgry/remote-protocol": "0.1.0",
+    "@tabler/icons-react-native": "^3.49.0",
+    "expo": "~57.0.27",
+    "expo-camera": "~57.0.6",
+    "expo-constants": "~57.0.21",
+    "expo-device": "~57.0.2",
+    "expo-font": "~57.0.4",
+    "expo-linking": "~57.0.12",
+    "expo-router": "~57.0.25",
+    "expo-secure-store": "~57.0.4",
+    "expo-splash-screen": "~57.0.9",
+    "expo-status-bar": "~57.0.1",
+    "expo-system-ui": "~57.0.4",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-get-random-values": "~1.11.0",
+    "react-native-reanimated": "4.5.1",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
+    "react-native-svg": "15.15.4",
+    "react-native-web": "~0.21.0",
+    "react-native-worklets": "0.10.1"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~5.9",
+    "vitest": "^5.0.2"
+  }
+}

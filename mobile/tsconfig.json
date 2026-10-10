@@ -1,0 +1,17 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      // React 19.2 for React Native lives in mobile/node_modules; the root's 19.3 types (for the
+      // desktop renderer) must not reach the app through hoisted packages.
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
+  "exclude": ["node_modules", "dist", "ios", "android"]
+}
