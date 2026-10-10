@@ -275,6 +275,37 @@ describe('relay client: reconnect', () => {
     expect(hello.ref).toBe(helloEnv.id)
   })
 
+  it('resends a command whose socket was replaced while its seq was being saved', async () => {
+    const t = await setup()
+    t.client.start()
+    await t.online()
+    // Hold the next seq write until the old socket is gone and a new one is authenticated.
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => (release = r))
+    const setItem = t.storage.setItem.bind(t.storage)
+    let held = false
+    t.storage.setItem = async (key, value) => {
+      if (key === VAULT_KEYS.seq && !held) {
+        held = true
+        await gate
+      }
+      return setItem(key, value)
+    }
+    const id = t.client.send(commands.setQueuePaused(true))
+    await settle()
+    t.sockets.last.serverClose(1006)
+    await t.clock.advance(1_001)
+    await t.online()
+    release()
+    await settle()
+    const refs = t.sockets.last.frames().map((f) => f.ref)
+    expect(refs).toContain(id)
+    // Still in seq order: the command (older seq) before the new hello.
+    const envs = t.sockets.last.envelopes()
+    expect(envs.map((e) => e.kind)).toEqual(['cmd', 'hello'])
+    expect(envs[0].seq).toBeLessThan(envs[1].seq)
+  })
+
   it('grows the backoff and waits at least 30 s after a rate-limit close', async () => {
     const t = await setup()
     t.client.start()

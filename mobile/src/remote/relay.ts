@@ -602,8 +602,15 @@ export class RelayClient {
     const text = JSON.stringify(frame)
     if (item.kind === 'cmd') {
       // Recorded before the socket sees it: if the socket died meanwhile, the reconnect resends it.
-      this.sent.set(item.id, { id: item.id, command: item.command, seq, frame: text, expiresAt: now + env.ttl * 1000, state: 'sent' })
+      const record: SentCommand = { id: item.id, command: item.command, seq, frame: text, expiresAt: now + env.ttl * 1000, state: 'sent' }
+      this.sent.set(item.id, record)
       this.o.events.onDelivery?.(item.id, 'sent')
+      // A newer socket authenticated while nextSeq() was pending: its onAuthed() could not see this
+      // command, so it goes out first on that socket (its seq is older than anything still queued).
+      if (this.socket !== socket && this.socket && this.authed) {
+        this.retransmit.push(record)
+        return
+      }
     }
     if (this.socket !== socket || !this.write(socket, this.withAck(text))) return
     if (item.kind === 'ping') this.armWatchdog()
