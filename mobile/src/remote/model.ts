@@ -132,6 +132,8 @@ export class RemoteModel {
   private toastSeq = 0
   /** The Expo push token for the relay (#39); `undefined` until the push module has an answer. */
   private pushToken: PushTokenState = undefined
+  /** False from an unpair (or "pair again") until the next pairing connects: a token fetched for the old pairing is dropped. */
+  private pushOpen = true
   private sleepTimer: unknown = null
   protected readonly clock: Clock
 
@@ -199,6 +201,7 @@ export class RemoteModel {
       }
     })
     this.client = client
+    this.pushOpen = true
     client.setPushToken(this.pushToken)
     client.start()
   }
@@ -274,6 +277,7 @@ export class RemoteModel {
    * to the desktop.
    */
   setPushToken(token: PushTokenState): void {
+    if (!this.pushOpen) return
     this.pushToken = token
     this.client?.setPushToken(token)
   }
@@ -288,6 +292,7 @@ export class RemoteModel {
     const client = this.client
     this.client = null
     this.pushToken = undefined
+    this.pushOpen = false
     if (client) await client.farewell()
     await this.deps.vault.wipe()
     this.requests.clear()
@@ -297,6 +302,7 @@ export class RemoteModel {
   private async onFatal(reason: FatalReason, message: string): Promise<void> {
     this.client = null
     this.pushToken = undefined
+    this.pushOpen = false
     // Pair again: every key and counter goes; the next pairing mints a new identity.
     await this.deps.vault.wipe()
     this.requests.clear()

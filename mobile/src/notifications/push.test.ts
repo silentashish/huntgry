@@ -189,6 +189,24 @@ describe('push registration', () => {
     expect(t.sunk).toEqual([TOKEN, TOKEN])
   })
 
+  it('drops a token that Expo returns after the phone unpaired', async () => {
+    const t = setup()
+    let release: (token: string) => void = () => undefined
+    t.port.getExpoPushToken = (projectId: string) => {
+      t.port.tokenCalls.push(projectId)
+      return new Promise<string>((r) => (release = r))
+    }
+    await t.registrar.start()
+    const pairing = t.registrar.onPaired()
+    await settle()
+    expect(t.port.tokenCalls).toHaveLength(1) // waiting on Expo
+    t.registrar.reset() // the owner unpaired meanwhile
+    release(TOKEN)
+    await pairing
+    expect(t.sunk).toEqual([])
+    expect(t.registrar.getSnapshot()).toMatchObject({ enabled: null, token: null, busy: false })
+  })
+
   it('serialises a toggle that arrives during a foreground refresh', async () => {
     const t = setup({}, true)
     t.port.permission = { status: 'granted', canAskAgain: true }

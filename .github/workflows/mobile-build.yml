@@ -81,5 +81,16 @@ jobs:
           SUBMIT: ${{ inputs.submit }}
         run: |
           args=(build --platform "$PLATFORM" --profile "$PROFILE" --non-interactive --no-wait)
-          if [ "$SUBMIT" = "true" ]; then args+=(--auto-submit); fi
+          if [ "$SUBMIT" = "true" ]; then
+            # Only store builds can be submitted: preview on Android is an APK (Play refuses it)
+            # and development has no submit profile.
+            case "$PROFILE:$PLATFORM" in
+              preview:ios | production:ios | production:android | production:all) ;;
+              *)
+                echo "::error::'submit' works for preview (iOS) and production builds only, not $PROFILE on $PLATFORM. Run it again without 'submit', or pick another profile."
+                exit 1
+                ;;
+            esac
+            args+=(--auto-submit)
+          fi
           npx --yes eas-cli@24 "${args[@]}"

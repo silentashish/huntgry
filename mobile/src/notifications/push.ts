@@ -90,6 +90,8 @@ export class PushRegistrar {
   private chain: Promise<unknown> = Promise.resolve()
   private unsubscribeToken: (() => void) | null = null
   private sent: PushSinkValue = undefined
+  /** Bumped by `reset`: a token fetch still in flight for the old pairing is dropped. */
+  private generation = 0
 
   constructor(private readonly o: PushRegistrarOptions) {
     const reason = unavailableReason(o)
@@ -162,6 +164,7 @@ export class PushRegistrar {
 
   /** The phone unpaired (the model already told the relay): back to "never asked". */
   reset(): void {
+    this.generation++
     this.sent = undefined
     this.set({ ...INITIAL_PUSH_STATE, available: this.state.available, unavailableReason: this.state.unavailableReason })
   }
@@ -183,6 +186,8 @@ export class PushRegistrar {
 
   /** Reads (or, with `ask`, requests) the permission and registers or removes the token to match. */
   private async sync(ask: boolean): Promise<void> {
+    const generation = this.generation
+    const stale = () => generation !== this.generation
     if (!this.state.available) {
       // Nothing to register; an earlier build's token (if any) is not ours to keep.
       if (this.state.enabled === false) this.emit(null)
@@ -196,6 +201,7 @@ export class PushRegistrar {
     try {
       let permission = await this.o.port.getPermission()
       if (ask && permission.status !== 'granted' && permission.canAskAgain) permission = await this.o.port.requestPermission()
+      if (stale()) return
       this.set({ permission: permission.status, canAskAgain: permission.canAskAgain })
       if (permission.status !== 'granted') {
         this.set({ token: null })
@@ -207,9 +213,11 @@ export class PushRegistrar {
         token = await this.o.port.getExpoPushToken(this.o.projectId!)
       } catch (err) {
         // Offline or Expo unreachable: the relay keeps whatever it had; tried again on the next foreground.
-        this.set({ error: (err as Error)?.message || 'Could not get a push token.' })
+        if (!stale()) this.set({ error: (err as Error)?.message || 'Could not get a push token.' })
         return
       }
+      // Unpaired (or turned off) while Expo answered: the token is not for this pairing.
+      if (stale() || this.state.enabled !== true) return
       if (!isExpoPushToken(token)) {
         this.set({ error: 'Expo returned a push token the relay would refuse.' })
         return
@@ -217,9 +225,9 @@ export class PushRegistrar {
       this.set({ token, error: null })
       this.emit(token)
     } catch (err) {
-      this.set({ error: (err as Error)?.message || 'Push notifications are not available.' })
+      if (!stale()) this.set({ error: (err as Error)?.message || 'Push notifications are not available.' })
     } finally {
-      this.set({ busy: false })
+      if (!stale()) this.set({ busy: false })
     }
   }
 

@@ -255,6 +255,22 @@ describe('push token in the model', () => {
     expect(t.storage.data.size).toBe(0)
   })
 
+  it('drops a token that arrives after unpair, so the next pairing does not get it before opting in', async () => {
+    const t = await model()
+    await t.model.init()
+    await t.online()
+    await t.model.unpair()
+    t.model.setPushToken(TOKEN) // a fetch for the old pairing finished late
+    // The next pairing connects: nothing until its own registration says so.
+    await t.vault.savePairing(PAIRING)
+    await t.model.init()
+    await t.online()
+    expect(t.pushFrames()).toEqual([])
+    t.model.setPushToken(TOKEN_2)
+    await settle()
+    expect(t.pushFrames()).toEqual([TOKEN_2])
+  })
+
   it('stores the push choice per pairing (null until asked)', async () => {
     const t = await model()
     const prefs = t.model.pushPrefs()

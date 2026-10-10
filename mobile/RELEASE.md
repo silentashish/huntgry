@@ -233,7 +233,9 @@ has:
 
 The credentials above stay on EAS; the workflow never sees them. Submitting from the workflow
 (`--auto-submit`) needs the App Store Connect API key / Play service account to be on EAS
-already, so do the first submit from your computer.
+already, so do the first submit from your computer. Only store builds can be submitted:
+preview on iOS (TestFlight) and production on either platform. The workflow stops with an error
+for any other combination (the Android preview is an APK, and development has no submit profile).
 
 ## Free Apple ID builds (no push)
 
