@@ -266,6 +266,23 @@ describe('review (#42)', () => {
     expect(t.model.verifiedSha(APP, 'resume-page-1.jpg')).toBeNull()
   })
 
+  it('a folder change while the result is loading fetches it again once the answer lands', async () => {
+    const t = await connected()
+    t.model.openReview(APP)
+    await settle()
+    const first = t.last('review.get')
+    // The Mac rebuilt the result while the phone's request was on its way.
+    t.sockets.last.receive(t.desktop.event('applications.changed', { ids: [APP] }))
+    await settle()
+    expect(t.sent('review.get')).toHaveLength(1)
+    await t.answer(first, DETAIL)
+    expect(t.sent('review.get')).toHaveLength(2)
+    const next: ReviewDetail = { ...DETAIL, revision: '7'.repeat(64) }
+    await t.answer(t.last('review.get'), next)
+    expect(t.model.getSnapshot().review[APP].detail?.revision).toBe(next.revision)
+    expect(t.sent('review.get')).toHaveLength(2)
+  })
+
   it('a refreshed revision replaces previews still loading, so Approve waits on the new hashes', async () => {
     const t = await opened()
     const oldReq = t.last('file.get')

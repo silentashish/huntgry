@@ -222,6 +222,8 @@ export class RemoteModel {
   private chunkRetries = 0
   /** The result the owner has open: refreshed when the Mac's application folders change. */
   private openReviewId: string | null = null
+  /** Results whose folder changed while their `review.get` was in flight: fetched again once it lands. */
+  private reviewRefresh = new Set<string>()
   private toastSeq = 0
   /** The Expo push token for the relay (#39); `undefined` until the push module has an answer. */
   private pushToken: PushTokenState = undefined
@@ -774,6 +776,7 @@ export class RemoteModel {
     this.activeDownload = null
     this.restartChunks()
     this.openReviewId = null
+    this.reviewRefresh.clear()
   }
 
   /** A command the relay dropped (expired, too large) or the phone could not send: no result will come. */
@@ -967,6 +970,10 @@ export class RemoteModel {
         const changed = prev?.detail && prev.detail.revision !== detail.revision && !prev.notice
         this.applyDetail(command.args.applicationId, detail)
         if (changed) this.setReview(command.args.applicationId, { notice: REVIEW_COPY.changed })
+        // The folder changed while this was on its way: it may predate that change.
+        if (this.reviewRefresh.delete(command.args.applicationId) && this.openReviewId === command.args.applicationId && !this.snap.review[command.args.applicationId]?.deciding) {
+          this.openReview(command.args.applicationId)
+        }
         return
       }
       case 'review.approve':
@@ -1016,6 +1023,7 @@ export class RemoteModel {
         if (this.snap.reviews) this.set({ reviews: { ...this.snap.reviews, loading: false, error: message } })
         return
       case 'review.get':
+        this.reviewRefresh.delete(command.args.applicationId)
         this.setReview(command.args.applicationId, { loading: false, error: message })
         return
       case 'file.get':
@@ -1116,7 +1124,11 @@ export class RemoteModel {
   private onApplicationsChanged(ids: string[]): void {
     if (this.snap.reviews) this.loadReviews()
     const open = this.openReviewId
-    if (open && this.snap.review[open]?.detail && (ids.length === 0 || ids.includes(open)) && !this.snap.review[open].deciding) this.openReview(open)
+    if (!open || (ids.length > 0 && !ids.includes(open))) return
+    const view = this.snap.review[open]
+    // Mid-request the answer may be from before this change: ask again once it lands.
+    if (view?.loading) this.reviewRefresh.add(open)
+    else if (view?.detail && !view.deciding) this.openReview(open)
   }
 }
 
