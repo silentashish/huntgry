@@ -319,7 +319,11 @@ export class Room extends DurableObject<Env> {
       }
       this.broadcastPresence()
     } else {
-      if (session.kind === 'device') this.sql('UPDATE devices SET last_seen = ? WHERE id = ?', now, session.id)
+      if (session.kind === 'device') {
+        this.sql('UPDATE devices SET last_seen = ? WHERE id = ?', now, session.id)
+        // The queued frames go down this socket now, so a pending push for them is no longer needed.
+        this.sql('DELETE FROM push_retries WHERE device = ?', session.id)
+      }
       this.notify(ws, this.presenceFor(session.id))
     }
 
@@ -523,6 +527,8 @@ export class Room extends DurableObject<Env> {
     const current = this.sql<{ push_token: string | null }>('SELECT push_token FROM devices WHERE id = ?', deviceId)[0]?.push_token
     if (current !== token) {
       this.sql('DELETE FROM push_retries WHERE device = ? AND category = ? AND token = ?', deviceId, category, token)
+      // A failed attempt for the old token must not hold back hints to the new one.
+      if (outcome !== 'ok') this.sql('DELETE FROM pushes WHERE device = ? AND category = ? AND at = ?', deviceId, category, at)
       return
     }
     if (outcome === 'ok') {
@@ -582,6 +588,11 @@ export class Room extends DurableObject<Env> {
       const current = this.sql<{ push_token: string | null }>('SELECT push_token FROM devices WHERE id = ?', device)[0]?.push_token
       if (current !== row.token) {
         this.sql('DELETE FROM push_retries WHERE device = ? AND category = ? AND token = ?', device, category, row.token)
+        continue
+      }
+      // The phone reconnected and got the queued frames over its socket: the push is not needed.
+      if (this.socketsOf('device', device).length > 0) {
+        this.sql('DELETE FROM push_retries WHERE device = ? AND category = ?', device, category)
         continue
       }
       await this.sendPush(device, category, row.token, row.text ?? undefined, row.attempt, now)

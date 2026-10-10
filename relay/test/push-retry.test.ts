@@ -11,6 +11,8 @@ import { HttpReply, NETWORK_ERROR, Relay, fixture, frame, sleep, type Fixture } 
  *   [bad-N]    400 every time (permanent: no retry)
  *   [dying-N]  503 first, then DeviceNotRegistered
  *   [twin-N]   429 twice with the same Retry-After date, then DeviceNotRegistered, ok after
+ *   [slow-N]   400 after 1 s (permanent: no retry)
+ *   [lag-N]    503 after 1 s, every time
  */
 let relay: Relay
 const calls = new Map<string, number>()
@@ -28,6 +30,8 @@ beforeAll(async () => {
       if (to.includes('[limit-')) return n === 1 ? new HttpReply(429, { 'retry-after': '2' }) : ok
       if (to.includes('[down-')) return new HttpReply(503)
       if (to.includes('[bad-')) return new HttpReply(400)
+      if (to.includes('[slow-')) return sleep(1000).then(() => new HttpReply(400))
+      if (to.includes('[lag-')) return sleep(1000).then(() => new HttpReply(503))
       if (to.includes('[dying-')) return n === 1 ? new HttpReply(503) : { data: [{ status: 'error', message: 'gone', details: { error: 'DeviceNotRegistered' } }] }
       if (to.includes('[twin-')) {
         if (!retryDates.has(to)) retryDates.set(to, new Date(Math.ceil(Date.now() / 1000) * 1000 + 3000).toUTCString())
@@ -118,6 +122,22 @@ describe('push retries', () => {
     await desktop.close()
   })
 
+  it('a failed send to a token replaced while it was in flight does not hold back the new token', async () => {
+    const f = await fixture(relay)
+    const slow = token('slow')
+    await withToken(f, slow)
+    const desktop = await f.desktop()
+    desktop.send(frame(f.deviceId, 's1', { pushHint: 'failed' }))
+    await waitForCalls(slow, 1)
+    const fresh = token('fresh')
+    await withToken(f, fresh) // while the first request is still waiting on Expo
+    await sleep(1500) // it fails
+    desktop.send(frame(f.deviceId, 's2', { pushHint: 'failed' }))
+    await waitForCalls(fresh, 1)
+    expect(callsTo(fresh)).toHaveLength(1)
+    await desktop.close()
+  })
+
   it('does not retry a permanent failure', async () => {
     const f = await fixture(relay)
     const t = token('bad')
@@ -163,6 +183,31 @@ describe('push retries are cancelled', () => {
     expect(await relay.revokeDevice(f.roomId, f.ownerSecret, f.deviceId)).toBe(204)
     await sleep(2500)
     expect(callsTo(t)).toHaveLength(1)
+    await desktop.close()
+  })
+
+  it('by the phone reconnecting, which receives the queued frame itself', async () => {
+    const { f, t, desktop } = await pendingRetry()
+    const phone = await f.phone()
+    await phone.next() // presence
+    await phone.close()
+    await sleep(2500)
+    expect(callsTo(t)).toHaveLength(1)
+    await desktop.close()
+  })
+
+  it('by the phone being connected when the retry is due', async () => {
+    const f = await fixture(relay)
+    const t = token('lag')
+    await withToken(f, t)
+    const desktop = await f.desktop()
+    desktop.send(frame(f.deviceId, 'g1', { pushHint: 'failed' }))
+    await waitForCalls(t, 1)
+    // The phone connects while the first request is in flight, so its retry is scheduled after.
+    const phone = await f.phone()
+    await sleep(3500)
+    expect(callsTo(t)).toHaveLength(1)
+    await phone.close()
     await desktop.close()
   })
 

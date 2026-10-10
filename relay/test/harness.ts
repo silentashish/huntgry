@@ -65,7 +65,7 @@ export const NETWORK_ERROR = Symbol('network error')
 
 export interface RelayOptions {
   bindings?: Record<string, string>
-  /** What the fake Expo endpoint answers; default: one `ok` ticket. An `HttpReply` sets the status; `NETWORK_ERROR` throws. */
+  /** What the fake Expo endpoint answers; default: one `ok` ticket. An `HttpReply` sets the status; `NETWORK_ERROR` throws; a promise delays the answer. */
   pushReply?: (call: PushCall) => unknown
   /** What the fake receipts endpoint answers for the ticket ids asked; default: every id `ok`. */
   receiptReply?: (ids: string[]) => unknown
@@ -172,7 +172,7 @@ export class Relay {
         }
         const call: PushCall = { url: request.url, body }
         relay.pushes.push(call)
-        const reply = options.pushReply ? options.pushReply(call) : { data: [{ status: 'ok' }] }
+        const reply = options.pushReply ? await options.pushReply(call) : { data: [{ status: 'ok' }] }
         if (reply === NETWORK_ERROR) throw new Error('fake network error')
         if (reply instanceof HttpReply) return new MfResponse(JSON.stringify(reply.body), { status: reply.status, headers: { 'content-type': 'application/json', ...reply.headers } })
         return new MfResponse(JSON.stringify(reply), { headers: { 'content-type': 'application/json' } })
