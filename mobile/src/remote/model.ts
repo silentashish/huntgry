@@ -980,7 +980,10 @@ export class RemoteModel {
       case 'review.discard':
       case 'review.rerun': {
         const detail = requireReviewDetail(body)
-        this.applyDetail(detail.applicationId, detail)
+        // A refresh that landed first may already show a newer revision than the one decided on: keep it.
+        const shown = this.snap.review[detail.applicationId]?.detail
+        if (!shown || shown.revision === command.args.revision) this.applyDetail(detail.applicationId, detail)
+        else this.setReview(detail.applicationId, { deciding: undefined })
         this.toast(command.name === 'review.approve' ? REVIEW_COPY.approved : command.name === 'review.discard' ? REVIEW_COPY.discarded : REVIEW_COPY.rerun, 'info')
         this.loadReviews()
         return

@@ -324,6 +324,21 @@ describe('review (#42)', () => {
     expect(t.sent('review.list')).toHaveLength(2)
   })
 
+  it('a decision answer does not replace a newer revision a refresh already showed', async () => {
+    const t = await opened()
+    // A rebuild on the Mac starts a refresh; the owner approves what is on screen meanwhile.
+    t.sockets.last.receive(t.desktop.event('applications.changed', { ids: [APP] }))
+    await settle()
+    const refresh = t.last('review.get')
+    expect(t.model.approve(APP, [])).toBe(true)
+    await settle()
+    const approve = t.last('review.approve')
+    const newer: ReviewDetail = { ...DETAIL, revision: '5'.repeat(64) }
+    await t.answer(refresh, newer)
+    await t.answer(approve, { ...DETAIL, state: 'approved' })
+    expect(t.model.getSnapshot().review[APP]).toMatchObject({ deciding: undefined, detail: { revision: newer.revision } })
+  })
+
   it('stale: the detail is fetched again and the owner is told; the pairing stays', async () => {
     const t = await opened()
     t.model.discard(APP)
