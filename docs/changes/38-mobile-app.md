@@ -111,13 +111,13 @@ SPA fallback and open it at 390 × 844 in both colour schemes; compared with the
 
 | | Dark | Light |
 | --- | --- | --- |
-| Pair | ![](assets/38-pair-dark.png) | ![](assets/38-pair-light.png) |
-| Pair · waiting | ![](assets/38-pair-waiting-dark.png) | ![](assets/38-pair-waiting-light.png) |
-| Status | ![](assets/38-status-dark.png) | ![](assets/38-status-light.png) |
-| Offline | ![](assets/38-offline-dark.png) | ![](assets/38-offline-light.png) |
-| Queue | ![](assets/38-queue-dark.png) | ![](assets/38-queue-light.png) |
-| Run | ![](assets/38-run-dark.png) | ![](assets/38-run-light.png) |
-| Settings | ![](assets/38-settings-dark.png) | ![](assets/38-settings-light.png) |
+| Pair | ![Pair screen, dark theme](assets/38-pair-dark.png) | ![Pair screen, light theme](assets/38-pair-light.png) |
+| Pair · waiting | ![Pair screen waiting for approval, dark theme](assets/38-pair-waiting-dark.png) | ![Pair screen waiting for approval, light theme](assets/38-pair-waiting-light.png) |
+| Status | ![Status screen, dark theme](assets/38-status-dark.png) | ![Status screen, light theme](assets/38-status-light.png) |
+| Offline | ![Offline screen, dark theme](assets/38-offline-dark.png) | ![Offline screen, light theme](assets/38-offline-light.png) |
+| Queue | ![Queue screen, dark theme](assets/38-queue-dark.png) | ![Queue screen, light theme](assets/38-queue-light.png) |
+| Run | ![Run screen, dark theme](assets/38-run-dark.png) | ![Run screen, light theme](assets/38-run-light.png) |
+| Settings | ![Settings screen, dark theme](assets/38-settings-dark.png) | ![Settings screen, light theme](assets/38-settings-light.png) |
 
 Native configuration: `npx expo config --type public` resolves (name, scheme `huntgry`, bundle
 id / package `com.huntgry.remote`, camera permission text, no microphone). `npx expo-doctor`:

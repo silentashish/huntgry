@@ -197,8 +197,9 @@ function LimitAlert({ snap }: { snap: RemoteSnapshot }) {
   const until = p?.waitingLimitUntil ?? (snap.status?.pipeline?.status === 'waiting-limit' ? snap.status.pipeline.until : undefined)
   if (!until) return null
   const agent = p ? AGENT_LABEL[p.agent] : 'The agent'
-  const other = snap.status?.agents.find((a) => a.ready && a.id !== p?.agent)
-  const body = p?.status === 'waiting-limit' || !other ? 'Jobs not started yet wait until then. Nothing is lost.' : `Jobs not started yet switch to ${AGENT_LABEL[other.id]}. Nothing is lost.`
+  // The phone cannot tell whether this pipeline has a fallback agent (the desktop does not send
+  // it), so it does not promise a switch.
+  const body = 'Jobs not started yet wait for the reset, or go to the fallback agent if this pipeline has one. Nothing is lost.'
   return (
     <FadeIn index={5}>
       <Alert tone="warning" title={`${agent} limit resets ${clock(until)}`}>
