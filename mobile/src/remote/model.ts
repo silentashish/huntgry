@@ -45,7 +45,7 @@ import { FileDownload, FileError, fileKey } from './files'
 import { REVIEW_COPY, approvalIds, requiredPreviews } from './review'
 import { PairingFlow, PairingError, type PairingStep } from './pairing'
 import { systemClock, type Clock, type SocketFactory } from './platform'
-import { RelayClient, type ConnectionState, type FatalReason, type SentCommand } from './relay'
+import { RelayClient, StorageError, type ConnectionState, type FatalReason, type SentCommand } from './relay'
 import type { Pairing, Vault } from './vault'
 
 export interface RunView {
@@ -162,7 +162,7 @@ export interface ModelDeps {
   random?: () => number
 }
 
-/** Pages fetched in a row when a run opens; more come with "Load earlier" / the next change. */
+/** Pages fetched in a row when a run opens; more come with "Load more" (`loadMoreRun`). */
 const AUTO_PAGES = 12
 const COMMAND_HISTORY = 20
 /** Files kept in memory; the oldest go first (previews are fetched again when needed). */
@@ -784,6 +784,13 @@ export class RemoteModel {
     if (this.dispatch(commands.run(runId, view?.items.length || undefined), { quiet: true }) === null) this.setRun(runId, { loading: false })
   }
 
+  /** The next pages of a transcript that stopped at the automatic page limit (or failed to load). */
+  loadMoreRun(runId: string): void {
+    const view = this.snap.runs[runId]
+    if (!view || view.loading || view.complete) return
+    this.openRun(runId)
+  }
+
   /** New items since the last one (the last item is fetched again: a running tool may have finished). */
   refreshRun(runId: string): void {
     const view = this.snap.runs[runId]
@@ -853,7 +860,7 @@ export class RemoteModel {
         this.runPages.set(runId, pages)
         if (page.nextSeq !== undefined && pages < AUTO_PAGES) {
           this.setRun(runId, { run: page.run, items, complete: false, loading: true })
-          this.dispatch(commands.run(runId, page.nextSeq), { quiet: true })
+          if (this.dispatch(commands.run(runId, page.nextSeq), { quiet: true }) === null) this.setRun(runId, { loading: false })
         } else {
           this.setRun(runId, { run: page.run, items, complete: page.nextSeq === undefined, loading: false })
         }
@@ -999,7 +1006,11 @@ export class RemoteModel {
   protected async applyStatus(status: StatusSummary): Promise<void> {
     const at = new Date(this.clock.now()).toISOString()
     // Stored before the frame is acked: the last StatusSummary is the one thing besides keys that outlives the app.
-    await this.deps.vault.saveStatus(status, at)
+    try {
+      await this.deps.vault.saveStatus(status, at)
+    } catch (err) {
+      throw new StorageError(err instanceof Error ? err.message : undefined)
+    }
     this.set({ status, statusAt: at, workspace: { id: status.desktop.workspaceId, name: status.desktop.workspaceName } })
   }
 
