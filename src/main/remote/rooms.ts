@@ -1,8 +1,8 @@
 import type { RelayCredentials } from './credentials'
 
 /**
- * Room rotation for Settings (ADR-0001, "Relay deployment / credential storage"): Rotate in
- * the relay form and Unpair everything. Electron-free so the control flow is tested: the warning
+ * Room rotation for Settings (ADR-0001, "Relay deployment / credential storage"): Save in the
+ * relay form, Rotate relay credentials, the "credentials unreadable" recovery and Unpair everything. Electron-free so the control flow is tested: the warning
  * a failed relay revocation leaves is cleared by any rotation (the old room and its tokens
  * are gone), and Unpair everything always reconnects, even when the relay refuses a new room.
  */
@@ -18,6 +18,8 @@ export interface RoomDeps {
   writeCredentials(credentials: RelayCredentials): Promise<void>
   /** New desktop identity; every paired device is dropped. */
   rotateKeyPair(): Promise<unknown>
+  /** Every paired phone must pair again: its relay token lived in the replaced room. */
+  markAllNeedsRepair(): Promise<unknown>
   stopSession(): void
   /** Re-reads the credentials and settings and connects (or stays closed), publishing the state. */
   apply(): Promise<unknown>
@@ -40,16 +42,20 @@ export class RoomControl {
     this.warning = REVOKE_UNCONFIRMED
   }
 
-  /** The relay form's Save / Rotate: a new room; replacing one also rotates the desktop key. */
-  async replaceRoom(relayUrl: string, adminToken: string, previous: RelayCredentials | null): Promise<void> {
+  /**
+   * Save, Rotate relay credentials and the unreadable-credentials recovery: a new owner secret and
+   * room. Replacing a room (`previous`, or `replacing` when the old credentials cannot be read, so
+   * the old room cannot be deleted) marks every phone *needs re-pair*: their tokens were in it.
+   */
+  async replaceRoom(relayUrl: string, adminToken: string, previous: RelayCredentials | null, replacing = previous !== null): Promise<void> {
     const next = await this.deps.createRoom(relayUrl, adminToken)
     await this.deps.writeCredentials(next)
     if (previous) {
       await this.deps.deleteRoom(previous)
-      await this.deps.rotateKeyPair()
       // The old room, and every token a failed revocation left in it, is gone.
       this.warning = null
     }
+    if (replacing) await this.deps.markAllNeedsRepair()
   }
 
   /**

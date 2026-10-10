@@ -16,6 +16,7 @@ import { JobsPage } from './pages/jobs'
 import { ProfilePage } from './pages/profile'
 import { ReviewPage } from './pages/review'
 import { SettingsPage } from './pages/settings'
+import { PairingPrompt } from './pages/settings/PairingPrompt'
 import { TailorPage } from './pages/tailor'
 
 type Draft = { profile: MasterProfile; fileName: string; warnings: string[] }
@@ -66,44 +67,48 @@ export function App() {
   if (view.name === 'shell') {
     const switchWorkspace = () => setView({ name: 'picker' })
     return (
-      <AppLayout
-        key={view.inspection.path}
-        workspacePath={view.inspection.path}
-        initialLocation={view.start}
-        onSwitchWorkspace={switchWorkspace}
-      >
-        {(location) => {
-          switch (location.page) {
-            case 'dashboard':
-              return <DashboardPage />
-            case 'board':
-              return <BoardPage />
-            case 'jobs':
-              return <JobsPage />
-            case 'browser':
-              return <BrowserPage params={paramsFor(location, 'browser')} />
-            case 'tailor':
-              return <TailorPage params={paramsFor(location, 'tailor')} />
-            case 'review':
-              return <ReviewPage params={paramsFor(location, 'review')} />
-            case 'graph':
-              return <GraphPage params={paramsFor(location, 'graph')} />
-            case 'settings':
-              return <SettingsPage />
-            case 'profile':
-              return (
-                <ProfilePage
-                  params={paramsFor(location, 'profile')}
-                  document={view.doc}
-                  initialDraft={view.draft}
-                  onDocumentChange={(doc) => setView({ ...view, doc, draft: undefined })}
-                  onLeave={() => setView((v) => (v.name === 'shell' && v.draft ? { ...v, draft: undefined } : v))}
-                  onSwitchWorkspace={switchWorkspace}
-                />
-              )
-          }
-        }}
-      </AppLayout>
+      <>
+        {/* A phone that scanned the pairing code is asked about on every page (#37). */}
+        <PairingPrompt />
+        <AppLayout
+          key={view.inspection.path}
+          workspacePath={view.inspection.path}
+          initialLocation={view.start}
+          onSwitchWorkspace={switchWorkspace}
+        >
+          {(location) => {
+            switch (location.page) {
+              case 'dashboard':
+                return <DashboardPage />
+              case 'board':
+                return <BoardPage />
+              case 'jobs':
+                return <JobsPage />
+              case 'browser':
+                return <BrowserPage params={paramsFor(location, 'browser')} />
+              case 'tailor':
+                return <TailorPage params={paramsFor(location, 'tailor')} />
+              case 'review':
+                return <ReviewPage params={paramsFor(location, 'review')} />
+              case 'graph':
+                return <GraphPage params={paramsFor(location, 'graph')} />
+              case 'settings':
+                return <SettingsPage />
+              case 'profile':
+                return (
+                  <ProfilePage
+                    params={paramsFor(location, 'profile')}
+                    document={view.doc}
+                    initialDraft={view.draft}
+                    onDocumentChange={(doc) => setView({ ...view, doc, draft: undefined })}
+                    onLeave={() => setView((v) => (v.name === 'shell' && v.draft ? { ...v, draft: undefined } : v))}
+                    onSwitchWorkspace={switchWorkspace}
+                  />
+                )
+            }
+          }}
+        </AppLayout>
+      </>
     )
   }
 

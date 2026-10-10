@@ -10,5 +10,7 @@
   "ct": "nPuEaNQUHSRX1lktgjaGKzktsWS+XcxoDP9ZrvL2IyHo94hL9OIUj6yVj0szz+8nGEXtR/cbGCO2EjvargETIA66QA/ooM47MLtIRmlpmHag88pQSz/3M+EofYuKtpErF7wB0iVksXp1qjGzr5cyQxvksKIxi6ZRWxSF",
   "pairingSecret": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
   "pairingPlaintext": "{\"pair\":\"hello\"}",
-  "pairingCt": "ly56nJgzk5KAUWYDSTxeD9y0fpWU9D0gwJYNSBgVo3I="
+  "pairingCt": "ly56nJgzk5KAUWYDSTxeD9y0fpWU9D0gwJYNSBgVo3I=",
+  "pairHello": {"pair": "hello", "hello": {"devicePub": "ST6C/HRGSlkmiBdiPSBTxeuOLMSpiLT+4XnsawENUx0=", "deviceName": "Ashish's iPhone", "appVersion": "0.1.0", "protocol": {"min": 1, "max": 1}}},
+  "pairHelloCt": "ItSWEZsQ3XSwwyPsyoXdVdy0fpWU9D0gwJYNSBgVoyNzFPogDcR5JdSR/PMGNpYDR202ipBpcVN6Bto5VOElzEHmhld72dhsuE3GW77mD1625VpEBB8jP+LTiqcmsLULyla9zDcaYOloTxc7c4tznliLPbYwsFHguZXSm466jSjOT9fC7jfbd9FYbFfv0qJNd01bK62WsJ2CWGzcqIOEqKy1253WVq9w0cjj/3mFAZODl8d9U44="
 }

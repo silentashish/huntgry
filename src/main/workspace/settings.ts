@@ -16,8 +16,11 @@ export interface AppSettings {
   defaultAgent?: string
   /** Settings → Agents (#79): the CLI copy to run, by executable name (`claude`, `codex`, `agy`); unset = the first one found. */
   cliPaths?: Record<string, string>
-  /** Remote control (ADR-0001): the session is off unless enabled; the two toggles default to details off, transcripts on. */
-  remote?: { enabled?: boolean; notificationDetails?: boolean; transcripts?: boolean }
+  /**
+   * Remote control (ADR-0001): the session is off unless enabled; the two toggles default to details off, transcripts on;
+   * the command TTLs (seconds) default to 2 h for costly commands and 24 h for the rest (read through `remote/settings.ts`).
+   */
+  remote?: { enabled?: boolean; notificationDetails?: boolean; transcripts?: boolean; costlyTtlSeconds?: number; defaultTtlSeconds?: number }
   /** Settings → Pricing (#44): prices the user changed or added; the bundled table fills in the rest. */
   pricing?: PricingOverrides
   /** Apply (#71): pick remembered answers in dropdowns and button groups automatically; on unless set to false. */

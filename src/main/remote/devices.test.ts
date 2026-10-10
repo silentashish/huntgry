@@ -54,6 +54,23 @@ describe('DeviceStore', () => {
     expect(again.get(phone.id)!.lastSeq).toBe(30)
   })
 
+  it('Rotate relay credentials marks every device for re-pair, on disk too, and keeps the desktop key', async () => {
+    const store = new DeviceStore(dir, fakeCipher())
+    await store.load()
+    const keys = (await store.keyPair())!
+    await store.add(fakePhone(keys, 'A', 'dev-a').record)
+    await store.add(fakePhone(keys, 'B', 'dev-b').record)
+    await store.markAllNeedsRepair()
+    expect(store.active()).toEqual([])
+    const again = new DeviceStore(dir, fakeCipher())
+    await again.load()
+    expect(again.list().map((d) => [d.id, d.needsRepair])).toEqual([
+      ['dev-a', true],
+      ['dev-b', true]
+    ])
+    expect(toBase64((await again.keyPair())!.publicKey)).toBe(toBase64(keys.publicKey))
+  })
+
   it('marks a device for re-pair and rotation drops every device', async () => {
     const store = new DeviceStore(dir, fakeCipher())
     await store.load()
