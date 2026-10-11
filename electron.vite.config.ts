@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+
+const { version } = JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as { version: string }
 
 export default defineConfig({
   main: {
@@ -24,6 +27,8 @@ export default defineConfig({
   },
   renderer: {
     resolve: { alias: { '@shared': resolve('src/shared') } },
+    // The sidebar's version line (#108): the same version `app.getVersion()` reports, from package.json.
+    define: { __APP_VERSION__: JSON.stringify(version) },
     plugins: [react()]
   }
 })

@@ -11,7 +11,6 @@ import { locationOf, paramsFor, type Location } from './navigation'
 import { BoardPage } from './pages/board'
 import { BrowserPage } from './pages/browser'
 import { DashboardPage } from './pages/dashboard'
-import { GraphPage } from './pages/graph'
 import { JobsPage } from './pages/jobs'
 import { ProfilePage } from './pages/profile'
 import { ReviewPage } from './pages/review'
@@ -74,9 +73,11 @@ export function App() {
           key={view.inspection.path}
           workspacePath={view.inspection.path}
           initialLocation={view.start}
+          profile={view.doc.profile}
           onSwitchWorkspace={switchWorkspace}
         >
           {(location) => {
+            // `graph` never gets here: navigation sends it to Profile's graph view (#108).
             switch (location.page) {
               case 'dashboard':
                 return <DashboardPage />
@@ -90,8 +91,6 @@ export function App() {
                 return <TailorPage params={paramsFor(location, 'tailor')} />
               case 'review':
                 return <ReviewPage params={paramsFor(location, 'review')} />
-              case 'graph':
-                return <GraphPage params={paramsFor(location, 'graph')} />
               case 'settings':
                 return <SettingsPage />
               case 'profile':
