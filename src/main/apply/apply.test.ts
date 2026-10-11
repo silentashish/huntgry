@@ -1018,6 +1018,21 @@ describe('ApplyService on Workday', () => {
     expect(service.current()!.message).toMatch(/Nothing for Huntgry on this step \("Application Questions"\)/)
   })
 
+  it('scans a reported step again when its detect gets no answer', async () => {
+    await workdayApp()
+    const tab = wdTab()
+    const { service } = wdSetup(tab, undefined, { retryDelaysMs: [10, 10], requestTimeoutMs: 100 })
+    await service.start(WD_ID)
+    tab.load(fixture('workday-signin.html'), `${JOB}/apply/applyManually`)
+    await vi.waitFor(() => expect(service.current()!.step?.kind).toBe('account-wall'))
+    // The user signs in; My Information swaps in, but the scan the watcher's report asks for is never answered.
+    tab.lostDetects = 1
+    tab.step(fixture('workday-my-information.html'))
+    await until(service, 'filled')
+    expect(service.current()!.step).toEqual({ kind: 'form', title: 'My Information' })
+    expect(value(tab, '#name--legalName--firstName')).toBe('Ada')
+  })
+
   it('a step reported again while its fill is running (in-page navigation, then the watcher) does not cancel it', async () => {
     await workdayApp()
     const tab = wdTab()

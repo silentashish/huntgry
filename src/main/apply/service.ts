@@ -394,7 +394,7 @@ export class ApplyService {
       // The page did not answer (the request reached a document that was being replaced, or the page timed out)
       // or answered something unreadable. A newer load detects on its own; if none came, this page is still the
       // current one and nothing else would ever scan it again (#119): try again, a bounded number of times.
-      if (seq !== null) this.detectAgain(ctx, seq, attempt)
+      this.detectAgain(ctx, seq, attempt)
       return
     }
     if (this.ctx !== ctx) return
@@ -504,14 +504,16 @@ export class ApplyService {
 
   /**
    * Schedules the next detect of generation `seq` (the retry delays bound how many), unless a newer generation
-   * already replaced it: that one's own load detects it.
+   * already replaced it: that one's own load detects it. A step report (`seq` null) is retried as a step report, for
+   * the generation it was made in.
    */
-  private detectAgain(ctx: Context, seq: number, attempt: number): void {
+  private detectAgain(ctx: Context, seq: number | null, attempt: number): void {
     const delay = (this.deps.retryDelaysMs ?? DEFAULT_RETRIES)[attempt]
-    if (delay === undefined || this.ctx !== ctx || ctx.loadSeq !== seq) return
+    const generation = seq ?? ctx.loadSeq
+    if (delay === undefined || this.ctx !== ctx || ctx.loadSeq !== generation) return
     this.later(ctx, delay, () => {
       // A load meanwhile detects its own page; this retry would only scan it for a generation already gone.
-      if (ctx.loadSeq === seq) void this.detect(ctx, seq, attempt + 1)
+      if (ctx.loadSeq === generation) void this.detect(ctx, seq, attempt + 1)
     })
   }
 
