@@ -1,8 +1,9 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
-import { Button, Group, Modal, Paper, Stack, Text } from '@mantine/core'
+import { Button, Group, Modal, Stack, Text, Title } from '@mantine/core'
 import { IconCheck, IconDeviceMobile } from '@tabler/icons-react'
 import type { RemotePairingInfo, RemoteState } from '@shared/remote-types'
 import { api, errorText } from '../../api'
+import classes from './settings.module.css'
 
 /**
  * The approve step of pairing (#37): "Pair '<device name>'?" with Approve / Deny. Shown inside the
@@ -67,32 +68,33 @@ export function ApprovePanel({ request, onDecided }: { request: RemotePairingInf
 
   const name = request.deviceName ?? 'a phone'
   return (
-    <Paper withBorder radius="md" p="sm" style={{ borderColor: 'var(--mantine-color-orange-filled)' }} data-testid="pair-approve">
-      <Group justify="space-between" wrap="nowrap" gap="sm">
-        <Group gap="sm" wrap="nowrap">
-          <IconDeviceMobile size={20} color="var(--mantine-color-orange-filled)" />
-          <div>
-            <Text fw={600}>Pair “{name}”?</Text>
-            <Text size="xs" c="dimmed">
-              Just scanned · Huntgry {request.appVersion ?? ''} · decide within {countdown(request.decideBy, now)}
+    <div data-testid="pair-approve">
+      <div className={classes.approve}>
+        <IconDeviceMobile size={20} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className={classes.approveTitle}>Pair “{name}”?</div>
+          <Text size="xs" c="dimmed">
+            Just scanned · Huntgry {request.appVersion ?? ''} · decide within{' '}
+            <Text span inherit ff="monospace">
+              {countdown(request.decideBy, now)}
             </Text>
-          </div>
-        </Group>
-        <Group gap="xs" wrap="nowrap">
-          <Button size="xs" variant="subtle" color="gray" disabled={busy !== null || request.status === 'approving'} loading={busy === 'deny'} onClick={() => void decide(false)}>
+          </Text>
+        </div>
+        <Group gap={8} wrap="nowrap" style={{ flex: 'none' }}>
+          <Button size="xs" variant="subtle" disabled={busy !== null || request.status === 'approving'} loading={busy === 'deny'} onClick={() => void decide(false)}>
             Deny
           </Button>
-          <Button size="xs" color="orange" leftSection={<IconCheck size={14} />} disabled={busy !== null} loading={busy === 'approve' || request.status === 'approving'} onClick={() => void decide(true)}>
+          <Button size="xs" variant="primary" leftSection={<IconCheck size={14} />} disabled={busy !== null} loading={busy === 'approve' || request.status === 'approving'} onClick={() => void decide(true)}>
             Approve
           </Button>
         </Group>
-      </Group>
+      </div>
       {(error ?? request.error) && (
-        <Text size="xs" c="red" mt={6}>
+        <Text size="xs" c="var(--hg-status-danger)" mt={6}>
           {error ?? request.error}
         </Text>
       )}
-    </Paper>
+    </div>
   )
 }
 
@@ -112,8 +114,23 @@ export function PairingPrompt() {
 
   const requests = waitingRequests(state).filter((r) => !hidden.includes(r.id))
   return (
-    <Modal opened={!open && requests.length > 0} onClose={() => setHidden((h) => [...h, ...requests.map((r) => r.id)])} title="A phone wants to pair" centered size="lg">
-      <Stack gap="sm">
+    <Modal
+      opened={!open && requests.length > 0}
+      onClose={() => setHidden((h) => [...h, ...requests.map((r) => r.id)])}
+      title={
+        <Group gap={10} wrap="nowrap">
+          <IconDeviceMobile size={20} color="var(--hg-accent-primary)" />
+          <Title order={3} className={classes.modalTitle}>
+            A phone wants to pair
+          </Title>
+        </Group>
+      }
+      centered
+      size={560}
+      radius="var(--hg-radius-2xl)"
+      padding={24}
+    >
+      <Stack gap="md">
         <Text size="sm" c="dimmed">
           Only approve a phone you are holding. It will be able to see this Mac&apos;s queue and runs and control them.
         </Text>

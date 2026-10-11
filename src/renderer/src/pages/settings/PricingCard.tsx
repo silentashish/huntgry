@@ -1,9 +1,26 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ActionIcon, Alert, Anchor, Badge, Button, Card, Group, Modal, NumberInput, ScrollArea, Stack, Table, Text, TextInput, Title, Tooltip } from '@mantine/core'
+import {
+  ActionIcon,
+  Alert,
+  Anchor,
+  Button,
+  Group,
+  Modal,
+  NumberInput,
+  ScrollArea,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+  Tooltip
+} from '@mantine/core'
 import { IconCloudDownload, IconPencil, IconPlus, IconRestore } from '@tabler/icons-react'
 import type { ModelPrice } from '@shared/pricing'
 import type { PricingState } from '@shared/usage-types'
 import { api, errorText } from '../../api'
+import { MonoLabel, StatusPill } from '../../components/ui'
+import { SettingsCard, TableFrame } from './SettingsCard'
+import classes from './settings.module.css'
 
 type Draft = {
   id: string
@@ -19,7 +36,18 @@ type Draft = {
   existing: boolean
 }
 
-const EMPTY: Draft = { id: '', label: '', input: '', cachedInput: '', cacheWrite: '', cacheWrite1h: '', output: '', source: '', aliases: [], existing: false }
+const EMPTY: Draft = {
+  id: '',
+  label: '',
+  input: '',
+  cachedInput: '',
+  cacheWrite: '',
+  cacheWrite1h: '',
+  output: '',
+  source: '',
+  aliases: [],
+  existing: false
+}
 
 /** `raw.githubusercontent.com` for a URL; the text itself otherwise. */
 function hostOf(source: string): string {
@@ -112,197 +140,254 @@ export function PricingCard() {
   const synced = state?.synced ?? null
   const changed = state?.prices.some((p) => p.custom) ?? false
 
+  // SectionCard takes no data-* props: the test id sits on a wrapper (e2e `UsagePage.pricingCard`).
   return (
-    <Card withBorder radius="md" padding="lg" data-testid="pricing-card">
-      <Group justify="space-between" align="flex-start" mb="xs">
-        <div>
-          <Title order={4}>Pricing</Title>
-          <Text size="sm" c="dimmed" maw={640}>
-            USD per million tokens, used for the estimated API cost of every run. On a subscription (Claude Pro/Max,
-            ChatGPT, Google AI) nothing is billed per token: the estimate is what the same tokens would cost on the API.
-            Changes apply to past runs too.
-          </Text>
-        </div>
-        <Group gap="xs">
-          <Button size="xs" leftSection={<IconCloudDownload size={14} />} loading={syncing} onClick={() => void sync()}>
-            Sync prices
-          </Button>
-          <Button size="xs" variant="light" leftSection={<IconPlus size={14} />} onClick={() => setDraft({ ...EMPTY })}>
-            Add model
-          </Button>
-          {changed && (
-            <Button size="xs" variant="default" leftSection={<IconRestore size={14} />} onClick={() => void act(api.runner.resetPrices)}>
-              Reset to defaults
+    <div data-testid="pricing-card">
+      <SettingsCard
+        title="Pricing"
+        description="USD per million tokens, used for the estimated API cost of every run. On a subscription (Claude Pro/Max, ChatGPT, Google AI) nothing is billed per token: the estimate is what the same tokens would cost on the API. Changes apply to past runs too."
+        actions={
+          <>
+            <Button
+              size="xs"
+              variant="secondary"
+              leftSection={<IconCloudDownload size={14} />}
+              loading={syncing}
+              onClick={() => void sync()}
+            >
+              Sync prices
             </Button>
+            <Button
+              size="xs"
+              variant="subtle"
+              leftSection={<IconPlus size={14} />}
+              onClick={() => setDraft({ ...EMPTY })}
+            >
+              Add model
+            </Button>
+            {changed && (
+              <Button
+                size="xs"
+                variant="subtle"
+                leftSection={<IconRestore size={14} />}
+                onClick={() => void act(api.runner.resetPrices)}
+              >
+                Reset to defaults
+              </Button>
+            )}
+          </>
+        }
+      >
+        <Stack gap="sm">
+          <Group gap="xs">
+            <Text
+              span
+              ff="monospace"
+              fz={10}
+              lh="12px"
+              lts="0.08em"
+              c="var(--hg-text-muted)"
+              data-testid="pricing-sync-status"
+            >
+              {synced
+                ? `Last synced ${new Date(synced.syncedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })} from ${hostOf(synced.source)} (${synced.models} models). Your own edits still win.`
+                : 'Not synced: bundled prices. "Sync prices" fetches current prices for Claude, OpenAI and Gemini models from a public price list (a rough estimate, not your bill).'}
+            </Text>
+            {synced && (
+              <Anchor
+                component="button"
+                size="xs"
+                ff="monospace"
+                onClick={() => void act(api.runner.clearSyncedPrices)}
+              >
+                Clear synced prices
+              </Anchor>
+            )}
+          </Group>
+          {error && (
+            <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
+              {error}
+            </Alert>
           )}
-        </Group>
-      </Group>
-      <Group gap="xs" mb="xs">
-        <Text size="xs" c="dimmed" data-testid="pricing-sync-status">
-          {synced
-            ? `Last synced ${new Date(synced.syncedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })} from ${hostOf(synced.source)} (${synced.models} models). Your own edits still win.`
-            : 'Not synced: bundled prices. "Sync prices" fetches current prices for Claude, OpenAI and Gemini models from a public price list (a rough estimate, not your bill).'}
-        </Text>
-        {synced && (
-          <Anchor component="button" size="xs" onClick={() => void act(api.runner.clearSyncedPrices)}>
-            Clear synced prices
-          </Anchor>
-        )}
-      </Group>
-      {error && (
-        <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)} mb="xs">
-          {error}
-        </Alert>
-      )}
-      <ScrollArea.Autosize mah={360}>
-        <Table fz="xs" striped stickyHeader>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Model</Table.Th>
-              <Table.Th ta="right">Input</Table.Th>
-              <Table.Th ta="right">Cached</Table.Th>
-              <Table.Th ta="right">Cache write</Table.Th>
-              <Table.Th ta="right">Output</Table.Th>
-              <Table.Th>Source</Table.Th>
-              <Table.Th />
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {(state?.prices ?? []).map((p) => (
-              <Table.Tr key={p.id} data-testid={`price-${p.id}`}>
-                <Table.Td>
-                  <Text size="xs" fw={500}>
-                    {p.label}
-                  </Text>
-                  <Text size="xs" c="dimmed" ff="monospace">
-                    {p.id}
-                  </Text>
-                </Table.Td>
-                <Table.Td ta="right">{rate(p.input)}</Table.Td>
-                <Table.Td ta="right">{rate(p.cachedInput)}</Table.Td>
-                <Table.Td ta="right">
-                  {rate(p.cacheWrite)}
-                  {p.cacheWrite1h !== undefined && (
-                    <Text span size="xs" c="dimmed">
-                      {' '}
-                      / {rate(p.cacheWrite1h)} 1h
-                    </Text>
-                  )}
-                </Table.Td>
-                <Table.Td ta="right">{rate(p.output)}</Table.Td>
-                <Table.Td>
-                  {p.custom ? (
-                    <Badge size="xs" variant="light" color="grape">
-                      {bundled.has(p.id) ? 'changed' : 'added'}
-                    </Badge>
-                  ) : (
-                    <>
-                      {p.synced && (
-                        <Badge size="xs" variant="light" color="teal" mr={4}>
-                          synced
-                        </Badge>
-                      )}
-                      <Anchor href={p.source} target="_blank" rel="noreferrer" size="xs">
-                        {hostOf(p.source)}
-                      </Anchor>
-                    </>
-                  )}{' '}
-                  <Text span size="xs" c="dimmed">
-                    {p.asOf}
-                  </Text>
-                </Table.Td>
-                <Table.Td>
-                  <Group gap={2} wrap="nowrap">
-                    <Tooltip label="Edit">
-                      <ActionIcon size="sm" variant="subtle" aria-label={`Edit ${p.id}`} onClick={() => edit(p)}>
-                        <IconPencil size={14} />
-                      </ActionIcon>
-                    </Tooltip>
-                    {p.custom && (
-                      <Tooltip label={bundled.has(p.id) ? 'Back to the bundled price' : 'Remove'}>
-                        <ActionIcon
-                          size="sm"
-                          variant="subtle"
-                          color="gray"
-                          aria-label={`Reset ${p.id}`}
-                          onClick={() => void act(() => api.runner.removePrice(p.id))}
-                        >
-                          <IconRestore size={14} />
-                        </ActionIcon>
-                      </Tooltip>
-                    )}
-                  </Group>
-                </Table.Td>
-              </Table.Tr>
-            ))}
-          </Table.Tbody>
-        </Table>
-      </ScrollArea.Autosize>
-      <Text size="xs" c="dimmed" mt="xs">
-        Not modelled: long-context tiers (over 200k–272k input tokens in one request), batch, fast mode and regional
-        pricing. A model missing here shows as "not priced".
-      </Text>
+          <TableFrame>
+            <ScrollArea.Autosize mah={360}>
+              <Table stickyHeader horizontalSpacing="md" verticalSpacing={10}>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Model</Table.Th>
+                    <Table.Th>Input</Table.Th>
+                    <Table.Th>Cached</Table.Th>
+                    <Table.Th>Cache write</Table.Th>
+                    <Table.Th>Output</Table.Th>
+                    <Table.Th>Source</Table.Th>
+                    <Table.Th />
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {(state?.prices ?? []).map((p) => (
+                    <Table.Tr key={p.id} data-testid={`price-${p.id}`}>
+                      <Table.Td>
+                        <Text size="sm" fw={500}>
+                          {p.label}
+                        </Text>
+                        <MonoLabel size="xs" component="div">
+                          {p.id}
+                        </MonoLabel>
+                      </Table.Td>
+                      <Table.Td className={classes.amount}>{rate(p.input)}</Table.Td>
+                      <Table.Td className={classes.amount}>{rate(p.cachedInput)}</Table.Td>
+                      <Table.Td className={classes.amount}>
+                        {rate(p.cacheWrite)}
+                        {p.cacheWrite1h !== undefined && (
+                          <Text span inherit c="dimmed">
+                            {' '}
+                            / {rate(p.cacheWrite1h)} 1h
+                          </Text>
+                        )}
+                      </Table.Td>
+                      <Table.Td className={classes.amount}>{rate(p.output)}</Table.Td>
+                      <Table.Td>
+                        <Group gap={6} wrap="nowrap">
+                          {p.custom ? (
+                            <StatusPill tone={bundled.has(p.id) ? 'accent' : 'review'}>
+                              {bundled.has(p.id) ? 'changed' : 'added'}
+                            </StatusPill>
+                          ) : (
+                            <>
+                              {p.synced && <StatusPill tone="trail">synced</StatusPill>}
+                              <Anchor href={p.source} target="_blank" rel="noreferrer" size="xs">
+                                {hostOf(p.source)}
+                              </Anchor>
+                            </>
+                          )}
+                          <MonoLabel size="xs" className={classes.nowrap}>
+                            {p.asOf}
+                          </MonoLabel>
+                        </Group>
+                      </Table.Td>
+                      <Table.Td>
+                        <Group gap={2} wrap="nowrap" justify="flex-end">
+                          <Tooltip label="Edit">
+                            <ActionIcon
+                              size="sm"
+                              variant="subtle"
+                              color="gray"
+                              aria-label={`Edit ${p.id}`}
+                              onClick={() => edit(p)}
+                            >
+                              <IconPencil size={14} />
+                            </ActionIcon>
+                          </Tooltip>
+                          {p.custom && (
+                            <Tooltip label={bundled.has(p.id) ? 'Back to the bundled price' : 'Remove'}>
+                              <ActionIcon
+                                size="sm"
+                                variant="subtle"
+                                color="gray"
+                                aria-label={`Reset ${p.id}`}
+                                onClick={() => void act(() => api.runner.removePrice(p.id))}
+                              >
+                                <IconRestore size={14} />
+                              </ActionIcon>
+                            </Tooltip>
+                          )}
+                        </Group>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </ScrollArea.Autosize>
+          </TableFrame>
+          <Text size="xs" c="var(--hg-text-muted)">
+            Not modelled: long-context tiers (over 200k–272k input tokens in one request), batch, fast mode and regional
+            pricing. A model missing here shows as &quot;not priced&quot;.
+          </Text>
+        </Stack>
 
-      <Modal opened={draft !== null} onClose={() => setDraft(null)} title={draft?.existing ? `Price of ${draft.id}` : 'Add a model'}>
-        {draft && (
-          <Stack gap="xs">
-            <TextInput
-              label="Model id"
-              description="As the agent reports it, e.g. gpt-6-sol or claude-opus-5-5"
-              value={draft.id}
-              disabled={draft.existing}
-              onChange={(e) => setDraft({ ...draft, id: e.currentTarget.value })}
-            />
-            <TextInput label="Name" value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.currentTarget.value })} />
-            <Group grow>
-              <NumberInput label="Input" prefix="$" min={0} decimalScale={4} value={draft.input} onChange={(v) => setDraft({ ...draft, input: v })} />
+        <Modal
+          opened={draft !== null}
+          onClose={() => setDraft(null)}
+          title={draft?.existing ? `Price of ${draft.id}` : 'Add a model'}
+        >
+          {draft && (
+            <Stack gap="xs">
+              <TextInput
+                label="Model id"
+                description="As the agent reports it, e.g. gpt-6-sol or claude-opus-5-5"
+                value={draft.id}
+                disabled={draft.existing}
+                onChange={(e) => setDraft({ ...draft, id: e.currentTarget.value })}
+              />
+              <TextInput
+                label="Name"
+                value={draft.label}
+                onChange={(e) => setDraft({ ...draft, label: e.currentTarget.value })}
+              />
+              <Group grow>
+                <NumberInput
+                  label="Input"
+                  prefix="$"
+                  min={0}
+                  decimalScale={4}
+                  value={draft.input}
+                  onChange={(v) => setDraft({ ...draft, input: v })}
+                />
+                <NumberInput
+                  label="Cached input"
+                  prefix="$"
+                  min={0}
+                  decimalScale={4}
+                  value={draft.cachedInput}
+                  onChange={(v) => setDraft({ ...draft, cachedInput: v })}
+                />
+              </Group>
+              <Group grow>
+                <NumberInput
+                  label="Cache write"
+                  description="Empty: as input"
+                  prefix="$"
+                  min={0}
+                  decimalScale={4}
+                  value={draft.cacheWrite}
+                  onChange={(v) => setDraft({ ...draft, cacheWrite: v })}
+                />
+                <NumberInput
+                  label="1-hour cache write"
+                  description="Claude only"
+                  prefix="$"
+                  min={0}
+                  decimalScale={4}
+                  value={draft.cacheWrite1h}
+                  onChange={(v) => setDraft({ ...draft, cacheWrite1h: v })}
+                />
+              </Group>
               <NumberInput
-                label="Cached input"
+                label="Output (incl. reasoning)"
                 prefix="$"
                 min={0}
                 decimalScale={4}
-                value={draft.cachedInput}
-                onChange={(v) => setDraft({ ...draft, cachedInput: v })}
+                value={draft.output}
+                onChange={(v) => setDraft({ ...draft, output: v })}
               />
-            </Group>
-            <Group grow>
-              <NumberInput
-                label="Cache write"
-                description="Empty: as input"
-                prefix="$"
-                min={0}
-                decimalScale={4}
-                value={draft.cacheWrite}
-                onChange={(v) => setDraft({ ...draft, cacheWrite: v })}
+              <TextInput
+                label="Source"
+                placeholder="Where the price comes from (optional)"
+                value={draft.source}
+                onChange={(e) => setDraft({ ...draft, source: e.currentTarget.value })}
               />
-              <NumberInput
-                label="1-hour cache write"
-                description="Claude only"
-                prefix="$"
-                min={0}
-                decimalScale={4}
-                value={draft.cacheWrite1h}
-                onChange={(v) => setDraft({ ...draft, cacheWrite1h: v })}
-              />
-            </Group>
-            <NumberInput label="Output (incl. reasoning)" prefix="$" min={0} decimalScale={4} value={draft.output} onChange={(v) => setDraft({ ...draft, output: v })} />
-            <TextInput
-              label="Source"
-              placeholder="Where the price comes from (optional)"
-              value={draft.source}
-              onChange={(e) => setDraft({ ...draft, source: e.currentTarget.value })}
-            />
-            <Group justify="flex-end" mt="xs">
-              <Button variant="default" onClick={() => setDraft(null)}>
-                Cancel
-              </Button>
-              <Button onClick={save} loading={saving} disabled={!draft.id.trim()}>
-                Save
-              </Button>
-            </Group>
-          </Stack>
-        )}
-      </Modal>
-    </Card>
+              <Group justify="flex-end" mt="xs">
+                <Button variant="default" onClick={() => setDraft(null)}>
+                  Cancel
+                </Button>
+                <Button onClick={save} loading={saving} disabled={!draft.id.trim()}>
+                  Save
+                </Button>
+              </Group>
+            </Stack>
+          )}
+        </Modal>
+      </SettingsCard>
+    </div>
   )
 }

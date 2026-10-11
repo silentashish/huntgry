@@ -2,11 +2,23 @@ import { expect, type ElectronApplication, type Locator, type Page } from '@play
 
 export type AgentLabel = 'Claude' | 'Codex' | 'Antigravity'
 
+/** The entries of the section nav on the left (#116). */
+export type SettingsSection =
+  | 'Agents'
+  | 'Standing approvals'
+  | 'Saved answers'
+  | 'Pricing'
+  | 'Claude'
+  | 'Skill dependencies'
+  | 'Remote control'
+  | 'Appearance'
+
 /**
  * The Settings page: the banner, the Agents card (one row per agent with the
  * default-agent radio, CLI path + version, skill path or "Install skill"), the
  * Claude card (CLI, account, skill, venv, LaTeX rows with their buttons) and
- * the skill's preflight table. Role, label and text locators only.
+ * the skill's preflight table, plus the section nav and the Appearance card (#116). Role, label
+ * and text locators only.
  */
 export class SettingsPage {
   readonly heading: Locator
@@ -19,6 +31,8 @@ export class SettingsPage {
   readonly updateClaudeButton: Locator
   readonly installSkillButton: Locator
   readonly installPythonButton: Locator
+  /** The sticky list of sections (a complementary landmark: the shell's navbar is the only navigation). */
+  readonly sectionNav: Locator
 
   constructor(readonly page: Page) {
     this.heading = page.getByRole('heading', { name: 'Settings', level: 2 })
@@ -31,6 +45,22 @@ export class SettingsPage {
     this.updateClaudeButton = page.getByRole('button', { name: 'Update Claude Code' })
     this.installSkillButton = page.getByRole('button', { name: 'Install resume-tailor skill' })
     this.installPythonButton = page.getByRole('button', { name: /Install Python dependencies|Reinstall Python dependencies/ })
+    this.sectionNav = page.getByRole('complementary', { name: 'Settings sections' })
+  }
+
+  /** A section nav entry; the highlighted one has `aria-current="true"`. */
+  sectionLink(section: SettingsSection): Locator {
+    return this.sectionNav.getByRole('button', { name: section, exact: true })
+  }
+
+  /** A card's title (level 3). */
+  cardHeading(title: string): Locator {
+    return this.page.getByRole('heading', { name: title, level: 3, exact: true })
+  }
+
+  /** System / Light / Dark in the Appearance card. */
+  appearanceOption(label: 'System' | 'Light' | 'Dark'): Locator {
+    return this.page.getByRole('radio', { name: label, exact: true })
   }
 
   /** The radio that makes `agent` the default. */

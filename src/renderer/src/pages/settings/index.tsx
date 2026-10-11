@@ -1,22 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import {
-  Alert,
-  Badge,
-  Button,
-  Card,
-  Code,
-  Group,
-  List,
-  Loader,
-  Radio,
-  ScrollArea,
-  Select,
-  Stack,
-  Table,
-  Text,
-  Title
-} from '@mantine/core'
-import { IconAlertTriangle, IconCheck, IconRefresh, IconX } from '@tabler/icons-react'
+import { Alert, Button, Code, Group, List, Loader, Radio, ScrollArea, Select, Stack, Table, Text } from '@mantine/core'
+import { IconAlertTriangle, IconCheck, IconCircleCheck, IconLink, IconRefresh, IconX } from '@tabler/icons-react'
 import {
   AGENT_LABEL,
   CLAUDE_COMMANDS,
@@ -28,22 +12,35 @@ import {
   type SkillUpdateStatus
 } from '@shared/runner-types'
 import { api, errorText } from '../../api'
-import { RemoteCard } from './RemoteCard'
+import { MonoLabel, PageHeader, StatusPill, type UiTone } from '../../components/ui'
+import { AppearanceCard } from './AppearanceCard'
 import { PricingCard } from './PricingCard'
+import { RemoteCard } from './RemoteCard'
 import { SavedAnswersCard } from './SavedAnswersCard'
+import { SectionNav, SettingsSection, type SettingsSectionId } from './SectionNav'
+import { PathText, SettingsCard, toneOfColor } from './SettingsCard'
 import { StandingApprovalsCard } from './StandingApprovalsCard'
+import classes from './settings.module.css'
 
-const STATUS: Record<PreflightItem['status'], { color: string; label: string }> = {
-  ok: { color: 'green', label: 'OK' },
-  missing: { color: 'red', label: 'Missing' },
-  optional: { color: 'gray', label: 'Optional' }
+const STATUS: Record<PreflightItem['status'], { tone: UiTone; label: string }> = {
+  ok: { tone: 'success', label: 'OK' },
+  missing: { tone: 'danger', label: 'Missing' },
+  optional: { tone: 'neutral', label: 'Optional' }
 }
 
 const INSTALL_KIND_LABEL = { native: 'native install', homebrew: 'Homebrew', npm: 'npm', other: '' } as const
 
 type Installer = 'python' | 'claude' | 'update' | 'skill' | 'reinstall-skill' | 'sync-skill' | `link-${AgentId}`
 
-/** Where the agent CLIs and the resume-tailor skill are, and whether their dependencies are installed. */
+/** Sections that need the runner environment (the agent check) before they render. */
+const ENV_SECTIONS: readonly SettingsSectionId[] = ['agents', 'approvals', 'answers', 'pricing', 'claude', 'deps']
+const ALWAYS_SECTIONS: readonly SettingsSectionId[] = ['remote', 'appearance']
+
+/**
+ * Settings (#116, Figma "Settings"): a sticky section nav on the left and the cards on the right:
+ * the agent CLIs, standing approvals, saved answers, pricing, the Claude CLI and the skill's
+ * dependencies, remote control and appearance.
+ */
 export function SettingsPage() {
   const [env, setEnv] = useState<RunnerEnvironment | null>(null)
   const [checking, setChecking] = useState(false)
@@ -107,7 +104,11 @@ export function SettingsPage() {
   const installClaude = () => install('claude', () => api.runner.installClaude(), 'Installing Claude Code failed.')
   const updateClaude = () => install('update', () => api.runner.updateClaude(), 'Updating Claude Code failed.')
   const linkSkill = (agent: AgentId) =>
-    install(`link-${agent}`, () => api.runner.linkSkill(agent), `Installing the skill for ${AGENT_LABEL[agent]} failed.`)
+    install(
+      `link-${agent}`,
+      () => api.runner.linkSkill(agent),
+      `Installing the skill for ${AGENT_LABEL[agent]} failed.`
+    )
   async function setCliPath(agent: AgentId, path?: string | null) {
     setError(null)
     try {
@@ -138,14 +139,27 @@ export function SettingsPage() {
       checkSkillUpdate
     )
 
+  const installLog = (
+    <ScrollArea.Autosize mah={200} mt="md">
+      <Code block>{log.join('\n')}</Code>
+      <div ref={logEnd} />
+    </ScrollArea.Autosize>
+  )
+
+  const sections = env ? [...ENV_SECTIONS, ...ALWAYS_SECTIONS] : ALWAYS_SECTIONS
+
   return (
-    <Stack gap="md">
-      <Group justify="space-between">
-        <Title order={2}>Settings</Title>
-        <Button variant="default" leftSection={<IconRefresh size={16} />} loading={checking} onClick={check}>
-          Check again
-        </Button>
-      </Group>
+    <Stack gap="lg">
+      <PageHeader
+        eyebrow="Agents, skill, pricing, memory and the phone link"
+        title="Settings"
+        subtitle="Everything here lives with the app's data, outside the workspace, so an agent can never change it."
+        actions={
+          <Button variant="default" leftSection={<IconRefresh size={16} />} loading={checking} onClick={check}>
+            Check again
+          </Button>
+        }
+      />
 
       {error && (
         <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
@@ -168,7 +182,12 @@ export function SettingsPage() {
               to build PDFs are installed.
             </Alert>
           ) : (
-            <Alert color="yellow" variant="light" title="Not everything is in place">
+            <Alert
+              color="yellow"
+              variant="light"
+              icon={<IconAlertTriangle size={18} />}
+              title="Not everything is in place"
+            >
               <List size="sm">
                 {env.problems.map((p) => (
                   <List.Item key={p}>{p}</List.Item>
@@ -186,210 +205,274 @@ export function SettingsPage() {
               </List>
             </Alert>
           )}
-
-          <AgentsCard
-            env={env}
-            installing={installing}
-            onLinkSkill={linkSkill}
-            onSetDefault={setDefault}
-            onSetCliPath={setCliPath}
-          />
-
-          <StandingApprovalsCard />
-
-          <SavedAnswersCard />
-
-          <PricingCard />
-
-          <Card withBorder radius="md" padding="lg">
-            <Title order={4} mb="sm">
-              Claude
-            </Title>
-            <Table layout="fixed">
-              <Table.Tbody>
-                <Row
-                  label="Claude CLI"
-                  value={env.claudePath}
-                  badges={[
-                    {
-                      text: env.claudeVersion ?? 'version unknown',
-                      color: env.claudeVersionOk ? 'gray' : 'red'
-                    },
-                    ...(env.claudeInstallKind && INSTALL_KIND_LABEL[env.claudeInstallKind]
-                      ? [{ text: INSTALL_KIND_LABEL[env.claudeInstallKind], color: 'gray' }]
-                      : [])
-                  ]}
-                  missing={
-                    <Stack gap={4} align="flex-start">
-                      <Button size="xs" loading={installing === 'claude'} disabled={!!installing} onClick={installClaude}>
-                        Install Claude Code
-                      </Button>
-                      <Text size="xs" c="dimmed">
-                        Runs the official installer. Or in a terminal: <Code>{CLAUDE_COMMANDS.install}</Code>
-                      </Text>
-                    </Stack>
-                  }
-                  action={
-                    env.claudePath && !env.claudeVersionOk ? (
-                      env.claudeInstallKind === 'homebrew' ? (
-                        <Text size="xs" c="dimmed">
-                          Update in a terminal: <Code>{CLAUDE_COMMANDS.brewUpgrade}</Code>
-                        </Text>
-                      ) : (
-                        <Button
-                          size="xs"
-                          variant="light"
-                          color="red"
-                          loading={installing === 'update'}
-                          disabled={!!installing}
-                          onClick={updateClaude}
-                        >
-                          Update Claude Code
-                        </Button>
-                      )
-                    ) : undefined
-                  }
-                />
-                {env.claudePath && <AccountRow env={env} />}
-                <Row
-                  label="resume-tailor skill"
-                  value={env.skillDir}
-                  badges={[
-                    ...(env.skillInstall ? [{ text: `${env.skillInstall.tag} · installed by Huntgry`, color: 'gray' }] : []),
-                    // Without a Huntgry install record the local version is unknown, so only the latest tag is shown.
-                    ...(!skillUpdate
-                      ? []
-                      : !skillUpdate.installed
-                        ? [{ text: `latest: ${skillUpdate.latest}`, color: 'gray' }]
-                        : skillUpdate.updateAvailable
-                          ? [{ text: `${skillUpdate.latest} available`, color: 'blue' }]
-                          : [{ text: 'up to date', color: 'green' }])
-                  ]}
-                  missing={
-                    <Button
-                      size="xs"
-                      loading={installing === 'skill'}
-                      disabled={!!installing}
-                      onClick={() => installSkill(false)}
-                    >
-                      Install resume-tailor skill
-                    </Button>
-                  }
-                  action={
-                    <Group gap="xs">
-                      <Button
-                        size="xs"
-                        variant="light"
-                        leftSection={<IconRefresh size={14} />}
-                        loading={installing === 'sync-skill'}
-                        disabled={!!installing}
-                        onClick={syncSkill}
-                        title={`Install the latest release from GitHub over the copy in ~/.claude/skills (the old one is backed up)`}
-                      >
-                        {skillUpdate?.updateAvailable && skillUpdate.installed
-                          ? `Sync to ${skillUpdate.latest}`
-                          : 'Sync from GitHub'}
-                      </Button>
-                      {env.skillInstall && (
-                        <Button
-                          size="xs"
-                          variant="subtle"
-                          loading={installing === 'reinstall-skill'}
-                          disabled={!!installing}
-                          onClick={() => installSkill(true)}
-                        >
-                          Reinstall
-                        </Button>
-                      )}
-                    </Group>
-                  }
-                />
-                <Row
-                  label="Python venv"
-                  value={env.venvDir}
-                  badges={[{ text: env.venvReady ? 'ready' : 'not created', color: 'gray' }]}
-                />
-                <Row label="LaTeX" value={env.texBin} />
-              </Table.Tbody>
-            </Table>
-            {log.length > 0 && installing !== 'python' && (
-              <ScrollArea.Autosize mah={200} mt="md">
-                <Code block>{log.join('\n')}</Code>
-                <div ref={logEnd} />
-              </ScrollArea.Autosize>
-            )}
-          </Card>
-
-          <Card withBorder radius="md" padding="lg">
-            <Group justify="space-between" mb="sm" wrap="nowrap" align="flex-start">
-              <div>
-                <Title order={4}>Skill dependencies</Title>
-                <Text size="sm" c="dimmed">
-                  Output of the skill's own <Code>scripts/preflight.py</Code>, run with the PATH a tailoring run gets.
-                </Text>
-              </div>
-              <Button
-                variant="light"
-                loading={installing === 'python'}
-                onClick={installPython}
-                disabled={!env.skillDir || (!!installing && installing !== 'python')}
-                style={{ flexShrink: 0 }}
-              >
-                {env.venvReady ? 'Reinstall Python dependencies' : 'Install Python dependencies'}
-              </Button>
-            </Group>
-            {env.preflight.length > 0 ? (
-              <Table striped highlightOnHover>
-                <Table.Tbody>
-                  {env.preflight.map((p, i) => (
-                    <Table.Tr key={`${p.name}-${i}`}>
-                      <Table.Td w={110}>
-                        <Badge
-                          color={STATUS[p.status].color}
-                          variant="light"
-                          leftSection={p.status === 'missing' ? <IconX size={12} /> : undefined}
-                        >
-                          {STATUS[p.status].label}
-                        </Badge>
-                      </Table.Td>
-                      <Table.Td>{p.name}</Table.Td>
-                      <Table.Td c="dimmed">{p.detail}</Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            ) : (
-              <Code block>{env.preflightOutput || 'The preflight check did not run (skill not found).'}</Code>
-            )}
-            {log.length > 0 && installing === 'python' && (
-              <ScrollArea.Autosize mah={200} mt="md">
-                <Code block>{log.join('\n')}</Code>
-                <div ref={logEnd} />
-              </ScrollArea.Autosize>
-            )}
-          </Card>
-
-          <Card withBorder radius="md" padding="lg">
-            <Title order={4} mb="xs">
-              Installing LaTeX and poppler
-            </Title>
-            <Text size="sm" mb="xs">
-              The skill compiles resumes with <Code>pdflatex</Code> and checks them with poppler. Without admin rights,
-              TinyTeX installs into your home folder:
-            </Text>
-            <Code block>{`curl -sL "https://yihui.org/tinytex/install-bin-unix.sh" | sh
-~/Library/TinyTeX/bin/universal-darwin/tlmgr install enumitem titlesec parskip
-brew install poppler`}</Code>
-            <Text size="sm" mt="xs" c="dimmed">
-              Or install BasicTeX / MacTeX (<Code>brew install --cask basictex</Code>, asks for your password). Huntgry
-              finds either one; your shell PATH does not need to change.
-            </Text>
-          </Card>
         </>
       )}
 
-      <RemoteCard />
+      <div className={classes.layout}>
+        <SectionNav sections={sections} />
+        <div className={classes.content}>
+          {env && (
+            <>
+              <SettingsSection id="agents">
+                <AgentsCard
+                  env={env}
+                  installing={installing}
+                  onLinkSkill={linkSkill}
+                  onSetDefault={setDefault}
+                  onSetCliPath={setCliPath}
+                />
+              </SettingsSection>
+
+              <SettingsSection id="approvals">
+                <StandingApprovalsCard />
+              </SettingsSection>
+
+              <SettingsSection id="answers">
+                <SavedAnswersCard />
+              </SettingsSection>
+
+              <SettingsSection id="pricing">
+                <PricingCard />
+              </SettingsSection>
+
+              <div className={classes.pair}>
+                <SettingsSection id="claude">
+                  <ClaudeCard
+                    env={env}
+                    skillUpdate={skillUpdate}
+                    installing={installing}
+                    onInstallClaude={installClaude}
+                    onUpdateClaude={updateClaude}
+                    onInstallSkill={installSkill}
+                    onSyncSkill={syncSkill}
+                  >
+                    {log.length > 0 && installing !== 'python' && installLog}
+                  </ClaudeCard>
+                </SettingsSection>
+
+                <SettingsSection id="deps">
+                  <SettingsCard
+                    title="Skill dependencies"
+                    description={
+                      <>
+                        Output of the skill&apos;s own <Code>scripts/preflight.py</Code>, run with the PATH a tailoring
+                        run gets.
+                      </>
+                    }
+                    actions={
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        loading={installing === 'python'}
+                        onClick={installPython}
+                        disabled={!env.skillDir || (!!installing && installing !== 'python')}
+                      >
+                        {env.venvReady ? 'Reinstall Python dependencies' : 'Install Python dependencies'}
+                      </Button>
+                    }
+                  >
+                    {env.preflight.length > 0 ? (
+                      <Table withRowBorders={false} className={classes.preflight} layout="fixed">
+                        <Table.Tbody>
+                          {env.preflight.map((p, i) => (
+                            <Table.Tr key={`${p.name}-${i}`}>
+                              <Table.Td w={96}>
+                                <StatusPill
+                                  tone={STATUS[p.status].tone}
+                                  className={classes.monoPill}
+                                  leftSection={p.status === 'missing' ? <IconX size={11} /> : undefined}
+                                >
+                                  {STATUS[p.status].label}
+                                </StatusPill>
+                              </Table.Td>
+                              <Table.Td w="34%" className={classes.path} data-tone="primary">
+                                {p.name}
+                              </Table.Td>
+                              <Table.Td>
+                                <Text size="xs" c="var(--hg-text-muted)">
+                                  {p.detail}
+                                </Text>
+                              </Table.Td>
+                            </Table.Tr>
+                          ))}
+                        </Table.Tbody>
+                      </Table>
+                    ) : (
+                      <Code block>{env.preflightOutput || 'The preflight check did not run (skill not found).'}</Code>
+                    )}
+                    {log.length > 0 && installing === 'python' && installLog}
+                  </SettingsCard>
+                </SettingsSection>
+              </div>
+
+              <SettingsCard title="Installing LaTeX and poppler">
+                <Text size="sm" mb="xs" c="dimmed">
+                  The skill compiles resumes with <Code>pdflatex</Code> and checks them with poppler. Without admin
+                  rights, TinyTeX installs into your home folder:
+                </Text>
+                <Code block>{`curl -sL "https://yihui.org/tinytex/install-bin-unix.sh" | sh
+~/Library/TinyTeX/bin/universal-darwin/tlmgr install enumitem titlesec parskip
+brew install poppler`}</Code>
+                <Text size="sm" mt="xs" c="dimmed">
+                  Or install BasicTeX / MacTeX (<Code>brew install --cask basictex</Code>, asks for your password).
+                  Huntgry finds either one; your shell PATH does not need to change.
+                </Text>
+              </SettingsCard>
+            </>
+          )}
+
+          <SettingsSection id="remote">
+            <RemoteCard />
+          </SettingsSection>
+
+          <SettingsSection id="appearance">
+            <AppearanceCard />
+          </SettingsSection>
+        </div>
+      </div>
     </Stack>
+  )
+}
+
+/** The Claude CLI, the account, the skill folder, the Python venv and LaTeX, with their install buttons. */
+function ClaudeCard({
+  env,
+  skillUpdate,
+  installing,
+  onInstallClaude,
+  onUpdateClaude,
+  onInstallSkill,
+  onSyncSkill,
+  children
+}: {
+  env: RunnerEnvironment
+  skillUpdate: SkillUpdateStatus | null
+  installing: Installer | null
+  onInstallClaude(): void
+  onUpdateClaude(): void
+  onInstallSkill(replace: boolean): void
+  onSyncSkill(): void
+  /** The install log while one of this card's installs runs. */
+  children?: ReactNode
+}) {
+  return (
+    <SettingsCard title="Claude">
+      <Table layout="fixed" className={classes.kvTable} verticalSpacing={8} horizontalSpacing={0}>
+        <Table.Tbody>
+          <Row
+            label="Claude CLI"
+            value={env.claudePath}
+            badges={[
+              {
+                text: env.claudeVersion ?? 'version unknown',
+                color: env.claudeVersionOk ? 'gray' : 'red'
+              },
+              ...(env.claudeInstallKind && INSTALL_KIND_LABEL[env.claudeInstallKind]
+                ? [{ text: INSTALL_KIND_LABEL[env.claudeInstallKind], color: 'gray' }]
+                : [])
+            ]}
+            missing={
+              <Stack gap={4} align="flex-start">
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  loading={installing === 'claude'}
+                  disabled={!!installing}
+                  onClick={onInstallClaude}
+                >
+                  Install Claude Code
+                </Button>
+                <Text size="xs" c="dimmed">
+                  Runs the official installer. Or in a terminal: <Code>{CLAUDE_COMMANDS.install}</Code>
+                </Text>
+              </Stack>
+            }
+            action={
+              env.claudePath && !env.claudeVersionOk ? (
+                env.claudeInstallKind === 'homebrew' ? (
+                  <Text size="xs" c="dimmed">
+                    Update in a terminal: <Code>{CLAUDE_COMMANDS.brewUpgrade}</Code>
+                  </Text>
+                ) : (
+                  <Button
+                    size="xs"
+                    variant="light"
+                    color="danger"
+                    loading={installing === 'update'}
+                    disabled={!!installing}
+                    onClick={onUpdateClaude}
+                  >
+                    Update Claude Code
+                  </Button>
+                )
+              ) : undefined
+            }
+          />
+          {env.claudePath && <AccountRow env={env} />}
+          <Row
+            label="resume-tailor skill"
+            value={env.skillDir}
+            badges={[
+              ...(env.skillInstall ? [{ text: `${env.skillInstall.tag} · installed by Huntgry`, color: 'gray' }] : []),
+              // Without a Huntgry install record the local version is unknown, so only the latest tag is shown.
+              ...(!skillUpdate
+                ? []
+                : !skillUpdate.installed
+                  ? [{ text: `latest: ${skillUpdate.latest}`, color: 'gray' }]
+                  : skillUpdate.updateAvailable
+                    ? [{ text: `${skillUpdate.latest} available`, color: 'blue' }]
+                    : [{ text: 'up to date', color: 'green' }])
+            ]}
+            missing={
+              <Button
+                size="xs"
+                variant="secondary"
+                loading={installing === 'skill'}
+                disabled={!!installing}
+                onClick={() => onInstallSkill(false)}
+              >
+                Install resume-tailor skill
+              </Button>
+            }
+            action={
+              <Group gap={4}>
+                <Button
+                  size="xs"
+                  variant="subtle"
+                  leftSection={<IconRefresh size={14} />}
+                  loading={installing === 'sync-skill'}
+                  disabled={!!installing}
+                  onClick={onSyncSkill}
+                  title={`Install the latest release from GitHub over the copy in ~/.claude/skills (the old one is backed up)`}
+                >
+                  {skillUpdate?.updateAvailable && skillUpdate.installed
+                    ? `Sync to ${skillUpdate.latest}`
+                    : 'Sync from GitHub'}
+                </Button>
+                {env.skillInstall && (
+                  <Button
+                    size="xs"
+                    variant="subtle"
+                    loading={installing === 'reinstall-skill'}
+                    disabled={!!installing}
+                    onClick={() => onInstallSkill(true)}
+                  >
+                    Reinstall
+                  </Button>
+                )}
+              </Group>
+            }
+          />
+          <Row
+            label="Python venv"
+            value={env.venvDir}
+            badges={[{ text: env.venvReady ? 'ready' : 'not created', color: env.venvReady ? 'green' : 'gray' }]}
+          />
+          <Row label="LaTeX" value={env.texBin} />
+        </Table.Tbody>
+      </Table>
+      {children}
+    </SettingsCard>
   )
 }
 
@@ -409,21 +492,25 @@ function AgentsCard({
   onSetCliPath(agent: AgentId, path?: string | null): void
 }) {
   return (
-    <Card withBorder radius="md" padding="lg">
-      <Title order={4}>Agents</Title>
-      <Text size="sm" c="dimmed" mb="sm">
-        The CLI that runs the resume-tailor skill. New runs use the default; the Tailor form and "Tailor all" can pick
-        another one per job. Codex and Antigravity use the skill installed for Claude, linked into their own skills
-        folder. When several copies of a CLI are installed, pick the one to run; Remove goes back to the first one
-        found.
-      </Text>
+    <SettingsCard
+      title="Agents"
+      description={
+        <>
+          The CLI that runs the resume-tailor skill. New runs use the default; the Tailor form and &quot;Tailor
+          all&quot; can pick another one per job. Codex and Antigravity use the skill installed for Claude, linked into
+          their own skills folder. When several copies of a CLI are installed, pick the one to run; Remove goes back to
+          the first one found.
+        </>
+      }
+    >
       <Radio.Group value={env.defaultAgent} onChange={(v) => onSetDefault(v as AgentId)}>
-        <Table layout="fixed" verticalSpacing="sm">
-          <Table.Thead>
+        <Table layout="fixed" withRowBorders={false} className={classes.agents}>
+          <Table.Thead className={classes.srOnly}>
             <Table.Tr>
-              <Table.Th w={150}>Agent</Table.Th>
+              <Table.Th>Agent</Table.Th>
               <Table.Th>CLI</Table.Th>
               <Table.Th>resume-tailor skill</Table.Th>
+              <Table.Th>Choose the CLI</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -431,6 +518,7 @@ function AgentsCard({
               <AgentRow
                 key={a.id}
                 agent={a}
+                isDefault={a.id === env.defaultAgent}
                 canLink={!!env.skillDir}
                 busy={!!installing}
                 linking={installing === `link-${a.id}`}
@@ -441,12 +529,13 @@ function AgentsCard({
           </Table.Tbody>
         </Table>
       </Radio.Group>
-    </Card>
+    </SettingsCard>
   )
 }
 
 function AgentRow({
   agent: a,
+  isDefault,
   canLink,
   busy,
   linking,
@@ -454,6 +543,7 @@ function AgentRow({
   onSetCliPath
 }: {
   agent: AgentStatus
+  isDefault: boolean
   canLink: boolean
   busy: boolean
   linking: boolean
@@ -462,61 +552,67 @@ function AgentRow({
 }) {
   const cliProblem = a.problems.find((p) => p.includes('CLI') || p.includes('signed in'))
   return (
-    <Table.Tr>
-      <Table.Td>
-        <Stack gap={4}>
-          <Radio value={a.id} label={a.label} aria-label={`Make ${a.label} the default agent`} />
-          <Badge size="sm" variant="light" color={a.ready ? 'green' : 'red'}>
-            {a.ready ? 'Ready' : 'Not ready'}
-          </Badge>
-        </Stack>
+    <Table.Tr data-default={isDefault || undefined}>
+      <Table.Td w={200}>
+        <Group gap={12} wrap="nowrap" align="center">
+          <Radio value={a.id} aria-label={`Make ${a.label} the default agent`} size="sm" />
+          <Stack gap={2} style={{ minWidth: 0 }}>
+            <Group gap={6} wrap="nowrap">
+              <span className={classes.agentName}>{a.label}</span>
+              <StatusPill tone={a.ready ? 'success' : 'danger'} dot>
+                {a.ready ? 'Ready' : 'Not ready'}
+              </StatusPill>
+            </Group>
+            {isDefault && <MonoLabel size="xs">default agent</MonoLabel>}
+          </Stack>
+        </Group>
       </Table.Td>
       <Table.Td>
         {a.cliPath ? (
           <Stack gap={4} align="flex-start">
-            <Group gap="xs" wrap="nowrap" maw="100%">
-              <Text size="sm" ff="monospace" truncate="start" style={{ minWidth: 0 }}>
-                <bdi>{a.cliPath}</bdi>
-              </Text>
-              <Badge variant="light" color="gray" style={{ flexShrink: 0 }}>
-                {a.version ?? 'version unknown'}
-              </Badge>
+            <Group gap={6} wrap="nowrap" maw="100%">
+              <PathText>{a.cliPath}</PathText>
+              <StatusPill className={classes.monoPill}>{a.version ?? 'version unknown'}</StatusPill>
             </Group>
             {cliProblem && (
-              <Text size="xs" c="red">
+              <Text size="xs" c="var(--hg-status-danger)">
                 {cliProblem}
               </Text>
             )}
-            <CliChoice agent={a} busy={busy} onSetCliPath={onSetCliPath} />
+            <CliPicker agent={a} busy={busy} onSetCliPath={onSetCliPath} />
           </Stack>
         ) : (
-          <Stack gap={4} align="flex-start">
-            <Badge color="red" variant="light">
-              Not found
-            </Badge>
+          <Stack gap={2} align="flex-start">
+            <span className={`${classes.path} ${classes.danger}`}>Not found</span>
             {cliProblem && (
-              <Text size="xs" c="dimmed">
+              <Text size="xs" c="var(--hg-status-warning)">
                 {cliProblem}
               </Text>
             )}
-            <CliChoice agent={a} busy={busy} onSetCliPath={onSetCliPath} />
+            <CliPicker agent={a} busy={busy} onSetCliPath={onSetCliPath} />
           </Stack>
         )}
       </Table.Td>
-      <Table.Td>
+      <Table.Td w="32%">
         {a.skillPath ? (
-          <Text size="sm" ff="monospace" truncate="start">
-            <bdi>{a.skillPath}</bdi>
-          </Text>
+          <Group gap={8} wrap="nowrap">
+            <IconCircleCheck size={14} className={classes.success} style={{ flex: 'none' }} />
+            <PathText>{a.skillPath}</PathText>
+          </Group>
         ) : (
           <Stack gap={4} align="flex-start">
-            <Badge color="red" variant="light">
-              Not installed
-            </Badge>
+            <span className={`${classes.path} ${classes.danger}`}>Not installed</span>
             {a.id !== 'claude' &&
               (canLink ? (
                 <>
-                  <Button size="xs" loading={linking} disabled={busy} onClick={onLinkSkill}>
+                  <Button
+                    size="xs"
+                    variant="secondary"
+                    leftSection={<IconLink size={14} />}
+                    loading={linking}
+                    disabled={busy}
+                    onClick={onLinkSkill}
+                  >
                     Install skill
                   </Button>
                   <Text size="xs" c="dimmed">
@@ -530,21 +626,24 @@ function AgentRow({
               ))}
             {a.id === 'claude' && (
               <Text size="xs" c="dimmed">
-                Use "Install resume-tailor skill" below.
+                Use &quot;Install resume-tailor skill&quot; below.
               </Text>
             )}
           </Stack>
         )}
+      </Table.Td>
+      <Table.Td w={100} ta="right">
+        <CliButtons agent={a} busy={busy} onSetCliPath={onSetCliPath} />
       </Table.Td>
     </Table.Tr>
   )
 }
 
 /**
- * Which copy of an agent's CLI runs (#79): one of the copies found, another file, or (Remove) the
- * first copy found again.
+ * Which copy of an agent's CLI runs (#79): one of the copies found (this picker), another file
+ * (Choose…) or, with Remove, the first copy found again (`CliButtons`).
  */
-function CliChoice({
+function CliPicker({
   agent: a,
   busy,
   onSetCliPath
@@ -555,6 +654,7 @@ function CliChoice({
 }) {
   if (a.cliPinned) return null
   const gone = a.cliChoice !== null && a.cliChoice !== a.cliPath
+  if (a.cliCandidates.length <= 1 && !gone) return null
   return (
     <Stack gap={4} align="flex-start" w="100%">
       {a.cliCandidates.length > 1 && (
@@ -568,30 +668,45 @@ function CliChoice({
           disabled={busy}
           comboboxProps={{ withinPortal: true }}
           onChange={(v) => v && v !== a.cliPath && onSetCliPath(v)}
+          styles={{ input: { fontFamily: 'var(--hg-font-mono)', fontSize: 11 } }}
         />
       )}
       {gone && (
-        <Text size="xs" c="orange">
+        <Text size="xs" c="var(--hg-status-warning)">
           The chosen CLI <Code>{a.cliChoice}</Code> is gone; using the first copy found.
         </Text>
       )}
-      <Group gap="xs">
-        <Button size="compact-xs" variant="subtle" disabled={busy} onClick={() => onSetCliPath()}>
-          Choose…
+    </Stack>
+  )
+}
+
+function CliButtons({
+  agent: a,
+  busy,
+  onSetCliPath
+}: {
+  agent: AgentStatus
+  busy: boolean
+  onSetCliPath(path?: string | null): void
+}) {
+  if (a.cliPinned) return null
+  return (
+    <Stack gap={2} align="flex-end">
+      <Button size="compact-xs" variant="subtle" disabled={busy} onClick={() => onSetCliPath()}>
+        Choose…
+      </Button>
+      {a.cliChoice !== null && (
+        <Button
+          size="compact-xs"
+          variant="subtle"
+          color="red"
+          disabled={busy}
+          onClick={() => onSetCliPath(null)}
+          aria-label={`Remove the chosen ${a.label} CLI`}
+        >
+          Remove
         </Button>
-        {a.cliChoice !== null && (
-          <Button
-            size="compact-xs"
-            variant="subtle"
-            color="red"
-            disabled={busy}
-            onClick={() => onSetCliPath(null)}
-            aria-label={`Remove the chosen ${a.label} CLI`}
-          >
-            Remove
-          </Button>
-        )}
-      </Group>
+      )}
     </Stack>
   )
 }
@@ -600,33 +715,25 @@ function AccountRow({ env }: { env: RunnerEnvironment }) {
   const auth = env.claudeAuth
   return (
     <Table.Tr>
-      <Table.Th w={180}>Account</Table.Th>
+      <Table.Th w={130}>Account</Table.Th>
       <Table.Td>
         {auth?.loggedIn ? (
           <Group gap="xs" wrap="nowrap">
             <Text size="sm" truncate>
               Signed in{auth.email ? ` as ${auth.email}` : ''}
             </Text>
-            {auth.subscriptionType && (
-              <Badge variant="light" color="gray" style={{ flexShrink: 0 }}>
-                {auth.subscriptionType}
-              </Badge>
-            )}
+            {auth.subscriptionType && <StatusPill>{auth.subscriptionType}</StatusPill>}
           </Group>
         ) : auth ? (
           <Stack gap={4} align="flex-start">
-            <Badge color="red" variant="light">
-              Not signed in
-            </Badge>
+            <StatusPill tone="danger">Not signed in</StatusPill>
             <Text size="xs" c="dimmed">
-              Sign in once in a terminal with <Code>{CLAUDE_COMMANDS.login}</Code>, then Check again. Claude Code needs a
-              Pro, Max, Team, Enterprise or Console account.
+              Sign in once in a terminal with <Code>{CLAUDE_COMMANDS.login}</Code>, then Check again. Claude Code needs
+              a Pro, Max, Team, Enterprise or Console account.
             </Text>
           </Stack>
         ) : (
-          <Badge color="gray" variant="light">
-            Unknown
-          </Badge>
+          <StatusPill>Unknown</StatusPill>
         )}
       </Table.Td>
     </Table.Tr>
@@ -645,33 +752,32 @@ function Row({
   badges?: { text: string; color: string }[]
   /** Shown under "Not found" (e.g. an Install button). */
   missing?: ReactNode
-  /** Shown under the value (e.g. an Update button). */
+  /** Shown next to the value (e.g. an Update button). */
   action?: ReactNode
 }) {
   return (
     <Table.Tr>
-      <Table.Th w={180}>{label}</Table.Th>
+      <Table.Th w={130}>{label}</Table.Th>
       <Table.Td>
         {value ? (
-          <Stack gap={4} align="flex-start">
-            <Group gap="xs" wrap="nowrap" maw="100%">
-              <Text size="sm" ff="monospace" truncate="start" style={{ minWidth: 0 }}>
-                {/* truncate="start" uses direction: rtl; <bdi> keeps the leading "/" where it belongs. */}
-                <bdi>{value}</bdi>
-              </Text>
-              {badges.map((b) => (
-                <Badge key={b.text} variant="light" color={b.color} style={{ flexShrink: 0 }}>
-                  {b.text}
-                </Badge>
-              ))}
-            </Group>
-            {action}
-          </Stack>
+          <Group gap={8} wrap="nowrap" align="flex-start" justify="space-between">
+            <Stack gap={4} style={{ minWidth: 0, flex: 1 }} pt={2}>
+              <PathText tone="primary">{value}</PathText>
+              {badges.length > 0 && (
+                <Group gap={4}>
+                  {badges.map((b) => (
+                    <StatusPill key={b.text} tone={toneOfColor(b.color)} className={classes.monoPill}>
+                      {b.text}
+                    </StatusPill>
+                  ))}
+                </Group>
+              )}
+            </Stack>
+            {action != null && <div style={{ flex: 'none' }}>{action}</div>}
+          </Group>
         ) : (
           <Stack gap={6} align="flex-start">
-            <Badge color="red" variant="light">
-              Not found
-            </Badge>
+            <StatusPill tone="danger">Not found</StatusPill>
             {missing}
           </Stack>
         )}

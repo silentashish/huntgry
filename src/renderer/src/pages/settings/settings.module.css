@@ -1,0 +1,347 @@
+/* Settings (#116, Figma "Settings" 14:2 and "Settings — Pair a phone" 17:1342). Colours are tokens only. */
+
+/* ---------- page layout: section nav + cards ---------- */
+
+.layout {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--hg-space-6);
+}
+
+.nav {
+  position: sticky;
+  top: var(--hg-space-7);
+  flex: 0 0 200px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--hg-space-1);
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: var(--hg-space-3);
+  width: 100%;
+  padding: var(--hg-space-3) 10px;
+  border-radius: var(--hg-radius-md);
+  color: var(--hg-text-secondary);
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: 500;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.navItem svg {
+  flex: 0 0 auto;
+  color: var(--hg-icon-muted);
+}
+
+.navItem:hover {
+  background-color: var(--hg-bg-hover);
+  color: var(--hg-text-primary);
+}
+
+.navItem[data-active] {
+  background-color: var(--hg-bg-subtle);
+  color: var(--hg-text-primary);
+}
+
+.navItem[data-active] svg {
+  color: var(--hg-icon-default);
+}
+
+.content {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--hg-space-5);
+}
+
+.section {
+  scroll-margin-top: var(--hg-space-7);
+  min-width: 0;
+}
+
+/* Claude and Skill dependencies side by side when there is room. */
+.pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(440px, 100%), 1fr));
+  gap: var(--hg-space-5);
+  align-items: start;
+}
+
+@media (max-width: 1000px) {
+  .nav {
+    display: none;
+  }
+}
+
+/* ---------- cards (SectionCard with the Settings title size) ---------- */
+
+.card h3 {
+  font-size: 20px;
+  line-height: 26px;
+  letter-spacing: -0.005em;
+}
+
+.card {
+  min-width: 0;
+}
+
+/* ---------- tables: rounded frame, sunken mono header, roomy rows ---------- */
+
+.tableWrap {
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-lg);
+  overflow: hidden;
+  background-color: var(--hg-bg-surface);
+}
+
+.tableWrap th {
+  padding-top: var(--hg-space-3);
+  padding-bottom: var(--hg-space-3);
+}
+
+.tableWrap tbody tr:last-child td,
+.tableWrap tbody tr:last-child th {
+  border-bottom: 0;
+}
+
+/* Key/value rows (Claude card) and the preflight list: no frame, label column in Geist. */
+:root[data-mantine-color-scheme] .kvTable th {
+  font-family: var(--hg-font-ui);
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--hg-text-secondary);
+  background-color: transparent;
+  vertical-align: top;
+  padding-top: 10px;
+}
+
+.kvTable td {
+  vertical-align: top;
+}
+
+.preflight td {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  border-bottom: 0;
+}
+
+/* ---------- agents: one framed row per agent ---------- */
+
+.agents {
+  border-collapse: separate;
+  border-spacing: 0 var(--hg-space-3);
+  margin: calc(-1 * var(--hg-space-3)) 0;
+}
+
+.agents td {
+  padding: var(--hg-space-4) 14px;
+  vertical-align: middle;
+  background-color: var(--hg-bg-surface-sunken);
+  border-top: 1px solid var(--hg-border-subtle);
+  border-bottom: 1px solid var(--hg-border-subtle);
+}
+
+.agents td:first-child {
+  border-left: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-lg) 0 0 var(--hg-radius-lg);
+}
+
+.agents td:last-child {
+  border-right: 1px solid var(--hg-border-subtle);
+  border-radius: 0 var(--hg-radius-lg) var(--hg-radius-lg) 0;
+}
+
+.agents tr[data-default] td {
+  background-color: var(--hg-accent-primary-soft);
+  border-color: var(--hg-accent-primary);
+}
+
+.agentName {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--hg-text-primary);
+}
+
+.agents tr[data-default] .agentName {
+  color: var(--hg-text-accent);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- readouts ---------- */
+
+.path {
+  font-family: var(--hg-font-mono);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--hg-text-secondary);
+  min-width: 0;
+}
+
+.path[data-tone='primary'] {
+  color: var(--hg-text-primary);
+}
+
+.danger {
+  color: var(--hg-status-danger);
+}
+
+.warning {
+  color: var(--hg-status-warning);
+}
+
+.success {
+  color: var(--hg-status-success);
+}
+
+.monoPill.monoPill {
+  font-family: var(--hg-font-mono);
+  letter-spacing: 0.06em;
+}
+
+.amount {
+  white-space: nowrap;
+  font-family: var(--hg-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--hg-text-primary);
+}
+
+/* ---------- toggles in a sunken strip (Saved answers) ---------- */
+
+.toggleStrip {
+  padding: 10px var(--hg-space-4);
+  border-radius: var(--hg-radius-md);
+  background-color: var(--hg-bg-surface-sunken);
+}
+
+/* ---------- Appearance ---------- */
+
+.schemes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--hg-space-4);
+}
+
+.scheme {
+  width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--hg-space-3);
+  padding: 10px;
+  border-radius: var(--hg-radius-lg);
+  border: 1px solid var(--hg-border-subtle);
+  background-color: var(--hg-bg-surface-sunken);
+  text-align: left;
+}
+
+.scheme[data-checked] {
+  border-color: var(--hg-accent-primary);
+}
+
+.scheme:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: 2px;
+}
+
+.schemePreview {
+  height: 70px;
+  border-radius: var(--hg-radius-md);
+  border: 1px solid var(--hg-border-subtle);
+}
+
+.schemePreview[data-scheme='system'] {
+  background-color: var(--hg-bg-subtle);
+}
+
+.schemePreview[data-scheme='light'] {
+  background-color: var(--hg-bone-50);
+}
+
+.schemePreview[data-scheme='dark'] {
+  background-color: var(--hg-ink-950);
+}
+
+.schemeLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--hg-text-primary);
+}
+
+/* ---------- Pair a phone ---------- */
+
+.modalTitle {
+  margin: 0;
+  font-family: var(--hg-font-display);
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--hg-text-primary);
+}
+
+.qr {
+  flex: none;
+  position: relative;
+  width: 196px;
+  height: 196px;
+  padding: 14px;
+  box-sizing: border-box;
+  border-radius: var(--hg-radius-lg);
+  background-color: var(--hg-white);
+}
+
+.qrNote {
+  color: var(--hg-ink-700);
+  font-size: 13px;
+  text-align: center;
+}
+
+.approve {
+  display: flex;
+  align-items: center;
+  gap: var(--hg-space-4);
+  padding: 14px;
+  border-radius: var(--hg-radius-lg);
+  border: 1px solid var(--hg-accent-primary);
+  background-color: var(--hg-accent-primary-soft);
+}
+
+.approve > svg {
+  flex: none;
+  color: var(--hg-accent-primary);
+}
+
+.approveTitle {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--hg-text-primary);
+}
+
+.nowrap {
+  white-space: nowrap;
+}

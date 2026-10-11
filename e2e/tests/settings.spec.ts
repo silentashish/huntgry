@@ -72,6 +72,38 @@ test.describe('with every agent faked', () => {
   })
 })
 
+test.describe('section nav and appearance', () => {
+  test.use({ workspace: 'demo', prepare: withFakeAgents() })
+
+  test('the nav scrolls to a card and highlights it; Appearance sets the colour scheme and keeps it (#116)', async ({ app }) => {
+    let settings = await openSettings(app)
+    await expect(settings.sectionLink('Agents')).toHaveAttribute('aria-current', 'true')
+
+    await settings.sectionLink('Pricing').click()
+    await expect(settings.cardHeading('Pricing')).toBeInViewport()
+    await expect(settings.sectionLink('Pricing')).toHaveAttribute('aria-current', 'true')
+    await expect(settings.sectionLink('Agents')).not.toHaveAttribute('aria-current', 'true')
+
+    await settings.sectionLink('Appearance').click()
+    await expect(settings.cardHeading('Appearance')).toBeInViewport()
+    await expect(settings.sectionLink('Appearance')).toHaveAttribute('aria-current', 'true')
+
+    const scheme = () => app.window.evaluate(() => document.documentElement.getAttribute('data-mantine-color-scheme'))
+    await settings.appearanceOption('Dark').click()
+    await expect(settings.appearanceOption('Dark')).toBeChecked()
+    await expect.poll(scheme).toBe('dark')
+    await settings.appearanceOption('Light').click()
+    await expect(settings.appearanceOption('Light')).toBeChecked()
+    await expect.poll(scheme).toBe('light')
+
+    await app.relaunch()
+    settings = await openSettings(app)
+    await expect(settings.appearanceOption('Light')).toBeChecked()
+    await expect(settings.appearanceOption('System')).not.toBeChecked()
+    expect(await scheme()).toBe('light')
+  })
+})
+
 test.describe('with an old Claude Code', () => {
   test.use({ workspace: 'demo', prepare: withFakeAgents({ claudeVersion: '2.0.0' }) })
 
