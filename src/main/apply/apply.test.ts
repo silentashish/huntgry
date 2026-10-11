@@ -587,9 +587,10 @@ describe('ApplyService', () => {
     await new Promise((r) => setTimeout(r, 20))
     expect(service.current()).toMatchObject({ status: 'submitted-detected' })
     expect(events.slice(seen).map((e) => e?.status)).not.toContain('filled')
-    // Fill form on the confirmation page itself does nothing.
+    // Fill form pressed afterwards on the same page ("Not yet") overrules the detection and fills it.
     await service.fill(service.current()!.id)
-    expect(service.current()).toMatchObject({ status: 'submitted-detected' })
+    expect(tab.answersSeen).toHaveLength(2)
+    expect(service.current()!.status).not.toBe('submitted-detected')
   })
 
   it('reports a confirmation page and leaves tracking alone', async () => {

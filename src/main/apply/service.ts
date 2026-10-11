@@ -366,7 +366,7 @@ export class ApplyService {
   /** Detects and fills the tab's current page (Fill form / Fill again). */
   async fill(sessionId: string): Promise<ApplySession> {
     const ctx = this.require(sessionId)
-    await this.fillPage(ctx)
+    await this.fillPage(ctx, { user: true })
     return this.session as ApplySession
   }
 
@@ -527,10 +527,14 @@ export class ApplyService {
    * rest of the work (uploads, the final status) is dropped, so it can never
    * touch the next document or overwrite "submitted" with "filled".
    */
-  private async fillPage(ctx: Context): Promise<void> {
+  private async fillPage(ctx: Context, { user = false }: { user?: boolean } = {}): Promise<void> {
     const seq = ctx.loadSeq
-    // The site shows its "application submitted" page: there is no form left to fill (#119).
-    if (ctx.confirmedSeq === seq) return
+    // The site shows its "application submitted" page: there is no form left to fill (#119). Fill form pressed there
+    // ("Not yet" in the panel) overrules the detection: the form may still be open.
+    if (ctx.confirmedSeq === seq) {
+      if (!user) return
+      ctx.confirmedSeq = null
+    }
     if (ctx.fillingSeq === seq) return
     ctx.fillingSeq = seq
     // A page whose scan was still pending when Fill form was pressed can turn out to be the confirmation page: the
