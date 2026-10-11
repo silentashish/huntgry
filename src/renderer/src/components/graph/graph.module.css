@@ -1,0 +1,328 @@
+/* Knowledge graph parts (#115, Figma Profile — Knowledge graph / Skills). Colours are --hg-* tokens. */
+
+/* ---------- Node panel ---------- */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-xl);
+  background-color: var(--hg-bg-surface);
+  min-width: 0;
+}
+
+.panelHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.panelTitle {
+  margin: 0;
+  font-family: var(--hg-font-ui);
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--hg-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.panelDetail {
+  margin: -6px 0 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--hg-text-secondary);
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sectionLabel {
+  margin: 0;
+}
+
+.evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: var(--hg-radius-md);
+  background-color: var(--hg-bg-surface-sunken);
+  min-width: 0;
+}
+
+.evidenceSource {
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  color: var(--hg-text-link);
+  overflow-wrap: anywhere;
+}
+
+button.evidenceSource {
+  all: unset;
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  color: var(--hg-text-link);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+button.evidenceSource:hover {
+  text-decoration: underline;
+}
+
+button.evidenceSource:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: 2px;
+  border-radius: var(--hg-radius-xs);
+}
+
+.evidenceText {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--hg-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.panelText {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--hg-text-secondary);
+}
+
+.pillButton {
+  all: unset;
+  cursor: pointer;
+  border-radius: var(--hg-radius-full);
+  display: inline-flex;
+}
+
+.pillButton:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: 2px;
+}
+
+.linkedList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.linked {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--hg-radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--hg-text-primary);
+}
+
+.linked:hover {
+  background-color: var(--hg-bg-hover);
+}
+
+.linked:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+}
+
+.linkedKind {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--hg-radius-full);
+}
+
+.linkedLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.placeholder {
+  align-items: flex-start;
+}
+
+/* ---------- Legend and toolbar ---------- */
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: auto;
+  gap: 4px 10px;
+  margin-block: 0;
+  margin-right: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  color: var(--hg-text-secondary);
+  white-space: nowrap;
+}
+
+.legendDot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--hg-radius-full);
+  flex: none;
+}
+
+/* The "Jobs overlay (N)" chip: an ember outline pill while on, a neutral one while off. */
+.overlayLabel {
+  height: 22px;
+  padding: 0 9px;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: var(--hg-radius-full);
+  border: 1px solid var(--hg-border-default);
+  background-color: transparent;
+  color: var(--hg-text-secondary);
+}
+
+.overlayLabel[data-checked] {
+  border-color: var(--hg-accent-primary);
+  color: var(--hg-text-accent);
+  background-color: transparent;
+  padding: 0 9px;
+}
+
+.overlayLabel:where(:hover) {
+  background-color: var(--hg-bg-hover);
+}
+
+.overlayIconWrapper {
+  display: none;
+}
+
+.overlayContent {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* ---------- Canvas card ---------- */
+
+.canvasCard {
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-xl);
+  background-color: var(--hg-bg-surface-sunken);
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* ---------- Skills table ---------- */
+
+.tableCard {
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-xl);
+  background-color: var(--hg-bg-surface);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.table {
+  --table-vertical-spacing: 12px;
+  --table-horizontal-spacing: 16px;
+}
+
+.table th {
+  padding-block: 8px;
+  white-space: nowrap;
+}
+
+.table td {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--hg-text-primary);
+}
+
+.table tbody tr {
+  cursor: pointer;
+}
+
+.table tbody tr[data-selected] {
+  background-color: var(--hg-bg-active);
+}
+
+.skillName {
+  all: unset;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--hg-text-primary);
+}
+
+.skillName:hover {
+  text-decoration: underline;
+}
+
+.skillName:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: 2px;
+  border-radius: var(--hg-radius-xs);
+}
+
+.skillCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.years {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.yearsBar {
+  width: 80px;
+  flex: none;
+}
+
+.muted {
+  color: var(--hg-text-muted);
+}
+
+/* ---------- Skills summary card (Dashboard) ---------- */
+
+.summaryGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.summaryGroup + .summaryGroup {
+  margin-top: 14px;
+}
+
+.summaryEmpty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--hg-text-secondary);
+}

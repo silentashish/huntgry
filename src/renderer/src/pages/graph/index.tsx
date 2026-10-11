@@ -1,204 +1,33 @@
-import { useEffect, useMemo, useState } from 'react'
-import {
-  Alert,
-  Button,
-  Card,
-  Center,
-  Chip,
-  Grid,
-  Group,
-  Loader,
-  SegmentedControl,
-  Select,
-  Stack,
-  Text,
-  TextInput,
-  Title
-} from '@mantine/core'
-import { IconRefresh, IconSearch } from '@tabler/icons-react'
-import type { NodeKind } from '@shared/knowledge-graph'
-import { KIND_COLOR, KIND_LABEL } from '../../components/graph/colors'
-import { GraphCanvas } from '../../components/graph/GraphCanvas'
-import { NodePanel } from '../../components/graph/NodePanel'
-import { SkillsSummaryCard } from '../../components/graph/SkillsSummaryCard'
-import { SkillsTable } from '../../components/graph/SkillsTable'
-import { useKnowledgeGraph } from '../../components/graph/useKnowledgeGraph'
+import { Button, Stack } from '@mantine/core'
+import { IconUser } from '@tabler/icons-react'
+import { PageHeader } from '../../components/ui'
 import { useNavigation, type PageParams } from '../../navigation'
+import { GraphView, useKnowledgeState } from '../profile/KnowledgeViews'
 
-const LEGEND: NodeKind[] = ['person', 'experience', 'company', 'project', 'skill', 'education', 'certification', 'job']
-
-/** Skills, roles, companies and projects from the master profile as a navigable graph, plus a skills table. */
+/**
+ * The Knowledge graph on its own. Since #95 the graph is a view of the Profile page
+ * (`navigate('profile', { view: 'graph', nodeId })`); this stays for a `graph` location until
+ * the shell sends those to the Profile page, and shows the same view.
+ */
 export function GraphPage({ params }: { params: PageParams['graph'] }) {
   const { navigate } = useNavigation()
-  const [view, setView] = useState<'graph' | 'skills'>('graph')
-  const [selected, setSelected] = useState<string | null>(params?.nodeId ?? null)
-  const [search, setSearch] = useState('')
-  const [showJobs, setShowJobs] = useState(true)
-  const { graph, jobs, error, reload } = useKnowledgeGraph(showJobs)
-
-  // A selected node can disappear (overlay turned off, profile edited): drop the selection with it.
-  useEffect(() => {
-    if (graph && selected && !graph.nodes.some((n) => n.id === selected)) setSelected(null)
-  }, [graph, selected])
-
-  const hiddenKinds = useMemo(() => new Set<NodeKind>(), [])
-  const matches = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q || !graph) return null
-    return new Set(
-      graph.nodes
-        .filter((n) => n.label.toLowerCase().includes(q) || n.detail.toLowerCase().includes(q))
-        .map((n) => n.id)
-    )
-  }, [graph, search])
-
-  const sparse = graph && graph.nodes.length <= 1
-
+  const state = useKnowledgeState(params?.nodeId, params)
   return (
-    <Stack gap="md">
-      <Group justify="space-between">
-        <Title order={2}>Knowledge graph</Title>
-        <Group gap="xs">
-          <SegmentedControl
-            value={view}
-            onChange={(v) => setView(v as 'graph' | 'skills')}
-            data={[
-              { value: 'graph', label: 'Graph' },
-              { value: 'skills', label: 'Skills' }
-            ]}
-          />
-          <Button variant="default" leftSection={<IconRefresh size={16} />} onClick={reload}>
-            Refresh
+    <Stack gap="lg">
+      <PageHeader
+        eyebrow="Your experience as a graph, with the jobs you saved laid over it"
+        title="Knowledge graph"
+        actions={
+          <Button
+            variant="default"
+            leftSection={<IconUser size={16} />}
+            onClick={() => navigate('profile', { view: 'graph', nodeId: state.selected ?? undefined })}
+          >
+            Open in Profile
           </Button>
-        </Group>
-      </Group>
-
-      {error && (
-        <Alert color="red" variant="light">
-          {error}
-        </Alert>
-      )}
-
-      {!graph && !error && (
-        <Center py="xl">
-          <Loader />
-        </Center>
-      )}
-
-      {graph && sparse && (
-        <Card withBorder radius="md" padding="xl">
-          <Stack align="center" gap="xs" py="lg">
-            <Title order={3}>Nothing to draw yet</Title>
-            <Text c="dimmed" ta="center" maw={520}>
-              The graph is built from your master profile: roles, projects, education and skills. Fill it in and come
-              back.
-            </Text>
-            <Button mt="sm" onClick={() => navigate('profile')}>
-              Open master profile
-            </Button>
-          </Stack>
-        </Card>
-      )}
-
-      {graph && !sparse && (
-        <>
-          <Group gap="sm" align="center">
-            <TextInput
-              style={{ flex: 1 }}
-              leftSection={<IconSearch size={16} />}
-              placeholder={view === 'graph' ? 'Highlight skills, roles, companies…' : 'Filter skills or groups…'}
-              value={search}
-              onChange={(e) => setSearch(e.currentTarget.value)}
-            />
-            {view === 'graph' && (
-              // Keyboard (and screen reader) way to select a node; the canvas itself is pointer-only.
-              <Select
-                w={240}
-                searchable
-                clearable
-                placeholder="Jump to…"
-                aria-label="Select a node of the graph"
-                data={graph.nodes.map((n) => ({ value: n.id, label: `${KIND_LABEL[n.kind]}: ${n.label}` }))}
-                value={selected}
-                onChange={setSelected}
-                limit={50}
-              />
-            )}
-            <Chip checked={showJobs} onChange={setShowJobs} disabled={jobs.length === 0}>
-              Jobs overlay ({jobs.length})
-            </Chip>
-          </Group>
-
-          {view === 'graph' ? (
-            <Grid gap="md">
-              <Grid.Col span={{ base: 12, md: selected ? 8 : 12 }}>
-                <Card withBorder radius="md" padding={0}>
-                  <GraphCanvas
-                    graph={graph}
-                    selected={selected}
-                    matches={matches}
-                    hiddenKinds={hiddenKinds}
-                    onSelect={setSelected}
-                    height={560}
-                  />
-                </Card>
-                <Group gap="md" mt="xs">
-                  {LEGEND.filter((k) => graph.nodes.some((n) => n.kind === k)).map((k) => (
-                    <Group key={k} gap={6}>
-                      <span
-                        style={{
-                          width: 10,
-                          height: 10,
-                          borderRadius: 5,
-                          background: `var(--mantine-color-${KIND_COLOR[k]}-filled)`
-                        }}
-                      />
-                      <Text size="xs" c="dimmed">
-                        {KIND_LABEL[k]}
-                      </Text>
-                    </Group>
-                  ))}
-                  {graph.skills.some((s) => s.gap) && (
-                    <Group gap={6}>
-                      <span
-                        style={{
-                          width: 10,
-                          height: 10,
-                          borderRadius: 5,
-                          background: 'var(--mantine-color-orange-filled)'
-                        }}
-                      />
-                      <Text size="xs" c="dimmed">
-                        Gap (asked for, not in profile)
-                      </Text>
-                    </Group>
-                  )}
-                </Group>
-              </Grid.Col>
-              {selected && (
-                <Grid.Col span={{ base: 12, md: 4 }}>
-                  <NodePanel graph={graph} id={selected} onSelect={setSelected} />
-                </Grid.Col>
-              )}
-            </Grid>
-          ) : (
-            <Grid gap="md">
-              <Grid.Col span={{ base: 12, md: selected ? 8 : 12 }}>
-                <Card withBorder radius="md" padding={0}>
-                  <SkillsTable graph={graph} filter={search} onSelect={setSelected} />
-                </Card>
-              </Grid.Col>
-              {selected && (
-                <Grid.Col span={{ base: 12, md: 4 }}>
-                  <NodePanel graph={graph} id={selected} onSelect={setSelected} />
-                </Grid.Col>
-              )}
-            </Grid>
-          )}
-
-          <SkillsSummaryCard graph={graph} showLink={false} />
-        </>
-      )}
+        }
+      />
+      <GraphView state={state} onOpenEditor={() => navigate('profile', { view: 'editor' })} />
     </Stack>
   )
 }

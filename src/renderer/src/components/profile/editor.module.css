@@ -1,0 +1,449 @@
+/* Master profile editor (#115, Figma Profile — Editor / Leave guard modal). Colours are --hg-* tokens. */
+
+/* ---------- Header card ---------- */
+
+.headerCard {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-xl);
+  background-color: var(--hg-bg-surface);
+  flex-wrap: wrap;
+}
+
+.headerText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.nameRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.name {
+  margin: 0;
+  font-family: var(--hg-font-display);
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--hg-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.fileBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+  padding: 0 8px;
+  border-radius: var(--hg-radius-full);
+  background-color: var(--hg-bg-subtle);
+  color: var(--hg-text-secondary);
+  font-family: var(--hg-font-mono);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  max-width: 100%;
+}
+
+.fileBadge > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contactLine {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--hg-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: none;
+}
+
+/* ---------- Section nav + body ---------- */
+
+.tabs {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.tabList {
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 16px;
+}
+
+.tabList::before {
+  display: none;
+}
+
+:root[data-mantine-color-scheme] .tab {
+  justify-content: flex-start;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--hg-radius-md);
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--hg-text-secondary);
+  border: 0;
+}
+
+:root[data-mantine-color-scheme] .tab:where(:hover) {
+  background-color: var(--hg-bg-hover);
+  color: var(--hg-text-primary);
+}
+
+:root[data-mantine-color-scheme] .tab[data-active] {
+  background-color: var(--hg-bg-subtle);
+  color: var(--hg-text-primary);
+}
+
+.tabLabel {
+  flex: 1;
+  text-align: left;
+}
+
+.count {
+  display: inline-flex;
+  align-items: center;
+  height: 14px;
+  padding: 0 6px;
+  border-radius: var(--hg-radius-full);
+  background-color: var(--hg-bg-subtle);
+  color: var(--hg-text-secondary);
+  font-family: var(--hg-font-mono);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+
+.tab[data-active] .count {
+  background-color: var(--hg-bg-active);
+}
+
+.count[data-tone='warning'] {
+  background-color: var(--hg-status-warning-soft);
+  color: var(--hg-status-warning);
+}
+
+.panel {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---------- Sections ---------- */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.section + .section,
+.section .section {
+  margin-top: 8px;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+}
+
+.sectionHead[data-order='4'] {
+  margin-top: 8px;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-family: var(--hg-font-ui);
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--hg-text-primary);
+  white-space: nowrap;
+}
+
+.sectionHead[data-order='4'] .sectionTitle {
+  font-size: 15px;
+  line-height: 20px;
+}
+
+.sectionMeta {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--hg-text-muted);
+}
+
+.sectionAction {
+  flex: none;
+  margin-left: auto;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-xl);
+  background-color: var(--hg-bg-surface);
+}
+
+.row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.hint,
+.empty {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--hg-text-muted);
+}
+
+.empty {
+  font-size: 13px;
+  line-height: 18px;
+  padding: 16px;
+  border: 1px dashed var(--hg-border-default);
+  border-radius: var(--hg-radius-xl);
+}
+
+/* ---------- Fields: a 12-column grid, rows of 3 and 4 like the Figma Experience card ---------- */
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 14px 12px;
+}
+
+.field {
+  grid-column: span var(--field-cols, 6);
+  min-width: 0;
+}
+
+@media (max-width: 960px) {
+  .field {
+    grid-column: span 12;
+  }
+}
+
+/* ---------- Entry cards (accordion) ---------- */
+
+.entries {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+:root[data-mantine-color-scheme] .entry {
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-xl);
+  background-color: var(--hg-bg-surface);
+  overflow: hidden;
+}
+
+:root[data-mantine-color-scheme] .entry[data-active] {
+  border-color: var(--hg-border-default);
+}
+
+.entryHead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 12px;
+}
+
+:root[data-mantine-color-scheme] .entryControl {
+  flex: 1;
+  min-width: 0;
+  padding: 16px 8px 16px 16px;
+  background-color: transparent;
+  color: var(--hg-text-primary);
+}
+
+:root[data-mantine-color-scheme] .entryControl:where(:hover) {
+  background-color: transparent;
+}
+
+.entryControl:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: -2px;
+  border-radius: var(--hg-radius-xl);
+}
+
+.entryChevron {
+  color: var(--hg-icon-default);
+  margin-inline-end: 8px;
+}
+
+.entryLabel {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+}
+
+.entryTitle {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entryMeta {
+  font-family: var(--hg-font-mono);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--hg-text-muted);
+  white-space: nowrap;
+}
+
+.entryContent {
+  padding: 0 16px 16px;
+}
+
+/* ---------- Save bar (floating pill) ---------- */
+
+.saveDock {
+  position: sticky;
+  bottom: 24px;
+  z-index: 20;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  margin-top: 8px;
+}
+
+.saveBar {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--hg-border-default);
+  border-radius: var(--hg-radius-full);
+  background-color: var(--hg-bg-surface-raised);
+  box-shadow: var(--hg-shadow-float);
+}
+
+.saveDot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--hg-radius-full);
+  background-color: var(--hg-status-warning);
+  flex: none;
+}
+
+.saveText {
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--hg-text-primary);
+  white-space: nowrap;
+}
+
+/* ---------- Confirm / leave guard modal ---------- */
+
+.modalHeader {
+  padding-bottom: 14px;
+}
+
+:root[data-mantine-color-scheme] .modalTitle {
+  font-family: var(--hg-font-ui);
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.modalTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.modalIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: var(--hg-radius-md);
+  background-color: var(--tone-soft);
+  color: var(--tone-fg);
+}
+
+.modalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modalText {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--hg-text-secondary);
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* The first card cannot move up, the last one down: a quiet arrow instead of the theme's grey disabled box. */
+:root[data-mantine-color-scheme] .entryHead button:is(:disabled, [data-disabled]) {
+  background-color: transparent;
+  color: var(--hg-icon-muted);
+}

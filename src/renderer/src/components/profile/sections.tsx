@@ -1,4 +1,5 @@
-import { ActionIcon, Button, Group, Stack, Text, TextInput, Textarea, Title } from '@mantine/core'
+import { ActionIcon, TextInput, Textarea } from '@mantine/core'
+import { IconTrash } from '@tabler/icons-react'
 import {
   emptyCertification,
   emptyEducation,
@@ -13,32 +14,33 @@ import {
   type ProjectEntry,
   type PublicationEntry
 } from '@shared/master-profile'
-import { CommaListInput, EntryList, FieldGrid, LinesInput, type FieldSpec } from './fields'
+import classes from './editor.module.css'
+import { AddButton, CommaListInput, EntryList, FieldGrid, LinesInput, SectionHead, type FieldSpec } from './fields'
 
 type Edit = (next: MasterProfile) => void
 
 const CONTACT_FIELDS: Array<FieldSpec<ContactInfo>> = [
   { key: 'name', label: 'Full name', placeholder: 'Jane Doe' },
   { key: 'headline', label: 'Headline', placeholder: 'Full-Stack Software Engineer' },
-  { key: 'email', label: 'Email', placeholder: 'jane@example.com' },
-  { key: 'phone', label: 'Phone', placeholder: '(555) 010-0100' },
-  { key: 'location', label: 'Location', placeholder: 'City, ST' },
+  { key: 'email', label: 'Email', placeholder: 'jane@example.com', cols: 4 },
+  { key: 'phone', label: 'Phone', placeholder: '(555) 010-0100', cols: 4 },
+  { key: 'location', label: 'Location', placeholder: 'City, ST', cols: 4 },
   { key: 'workAuthorization', label: 'Work authorization', placeholder: 'e.g. US citizen, needs sponsorship' },
   { key: 'linkedin', label: 'LinkedIn', placeholder: 'https://www.linkedin.com/in/…' },
   { key: 'github', label: 'GitHub', placeholder: 'https://github.com/…' },
-  { key: 'website', label: 'Website', placeholder: 'https://…', span: 2 }
+  { key: 'website', label: 'Website', placeholder: 'https://…' }
 ]
 
 const EXPERIENCE_FIELDS: Array<FieldSpec<ExperienceEntry>> = [
-  { key: 'company', label: 'Company' },
-  { key: 'role', label: 'Role' },
-  { key: 'start', label: 'Start', placeholder: 'Aug 2024' },
-  { key: 'end', label: 'End', placeholder: 'Present' },
-  { key: 'location', label: 'Location', placeholder: 'City, ST' },
-  { key: 'employmentType', label: 'Type', placeholder: 'Full-Time, Remote' },
-  { key: 'project', label: 'Project' },
-  { key: 'projectLink', label: 'Project link', placeholder: 'https://…' },
-  { key: 'technologies', label: 'Technologies', span: 2 },
+  { key: 'company', label: 'Company', cols: 4 },
+  { key: 'role', label: 'Role', cols: 4 },
+  { key: 'employmentType', label: 'Type', placeholder: 'Full-Time, Remote', cols: 4 },
+  { key: 'start', label: 'Start', placeholder: 'Aug 2024', cols: 3 },
+  { key: 'end', label: 'End', placeholder: 'Present', cols: 3 },
+  { key: 'location', label: 'Location', placeholder: 'City, ST', cols: 3 },
+  { key: 'projectLink', label: 'Project link', placeholder: 'https://…', cols: 3 },
+  { key: 'project', label: 'Project', cols: 12 },
+  { key: 'technologies', label: 'Technologies', cols: 12 },
   {
     key: 'highlights',
     label: 'Highlights',
@@ -48,42 +50,51 @@ const EXPERIENCE_FIELDS: Array<FieldSpec<ExperienceEntry>> = [
 ]
 
 const PROJECT_FIELDS: Array<FieldSpec<ProjectEntry>> = [
-  { key: 'name', label: 'Name' },
-  { key: 'link', label: 'Link', placeholder: 'https://github.com/…' },
-  { key: 'dates', label: 'Dates' },
-  { key: 'technologies', label: 'Technologies' },
+  { key: 'name', label: 'Name', cols: 4 },
+  { key: 'dates', label: 'Dates', cols: 4 },
+  { key: 'link', label: 'Link', placeholder: 'https://github.com/…', cols: 4 },
+  { key: 'technologies', label: 'Technologies', cols: 12 },
   { key: 'description', label: 'Description', kind: 'textarea' },
   { key: 'highlights', label: 'Highlights', kind: 'lines', description: 'One per line.' }
 ]
 
 const EDUCATION_FIELDS: Array<FieldSpec<EducationEntry>> = [
-  { key: 'institution', label: 'Institution', span: 2 },
-  { key: 'degree', label: 'Degree', placeholder: 'Master of Science' },
-  { key: 'field', label: 'Field of study', placeholder: 'Computer Science' },
-  { key: 'start', label: 'Start' },
-  { key: 'end', label: 'End' },
-  { key: 'location', label: 'Location' },
-  { key: 'gpa', label: 'GPA' },
+  { key: 'institution', label: 'Institution', cols: 4 },
+  { key: 'degree', label: 'Degree', placeholder: 'Master of Science', cols: 4 },
+  { key: 'field', label: 'Field of study', placeholder: 'Computer Science', cols: 4 },
+  { key: 'start', label: 'Start', cols: 3 },
+  { key: 'end', label: 'End', cols: 3 },
+  { key: 'location', label: 'Location', cols: 3 },
+  { key: 'gpa', label: 'GPA', cols: 3 },
   { key: 'highlights', label: 'Highlights', kind: 'lines', description: 'Thesis, honours, coursework… one per line.' }
 ]
 
 const CERTIFICATION_FIELDS: Array<FieldSpec<CertificationEntry>> = [
-  { key: 'name', label: 'Name', span: 2 },
-  { key: 'issuer', label: 'Issuer' },
-  { key: 'date', label: 'Date' },
-  { key: 'link', label: 'Link', span: 2 }
+  { key: 'name', label: 'Name', cols: 6 },
+  { key: 'issuer', label: 'Issuer', cols: 3 },
+  { key: 'date', label: 'Date', cols: 3 },
+  { key: 'link', label: 'Link', cols: 12 }
 ]
 
 const PUBLICATION_FIELDS: Array<FieldSpec<PublicationEntry>> = [
-  { key: 'title', label: 'Title', span: 2 },
-  { key: 'venue', label: 'Venue' },
-  { key: 'date', label: 'Date' },
-  { key: 'link', label: 'Link', span: 2 },
+  { key: 'title', label: 'Title', cols: 6 },
+  { key: 'venue', label: 'Venue', cols: 3 },
+  { key: 'date', label: 'Date', cols: 3 },
+  { key: 'link', label: 'Link', cols: 12 },
   { key: 'description', label: 'Description', kind: 'textarea' }
 ]
 
 const range = (a: string, b: string) => [a, b].filter(Boolean).join(' – ')
 const join = (...parts: string[]) => parts.filter(Boolean).join(' · ')
+const entries = (n: number) => `${n} entr${n === 1 ? 'y' : 'ies'} · order kept in the file`
+
+function RemoveButton({ label, onClick }: { label: string; onClick(): void }) {
+  return (
+    <ActionIcon variant="subtle" color="danger" aria-label={label} mb={6} onClick={onClick}>
+      <IconTrash size={14} />
+    </ActionIcon>
+  )
+}
 
 export function ContactSection({ profile, onChange }: { profile: MasterProfile; onChange: Edit }) {
   const c = profile.contact
@@ -91,46 +102,41 @@ export function ContactSection({ profile, onChange }: { profile: MasterProfile; 
   const setOther = (i: number, patch: Partial<ContactInfo['other'][number]>) =>
     setContact({ ...c, other: c.other.map((o, j) => (j === i ? { ...o, ...patch } : o)) })
   return (
-    <Stack gap="md">
-      <FieldGrid value={c} fields={CONTACT_FIELDS} onChange={setContact} />
-      <Stack gap="xs">
-        <Text size="sm" fw={500}>
-          Other links
-        </Text>
-        {c.other.map((o, i) => (
-          <Group key={i} wrap="nowrap" align="flex-end">
-            <TextInput
-              aria-label="Label"
-              placeholder="Label (e.g. Portfolio)"
-              value={o.label}
-              onChange={(e) => setOther(i, { label: e.currentTarget.value })}
-              w={180}
-            />
-            <TextInput
-              aria-label="Value"
-              placeholder="https://…"
-              value={o.value}
-              onChange={(e) => setOther(i, { value: e.currentTarget.value })}
-              style={{ flex: 1 }}
-            />
-            <ActionIcon
-              variant="subtle"
-              color="red"
-              aria-label="Remove link"
-              mb={4}
-              onClick={() => setContact({ ...c, other: c.other.filter((_o, j) => j !== i) })}
-            >
-              ✕
-            </ActionIcon>
-          </Group>
-        ))}
-        <Group>
-          <Button variant="light" size="xs" onClick={() => setContact({ ...c, other: [...c.other, { label: '', value: '' }] })}>
-            Add link
-          </Button>
-        </Group>
-      </Stack>
-    </Stack>
+    <div className={classes.section}>
+      <SectionHead title="Contact" meta="At the top of every resume" />
+      <div className={classes.card}>
+        <FieldGrid value={c} fields={CONTACT_FIELDS} onChange={setContact} />
+      </div>
+      <SectionHead
+        title="Other links"
+        meta="Portfolio, Stack Overflow, a talk…"
+        order={4}
+        action={<AddButton onClick={() => setContact({ ...c, other: [...c.other, { label: '', value: '' }] })}>Add link</AddButton>}
+      />
+      {c.other.length > 0 && (
+        <div className={classes.card}>
+          {c.other.map((o, i) => (
+            <div key={i} className={classes.row}>
+              <TextInput
+                aria-label="Label"
+                placeholder="Label (e.g. Portfolio)"
+                value={o.label}
+                onChange={(e) => setOther(i, { label: e.currentTarget.value })}
+                w={200}
+              />
+              <TextInput
+                aria-label="Value"
+                placeholder="https://…"
+                value={o.value}
+                onChange={(e) => setOther(i, { value: e.currentTarget.value })}
+                className={classes.grow}
+              />
+              <RemoveButton label="Remove link" onClick={() => setContact({ ...c, other: c.other.filter((_o, j) => j !== i) })} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -138,23 +144,33 @@ export function SummarySkillsSection({ profile, onChange }: { profile: MasterPro
   const skills = profile.skills
   const setSkill = (i: number, patch: Partial<MasterProfile['skills'][number]>) =>
     onChange({ ...profile, skills: skills.map((s, j) => (j === i ? { ...s, ...patch } : s)) })
+  const count = skills.reduce((n, s) => n + s.items.length, 0)
   return (
-    <Stack gap="lg">
-      <Textarea
-        label="Summary"
-        description="A few sentences on who you are and what you bring. Tailored resumes pick from this."
-        autosize
-        minRows={4}
-        value={profile.summary}
-        onChange={(e) => onChange({ ...profile, summary: e.currentTarget.value })}
+    <div className={classes.section}>
+      <SectionHead title="Summary & skills" meta="Tailored resumes pick from these" />
+      <div className={classes.card}>
+        <Textarea
+          label="Summary"
+          description="A few sentences on who you are and what you bring. Tailored resumes pick from this."
+          inputWrapperOrder={['label', 'input', 'description', 'error']}
+          autosize
+          minRows={4}
+          value={profile.summary}
+          onChange={(e) => onChange({ ...profile, summary: e.currentTarget.value })}
+        />
+      </div>
+      <SectionHead
+        title="Skills"
+        meta={`${skills.length} group${skills.length === 1 ? '' : 's'} · ${count} skill${count === 1 ? '' : 's'}`}
+        order={4}
+        action={<AddButton onClick={() => onChange({ ...profile, skills: [...skills, { category: '', items: [] }] })}>Add skill group</AddButton>}
       />
-      <Stack gap="xs">
-        <Title order={5}>Skills</Title>
-        <Text size="xs" c="dimmed">
+      <div className={classes.card}>
+        <p className={classes.hint}>
           Group skills by category. Separate items with commas; commas inside brackets are kept, e.g. AWS (EC2, S3).
-        </Text>
+        </p>
         {skills.map((s, i) => (
-          <Group key={i} wrap="nowrap" align="flex-end">
+          <div key={i} className={classes.row}>
             <TextInput
               label={i === 0 ? 'Category' : undefined}
               aria-label="Category"
@@ -163,7 +179,7 @@ export function SummarySkillsSection({ profile, onChange }: { profile: MasterPro
               onChange={(e) => setSkill(i, { category: e.currentTarget.value })}
               w={220}
             />
-            <div style={{ flex: 1 }}>
+            <div className={classes.grow}>
               <CommaListInput
                 label={i === 0 ? 'Skills' : undefined}
                 placeholder="Python, TypeScript, SQL"
@@ -171,38 +187,24 @@ export function SummarySkillsSection({ profile, onChange }: { profile: MasterPro
                 onChange={(items) => setSkill(i, { items })}
               />
             </div>
-            <ActionIcon
-              variant="subtle"
-              color="red"
-              aria-label="Remove skill group"
-              mb={4}
-              onClick={() => onChange({ ...profile, skills: skills.filter((_s, j) => j !== i) })}
-            >
-              ✕
-            </ActionIcon>
-          </Group>
+            <RemoveButton label="Remove skill group" onClick={() => onChange({ ...profile, skills: skills.filter((_s, j) => j !== i) })} />
+          </div>
         ))}
-        <Group>
-          <Button
-            variant="light"
-            size="xs"
-            onClick={() => onChange({ ...profile, skills: [...skills, { category: '', items: [] }] })}
-          >
-            Add skill group
-          </Button>
-        </Group>
-      </Stack>
-    </Stack>
+      </div>
+    </div>
   )
 }
 
 export function ExperienceSection({ profile, onChange }: { profile: MasterProfile; onChange: Edit }) {
   return (
     <EntryList
+      heading="Experience"
+      summary={entries(profile.experience.length)}
       items={profile.experience}
       onChange={(experience) => onChange({ ...profile, experience })}
       create={emptyExperience}
-      title={(e) => join(e.role, e.company, range(e.start, e.end))}
+      title={(e) => join(e.role, e.company)}
+      meta={(e) => range(e.start, e.end)}
       render={(e, update) => <FieldGrid value={e} fields={EXPERIENCE_FIELDS} onChange={update} />}
       addLabel="Add experience"
       empty="No experience yet. Include everything, even roles that will rarely make a resume."
@@ -213,10 +215,13 @@ export function ExperienceSection({ profile, onChange }: { profile: MasterProfil
 export function ProjectsSection({ profile, onChange }: { profile: MasterProfile; onChange: Edit }) {
   return (
     <EntryList
+      heading="Projects"
+      summary={entries(profile.projects.length)}
       items={profile.projects}
       onChange={(projects) => onChange({ ...profile, projects })}
       create={emptyProject}
-      title={(p) => join(p.name, p.dates)}
+      title={(p) => p.name}
+      meta={(p) => p.dates}
       render={(p, update) => <FieldGrid value={p} fields={PROJECT_FIELDS} onChange={update} />}
       addLabel="Add project"
       empty="No projects yet."
@@ -227,10 +232,13 @@ export function ProjectsSection({ profile, onChange }: { profile: MasterProfile;
 export function EducationSection({ profile, onChange }: { profile: MasterProfile; onChange: Edit }) {
   return (
     <EntryList
+      heading="Education"
+      summary={entries(profile.education.length)}
       items={profile.education}
       onChange={(education) => onChange({ ...profile, education })}
       create={emptyEducation}
-      title={(e) => join([e.degree, e.field].filter(Boolean).join(', '), e.institution, range(e.start, e.end))}
+      title={(e) => join([e.degree, e.field].filter(Boolean).join(', '), e.institution)}
+      meta={(e) => range(e.start, e.end)}
       render={(e, update) => <FieldGrid value={e} fields={EDUCATION_FIELDS} onChange={update} />}
       addLabel="Add education"
       empty="No education yet."
@@ -239,33 +247,38 @@ export function EducationSection({ profile, onChange }: { profile: MasterProfile
 }
 
 export function CredentialsSection({ profile, onChange }: { profile: MasterProfile; onChange: Edit }) {
+  const [certs, pubs] = [profile.certifications.length, profile.publications.length]
   return (
-    <Stack gap="lg">
-      <Stack gap="xs">
-        <Title order={5}>Certifications</Title>
-        <EntryList
-          items={profile.certifications}
-          onChange={(certifications) => onChange({ ...profile, certifications })}
-          create={emptyCertification}
-          title={(c) => join(c.name, c.issuer, c.date)}
-          render={(c, update) => <FieldGrid value={c} fields={CERTIFICATION_FIELDS} onChange={update} />}
-          addLabel="Add certification"
-          empty="No certifications. Use the issuer's exact official name."
-        />
-      </Stack>
-      <Stack gap="xs">
-        <Title order={5}>Publications</Title>
-        <EntryList
-          items={profile.publications}
-          onChange={(publications) => onChange({ ...profile, publications })}
-          create={emptyPublication}
-          title={(p) => join(p.title, p.venue, p.date)}
-          render={(p, update) => <FieldGrid value={p} fields={PUBLICATION_FIELDS} onChange={update} />}
-          addLabel="Add publication"
-          empty="No publications."
-        />
-      </Stack>
-    </Stack>
+    <div className={classes.section}>
+      <SectionHead
+        title="Certifications & publications"
+        meta={`${certs} certification${certs === 1 ? '' : 's'} · ${pubs} publication${pubs === 1 ? '' : 's'}`}
+      />
+      <EntryList
+        heading="Certifications"
+        headingOrder={4}
+        items={profile.certifications}
+        onChange={(certifications) => onChange({ ...profile, certifications })}
+        create={emptyCertification}
+        title={(c) => join(c.name, c.issuer)}
+        meta={(c) => c.date}
+        render={(c, update) => <FieldGrid value={c} fields={CERTIFICATION_FIELDS} onChange={update} />}
+        addLabel="Add certification"
+        empty="No certifications. Use the issuer's exact official name."
+      />
+      <EntryList
+        heading="Publications"
+        headingOrder={4}
+        items={profile.publications}
+        onChange={(publications) => onChange({ ...profile, publications })}
+        create={emptyPublication}
+        title={(p) => join(p.title, p.venue)}
+        meta={(p) => p.date}
+        render={(p, update) => <FieldGrid value={p} fields={PUBLICATION_FIELDS} onChange={update} />}
+        addLabel="Add publication"
+        empty="No publications."
+      />
+    </div>
   )
 }
 
@@ -274,57 +287,43 @@ export function NotesSection({ profile, onChange }: { profile: MasterProfile; on
   const setExtra = (i: number, patch: Partial<MasterProfile['extraSections'][number]>) =>
     onChange({ ...profile, extraSections: extras.map((x, j) => (j === i ? { ...x, ...patch } : x)) })
   return (
-    <Stack gap="lg">
-      <LinesInput
-        label="Gaps and constraints"
-        description="What you do not have or cannot do (technologies, travel, sponsorship), one per line. Keeps the generator from papering over it."
-        value={profile.gaps}
-        onChange={(gaps) => onChange({ ...profile, gaps })}
+    <div className={classes.section}>
+      <SectionHead title="Gaps & notes" meta="What you do not have, and sections kept as you wrote them" />
+      <div className={classes.card}>
+        <LinesInput
+          label="Gaps and constraints"
+          description="What you do not have or cannot do (technologies, travel, sponsorship), one per line. Keeps the generator from papering over it."
+          value={profile.gaps}
+          onChange={(gaps) => onChange({ ...profile, gaps })}
+        />
+      </div>
+      <SectionHead
+        title="Other sections"
+        meta="Awards, volunteering, languages… written to the file as their own “##” sections, in Markdown"
+        order={4}
+        action={<AddButton onClick={() => onChange({ ...profile, extraSections: [...extras, { title: '', body: '' }] })}>Add section</AddButton>}
       />
-      <Stack gap="xs">
-        <Title order={5}>Other sections</Title>
-        <Text size="xs" c="dimmed">
-          Awards, volunteering, languages… Written to the file as their own “##” sections, in Markdown.
-        </Text>
-        {extras.map((x, i) => (
-          <Stack key={i} gap={4}>
-            <Group wrap="nowrap" align="flex-end">
-              <TextInput
-                aria-label="Section title"
-                placeholder="Section title"
-                value={x.title}
-                onChange={(e) => setExtra(i, { title: e.currentTarget.value })}
-                style={{ flex: 1 }}
-              />
-              <ActionIcon
-                variant="subtle"
-                color="red"
-                aria-label="Remove section"
-                mb={4}
-                onClick={() => onChange({ ...profile, extraSections: extras.filter((_x, j) => j !== i) })}
-              >
-                ✕
-              </ActionIcon>
-            </Group>
-            <Textarea
-              aria-label="Section content"
-              autosize
-              minRows={3}
-              value={x.body}
-              onChange={(e) => setExtra(i, { body: e.currentTarget.value })}
+      {extras.map((x, i) => (
+        <div key={i} className={classes.card}>
+          <div className={classes.row}>
+            <TextInput
+              aria-label="Section title"
+              placeholder="Section title"
+              value={x.title}
+              onChange={(e) => setExtra(i, { title: e.currentTarget.value })}
+              className={classes.grow}
             />
-          </Stack>
-        ))}
-        <Group>
-          <Button
-            variant="light"
-            size="xs"
-            onClick={() => onChange({ ...profile, extraSections: [...extras, { title: '', body: '' }] })}
-          >
-            Add section
-          </Button>
-        </Group>
-      </Stack>
-    </Stack>
+            <RemoveButton label="Remove section" onClick={() => onChange({ ...profile, extraSections: extras.filter((_x, j) => j !== i) })} />
+          </div>
+          <Textarea
+            aria-label="Section content"
+            autosize
+            minRows={3}
+            value={x.body}
+            onChange={(e) => setExtra(i, { body: e.currentTarget.value })}
+          />
+        </div>
+      ))}
+    </div>
   )
 }
