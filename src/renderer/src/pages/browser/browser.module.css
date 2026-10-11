@@ -1,0 +1,414 @@
+/* Browser page and Apply panel (#112, Figma Browser — Apply session 8:2, Browser — Empty 8:308). Colours are --hg-* tokens. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background-color: var(--hg-bg-canvas);
+}
+
+/* ---------- Tab strip ---------- */
+
+.strip {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+  min-height: 46px;
+  padding: 8px 12px 0;
+  background-color: var(--hg-bg-surface);
+  border-bottom: 1px solid var(--hg-border-subtle);
+}
+
+.tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  width: 200px;
+  height: 38px;
+  padding: 0 8px 0 12px;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--hg-radius-md) var(--hg-radius-md) 0 0;
+  color: var(--hg-text-secondary);
+  transition: background-color 120ms ease;
+}
+
+.tab:hover {
+  background-color: var(--hg-bg-hover);
+}
+
+.tab[data-active] {
+  /* The active tab joins the toolbar below it. */
+  background-color: var(--hg-bg-canvas);
+  border-color: var(--hg-border-subtle);
+  color: var(--hg-text-primary);
+  margin-bottom: -1px;
+  height: 39px;
+}
+
+.tabIcon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--hg-icon-muted);
+}
+
+.tab[data-active] .tabIcon {
+  color: var(--hg-text-accent);
+}
+
+.tabLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  color: inherit;
+}
+
+.newTab {
+  align-self: center;
+  flex-shrink: 0;
+}
+
+.noTabs {
+  align-self: center;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--hg-text-muted);
+}
+
+.stripHint {
+  align-self: center;
+  margin-left: auto;
+  padding-left: 12px;
+  white-space: nowrap;
+}
+
+/* ---------- Toolbar ---------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 8px 12px;
+  background-color: var(--hg-bg-canvas);
+  border-bottom: 1px solid var(--hg-border-subtle);
+}
+
+/* Browser chrome: a disabled ghost button is a dimmed icon, not a filled chip (beats the theme's disabled fill). */
+.page .toolbar :is(:global(.mantine-ActionIcon-root), :global(.mantine-Button-root))[data-variant='subtle']:is(:disabled, [data-disabled]) {
+  background-color: transparent;
+  color: var(--hg-icon-muted);
+  opacity: 0.5;
+}
+
+.address {
+  flex: 1;
+  min-width: 0;
+}
+
+.addressInput {
+  font-family: var(--hg-font-mono);
+  font-size: 13px;
+}
+
+.addressInput::placeholder {
+  font-family: var(--hg-font-ui);
+}
+
+.addressIcon {
+  color: var(--hg-icon-muted);
+}
+
+.addressIcon[data-secure] {
+  color: var(--hg-accent-secondary);
+}
+
+/* ---------- Body ---------- */
+
+.body {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+}
+
+.view {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+}
+
+.emptyDescription {
+  max-width: 460px;
+}
+
+/* ---------- Apply panel ---------- */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: 340px;
+  min-height: 0;
+  background-color: var(--hg-bg-surface);
+  border-left: 1px solid var(--hg-border-subtle);
+}
+
+.panelHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 12px 8px 16px;
+}
+
+.panelTitle {
+  margin: 2px 0 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--hg-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panelBody {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 6px 16px 16px;
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.statusLine {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--hg-text-secondary);
+}
+
+.caption {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--hg-text-muted);
+}
+
+/* "Huntgry never submits": the info alert of the design, without role="alert" (it is not news). */
+.info {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border-radius: var(--hg-radius-lg);
+  background-color: var(--hg-status-info-soft);
+  color: var(--hg-status-info);
+}
+
+.info p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--hg-text-secondary);
+}
+
+.infoIcon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* The site's confirmation: Mark as applied. */
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--hg-radius-lg);
+  background-color: var(--hg-status-success-soft);
+}
+
+.confirmText {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--hg-text-primary);
+}
+
+.confirmIcon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--hg-status-success);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.grow {
+  flex: 1;
+}
+
+/* ---------- Field report ---------- */
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.groupHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.count {
+  display: inline-flex;
+  align-items: center;
+  height: 14px;
+  padding: 0 6px;
+  border-radius: var(--hg-radius-full);
+  font-family: var(--hg-font-mono);
+  font-weight: 500;
+  font-size: 11px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  color: var(--tone-fg);
+  background-color: var(--tone-soft);
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--hg-radius-md);
+  background-color: var(--hg-bg-surface-sunken);
+}
+
+.rowHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 18px;
+}
+
+.rowLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  color: var(--hg-text-primary);
+}
+
+.required {
+  color: var(--hg-status-danger);
+}
+
+.rowPill {
+  flex-shrink: 0;
+}
+
+.rowText {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--hg-text-muted);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.rowText[data-lines='3'] {
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+.rowText[data-tone='review'] {
+  color: var(--hg-status-review);
+}
+
+.answerToggle {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+
+/* ---------- Answer once (AnswerControl) ---------- */
+
+.answer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid var(--hg-border-focus);
+  border-radius: var(--hg-radius-md);
+  background-color: var(--hg-bg-surface);
+}
+
+.answerTitle {
+  margin: 0;
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  color: var(--hg-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.answerNote {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--hg-text-muted);
+}
+
+.answerError {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--hg-status-danger);
+}
