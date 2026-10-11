@@ -1,18 +1,20 @@
 import { useEffect, useState } from 'react'
-import { Alert, Badge, Button, Card, Collapse, Group, NumberInput, PasswordInput, ScrollArea, Stack, Switch, Table, Text, TextInput, Title, UnstyledButton } from '@mantine/core'
+import { Alert, Button, Collapse, Group, NumberInput, PasswordInput, ScrollArea, Stack, Switch, Table, Text, TextInput, UnstyledButton } from '@mantine/core'
 import { IconChevronDown, IconChevronRight, IconDeviceMobile, IconQrcode } from '@tabler/icons-react'
 import type { RemoteAuditEntry, RemoteConnection, RemoteState } from '@shared/remote-types'
 import { api, errorText } from '../../api'
+import { MonoLabel, StatusPill, type UiTone } from '../../components/ui'
+import { SettingsCard, TableFrame } from './SettingsCard'
 import { PairPhoneModal } from './PairPhoneModal'
 import { ApprovePanel, waitingRequests } from './PairingPrompt'
 
-const CONNECTION: Record<RemoteConnection, { color: string; label: string }> = {
-  disabled: { color: 'gray', label: 'Off' },
-  unconfigured: { color: 'gray', label: 'Not set up' },
-  'credentials-unreadable': { color: 'red', label: 'Credentials unreadable' },
-  offline: { color: 'orange', label: 'Offline' },
-  connecting: { color: 'blue', label: 'Connecting' },
-  online: { color: 'green', label: 'Connected' }
+const CONNECTION: Record<RemoteConnection, { tone: UiTone; label: string }> = {
+  disabled: { tone: 'neutral', label: 'Off' },
+  unconfigured: { tone: 'neutral', label: 'Not set up' },
+  'credentials-unreadable': { tone: 'danger', label: 'Credentials unreadable' },
+  offline: { tone: 'warning', label: 'Offline' },
+  connecting: { tone: 'info', label: 'Connecting' },
+  online: { tone: 'success', label: 'Connected' }
 }
 
 /** Why a relay URL is refused, or `null` (the main process checks again). */
@@ -104,25 +106,22 @@ export function RemoteCard() {
   const saveLabel = unreadable ? 'Recover' : configured ? 'Replace room' : 'Save'
 
   return (
-    <Card withBorder radius="md" padding="lg">
-      <Group justify="space-between" align="flex-start" wrap="nowrap" mb="xs">
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <Title order={4}>Remote control</Title>
-          <Text size="sm" c="dimmed">
-            Control the queue from your phone through your own end-to-end encrypted relay. Huntgry only connects out to the relay; nothing listens on this Mac.
-          </Text>
-        </div>
-        <Group gap="xs" wrap="nowrap" style={{ flex: 'none' }}>
+    <SettingsCard
+      title="Remote control"
+      description="Control the queue from your phone through your own end-to-end encrypted relay. Huntgry only connects out to the relay; nothing listens on this Mac."
+      actions={
+        <>
           {status && (
-            <Badge color={status.color} variant="light">
+            <StatusPill tone={status.tone} dot={state?.connection === 'online' || state?.connection === 'connecting'}>
               {status.label}
-            </Badge>
+            </StatusPill>
           )}
-          <Button size="xs" color="orange" leftSection={<IconQrcode size={14} />} disabled={state?.connection !== 'online'} onClick={() => setPairing(true)}>
+          <Button size="xs" variant="primary" leftSection={<IconQrcode size={14} />} disabled={state?.connection !== 'online'} onClick={() => setPairing(true)}>
             Pair a phone
           </Button>
-        </Group>
-      </Group>
+        </>
+      }
+    >
       <Stack gap="sm">
         {error && (
           <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
@@ -143,14 +142,15 @@ export function RemoteCard() {
           <>
             <Switch label="Enable remote control" checked={state.connection !== 'disabled'} disabled={busy} onChange={(e) => void run(() => api.remote.setEnabled(e.currentTarget.checked))} />
             <Group align="flex-start" gap="sm" grow>
-              <TextInput label="Relay URL" placeholder="https://huntgry-relay.example.workers.dev" value={relayUrl} error={urlProblem} onChange={(e) => setRelayUrl(e.currentTarget.value)} styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }} />
-              <PasswordInput
-                label="Admin token"
-                placeholder={configured ? 'Saved (never shown again)' : 'From wrangler secret put ADMIN_TOKEN'}
-                value={adminToken}
-                onChange={(e) => setAdminToken(e.currentTarget.value)}
-                autoComplete="off"
+              <TextInput
+                label="Relay URL"
+                placeholder="https://huntgry-relay.example.workers.dev"
+                value={relayUrl}
+                error={urlProblem}
+                onChange={(e) => setRelayUrl(e.currentTarget.value)}
+                styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }}
               />
+              <PasswordInput label="Admin token" placeholder={configured ? 'Saved (never shown again)' : 'From wrangler secret put ADMIN_TOKEN'} value={adminToken} onChange={(e) => setAdminToken(e.currentTarget.value)} autoComplete="off" />
             </Group>
             {(adminToken.trim() || !configured) && (
               <Group justify="space-between" wrap="nowrap">
@@ -175,8 +175,13 @@ export function RemoteCard() {
                 </Button>
               </Group>
             )}
-            <Group gap="xl">
-              <Switch label="Show details in notifications (visible to the relay, Expo and Apple/Google)" checked={state.notificationDetails} disabled={busy} onChange={(e) => void run(() => api.remote.setNotificationDetails(e.currentTarget.checked))} />
+            <Group gap="lg">
+              <Switch
+                label="Show details in notifications (visible to the relay, Expo and Apple/Google)"
+                checked={state.notificationDetails}
+                disabled={busy}
+                onChange={(e) => void run(() => api.remote.setNotificationDetails(e.currentTarget.checked))}
+              />
               <Switch label="Show transcripts on the phone" checked={state.transcripts} disabled={busy} onChange={(e) => void run(() => api.remote.setTranscripts(e.currentTarget.checked))} />
             </Group>
             <Group align="flex-end" gap="sm">
@@ -197,44 +202,48 @@ export function RemoteCard() {
               <ApprovePanel key={r.id} request={r} onDecided={setState} />
             ))}
             {state.devices.length > 0 ? (
-              <Table verticalSpacing="xs" withTableBorder>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Phone</Table.Th>
-                    <Table.Th>Paired</Table.Th>
-                    <Table.Th>Last seen</Table.Th>
-                    <Table.Th w={90} />
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {state.devices.map((d) => (
-                    <Table.Tr key={d.id}>
-                      <Table.Td>
-                        <Group gap={8} wrap="nowrap">
-                          <IconDeviceMobile size={16} />
-                          <Text size="sm">{d.name}</Text>
-                          {d.needsRepair && (
-                            <Badge color="yellow" variant="light" size="sm" title="Its counter rewound or the relay credentials were rotated: pair it again">
-                              Pair again
-                            </Badge>
-                          )}
-                        </Group>
-                      </Table.Td>
-                      <Table.Td>
-                        <Text size="sm">{new Date(d.pairedAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}</Text>
-                      </Table.Td>
-                      <Table.Td>
-                        <Text size="sm">{lastSeenText(d.lastSeen)}</Text>
-                      </Table.Td>
-                      <Table.Td>
-                        <Button size="compact-xs" variant="subtle" color="gray" disabled={busy} onClick={() => void run(() => api.remote.revoke(d.id))}>
-                          Revoke
-                        </Button>
-                      </Table.Td>
+              <TableFrame>
+                <Table horizontalSpacing="md" verticalSpacing={10}>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Phone</Table.Th>
+                      <Table.Th>Paired</Table.Th>
+                      <Table.Th>Last seen</Table.Th>
+                      <Table.Th w={100} />
                     </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {state.devices.map((d) => (
+                      <Table.Tr key={d.id}>
+                        <Table.Td>
+                          <Group gap={8} wrap="nowrap">
+                            <IconDeviceMobile size={16} color="var(--hg-icon-default)" />
+                            <Text size="sm" fw={500}>
+                              {d.name}
+                            </Text>
+                            {d.needsRepair && (
+                              <StatusPill tone="warning" title="Its counter rewound or the relay credentials were rotated: pair it again">
+                                Pair again
+                              </StatusPill>
+                            )}
+                          </Group>
+                        </Table.Td>
+                        <Table.Td>
+                          <MonoLabel tone="secondary">{new Date(d.pairedAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}</MonoLabel>
+                        </Table.Td>
+                        <Table.Td>
+                          <MonoLabel tone="secondary">{lastSeenText(d.lastSeen)}</MonoLabel>
+                        </Table.Td>
+                        <Table.Td>
+                          <Button size="xs" variant="subtle" disabled={busy} onClick={() => void run(() => api.remote.revoke(d.id))}>
+                            Revoke
+                          </Button>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </TableFrame>
             ) : (
               <Text size="sm" c="dimmed">
                 No phones paired.
@@ -243,19 +252,8 @@ export function RemoteCard() {
             {(state.devices.length > 0 || configured) &&
               (confirm ? (
                 <Group gap="xs">
-                  <Text size="sm">
-                    {confirm === 'rotate'
-                      ? 'Create a new room and delete the old one? Every phone must pair again.'
-                      : 'Remove every phone, give this Mac a new identity and a new room?'}
-                  </Text>
-                  <Button
-                    size="xs"
-                    color="red"
-                    loading={busy}
-                    onClick={() =>
-                      void run(() => (confirm === 'rotate' ? api.remote.rotate() : api.remote.unpairAll())).then(() => setConfirm(null))
-                    }
-                  >
+                  <Text size="sm">{confirm === 'rotate' ? 'Create a new room and delete the old one? Every phone must pair again.' : 'Remove every phone, give this Mac a new identity and a new room?'}</Text>
+                  <Button size="xs" variant="light" color="danger" loading={busy} onClick={() => void run(() => (confirm === 'rotate' ? api.remote.rotate() : api.remote.unpairAll())).then(() => setConfirm(null))}>
                     {confirm === 'rotate' ? 'Rotate' : 'Unpair everything'}
                   </Button>
                   <Button size="xs" variant="subtle" onClick={() => setConfirm(null)}>
@@ -269,7 +267,7 @@ export function RemoteCard() {
                       Rotate relay credentials
                     </Button>
                   )}
-                  <Button size="xs" variant="light" color="red" disabled={busy} onClick={() => setConfirm('unpair')}>
+                  <Button size="xs" variant="light" color="danger" disabled={busy} onClick={() => setConfirm('unpair')}>
                     Unpair everything
                   </Button>
                 </Group>
@@ -280,9 +278,7 @@ export function RemoteCard() {
                 <Text size="sm" fw={500}>
                   Audit log
                 </Text>
-                <Text size="xs" c="dimmed">
-                  last 200 remote commands in this workspace
-                </Text>
+                <MonoLabel size="xs">last 200 remote commands in this workspace</MonoLabel>
               </Group>
             </UnstyledButton>
             <Collapse expanded={auditOpen}>
@@ -292,38 +288,40 @@ export function RemoteCard() {
                 </Text>
               )}
               {audit && audit.length > 0 && (
-                <ScrollArea.Autosize mah={320}>
-                  <Table verticalSpacing={4} fz="xs" stickyHeader>
-                    <Table.Thead>
-                      <Table.Tr>
-                        <Table.Th>Time</Table.Th>
-                        <Table.Th>Phone</Table.Th>
-                        <Table.Th>Command</Table.Th>
-                        <Table.Th>Outcome</Table.Th>
-                      </Table.Tr>
-                    </Table.Thead>
-                    <Table.Tbody>
-                      {audit.map((a, i) => (
-                        <Table.Tr key={`${a.deviceId}-${a.ts}-${i}`}>
-                          <Table.Td>{a.ts ? new Date(a.ts).toLocaleString() : ''}</Table.Td>
-                          <Table.Td>{a.device}</Table.Td>
-                          <Table.Td ff="monospace">{a.command}</Table.Td>
-                          <Table.Td>
-                            <Badge size="xs" variant="light" color={a.outcome === 'ok' ? 'green' : a.outcome === 'started' ? 'yellow' : 'red'} title={a.error}>
-                              {a.outcome === 'started' ? 'started' : a.outcome === 'ok' ? 'ok' : (a.error?.split(':')[0] ?? 'failed')}
-                            </Badge>
-                          </Table.Td>
+                <TableFrame>
+                  <ScrollArea.Autosize mah={320}>
+                    <Table verticalSpacing={6} horizontalSpacing="md" fz="xs" stickyHeader>
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>Time</Table.Th>
+                          <Table.Th>Phone</Table.Th>
+                          <Table.Th>Command</Table.Th>
+                          <Table.Th>Outcome</Table.Th>
                         </Table.Tr>
-                      ))}
-                    </Table.Tbody>
-                  </Table>
-                </ScrollArea.Autosize>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {audit.map((a, i) => (
+                          <Table.Tr key={`${a.deviceId}-${a.ts}-${i}`}>
+                            <Table.Td ff="monospace">{a.ts ? new Date(a.ts).toLocaleString() : ''}</Table.Td>
+                            <Table.Td>{a.device}</Table.Td>
+                            <Table.Td ff="monospace">{a.command}</Table.Td>
+                            <Table.Td>
+                              <StatusPill tone={a.outcome === 'ok' ? 'success' : a.outcome === 'started' ? 'warning' : 'danger'} title={a.error}>
+                                {a.outcome === 'started' ? 'started' : a.outcome === 'ok' ? 'ok' : (a.error?.split(':')[0] ?? 'failed')}
+                              </StatusPill>
+                            </Table.Td>
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  </ScrollArea.Autosize>
+                </TableFrame>
               )}
             </Collapse>
           </>
         )}
       </Stack>
       <PairPhoneModal opened={pairing} onClose={() => setPairing(false)} state={state} />
-    </Card>
+    </SettingsCard>
   )
 }
