@@ -39,7 +39,11 @@ const VALUES: FillValues = {
  * answering asynchronously like the IPC round trip does.
  */
 class FakeTab implements ApplyPage {
-  onNavigationStart?: ApplyPage['onNavigationStart']
+  starts = new Set<() => void>()
+  onNavigationStart?: ApplyPage['onNavigationStart'] = (listener) => {
+    this.starts.add(listener)
+    return () => void this.starts.delete(listener)
+  }
   dom: JSDOM
   listeners = new Map<string, Set<(payload: unknown) => void>>()
   loads = new Set<(full: boolean) => void>()
@@ -55,10 +59,20 @@ class FakeTab implements ApplyPage {
   picksSeen: Array<boolean | undefined> = []
   /** When set, fill replies wait here until `releaseFills()` (a slow page). */
   heldFills: Array<() => void> | null = null
+  /** When set, detect replies (scans of the document that got the request) wait here until `releaseDetects()`. */
+  heldDetects: Array<() => void> | null = null
+  /** This many detect requests get no answer at all (they reached a document that was being replaced). */
+  lostDetects = 0
 
   releaseFills() {
     const held = this.heldFills ?? []
     this.heldFills = null
+    for (const reply of held) reply()
+  }
+
+  releaseDetects() {
+    const held = this.heldDetects ?? []
+    this.heldDetects = null
     for (const reply of held) reply()
   }
 
@@ -95,6 +109,11 @@ class FakeTab implements ApplyPage {
 
   close() {
     for (const l of this.closes) l()
+  }
+
+  /** A main-frame navigation starts (`did-start-navigation`); nothing follows unless the test commits one. */
+  startNavigation() {
+    for (const l of this.starts) l()
   }
 
   /** An in-page navigation (pushState): the DOM changes, main hears `did-navigate-in-page`, no step report yet. */
@@ -140,6 +159,15 @@ class FakeTab implements ApplyPage {
       // The page did the fill already; only its answer is late.
       const result = this.fill(values as FillValues, text, answers, pick)
       this.heldFills.push(() => void result.then((r) => this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result: r })))
+      return
+    }
+    if (channel === AUTOFILL_CHANNELS.detect && this.lostDetects > 0) {
+      this.lostDetects--
+      return
+    }
+    if (channel === AUTOFILL_CHANNELS.detect && this.heldDetects) {
+      const result = scanPage(doc)
+      this.heldDetects.push(() => this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result }))
       return
     }
     void (async () => {
@@ -539,6 +567,32 @@ describe('ApplyService', () => {
     expect(service.current()!.status).toBe('submitted-detected')
   })
 
+  it('"Fill form" pressed while the thanks page is still being scanned never shows "Filled" over "Submitted" (#119)', async () => {
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', GH_URL)
+    const { service, events } = setup(tab)
+    await service.start(ID)
+    tab.heldDetects = []
+    tab.load(fixture('greenhouse-confirmation.html'), `${GH_URL}/confirmation`)
+    await vi.waitFor(() => expect(tab.heldDetects).toHaveLength(1))
+    // The user presses Fill form before the scan answers; the fill's answer is slow too.
+    tab.heldFills = []
+    const filling = service.fill(service.current()!.id)
+    await vi.waitFor(() => expect(tab.answersSeen).toHaveLength(1))
+    tab.releaseDetects()
+    await until(service, 'submitted-detected')
+    const seen = events.length
+    tab.releaseFills()
+    await filling
+    await new Promise((r) => setTimeout(r, 20))
+    expect(service.current()).toMatchObject({ status: 'submitted-detected' })
+    expect(events.slice(seen).map((e) => e?.status)).not.toContain('filled')
+    // Fill form pressed afterwards on the same page ("Not yet") overrules the detection and fills it.
+    await service.fill(service.current()!.id)
+    expect(tab.answersSeen).toHaveLength(2)
+    expect(service.current()!.status).not.toBe('submitted-detected')
+  })
+
   it('reports a confirmation page and leaves tracking alone', async () => {
     const dir = await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
     const tab = new FakeTab('', GH_URL)
@@ -552,6 +606,36 @@ describe('ApplyService', () => {
     tab.reply(AUTOFILL_CHANNELS.confirmation, { url: GH_URL })
     await until(service, 'submitted-detected')
     expect(await readdir(dir)).not.toContain('huntgry.json')
+  })
+
+  it('scans the confirmation page again when its detect gets no answer (#119)', async () => {
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', GH_URL)
+    const { service } = setup(tab, undefined, { retryDelaysMs: [10, 10], requestTimeoutMs: 100 })
+    await service.start(ID)
+    // The detect of the thanks page reaches the document being replaced and is never answered.
+    tab.lostDetects = 1
+    tab.load(fixture('greenhouse-confirmation.html'), `${GH_URL}/confirmation`)
+    await until(service, 'submitted-detected')
+  })
+
+  it('looks again when the scan that saw the confirmation page was overtaken by a navigation that never committed (#119)', async () => {
+    await application({ 'job-description.md': `Engineer\n${GH_URL}\n`, 'resume.pdf': '%PDF' })
+    const tab = new FakeTab('', GH_URL)
+    const starts = new Set<() => void>()
+    tab.onNavigationStart = (listener: () => void) => {
+      starts.add(listener)
+      return () => starts.delete(listener)
+    }
+    const { service } = setup(tab, undefined, { retryDelaysMs: [10, 10] })
+    await service.start(ID)
+    tab.heldDetects = []
+    tab.load(fixture('greenhouse-confirmation.html'), `${GH_URL}/confirmation`)
+    await vi.waitFor(() => expect(tab.heldDetects).toHaveLength(1))
+    // The page starts a navigation (a beacon, a download) that never commits: no load, no detect of its own.
+    for (const l of starts) l()
+    tab.releaseDetects()
+    await until(service, 'submitted-detected')
   })
 
   it('opens Lever postings on /apply and fills by field name', async () => {
@@ -934,6 +1018,21 @@ describe('ApplyService on Workday', () => {
     expect(service.current()!.message).toMatch(/Nothing for Huntgry on this step \("Application Questions"\)/)
   })
 
+  it('scans a reported step again when its detect gets no answer', async () => {
+    await workdayApp()
+    const tab = wdTab()
+    const { service } = wdSetup(tab, undefined, { retryDelaysMs: [10, 10], requestTimeoutMs: 100 })
+    await service.start(WD_ID)
+    tab.load(fixture('workday-signin.html'), `${JOB}/apply/applyManually`)
+    await vi.waitFor(() => expect(service.current()!.step?.kind).toBe('account-wall'))
+    // The user signs in; My Information swaps in, but the scan the watcher's report asks for is never answered.
+    tab.lostDetects = 1
+    tab.step(fixture('workday-my-information.html'))
+    await until(service, 'filled')
+    expect(service.current()!.step).toEqual({ kind: 'form', title: 'My Information' })
+    expect(value(tab, '#name--legalName--firstName')).toBe('Ada')
+  })
+
   it('a step reported again while its fill is running (in-page navigation, then the watcher) does not cancel it', async () => {
     await workdayApp()
     const tab = wdTab()
@@ -1278,11 +1377,11 @@ describe('application answers (#71)', () => {
   async function open(deps: AnswersDeps, html: string, id = ID, extra: Partial<ApplyDeps> = {}) {
     await application({ 'job-description.md': `Engineer\n${POSTING}\n`, 'resume.pdf': '%PDF' }, id)
     const tab = new FakeTab('', `${POSTING}/apply`)
-    const { service } = setup(tab, undefined, { answers: deps, ...extra })
+    const { service, events } = setup(tab, undefined, { answers: deps, ...extra })
     await service.start(id)
     tab.load(html, `${POSTING}/apply`)
     await until(service, 'filled')
-    return { tab, service }
+    return { tab, service, events }
   }
 
   const select = (tab: FakeTab) => tab.dom.window.document.querySelector('select[name="eeo[gender]"]') as HTMLSelectElement
@@ -1415,6 +1514,107 @@ describe('application answers (#71)', () => {
     expect(line(service, label)).toMatchObject({ outcome: 'filled', suggestedBy: 'draft' })
     await new Promise((r) => setTimeout(r, 20))
     expect(drafted).toHaveLength(1)
+  })
+
+  it('a draft that comes back after the form was submitted never turns "Submitted" into "Filled" (#119)', async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => (release = r))
+    const drafted: string[][] = []
+    const { deps } = answers()
+    deps.draft = async (_w, _id, questions) => {
+      drafted.push(questions.map((q) => q.question))
+      await gate
+      return questions.filter((q) => /interests you/.test(q.question)).map((q) => ({ id: q.id, answer: `Draft for ${q.question}` }))
+    }
+    const { tab, service } = await open(deps, fixture('lever-form.html'))
+    // The model is still drafting when the user presses the site's Submit and the thanks page loads.
+    await vi.waitFor(() => expect(drafted).toHaveLength(1))
+    tab.load(fixture('lever-thanks.html'), `${POSTING}/thanks`)
+    await until(service, 'submitted-detected')
+    const fills = tab.answersSeen.length
+    release()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(service.current()).toMatchObject({ status: 'submitted-detected' })
+    // Nothing was sent to fill the confirmation page.
+    expect(tab.answersSeen).toHaveLength(fills)
+  })
+
+  it('an answer whose refill is in flight when the thanks page is detected is dropped, not shown over "Submitted" (#119)', async () => {
+    const { deps } = answers()
+    const { tab, service } = await open(deps, fixture('lever-form.html'))
+    const field = line(service, 'What interests you about this role?')
+    // The thanks page has loaded; its scan is slow (the preload waits for the page to settle).
+    tab.heldDetects = []
+    tab.load(fixture('lever-thanks.html'), `${POSTING}/thanks`)
+    await vi.waitFor(() => expect(tab.heldDetects).toHaveLength(1))
+    // Meanwhile the user answers a question in the panel; the refill goes to the page loaded now, its answer is slow too.
+    tab.heldFills = []
+    const fills = tab.answersSeen.length
+    const answering = service.answer(service.current()!.id, field.fieldId!, 'Remote work', false)
+    await vi.waitFor(() => expect(tab.answersSeen.length).toBeGreaterThan(fills))
+    tab.releaseDetects()
+    await until(service, 'submitted-detected')
+    tab.releaseFills()
+    await answering
+    await new Promise((r) => setTimeout(r, 20))
+    expect(service.current()).toMatchObject({ status: 'submitted-detected' })
+  })
+
+  /** A model that drafts the "interests you" question once `release()` is called. */
+  function heldDraft(deps: AnswersDeps) {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => (release = r))
+    const drafted: string[][] = []
+    deps.draft = async (_w, _id, questions) => {
+      drafted.push(questions.map((q) => q.question))
+      await gate
+      return questions.filter((q) => /interests you/.test(q.question)).map((q) => ({ id: q.id, answer: `Draft for ${q.question}` }))
+    }
+    return { drafted, release: () => release() }
+  }
+
+  it('a late draft is not typed after a navigation on the thanks page that never commits; the next fill types it (#119)', async () => {
+    const { deps } = answers()
+    const held = heldDraft(deps)
+    const { tab, service, events } = await open(deps, fixture('lever-form.html'))
+    await vi.waitFor(() => expect(held.drafted).toHaveLength(1))
+    tab.load(fixture('lever-thanks.html'), `${POSTING}/thanks`)
+    await until(service, 'submitted-detected')
+    // A download link, a blocked redirect or a 204 on the thanks page: the generation moves on, the page stays.
+    tab.startNavigation()
+    const fills = tab.answersSeen.length
+    const seen = events.length
+    held.release()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(service.current()).toMatchObject({ status: 'submitted-detected' })
+    expect(tab.answersSeen).toHaveLength(fills)
+    expect(events.slice(seen).map((e) => e?.status)).not.toContain('filled')
+    // The draft stays with the session: back on the form, the next fill types it.
+    tab.load(fixture('lever-form.html'), `${POSTING}/apply`)
+    await vi.waitFor(() => expect(['ready', 'filled']).toContain(service.current()!.status))
+    await service.fill(service.current()!.id)
+    const label = 'What interests you about this role?'
+    expect((tab.dom.window.document.querySelector('textarea') as HTMLTextAreaElement).value).toBe(`Draft for ${label}`)
+    expect(line(service, label)).toMatchObject({ outcome: 'filled', suggestedBy: 'draft' })
+  })
+
+  it('a late draft is not typed after an in-page URL change on the thanks page (#119)', async () => {
+    const { deps } = answers()
+    const held = heldDraft(deps)
+    const { tab, service, events } = await open(deps, fixture('lever-form.html'))
+    await vi.waitFor(() => expect(held.drafted).toHaveLength(1))
+    tab.load(fixture('lever-thanks.html'), `${POSTING}/thanks`)
+    await until(service, 'submitted-detected')
+    // The thanks page changes its hash or query (did-navigate-in-page): a new generation, the same page.
+    tab.navigateInPage(fixture('lever-thanks.html'), `${POSTING}/thanks?submitted=1#done`)
+    const fills = tab.answersSeen.length
+    const seen = events.length
+    held.release()
+    // Past the in-page navigation's own detect (500 ms later).
+    await new Promise((r) => setTimeout(r, 650))
+    expect(service.current()).toMatchObject({ status: 'submitted-detected' })
+    expect(tab.answersSeen).toHaveLength(fills)
+    expect(events.slice(seen).map((e) => e?.status)).not.toContain('filled')
   })
 
   it('leaves text the user typed into an open-ended question alone (#82)', async () => {
