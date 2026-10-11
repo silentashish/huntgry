@@ -48,6 +48,12 @@ export function ProfilePage({ params, document, initialDraft, onDocumentChange, 
     [setLeaveGuard]
   )
   useEffect(() => () => setLeaveGuard(null), [setLeaveGuard])
+  // Any navigation that keeps this page mounted (even one the shell guarded and the user
+  // confirmed, like the sidebar's Profile entry from the graph view) leaves the draft in place:
+  // put its guard back so the next way out still asks.
+  useEffect(() => {
+    setLeaveGuard(guard.current)
+  }, [params, setLeaveGuard])
   const nav = useMemo<Navigation>(
     () => ({
       location: outer.location,
@@ -129,7 +135,9 @@ export function ProfilePage({ params, document, initialDraft, onDocumentChange, 
             view={view}
             onViewChange={showView}
           >
-            {view !== 'editor' && <KnowledgeArea view={view} params={params} onOpenEditor={() => showView('editor')} />}
+            {view !== 'editor' && (
+              <KnowledgeArea view={view} params={params} profileVersion={document.version} onOpenEditor={() => showView('editor')} />
+            )}
           </ProfileEditor>
         )}
       </Stack>
@@ -142,7 +150,18 @@ export function ProfilePage({ params, document, initialDraft, onDocumentChange, 
  * read when it opens, so a save in the editor shows up); between the two it keeps the selected
  * node and the jobs overlay.
  */
-function KnowledgeArea({ view, params, onOpenEditor }: { view: 'graph' | 'skills'; params: PageParams['profile']; onOpenEditor(): void }) {
-  const state = useKnowledgeState(params?.nodeId, params)
+function KnowledgeArea({
+  view,
+  params,
+  profileVersion,
+  onOpenEditor
+}: {
+  view: 'graph' | 'skills'
+  params: PageParams['profile']
+  /** The open document's version: a save or a reload from disk rebuilds the graph. */
+  profileVersion: string
+  onOpenEditor(): void
+}) {
+  const state = useKnowledgeState(params?.nodeId, params, profileVersion)
   return view === 'graph' ? <GraphView state={state} onOpenEditor={onOpenEditor} /> : <SkillsView state={state} onOpenEditor={onOpenEditor} />
 }

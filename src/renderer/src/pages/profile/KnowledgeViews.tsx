@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Center, Chip, Loader, SegmentedControl, Select, TextInput } from '@mantine/core'
+import { ActionIcon, Alert, Button, Center, Chip, Loader, SegmentedControl, Select, TextInput, Tooltip } from '@mantine/core'
 import { IconBriefcase, IconChartDots3, IconRefresh, IconSearch } from '@tabler/icons-react'
 import type { JobText, KnowledgeGraph, NodeKind } from '@shared/knowledge-graph'
 import { GAP_COLOR, KIND_COLOR, KIND_LABEL } from '../../components/graph/colors'
 import { GraphCanvas } from '../../components/graph/GraphCanvas'
 import graphClasses from '../../components/graph/graph.module.css'
 import { NodePanel } from '../../components/graph/NodePanel'
-import { SKILL_SORT_LABEL, isStrong, type SkillFilter, type SkillSort } from '../../components/graph/skills'
+import {
+  SKILL_SORT_LABEL,
+  defaultDirection,
+  isStrong,
+  type SkillFilter,
+  type SkillSort,
+  type SortDirection
+} from '../../components/graph/skills'
 import { SkillsTable } from '../../components/graph/SkillsTable'
 import { useKnowledgeGraph } from '../../components/graph/useKnowledgeGraph'
 import { EmptyState, MonoLabel } from '../../components/ui'
@@ -29,11 +36,12 @@ export interface KnowledgeState {
 /**
  * Loads the graph once for both views. `nodeId` (from the location) selects a node whenever the
  * location changes, so `navigate('profile', { view: 'graph', nodeId })` opens on it.
+ * `profileVersion` is the open document's version: a save or a reload from disk rebuilds the graph.
  */
-export function useKnowledgeState(nodeId: string | undefined, location: unknown): KnowledgeState {
+export function useKnowledgeState(nodeId: string | undefined, location: unknown, profileVersion?: string): KnowledgeState {
   const [showJobs, setShowJobs] = useState(true)
   const [selected, setSelected] = useState<string | null>(nodeId ?? null)
-  const { graph, jobs, error, reload } = useKnowledgeGraph(showJobs)
+  const { graph, jobs, error, reload } = useKnowledgeGraph(showJobs, profileVersion)
 
   useEffect(() => {
     if (nodeId) setSelected(nodeId)
@@ -103,6 +111,17 @@ function JobsOverlayChip({ state }: { state: KnowledgeState }) {
   )
 }
 
+/** Reads master-profile.md and the saved jobs again, for edits made outside the app. */
+function RefreshButton({ state }: { state: KnowledgeState }) {
+  return (
+    <Tooltip label="Read master-profile.md and the saved jobs again">
+      <ActionIcon variant="default" size="lg" aria-label="Refresh" onClick={state.reload}>
+        <IconRefresh size={16} />
+      </ActionIcon>
+    </Tooltip>
+  )
+}
+
 /** Profile → Knowledge graph: the canvas with search, "Jump to…", the jobs overlay, the legend and the node panel. */
 export function GraphView({ state, onOpenEditor }: { state: KnowledgeState; onOpenEditor(): void }) {
   const { graph, selected, setSelected } = state
@@ -143,6 +162,7 @@ export function GraphView({ state, onOpenEditor }: { state: KnowledgeState; onOp
           limit={50}
         />
         <JobsOverlayChip state={state} />
+        <RefreshButton state={state} />
         <span className={classes.spacer} />
         <ul className={graphClasses.legend} aria-label="Legend">
           {kinds.map((k) => (
@@ -188,7 +208,7 @@ export function SkillsView({ state, onOpenEditor }: { state: KnowledgeState; onO
   const { graph, selected, setSelected } = state
   const [search, setSearch] = useState('')
   const [show, setShow] = useState<SkillFilter>('all')
-  const [sort, setSort] = useState<SkillSort>('jobs')
+  const [{ key: sort, direction }, setSort] = useState<{ key: SkillSort; direction: SortDirection }>({ key: 'jobs', direction: 'desc' })
 
   const status = <Status state={state} onOpenEditor={onOpenEditor} />
   if (!graph || graph.nodes.length <= 1 || state.error) return status
@@ -216,19 +236,29 @@ export function SkillsView({ state, onOpenEditor }: { state: KnowledgeState; onO
           ]}
         />
         <JobsOverlayChip state={state} />
+        <RefreshButton state={state} />
         <span className={classes.spacer} />
         <Select
           className={classes.sort}
           aria-label="Sort skills"
           allowDeselect={false}
           value={sort}
-          onChange={(v) => v && setSort(v as SkillSort)}
+          onChange={(v) => v && setSort({ key: v as SkillSort, direction: defaultDirection(v as SkillSort) })}
           data={(Object.keys(SKILL_SORT_LABEL) as SkillSort[]).map((k) => ({ value: k, label: SKILL_SORT_LABEL[k] }))}
         />
       </div>
 
       <div className={classes.split} data-panel={selected ? 'open' : undefined}>
-        <SkillsTable graph={graph} filter={search} show={show} sort={sort} selected={selected} onSelect={setSelected} />
+        <SkillsTable
+          graph={graph}
+          filter={search}
+          show={show}
+          sort={sort}
+          direction={direction}
+          onSortChange={(key, dir) => setSort({ key, direction: dir })}
+          selected={selected}
+          onSelect={setSelected}
+        />
         {selected && (
           <div className={classes.side}>
             <NodePanel graph={graph} id={selected} onSelect={setSelected} />

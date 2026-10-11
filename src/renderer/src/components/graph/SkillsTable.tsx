@@ -1,9 +1,20 @@
 import { useMemo } from 'react'
-import { Table } from '@mantine/core'
+import { Table, UnstyledButton } from '@mantine/core'
+import { IconArrowDown, IconArrowUp } from '@tabler/icons-react'
 import type { KnowledgeGraph } from '@shared/knowledge-graph'
 import { MonoLabel, ProgressBar, StatusPill } from '../ui'
 import classes from './graph.module.css'
-import { evidenceSummary, matchesFilter, matchesQuery, sortSkills, yearsLabel, type SkillFilter, type SkillSort } from './skills'
+import {
+  defaultDirection,
+  evidenceSummary,
+  matchesFilter,
+  matchesQuery,
+  sortSkills,
+  yearsLabel,
+  type SkillFilter,
+  type SkillSort,
+  type SortDirection
+} from './skills'
 
 /** Every skill with its group, years, evidence and how many saved jobs ask for it (Figma: Profile — Skills). */
 export function SkillsTable({
@@ -11,6 +22,8 @@ export function SkillsTable({
   filter,
   show = 'all',
   sort = 'jobs',
+  direction = defaultDirection(sort),
+  onSortChange,
   selected = null,
   onSelect
 }: {
@@ -19,25 +32,45 @@ export function SkillsTable({
   filter: string
   show?: SkillFilter
   sort?: SkillSort
+  direction?: SortDirection
+  /** A sortable header was clicked: the same column flips the direction, another starts at its default. */
+  onSortChange?(sort: SkillSort, direction: SortDirection): void
   selected?: string | null
   onSelect(id: string): void
 }) {
   const rows = useMemo(
-    () => sortSkills(graph.skills.filter((s) => matchesQuery(s, filter) && matchesFilter(s, show)), sort),
-    [graph, filter, show, sort]
+    () => sortSkills(graph, graph.skills.filter((s) => matchesQuery(s, filter) && matchesFilter(s, show)), sort, direction),
+    [graph, filter, show, sort, direction]
   )
   const maxYears = useMemo(() => Math.max(1, ...graph.skills.map((s) => s.years)), [graph])
+
+  const th = (key: SkillSort, label: string, w?: number | string) => {
+    const active = sort === key
+    const Arrow = direction === 'asc' ? IconArrowUp : IconArrowDown
+    return (
+      <Table.Th w={w} aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : undefined}>
+        <UnstyledButton
+          className={classes.sortHeader}
+          data-active={active || undefined}
+          onClick={() => onSortChange?.(key, active ? (direction === 'asc' ? 'desc' : 'asc') : defaultDirection(key))}
+        >
+          {label}
+          {active && <Arrow size={12} aria-hidden />}
+        </UnstyledButton>
+      </Table.Th>
+    )
+  }
 
   return (
     <div className={classes.tableCard}>
       <Table className={classes.table} highlightOnHover>
         <Table.Thead>
           <Table.Tr>
-            <Table.Th w="26%">Skill</Table.Th>
+            {th('name', 'Skill', '26%')}
             <Table.Th w="16%">Group</Table.Th>
-            <Table.Th w={150}>Years</Table.Th>
-            <Table.Th>Evidence</Table.Th>
-            <Table.Th w={110}>Jobs asking</Table.Th>
+            {th('years', 'Years', 150)}
+            {th('evidence', 'Evidence')}
+            {th('jobs', 'Jobs asking', 120)}
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>

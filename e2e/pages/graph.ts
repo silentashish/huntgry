@@ -24,6 +24,8 @@ export class GraphPage {
   /** All / Gaps / Strong above the Skills table. */
   readonly skillFilter: Locator
   readonly sortSelect: Locator
+  /** Reads master-profile.md and the saved jobs again (both views). */
+  readonly refreshButton: Locator
   readonly emptyState: Locator
 
   constructor(readonly page: Page) {
@@ -37,7 +39,18 @@ export class GraphPage {
     this.skillsTable = page.getByRole('table')
     this.skillFilter = page.getByRole('radiogroup', { name: 'Show skills' })
     this.sortSelect = page.getByRole('combobox', { name: 'Sort skills' })
+    this.refreshButton = page.getByRole('button', { name: 'Refresh', exact: true })
     this.emptyState = page.getByRole('heading', { name: 'Nothing to draw yet' })
+  }
+
+  /** A column header of the Skills table (`aria-sort` on the sorted one). */
+  sortHeader(name: string): Locator {
+    return this.skillsTable.getByRole('columnheader', { name, exact: true })
+  }
+
+  /** The button in a sortable header: sorts by that column, again to flip the order. */
+  sortHeaderButton(name: string): Locator {
+    return this.sortHeader(name).getByRole('button')
   }
 
   /**

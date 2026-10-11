@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { KnowledgeGraph, SkillInfo } from '@shared/knowledge-graph'
 import { GAP_COLOR, KIND_COLOR, parseColor, tokenName, withAlpha } from './colors'
-import { evidenceSummary, isStrong, matchesFilter, matchesQuery, sortSkills, yearsLabel } from './skills'
+import { defaultDirection, evidenceSummary, isStrong, matchesFilter, matchesQuery, sortSkills, yearsLabel } from './skills'
 
 describe('graph colours', () => {
   it('are Scent Trail tokens only, one per node kind', () => {
@@ -76,11 +76,33 @@ describe('skills view helpers', () => {
   })
 
   it('sorts by jobs asking, evidence, years or name', () => {
-    expect(sortSkills([go, kafka, sql], 'jobs').map((s) => s.name)).toEqual(['Kafka', 'Go', 'SQL'])
-    expect(sortSkills([go, kafka, sql], 'evidence').map((s) => s.name)).toEqual(['Go', 'SQL', 'Kafka'])
-    expect(sortSkills([sql, kafka, go], 'years').map((s) => s.name)).toEqual(['Go', 'SQL', 'Kafka'])
-    expect(sortSkills([sql, kafka, go], 'name').map((s) => s.name)).toEqual(['Go', 'Kafka', 'SQL'])
+    const names = (xs: SkillInfo[]) => xs.map((s) => s.name)
+    expect(names(sortSkills(graph, [go, kafka, sql], 'jobs'))).toEqual(['Kafka', 'Go', 'SQL'])
+    expect(names(sortSkills(graph, [go, kafka, sql], 'evidence'))).toEqual(['Go', 'SQL', 'Kafka'])
+    expect(names(sortSkills(graph, [sql, kafka, go], 'years'))).toEqual(['Go', 'SQL', 'Kafka'])
+    expect(names(sortSkills(graph, [sql, kafka, go], 'name'))).toEqual(['Go', 'Kafka', 'SQL'])
     expect(yearsLabel(8.5)).toBe('8.5y')
     expect(yearsLabel(0)).toBe('–')
+  })
+
+  it('sorts either way: numbers highest first and names A–Z by default, the other way when asked', () => {
+    const names = (xs: SkillInfo[]) => xs.map((s) => s.name)
+    expect(defaultDirection('jobs')).toBe('desc')
+    expect(defaultDirection('name')).toBe('asc')
+    expect(names(sortSkills(graph, [go, kafka, sql], 'jobs', 'asc'))).toEqual(['SQL', 'Go', 'Kafka'])
+    expect(names(sortSkills(graph, [go, kafka, sql], 'name', 'desc'))).toEqual(['SQL', 'Kafka', 'Go'])
+  })
+
+  it('sorts evidence by what the column shows (distinct roles and projects), not by raw mentions', () => {
+    // Five highlights in one role ("1 role") rank below one role and one project ("1 role · 1 project").
+    const chatty = skill({
+      name: 'Chatty',
+      evidence: Array.from({ length: 5 }, (_v, i) => ({ nodeId: 'exp:0', source: 'Engineer · Acme', text: `Highlight ${i}` }))
+    })
+    expect(evidenceSummary(graph, chatty)).toBe('1 role')
+    expect(names(sortSkills(graph, [chatty, go, sql], 'evidence'))).toEqual(['Go', 'Chatty', 'SQL'])
+    function names(xs: SkillInfo[]) {
+      return xs.map((s) => s.name)
+    }
   })
 })

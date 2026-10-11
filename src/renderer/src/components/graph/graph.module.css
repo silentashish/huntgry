@@ -267,6 +267,26 @@ button.evidenceSource:focus-visible {
   cursor: pointer;
 }
 
+.sortHeader {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+
+.sortHeader[data-active],
+.sortHeader:hover {
+  color: var(--hg-text-primary);
+}
+
+.sortHeader:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: 2px;
+  border-radius: var(--hg-radius-xs);
+}
+
 .table tbody tr[data-selected] {
   background-color: var(--hg-bg-active);
 }

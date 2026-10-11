@@ -28,7 +28,9 @@ entry is one; blank lines and trailing spaces the file cannot hold are ignored, 
 While nothing is unsaved the line beside the switcher says "Saved in master-profile.md · the file is the only store,
 edit it anywhere" (the full path is its tooltip).
 
-**Leave guard** (Figma 17:1030). The guard message is now the Figma text with the real count: "The master profile has N
+**Leave guard** (Figma 17:1030). The page puts its guard back after every navigation that keeps it mounted, so a
+shell-guarded move that lands on the Profile page again (the sidebar's Profile entry from the graph view, confirmed)
+cannot leave the draft unguarded. The guard message is now the Figma text with the real count: "The master profile has N
 unsaved fields. Leaving the page throws them away; master-profile.md on disk is not touched." The shell (AppLayout)
 shows it in its modal with Keep editing / Discard and leave. The editor's own questions (More → Switch workspace…,
 Import over a filled form) use `components/profile/ConfirmModal`, which is the Figma modal: icon tile, Geist 20 title,
@@ -48,7 +50,14 @@ links comes from `withAlpha` (parses the hex / `rgb()` forms the tokens use).
 **Skills** (Figma 12:279). Toolbar: filter, All / Gaps / Strong segmented filter with counts, the Jobs overlay chip,
 "Sort: jobs asking / evidence / years / name". Table (mono header on the sunken surface): skill + "gap" pill, group,
 years bar (relative to the longest) with a mono "8.5y", evidence by source ("2 roles · 1 project", "skills list", "no
-evidence"), jobs asking. A row opens the node panel beside the table. Logic in `components/graph/skills.ts`.
+evidence"), jobs asking. The Skill, Years, Evidence and Jobs asking headers sort too; clicking the sorted one flips the
+order (`aria-sort` says which). Evidence sorts by what its column shows (distinct roles and projects, then a mention in
+the skills list), not by the number of mentions. A row opens the node panel beside the table. Logic in
+`components/graph/skills.ts`.
+
+**Staying current.** Both views take the open document's version: a save from the save bar or "Reload from disk"
+while the graph or the Skills view is open rebuilds it. A Refresh button in both toolbars reads master-profile.md and the
+saved jobs again, for edits made outside the app.
 
 **GraphPage** stays exported for a `graph` location until the shell sends it to the Profile page: it is a thin page
 (title "Knowledge graph", "Open in Profile") around the same `GraphView`. `SkillsSummaryCard` (Dashboard) is restyled
@@ -85,6 +94,11 @@ The sidebar in the screenshots is the pre-redesign shell (#108 restyles it in pa
   behaviour), next to the table.
 - **"Asked for by"** lists the job titles of the saved postings (Figma shows company names; the graph's job nodes are
   titled by the posting).
+- **Standalone GraphPage**: it shows the graph view only, with no Skills view and no `SkillsSummaryCard` (the Skills
+  view lives on the Profile page). The Profile's graph view also drops the summary card that sat under the old graph
+  page: Figma has none, and the Skills view covers it. The card stays on the Dashboard.
+- **Refresh**: an icon button in the graph and Skills toolbars (not in Figma), so edits made on disk can be read again.
+- **Sortable headers**: Figma's table headers are plain; they sort here, as on `main`.
 - **Legend placement**: it wraps to its own right-aligned line when the toolbar does not fit the 1040 px content width
   of the current shell.
 
@@ -96,9 +110,12 @@ The sidebar in the screenshots is the pre-redesign shell (#108 restyles it in pa
   switcher (`GraphPage.open()`), whether or not the sidebar still lists the graph; `e2e/pages/profile-editor.ts` gains
   the view switcher and follows the new save bar ("Save to master-profile.md", "Unsaved changes · N fields").
 - e2e specs: `graph.spec.ts` (legend "Gap", years as "5y", evidence by source, the All / Gaps filter, the selection
-  following from Skills to Knowledge graph, "Edit in master profile" opening the Editor view), `profile-editor.spec.ts`
+  following from Skills to Knowledge graph, "Edit in master profile" opening the Editor view; new: header sorting and
+  its order toggle, the graph following a save from the save bar, Refresh after an edit on disk), `profile-editor.spec.ts`
   (new: switching to the graph and skills views keeps the draft without asking, the save bar follows, leaving still
-  asks with the field count; the leave text), `profile-setup.spec.ts` (no Save button until something changed).
+  asks with the field count; the guard is back after the sidebar's Profile entry is confirmed from the graph view — this
+  one fails without the fix; the leave text), `profile-setup.spec.ts` (no Save button until something changed).
+- Unit: `graph.test.ts` also covers the sort direction and sorting evidence by distinct roles and projects.
 - Run on Linux under `xvfb-run`: `graph`, `profile-editor`, `profile-setup`, `insights`, `shell`, `dashboard` specs pass,
   except `profile-editor.spec.ts` "closing the window with unsaved edits…", which fails the same way on `main` under
   Linux (closing the last window quits the app).

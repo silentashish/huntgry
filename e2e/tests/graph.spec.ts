@@ -1,3 +1,5 @@
+import { readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { expect, test } from '../fixtures/app'
 import { GraphPage } from '../pages/graph'
 import { ProfileEditor } from '../pages/profile-editor'
@@ -111,6 +113,18 @@ test.describe('knowledge graph', () => {
     await graph.skillFilter.getByText(/^All \(\d+\)$/).click()
     await expect(graph.skillRow('Go')).toBeVisible()
 
+    // A sortable header sorts by its column; clicking it again flips the order.
+    const firstRow = graph.skillsTable.getByRole('row').nth(1)
+    await graph.sortHeaderButton('Skill').click()
+    await expect(graph.sortHeader('Skill')).toHaveAttribute('aria-sort', 'ascending')
+    await expect(firstRow).toContainText('Airflow')
+    await graph.sortHeaderButton('Skill').click()
+    await expect(graph.sortHeader('Skill')).toHaveAttribute('aria-sort', 'descending')
+    await expect(firstRow).toContainText('TypeScript')
+    await graph.sortHeaderButton('Jobs asking').click()
+    await expect(graph.sortHeader('Jobs asking')).toHaveAttribute('aria-sort', 'descending')
+    await expect(graph.sortHeader('Skill')).not.toHaveAttribute('aria-sort', /./)
+
     // Overlay off: the gap rows are gone, the profile's skills stay.
     await graph.toggleJobsOverlay(false)
     await expect(graph.skillRow('Kafka')).toHaveCount(0)
@@ -145,5 +159,25 @@ test.describe('knowledge graph', () => {
     await editor.expectView('Editor')
     await editor.expectTabSelected('Summary & skills')
     await expect(editor.field('Summary')).toContainText('Backend engineer with seven years')
+  })
+
+  test('the graph follows a save from the save bar, and Refresh picks up edits made on disk', async ({ app }) => {
+    const editor = new ProfileEditor(app.window)
+    await new Shell(app.window).goTo('profile')
+    await editor.field('Full name').fill('Alex Q. Rivera')
+    const graph = new GraphPage(app.window)
+    await graph.showView('Knowledge graph')
+    // The graph is built from the file, so it shows the saved name until the save.
+    expect(await graph.nodeLabels()).toContain('You: Alex Rivera')
+    await editor.save()
+    await expect.poll(() => graph.nodeLabels()).toContain('You: Alex Q. Rivera')
+
+    // Someone edits master-profile.md outside the app: Refresh reads it again.
+    const path = join(app.workspace!, 'master-profile.md')
+    const text = await readFile(path, 'utf8')
+    await writeFile(path, text.replace('- Languages: Go, Python, TypeScript, SQL', '- Languages: Go, Python, TypeScript, SQL, Elixir'))
+    expect(await graph.nodeLabels()).not.toContain('Skill: Elixir')
+    await graph.refreshButton.click()
+    await expect.poll(() => graph.nodeLabels()).toContain('Skill: Elixir')
   })
 })

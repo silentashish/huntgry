@@ -202,6 +202,32 @@ test.describe('profile editor', () => {
     await expect(editor.savedBadge).toBeVisible()
   })
 
+  test('after the sidebar Profile entry is confirmed from the graph view, the draft is still guarded', async ({ app }) => {
+    const editor = await openEditor(app)
+    const shell = new Shell(app.window)
+    await editor.field('Full name').fill('Alex Rivera-Kept')
+    await editor.showView('Knowledge graph')
+
+    // The shell may ask before re-opening the page it is on; confirming keeps this page and its draft.
+    await shell.navLink('profile').click()
+    const asked = await editor.leaveDialog.waitFor({ state: 'visible', timeout: 3000 }).then(
+      () => true,
+      () => false
+    )
+    if (asked) await editor.leaveDialog.getByRole('button', { name: 'Discard and leave' }).click()
+    await shell.expectActive('profile')
+    await editor.expectView('Editor')
+    await expect(editor.unsavedBadge).toBeVisible()
+    await expect(editor.field('Full name')).toHaveValue('Alex Rivera-Kept')
+
+    // The guard is back: leaving still asks instead of dropping the draft.
+    await shell.navLink('dashboard').click()
+    await expect(editor.leaveDialog).toBeVisible()
+    await editor.leaveDialog.getByRole('button', { name: 'Keep editing' }).click()
+    await shell.expectActive('profile')
+    await expect(editor.field('Full name')).toHaveValue('Alex Rivera-Kept')
+  })
+
   test('closing the window with unsaved edits asks through showMessageBoxSync and honours the answer', async ({ app }) => {
     const editor = await openEditor(app)
     const before = await profileOf(app.workspace!)
