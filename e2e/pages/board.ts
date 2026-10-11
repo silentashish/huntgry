@@ -5,7 +5,7 @@ import type { BoardColumnId } from '../../src/shared/board'
 export const COLUMN: Record<BoardColumnId, string> = {
   todo: 'To do',
   tailoring: 'Tailoring',
-  review: 'Waiting for review',
+  review: 'Needs review',
   ready: 'Ready to apply',
   applied: 'Applied',
   interviewing: 'Interviewing',
@@ -13,6 +13,9 @@ export const COLUMN: Record<BoardColumnId, string> = {
   rejected: 'Rejected',
   archived: 'Archived'
 }
+
+/** A column's item in a card's Move to menu: Archived reads "Archive", or "Dismiss job" on a saved job's card (#110). */
+const menuItemName = (id: BoardColumnId): string | RegExp => (id === 'archived' ? /^(Archive|Dismiss job)$/ : COLUMN[id])
 
 /**
  * The Board page (#85): one column per stage (`<section aria-label="To do">`, …), one card per job
@@ -60,11 +63,14 @@ export class BoardPage {
   /** Moves a card with its Move to menu. */
   async moveTo(title: string, id: BoardColumnId): Promise<void> {
     await this.card(title).getByRole('button', { name: /^Move / }).click()
-    await this.page.getByRole('menuitem', { name: COLUMN[id], exact: true }).click()
+    await this.page.getByRole('menuitem', { name: menuItemName(id), exact: true }).click()
     await this.expectIn(id, title)
   }
 
-  /** The columns a card's Move to menu offers, in order (the menu is closed again). */
+  /**
+   * The menu items of a card's Move to menu, in order (the menu is closed again): the columns it can
+   * go to, then "Archive" / "Dismiss job". The current column is shown ticked but is not an item.
+   */
   async moveTargets(title: string): Promise<string[]> {
     await this.card(title).getByRole('button', { name: /^Move / }).click()
     const items = this.page.getByRole('menuitem')
