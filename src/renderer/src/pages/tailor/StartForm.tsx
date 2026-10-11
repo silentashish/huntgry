@@ -63,8 +63,15 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
   // Once the user edits or pastes the description, it is theirs, not the board's summary.
   const showSummaryNotice =
     prefill?.descriptionComplete === false && (needsPaste || jobDescription === (prefill.jobDescription ?? ''))
-  // Sent from the Jobs page with its full posting: say where the fields came from.
-  const prefilled = !!prefill && !showSummaryNotice && !!(prefill.jobDescription || prefill.jobUrl) && prefill.descriptionComplete !== false
+  // Sent from a saved job (Jobs page or Board) with its full posting: say where the fields came from, until the
+  // user replaces the description or the URL (then they are theirs, as with the summary notice).
+  const prefilled =
+    !!prefill &&
+    !showSummaryNotice &&
+    !!(prefill.jobDescription || prefill.jobUrl) &&
+    prefill.descriptionComplete !== false &&
+    jobDescription === (prefill.jobDescription ?? '') &&
+    jobUrl === (prefill.jobUrl ?? '')
   // The chosen agent's CLI or skill is missing: nothing can run. Shared dependencies (LaTeX, venv) only break the build.
   const blocking = !!status && !status.ready
   const problem = blocking ? status.problems[0] : environment?.sharedProblems[0]
@@ -131,11 +138,11 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
         )}
 
         {prefilled && (
-          <Alert color="trail" icon={<IconSparkles size={18} />} title="Prefilled from Jobs">
+          <Alert color="trail" icon={<IconSparkles size={18} />} title="Prefilled from your saved job">
             <Text size="sm" c="var(--hg-text-secondary)">
               {[prefill?.role, prefill?.company].filter(Boolean).join(' at ') || 'This job'}.
-              {prefill?.jobDescription
-                ? ` The full posting is filled in below (${words(prefill.jobDescription).toLocaleString('en-US')} words).`
+              {jobDescription.trim()
+                ? ` The full posting is filled in below (${words(jobDescription).toLocaleString('en-US')} words).`
                 : ' Huntgry reads the posting from its URL when the run starts.'}
             </Text>
             {prefill?.jobUrl && (

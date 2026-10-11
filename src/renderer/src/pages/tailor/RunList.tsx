@@ -4,7 +4,7 @@ import type { RunSummary } from '@shared/runner-types'
 import { StatusPill } from '../../components/ui'
 import { runBadge } from '../../components/usage/format'
 import { AgentPill, MonoXs } from './parts'
-import { shortWhen, STATUS_LABEL } from './status'
+import { runStatusLabel, shortWhen, STATUS_LABEL } from './status'
 import classes from './tailor.module.css'
 
 interface Props {
@@ -55,7 +55,7 @@ export function RunList({ runs, selected, onSelect }: Props) {
                     {r.title}
                   </span>
                   <StatusPill tone={status.tone} dot>
-                    {status.label}
+                    {runStatusLabel(r.status, r.agent)}
                   </StatusPill>
                 </span>
                 <span className={classes.runItemRow}>

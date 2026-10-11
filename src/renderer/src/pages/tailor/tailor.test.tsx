@@ -1,12 +1,29 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MantineProvider } from '@mantine/core'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { AgentStatus, RunnerEnvironment, RunSummary, TranscriptItem } from '@shared/runner-types'
 import { AgentPicker, agentLine } from '../../components/AgentPicker'
+import { NavigationContext, type Navigation } from '../../navigation'
+import { RunView } from './RunView'
+import { StartForm } from './StartForm'
 import { runEstimate, shortWhen } from './status'
 import { groupTranscript, Transcript } from './Transcript'
 
-const html = (node: React.ReactNode) => renderToStaticMarkup(<MantineProvider>{node}</MantineProvider>)
+// The preload bridge (`window.api`) does not exist here; the views only call it from effects and clicks.
+vi.mock('../../api', () => ({ api: {}, errorText: String }))
+
+const nav: Navigation = {
+  location: { page: 'tailor', params: undefined },
+  navigate: () => undefined,
+  setLeaveGuard: () => undefined
+}
+
+const html = (node: React.ReactNode) =>
+  renderToStaticMarkup(
+    <MantineProvider>
+      <NavigationContext.Provider value={nav}>{node}</NavigationContext.Provider>
+    </MantineProvider>
+  )
 
 describe('shortWhen', () => {
   const now = new Date(2026, 9, 11, 15, 0)
@@ -53,6 +70,9 @@ describe('runEstimate', () => {
       run({ totals: totals(600_000, 0.9) }),
       run({ agent: 'codex', totals: totals(60_000, 0.1) }),
       run({ status: 'failed', totals: totals(10_000, 0.01) }),
+      // Paused at the gap analysis: only part of the work, so it does not count.
+      run({ status: 'waiting', totals: totals(30_000, 0.05) }),
+      run({ status: 'stopped', totals: totals(20_000, 0.02) }),
       run({ totals: undefined })
     ]
     expect(runEstimate(runs, 'claude')).toBe('~4 min · ≈ $0.40 based on your last 3 Claude runs')
@@ -141,5 +161,49 @@ describe('AgentPicker', () => {
     expect(out).toContain('aria-label="Claude (default)"')
     expect(out).toContain('aria-label="Antigravity: not available"')
     expect(out).toMatch(/<input[^>]*value="codex"[^>]*checked=""|<input[^>]*checked=""[^>]*value="codex"/)
+  })
+})
+
+describe('RunView reply dock', () => {
+  const finish = /<button[^>]*>(?:(?!<\/button>).)*Finish conversation/s
+
+  it('offers Finish conversation for a run waiting for the reply', () => {
+    expect(html(<RunView run={run({ status: 'waiting', live: true })} events={[]} />)).toMatch(finish)
+    // A waiting run with no process (Codex between turns) can be finished too.
+    expect(html(<RunView run={run({ status: 'waiting', live: false })} events={[]} />)).toMatch(finish)
+  })
+
+  it('hides it while the agent works and for a run that cannot be ended', () => {
+    const working = html(<RunView run={run({ status: 'running', live: true })} events={[]} />)
+    expect(working).not.toMatch(finish)
+    expect(working).toMatch(/>End</)
+    const finished = html(<RunView run={run({ status: 'finished', live: false })} events={[]} />)
+    expect(finished).not.toMatch(finish)
+    expect(finished).not.toMatch(/>End</)
+  })
+})
+
+describe('StartForm', () => {
+  it('says the fields come from the saved job, with the description’s word count', () => {
+    const out = html(
+      <StartForm
+        prefill={{ jobDescription: 'Acme is hiring a Staff Engineer. Go and Postgres.', jobUrl: 'https://acme.example/jobs/1', company: 'Acme', role: 'Staff Engineer' }}
+        environment={null}
+        busy={false}
+        onStart={() => undefined}
+        onEnvironmentChange={() => undefined}
+      />
+    )
+    expect(out).toContain('Prefilled from your saved job')
+    expect(out).toContain('Staff Engineer at Acme.')
+    expect(out).toContain('(9 words)')
+  })
+
+  it('shows no prefill note for a job board summary or an empty form', () => {
+    const props = { environment: null, busy: false, onStart: () => undefined, onEnvironmentChange: () => undefined }
+    expect(html(<StartForm prefill={undefined} {...props} />)).not.toContain('Prefilled from')
+    const summary = html(<StartForm prefill={{ jobDescription: 'Short snippet.', jobUrl: 'https://indeed.example/1', descriptionComplete: false }} {...props} />)
+    expect(summary).not.toContain('Prefilled from')
+    expect(summary).toContain('summary, not the full posting')
   })
 })

@@ -99,7 +99,8 @@ export function shortWhen(iso: string, now = new Date()): string {
  */
 export function runEstimate(runs: readonly RunSummary[], agent: AgentId, last = 10): string | null {
   const measured = runs
-    .filter((r) => r.agent === agent && r.status !== 'failed' && r.totals && r.totals.turns > 0 && r.totals.activeMs > 0)
+    // Finished runs only: a run waiting at the gap analysis (or stopped) has done only part of the work.
+    .filter((r) => r.agent === agent && r.status === 'finished' && r.totals && r.totals.turns > 0 && r.totals.activeMs > 0)
     .slice(0, last)
   if (measured.length === 0) return null
   const median = (xs: number[]) => {
