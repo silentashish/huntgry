@@ -1,6 +1,9 @@
-import { Badge, Button, Card, Group, Stack, Text, Title } from '@mantine/core'
+import { Button } from '@mantine/core'
 import type { KnowledgeGraph } from '@shared/knowledge-graph'
 import { useNavigation } from '../../navigation'
+import { MonoLabel, SectionCard, StatusPill } from '../ui'
+import classes from './graph.module.css'
+import { yearsLabel } from './skills'
 
 /**
  * Compact "top skills / gaps" card for the Dashboard: the best-evidenced skills
@@ -13,7 +16,7 @@ export function SkillsSummaryCard({
 }: {
   graph: KnowledgeGraph
   limit?: number
-  /** Hide the link to the Knowledge graph page when already on it. */
+  /** Hide the link to the Profile's Knowledge graph view when already on it. */
   showLink?: boolean
 }) {
   const { navigate } = useNavigation()
@@ -23,52 +26,45 @@ export function SkillsSummaryCard({
     .sort((a, b) => b.jobs.length - a.jobs.length)
     .slice(0, limit)
   return (
-    <Card withBorder radius="md" padding="md">
-      <Group justify="space-between" mb="xs">
-        <Title order={4}>Skills</Title>
-        {showLink && (
-          <Button size="xs" variant="subtle" onClick={() => navigate('graph')}>
+    <SectionCard
+      title="Skills"
+      titleOrder={4}
+      padding="md"
+      actions={
+        showLink && (
+          <Button size="xs" variant="subtle" onClick={() => navigate('profile', { view: 'graph' })}>
             Knowledge graph
           </Button>
-        )}
-      </Group>
-      <Stack gap="sm">
-        <div>
-          <Text size="xs" c="dimmed" tt="uppercase" fw={600} mb={4}>
-            Strongest evidence
-          </Text>
-          <Group gap={6}>
-            {top.map((s) => (
-              <Badge key={s.id} variant="light" color="green">
-                {s.name}
-                {s.years > 0 ? ` · ${s.years}y` : ''}
-              </Badge>
-            ))}
-            {top.length === 0 && (
-              <Text size="sm" c="dimmed">
-                Add skills and experience to your master profile.
-              </Text>
-            )}
-          </Group>
+        )
+      }
+    >
+      <div className={classes.summaryGroup}>
+        <MonoLabel tone="muted" component="p">
+          Strongest evidence
+        </MonoLabel>
+        <div className={classes.pills}>
+          {top.map((s) => (
+            <StatusPill key={s.id} tone="success">
+              {s.name}
+              {s.years > 0 ? ` · ${yearsLabel(s.years)}` : ''}
+            </StatusPill>
+          ))}
+          {top.length === 0 && <p className={classes.summaryEmpty}>Add skills and experience to your master profile.</p>}
         </div>
-        <div>
-          <Text size="xs" c="dimmed" tt="uppercase" fw={600} mb={4}>
-            Asked for, missing from your profile
-          </Text>
-          <Group gap={6}>
-            {gaps.map((s) => (
-              <Badge key={s.id} variant="light" color="orange">
-                {s.name} · {s.jobs.length} job{s.jobs.length === 1 ? '' : 's'}
-              </Badge>
-            ))}
-            {gaps.length === 0 && (
-              <Text size="sm" c="dimmed">
-                No gaps found in your saved job descriptions.
-              </Text>
-            )}
-          </Group>
+      </div>
+      <div className={classes.summaryGroup}>
+        <MonoLabel tone="muted" component="p">
+          Asked for, missing from your profile
+        </MonoLabel>
+        <div className={classes.pills}>
+          {gaps.map((s) => (
+            <StatusPill key={s.id} tone="warning">
+              {s.name} · {s.jobs.length} job{s.jobs.length === 1 ? '' : 's'}
+            </StatusPill>
+          ))}
+          {gaps.length === 0 && <p className={classes.summaryEmpty}>No gaps found in your saved job descriptions.</p>}
         </div>
-      </Stack>
-    </Card>
+      </div>
+    </SectionCard>
   )
 }

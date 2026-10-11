@@ -144,7 +144,9 @@ test.describe('profile editor', () => {
 
     await shell.navLink('dashboard').click()
     await expect(editor.leaveDialog).toBeVisible()
-    await expect(editor.leaveDialog).toContainText('You have edits that are not saved to the master profile yet.')
+    await expect(editor.leaveDialog).toContainText(
+      'The master profile has 1 unsaved field. Leaving the page throws it away; master-profile.md on disk is not touched.'
+    )
     await editor.leaveDialog.getByRole('button', { name: 'Keep editing' }).click()
     await expect(editor.leaveDialog).toBeHidden()
     await shell.expectActive('profile')
@@ -169,6 +171,61 @@ test.describe('profile editor', () => {
     // And with nothing unsaved, no question is asked.
     await shell.goTo('dashboard')
     await expect(editor.leaveDialog).toHaveCount(0)
+  })
+
+  test('the Knowledge graph and Skills views keep unsaved edits without asking; the save bar follows', async ({ app }) => {
+    const editor = await openEditor(app)
+    await editor.expectView('Editor')
+    await editor.field('Full name').fill('Alex Rivera-Draft')
+    await editor.openTab('Summary & skills')
+    await editor.field('Summary').fill('Draft summary.')
+    await expect(editor.unsavedBadge).toHaveText('Unsaved changes · 2 fields')
+
+    await editor.showView('Knowledge graph')
+    await expect(editor.leaveDialog).toHaveCount(0)
+    await expect(app.window.getByRole('combobox', { name: 'Select a node of the graph' })).toBeVisible()
+    await expect(editor.unsavedBadge).toHaveText('Unsaved changes · 2 fields')
+    await editor.showView('Skills')
+    await expect(app.window.getByRole('table')).toBeVisible()
+    await expect(editor.leaveDialog).toHaveCount(0)
+
+    await editor.showView('Editor')
+    await expect(editor.field('Summary')).toHaveValue('Draft summary.')
+    await editor.openTab('Contact')
+    await expect(editor.field('Full name')).toHaveValue('Alex Rivera-Draft')
+    // Leaving the page still asks.
+    await new Shell(app.window).navLink('dashboard').click()
+    await expect(editor.leaveDialog).toBeVisible()
+    await expect(editor.leaveDialog).toContainText('The master profile has 2 unsaved fields.')
+    await editor.leaveDialog.getByRole('button', { name: 'Keep editing' }).click()
+    await editor.discardButton.click()
+    await expect(editor.savedBadge).toBeVisible()
+  })
+
+  test('after the sidebar Profile entry is confirmed from the graph view, the draft is still guarded', async ({ app }) => {
+    const editor = await openEditor(app)
+    const shell = new Shell(app.window)
+    await editor.field('Full name').fill('Alex Rivera-Kept')
+    await editor.showView('Knowledge graph')
+
+    // The shell may ask before re-opening the page it is on; confirming keeps this page and its draft.
+    await shell.navLink('profile').click()
+    const asked = await editor.leaveDialog.waitFor({ state: 'visible', timeout: 3000 }).then(
+      () => true,
+      () => false
+    )
+    if (asked) await editor.leaveDialog.getByRole('button', { name: 'Discard and leave' }).click()
+    await shell.expectActive('profile')
+    await editor.expectView('Editor')
+    await expect(editor.unsavedBadge).toBeVisible()
+    await expect(editor.field('Full name')).toHaveValue('Alex Rivera-Kept')
+
+    // The guard is back: leaving still asks instead of dropping the draft.
+    await shell.navLink('dashboard').click()
+    await expect(editor.leaveDialog).toBeVisible()
+    await editor.leaveDialog.getByRole('button', { name: 'Keep editing' }).click()
+    await shell.expectActive('profile')
+    await expect(editor.field('Full name')).toHaveValue('Alex Rivera-Kept')
   })
 
   test('closing the window with unsaved edits asks through showMessageBoxSync and honours the answer', async ({ app }) => {

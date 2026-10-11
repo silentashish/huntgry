@@ -1,32 +1,34 @@
+import { readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { expect, test } from '../fixtures/app'
 import { GraphPage } from '../pages/graph'
 import { ProfileEditor } from '../pages/profile-editor'
 import { Shell } from '../pages/shell'
 
 /**
- * Knowledge graph flows on the `demo` workspace. The force-directed canvas is
- * never inspected: nodes are asserted through the "Jump to…" list (every node
- * as `<Kind>: <label>`), skills through the Skills table view, and the node
- * panel through its markup.
+ * Knowledge graph flows on the `demo` workspace, reached through Profile → Knowledge graph
+ * (#95: the graph is a view of the Profile page). The force-directed canvas is never
+ * inspected: nodes are asserted through the "Jump to…" list (every node as
+ * `<Kind>: <label>`), skills through the Skills view's table, and the node panel through
+ * its markup.
  */
 test.use({ workspace: 'demo' })
 
 async function openGraph(app: { window: import('@playwright/test').Page }): Promise<GraphPage> {
-  await new Shell(app.window).goTo('graph')
   const graph = new GraphPage(app.window)
-  await graph.expectVisible()
+  await graph.open()
   return graph
 }
 
 test.describe('knowledge graph', () => {
   test('the graph has a node for the person, every role, company, project and skill, and the jobs overlay', async ({ app }) => {
     const graph = await openGraph(app)
-    await expect(graph.viewSwitch.getByRole('radio', { name: 'Graph' })).toBeChecked()
+    await expect(graph.view('Knowledge graph')).toBeChecked()
     await expect(graph.jobsOverlayChip).toHaveText('Jobs overlay (5)')
     await expect(graph.jobsOverlay).toBeChecked()
     // The legend lists the kinds drawn, gaps included.
-    for (const kind of ['You', 'Role', 'Company', 'Project', 'Skill', 'Education', 'Certification', 'Job', 'Gap (asked for, not in profile)']) {
-      await expect(app.window.getByText(kind, { exact: true })).toBeVisible()
+    for (const kind of ['You', 'Role', 'Company', 'Project', 'Skill', 'Education', 'Certification', 'Job', 'Gap']) {
+      await expect(graph.legend.getByText(kind, { exact: true })).toBeVisible()
     }
 
     const nodes = await graph.nodeLabels()
@@ -62,7 +64,8 @@ test.describe('knowledge graph', () => {
     expect(without.filter((n) => n.startsWith('Job: '))).toEqual([])
     expect(without).not.toContain('Skill: Kafka')
     expect(without).toContain('Skill: Go')
-    await expect(app.window.getByText('Gap (asked for, not in profile)')).toHaveCount(0)
+    await expect(graph.legend.getByText('Gap', { exact: true })).toHaveCount(0)
+    await expect(graph.legend.getByText('Skill', { exact: true })).toBeVisible()
   })
 
   test('the Skills table lists every skill with its years, evidence and jobs asking, and the overlay marks the gaps', async ({ app }) => {
@@ -80,9 +83,10 @@ test.describe('knowledge graph', () => {
     // so it changes at month boundaries; accept either side if the test crosses one.
     const go = graph.skillRow('Go')
     await expect(go.getByRole('cell').nth(1)).toHaveText('Languages')
-    const expectedYears = (year: number): string => String(Math.round((year - 2022) * 2) / 2)
+    const expectedYears = (year: number): string => `${Math.round((year - 2022) * 2) / 2}y`
     expect([expectedYears(started), expectedYears(await appYear())]).toContain((await go.getByRole('cell').nth(2).innerText()).trim())
-    await expect(go.getByRole('cell').nth(3)).toHaveText('2')
+    // Evidence by where it comes from: the Acme role (its Technologies) besides the skills list.
+    await expect(go.getByRole('cell').nth(3)).toHaveText('1 role')
     await expect(go.getByRole('cell').nth(4)).toHaveText('2')
     await expect(go.getByText('gap')).toHaveCount(0)
 
@@ -90,7 +94,7 @@ test.describe('knowledge graph', () => {
     const kafka = graph.skillRow('Kafka')
     await expect(kafka.getByText('gap', { exact: true })).toBeVisible()
     await expect(kafka.getByRole('cell').nth(2)).toHaveText('–')
-    await expect(kafka.getByRole('cell').nth(3)).toHaveText('–')
+    await expect(kafka.getByRole('cell').nth(3)).toHaveText('no evidence')
     await expect(kafka.getByRole('cell').nth(4)).toHaveText('2')
     for (const gap of ['Airflow', 'GraphQL', 'React', 'Spark', 'Kubernetes']) {
       await expect(graph.skillRow(gap).getByText('gap', { exact: true })).toBeVisible()
@@ -102,6 +106,25 @@ test.describe('knowledge graph', () => {
     await expect(graph.skillRow('Go')).toHaveCount(0)
     await graph.searchInput.fill('')
 
+    // Gaps only, then everything again.
+    await graph.skillFilter.getByText(/^Gaps \(\d+\)$/).click()
+    await expect(graph.skillRow('Kafka')).toBeVisible()
+    await expect(graph.skillRow('Go')).toHaveCount(0)
+    await graph.skillFilter.getByText(/^All \(\d+\)$/).click()
+    await expect(graph.skillRow('Go')).toBeVisible()
+
+    // A sortable header sorts by its column; clicking it again flips the order.
+    const firstRow = graph.skillsTable.getByRole('row').nth(1)
+    await graph.sortHeaderButton('Skill').click()
+    await expect(graph.sortHeader('Skill')).toHaveAttribute('aria-sort', 'ascending')
+    await expect(firstRow).toContainText('Airflow')
+    await graph.sortHeaderButton('Skill').click()
+    await expect(graph.sortHeader('Skill')).toHaveAttribute('aria-sort', 'descending')
+    await expect(firstRow).toContainText('TypeScript')
+    await graph.sortHeaderButton('Jobs asking').click()
+    await expect(graph.sortHeader('Jobs asking')).toHaveAttribute('aria-sort', 'descending')
+    await expect(graph.sortHeader('Skill')).not.toHaveAttribute('aria-sort', /./)
+
     // Overlay off: the gap rows are gone, the profile's skills stay.
     await graph.toggleJobsOverlay(false)
     await expect(graph.skillRow('Kafka')).toHaveCount(0)
@@ -109,7 +132,7 @@ test.describe('knowledge graph', () => {
     await expect(go.getByRole('cell').nth(4)).toHaveText('–')
   })
 
-  test('clicking a skill row opens its panel; "Edit in master profile" deep-links to the Summary & skills tab', async ({ app }) => {
+  test('clicking a skill row opens its panel; "Edit in master profile" deep-links to the Summary & skills section of the Editor', async ({ app }) => {
     const graph = await openGraph(app)
     await graph.showView('Skills')
 
@@ -126,10 +149,35 @@ test.describe('knowledge graph', () => {
     await expect(pg).toContainText('Software Engineer · Globex Corporation')
     await expect(pg).toContainText('Migrated nightly reports to PostgreSQL')
 
-    await pg.getByRole('button', { name: 'Edit in master profile' }).click()
+    // The selection follows into the Knowledge graph view.
+    await graph.showView('Knowledge graph')
+    await expect(graph.nodePanel('PostgreSQL')).toContainText('8.5 years')
+
+    await graph.nodePanel('PostgreSQL').getByRole('button', { name: 'Edit in master profile' }).click()
     await new Shell(app.window).expectActive('profile')
     const editor = new ProfileEditor(app.window)
+    await editor.expectView('Editor')
     await editor.expectTabSelected('Summary & skills')
     await expect(editor.field('Summary')).toContainText('Backend engineer with seven years')
+  })
+
+  test('the graph follows a save from the save bar, and Refresh picks up edits made on disk', async ({ app }) => {
+    const editor = new ProfileEditor(app.window)
+    await new Shell(app.window).goTo('profile')
+    await editor.field('Full name').fill('Alex Q. Rivera')
+    const graph = new GraphPage(app.window)
+    await graph.showView('Knowledge graph')
+    // The graph is built from the file, so it shows the saved name until the save.
+    expect(await graph.nodeLabels()).toContain('You: Alex Rivera')
+    await editor.save()
+    await expect.poll(() => graph.nodeLabels()).toContain('You: Alex Q. Rivera')
+
+    // Someone edits master-profile.md outside the app: Refresh reads it again.
+    const path = join(app.workspace!, 'master-profile.md')
+    const text = await readFile(path, 'utf8')
+    await writeFile(path, text.replace('- Languages: Go, Python, TypeScript, SQL', '- Languages: Go, Python, TypeScript, SQL, Elixir'))
+    expect(await graph.nodeLabels()).not.toContain('Skill: Elixir')
+    await graph.refreshButton.click()
+    await expect.poll(() => graph.nodeLabels()).toContain('Skill: Elixir')
   })
 })

@@ -1,11 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useComputedColorScheme, useMantineTheme } from '@mantine/core'
-import { forceX, forceY } from 'd3-force-3d'
+import { forceCollide, forceX, forceY } from 'd3-force-3d'
 import ForceGraph2D, { type ForceGraphMethods, type NodeObject } from 'react-force-graph-2d'
 import type { GraphEdge, GraphNode, KnowledgeGraph, NodeKind } from '@shared/knowledge-graph'
-import { KIND_COLOR } from './colors'
+import { GAP_COLOR, KIND_COLOR, useTokenValues, withAlpha } from './colors'
 
 type Node = NodeObject<GraphNode & { degree: number }>
+
+/** Every colour the canvas paints with, as tokens; resolved to values on each theme change. */
+const CANVAS_TOKENS = {
+  ...KIND_COLOR,
+  gap: GAP_COLOR,
+  label: 'var(--hg-text-secondary)',
+  selected: 'var(--hg-text-primary)',
+  link: 'var(--hg-border-strong)',
+  asks: 'var(--hg-status-warning)',
+  mono: 'var(--hg-font-mono)'
+} satisfies Record<NodeKind | string, string>
 
 interface Props {
   graph: KnowledgeGraph
@@ -17,10 +27,12 @@ interface Props {
   height: number
 }
 
-/** Force-directed view of the graph: colour by kind, size by connections, labels when zoomed in. */
+/**
+ * Force-directed view of the graph (Figma: Profile — Knowledge graph): ringed nodes coloured by
+ * kind, sized by connections, mono labels beside them, dashed amber lines for what jobs ask for.
+ */
 export function GraphCanvas({ graph, selected, matches, hiddenKinds, onSelect, height }: Props) {
-  const theme = useMantineTheme()
-  const scheme = useComputedColorScheme('light')
+  const colors = useTokenValues(CANVAS_TOKENS)
   const box = useRef<HTMLDivElement>(null)
   const fg = useRef<ForceGraphMethods<Node> | undefined>(undefined)
   const [width, setWidth] = useState(600)
@@ -59,79 +71,89 @@ export function GraphCanvas({ graph, selected, matches, hiddenKinds, onSelect, h
   }, [graph, selected])
 
   useEffect(() => {
-    fg.current?.d3Force('charge')?.strength?.(-140)
+    fg.current?.d3Force('charge')?.strength?.(-120)
     // Weak gravity keeps separate components (a job linked only to gaps) near the rest.
-    fg.current?.d3Force('x', forceX(0).strength(0.06) as never)
-    fg.current?.d3Force('y', forceY(0).strength(0.06) as never)
+    fg.current?.d3Force('x', forceX(0).strength(0.07) as never)
+    fg.current?.d3Force('y', forceY(0).strength(0.07) as never)
+    // Room for each ring and the start of its label, so nodes do not sit on each other.
+    fg.current?.d3Force('collide', forceCollide((n) => radius(n as Node) + 8).strength(0.9) as never)
     const link = fg.current?.d3Force('link') as { distance?: (d: number) => void } | undefined
-    link?.distance?.(55)
+    link?.distance?.(48)
   }, [data])
 
-  const text = scheme === 'dark' ? theme.colors.dark[0] : theme.colors.gray[8]
   const faded = (id: string) => (neighbours ? !neighbours.has(id) : matches ? !matches.has(id) : false)
-  const color = (kind: NodeKind, gap: boolean) =>
-    theme.colors[gap ? 'orange' : KIND_COLOR[kind]][scheme === 'dark' ? 4 : 6]
   const gapIds = useMemo(() => new Set(graph.skills.filter((s) => s.gap).map((s) => s.id)), [graph])
+  const fill = (n: Node) => (gapIds.has(String(n.id)) ? colors.gap : colors[n.kind])
 
   return (
-    <div ref={box} style={{ width: '100%', height, borderRadius: 'var(--mantine-radius-md)', overflow: 'hidden' }}>
+    <div ref={box} style={{ width: '100%', height }}>
       <ForceGraph2D<GraphNode & { degree: number }, GraphEdge>
         ref={fg}
         width={width}
         height={height}
         graphData={data}
-        backgroundColor="transparent"
+        backgroundColor="rgba(0, 0, 0, 0)"
         cooldownTicks={120}
         onEngineStop={() => fg.current?.zoomToFit(400, 40)}
         nodeLabel={(n) => `${n.label}${n.detail ? ` — ${n.detail}` : ''}`}
         onNodeClick={(n) => onSelect(n.id === selected ? null : String(n.id))}
         onBackgroundClick={() => onSelect(null)}
         linkColor={(l) => {
-          const [s, t] = [endId(l.source), endId(l.target)]
-          const dim = faded(s) || faded(t)
-          const base =
-            l.kind === 'asks_for'
-              ? theme.colors.yellow[6]
-              : scheme === 'dark'
-                ? theme.colors.dark[3]
-                : theme.colors.gray[4]
-          return dim ? `${base}33` : base
+          const dim = faded(endId(l.source)) || faded(endId(l.target))
+          const base = l.kind === 'asks_for' ? colors.asks : colors.link
+          return dim ? withAlpha(base, 0.2) : base
         }}
+        linkLineDash={(l) => (l.kind === 'asks_for' ? [4, 3] : null)}
         linkWidth={(l) => (selected && (endId(l.source) === selected || endId(l.target) === selected) ? 2 : 1)}
         nodeCanvasObject={(n, ctx, scale) => {
-          const r = n.kind === 'person' ? 9 : 3 + Math.min(6, Math.sqrt(n.degree) * 1.4)
-          const alpha = faded(String(n.id)) ? 0.18 : 1
-          ctx.globalAlpha = alpha
-          ctx.beginPath()
-          ctx.arc(n.x ?? 0, n.y ?? 0, r, 0, 2 * Math.PI)
-          ctx.fillStyle = color(n.kind, gapIds.has(String(n.id)))
-          ctx.fill()
-          if (n.id === selected) {
-            ctx.lineWidth = 2 / scale
-            ctx.strokeStyle = text
-            ctx.stroke()
+          const r = radius(n)
+          const [x, y] = [n.x ?? 0, n.y ?? 0]
+          const color = fill(n)
+          ctx.globalAlpha = faded(String(n.id)) ? 0.28 : 1
+          if (n.kind === 'person') {
+            // The halo around "You".
+            ctx.beginPath()
+            ctx.arc(x, y, r * 1.9, 0, 2 * Math.PI)
+            ctx.fillStyle = withAlpha(color, 0.14)
+            ctx.fill()
           }
-          // Labels for big nodes always, for the rest once zoomed in.
-          if (scale > 1.6 || r >= 7 || n.id === selected || (neighbours?.has(String(n.id)) ?? false)) {
-            const size = Math.max(10 / scale, 2.5)
-            ctx.font = `${n.kind === 'person' ? 600 : 400} ${size}px ${theme.fontFamily}`
-            ctx.textAlign = 'center'
-            ctx.textBaseline = 'top'
-            ctx.fillStyle = text
+          ctx.beginPath()
+          ctx.arc(x, y, r, 0, 2 * Math.PI)
+          ctx.fillStyle = withAlpha(color, 0.2)
+          ctx.fill()
+          ctx.lineWidth = (n.id === selected ? 2.5 : 1.5) / scale
+          ctx.strokeStyle = n.id === selected ? colors.selected : color
+          ctx.stroke()
+          ctx.beginPath()
+          ctx.arc(x, y, Math.max(1, r * 0.12), 0, 2 * Math.PI)
+          ctx.fillStyle = color
+          ctx.fill()
+          // Every node is labelled (Figma); in a crowded graph only the bigger ones until zoomed in.
+          if (data.nodes.length <= 80 || scale > 1.3 || r >= 7 || n.id === selected || (neighbours?.has(String(n.id)) ?? false)) {
+            const size = Math.max(10.5 / scale, 2.5)
+            ctx.font = `500 ${size}px ${colors.mono || 'monospace'}`
+            ctx.textAlign = 'left'
+            ctx.textBaseline = 'middle'
+            ctx.fillStyle = n.id === selected ? colors.selected : colors.label
             const label = n.label.length > 28 ? `${n.label.slice(0, 27)}…` : n.label
-            ctx.fillText(label, n.x ?? 0, (n.y ?? 0) + r + 1.5)
+            ctx.fillText(label, x + r + 4 / scale, y)
           }
           ctx.globalAlpha = 1
         }}
         nodePointerAreaPaint={(n, paint, ctx) => {
           ctx.fillStyle = paint
           ctx.beginPath()
-          ctx.arc(n.x ?? 0, n.y ?? 0, 10, 0, 2 * Math.PI)
+          ctx.arc(n.x ?? 0, n.y ?? 0, 11, 0, 2 * Math.PI)
           ctx.fill()
         }}
       />
     </div>
   )
+}
+
+/** Ring radius: "You" biggest, the rest by how connected they are. */
+function radius(n: Node): number {
+  return n.kind === 'person' ? 11 : 5 + Math.min(6, Math.sqrt(n.degree) * 1.4)
 }
 
 /** A link end is an id before the simulation starts and the node object after. */

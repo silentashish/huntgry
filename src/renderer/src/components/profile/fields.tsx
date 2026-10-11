@@ -1,5 +1,7 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { Accordion, ActionIcon, Button, Group, SimpleGrid, Stack, Text, TextInput, Textarea, Tooltip } from '@mantine/core'
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { Accordion, ActionIcon, Button, TextInput, Textarea, Tooltip } from '@mantine/core'
+import { IconChevronDown, IconChevronRight, IconChevronUp, IconPlus, IconTrash } from '@tabler/icons-react'
+import classes from './editor.module.css'
 
 /** How one field of an entry is edited. `lines` edits a string[] as one item per line. */
 export interface FieldSpec<T> {
@@ -8,9 +10,11 @@ export interface FieldSpec<T> {
   kind?: 'text' | 'textarea' | 'lines'
   placeholder?: string
   description?: string
-  /** Columns out of 2; textareas and lines take the full row. */
-  span?: 1 | 2
+  /** Columns out of 12 (Figma rows of 3 and 4 fields); text defaults to 6, textareas and lines take the row. */
+  cols?: 3 | 4 | 6 | 12
 }
+
+const span = (cols: number) => ({ '--field-cols': cols }) as CSSProperties
 
 export function FieldGrid<T>({
   value,
@@ -22,16 +26,16 @@ export function FieldGrid<T>({
   onChange(next: T): void
 }) {
   return (
-    <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm" verticalSpacing="xs">
+    <div className={classes.fieldGrid}>
       {fields.map((f) => {
         const kind = f.kind ?? 'text'
-        const span = kind === 'text' ? (f.span ?? 1) : 2
         const common = {
           key: f.key,
           label: f.label,
           placeholder: f.placeholder,
           description: f.description,
-          style: span === 2 ? { gridColumn: '1 / -1' } : undefined
+          className: classes.field,
+          style: span(kind === 'text' ? (f.cols ?? 6) : 12)
         }
         if (kind === 'lines') {
           return (
@@ -46,13 +50,14 @@ export function FieldGrid<T>({
         return (
           <Input
             {...common}
+            inputWrapperOrder={['label', 'input', 'description', 'error']}
             {...(kind === 'textarea' ? { autosize: true, minRows: 2 } : {})}
             value={value[f.key] as unknown as string}
             onChange={(e) => onChange({ ...value, [f.key]: e.currentTarget.value })}
           />
         )
       })}
-    </SimpleGrid>
+    </div>
   )
 }
 
@@ -67,11 +72,13 @@ export function LinesInput({
   label?: string
   placeholder?: string
   description?: string
-  style?: React.CSSProperties
+  className?: string
+  style?: CSSProperties
 }) {
   return (
     <Textarea
       {...rest}
+      inputWrapperOrder={['label', 'input', 'description', 'error']}
       autosize
       minRows={3}
       value={value.join('\n')}
@@ -131,24 +138,70 @@ export function parseCommaList(text: string): string[] {
   return out.map((s) => s.trim()).filter(Boolean)
 }
 
+/** "Add …" in the Figma secondary small style. */
+export function AddButton({ children, onClick }: { children: ReactNode; onClick(): void }) {
+  return (
+    <Button variant="secondary" size="xs" leftSection={<IconPlus size={14} />} onClick={onClick}>
+      {children}
+    </Button>
+  )
+}
+
 /**
- * A reorderable list of entries rendered as an accordion. New entries open
- * automatically so the user can start typing.
+ * The head of an editor section (Figma: "Experience  4 entries · …  + Add experience"):
+ * a Geist 20 title, a muted line and the section's action.
+ */
+export function SectionHead({
+  title,
+  meta,
+  action,
+  order = 3
+}: {
+  title: ReactNode
+  meta?: ReactNode
+  action?: ReactNode
+  order?: 3 | 4
+}) {
+  const Heading = order === 3 ? 'h3' : 'h4'
+  return (
+    <div className={classes.sectionHead} data-order={order}>
+      <Heading className={classes.sectionTitle}>{title}</Heading>
+      {meta != null && <span className={classes.sectionMeta}>{meta}</span>}
+      {action != null && <span className={classes.sectionAction}>{action}</span>}
+    </div>
+  )
+}
+
+/**
+ * A reorderable list of entries rendered as cards that fold open (Figma: the Experience cards).
+ * New entries open automatically so the user can start typing.
  */
 export function EntryList<T>({
   items,
   onChange,
   create,
   title,
+  meta,
   render,
+  heading,
+  summary,
+  headingOrder = 3,
   addLabel,
   empty
 }: {
   items: T[]
   onChange(next: T[]): void
   create(): T
+  /** The card title, e.g. "Senior Engineer · Acme". */
   title(item: T): string
+  /** The mono line after the title, e.g. the dates. */
+  meta?(item: T): string
   render(item: T, update: (next: T) => void): ReactNode
+  /** Section title above the cards. */
+  heading: string
+  /** Muted line beside the section title. */
+  summary?: string
+  headingOrder?: 3 | 4
   addLabel: string
   empty: string
 }) {
@@ -165,61 +218,67 @@ export function EntryList<T>({
     onChange(items.filter((_it, j) => j !== i))
     setOpen([])
   }
+  const add = () => {
+    onChange([...items, create()])
+    setOpen([...open, String(items.length)])
+  }
   return (
-    <Stack gap="sm">
+    <div className={classes.section}>
+      <SectionHead title={heading} meta={summary} order={headingOrder} action={<AddButton onClick={add}>{addLabel}</AddButton>} />
       {items.length === 0 ? (
-        <Text c="dimmed" size="sm">
-          {empty}
-        </Text>
+        <p className={classes.empty}>{empty}</p>
       ) : (
-        <Accordion multiple variant="separated" value={open} onChange={setOpen}>
-          {items.map((item, i) => (
-            <Accordion.Item key={i} value={String(i)}>
-              <Group wrap="nowrap" gap={4} pr="xs">
-                <Accordion.Control style={{ flex: 1, minWidth: 0 }}>
-                  <Text fw={500} truncate>
-                    {title(item) || 'Untitled'}
-                  </Text>
-                </Accordion.Control>
-                <Tooltip label="Move up">
-                  <ActionIcon variant="subtle" color="gray" aria-label="Move up" disabled={i === 0} onClick={() => move(i, -1)}>
-                    ↑
-                  </ActionIcon>
-                </Tooltip>
-                <Tooltip label="Move down">
-                  <ActionIcon
-                    variant="subtle"
-                    color="gray"
-                    aria-label="Move down"
-                    disabled={i === items.length - 1}
-                    onClick={() => move(i, 1)}
+        <Accordion
+          multiple
+          value={open}
+          onChange={setOpen}
+          chevronPosition="left"
+          disableChevronRotation
+          classNames={{ root: classes.entries, item: classes.entry, control: classes.entryControl, chevron: classes.entryChevron, label: classes.entryLabel, content: classes.entryContent }}
+        >
+          {items.map((item, i) => {
+            const name = title(item)
+            const sub = meta?.(item) ?? ''
+            const isOpen = open.includes(String(i))
+            return (
+              <Accordion.Item key={i} value={String(i)}>
+                <div className={classes.entryHead}>
+                  <Accordion.Control
+                    aria-label={[name || 'Untitled', sub].filter(Boolean).join(' · ')}
+                    chevron={isOpen ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
                   >
-                    ↓
-                  </ActionIcon>
-                </Tooltip>
-                <Tooltip label="Remove">
-                  <ActionIcon variant="subtle" color="red" aria-label="Remove" onClick={() => remove(i)}>
-                    ✕
-                  </ActionIcon>
-                </Tooltip>
-              </Group>
-              <Accordion.Panel>{render(item, (next) => update(i, next))}</Accordion.Panel>
-            </Accordion.Item>
-          ))}
+                    <span className={classes.entryTitle}>{name || 'Untitled'}</span>
+                    {sub && <span className={classes.entryMeta}>{sub}</span>}
+                  </Accordion.Control>
+                  <Tooltip label="Move up">
+                    <ActionIcon variant="subtle" color="gray" size="sm" aria-label="Move up" disabled={i === 0} onClick={() => move(i, -1)}>
+                      <IconChevronUp size={14} />
+                    </ActionIcon>
+                  </Tooltip>
+                  <Tooltip label="Move down">
+                    <ActionIcon
+                      variant="subtle"
+                      color="gray"
+                      size="sm"
+                      aria-label="Move down"
+                      disabled={i === items.length - 1}
+                      onClick={() => move(i, 1)}
+                    >
+                      <IconChevronDown size={14} />
+                    </ActionIcon>
+                  </Tooltip>
+                  <Tooltip label="Remove">
+                    <ActionIcon variant="subtle" color="danger" size="sm" aria-label="Remove" onClick={() => remove(i)}>
+                      <IconTrash size={14} />
+                    </ActionIcon>
+                  </Tooltip>
+                </div>
+                <Accordion.Panel>{render(item, (next) => update(i, next))}</Accordion.Panel>
+              </Accordion.Item>
+            )
+          })}
         </Accordion>
       )}
-      <Group>
-        <Button
-          variant="light"
-          size="xs"
-          onClick={() => {
-            onChange([...items, create()])
-            setOpen([...open, String(items.length)])
-          }}
-        >
-          {addLabel}
-        </Button>
-      </Group>
-    </Stack>
+    </div>
   )
 }
