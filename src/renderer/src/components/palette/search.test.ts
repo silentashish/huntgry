@@ -7,7 +7,7 @@ import { flatten, normalize, paletteItems, scoreItem, searchPalette, wordScore, 
 
 function job(over: Partial<Job> & Pick<Job, 'id' | 'title' | 'company'>): Job {
   return {
-    source: 'manual',
+    source: 'pasted',
     sourceId: over.id.split(':')[1] ?? over.id,
     location: '',
     remote: false,
@@ -174,6 +174,14 @@ describe('palette search', () => {
     const jobs = searchPalette(many, 'acme').find((s) => s.group === 'jobs')!
     expect(jobs.items).toHaveLength(5)
     expect(jobs.label).toBe('Jobs · 12')
+  })
+
+  it('lists a skill once whatever its case, so ids stay unique', () => {
+    const twice = { ...profile, skills: [{ category: 'A', items: ['React', 'Go'] }, { category: 'B', items: ['react', ' Go '] }] } as MasterProfile
+    const items = paletteItems(data({ profile: twice })).filter((i) => i.id.startsWith('profile-skill:'))
+    expect(items.map((i) => i.title)).toEqual(['React', 'Go'])
+    const all = paletteItems(data({ profile: twice }))
+    expect(new Set(all.map((i) => i.id)).size).toBe(all.length)
   })
 
   it('returns nothing for a query nothing matches', () => {

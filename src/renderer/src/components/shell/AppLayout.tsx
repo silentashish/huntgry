@@ -143,7 +143,8 @@ export function AppLayout({ workspacePath, initialLocation, profile = null, onSw
         opened={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         profile={profile}
-        onSwitchWorkspace={() => guarded(onSwitchWorkspace)}
+        onSwitchWorkspace={onSwitchWorkspace}
+        guarded={guarded}
       />
 
       <LeaveGuardModal message={pending?.message ?? null} onKeep={() => setPending(null)} onDiscard={() => pending?.proceed()} />

@@ -101,9 +101,15 @@ export class Shell {
     await expect(this.palette).toBeHidden()
   }
 
-  /** The Knowledge graph view of Profile (the old `graph` page), through the palette. */
+  /**
+   * The Knowledge graph view of Profile (the old `graph` page), through the palette: Profile is the current
+   * entry, its view switch is on Knowledge graph and the graph's "Jump to…" node picker is shown.
+   */
   async openGraph(): Promise<void> {
     await this.sniff('knowledge graph', 'Profile → Knowledge graph')
     await this.expectActive('profile')
+    const views = this.page.getByRole('radiogroup', { name: 'Profile view' })
+    await expect(views.getByRole('radio', { name: 'Knowledge graph', exact: true })).toBeChecked()
+    await expect(this.page.getByRole('combobox', { name: 'Select a node of the graph' })).toBeVisible()
   }
 }

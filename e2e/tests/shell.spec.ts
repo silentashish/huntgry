@@ -117,8 +117,9 @@ test.describe('command palette (⌘K)', () => {
 
   test('the Knowledge graph opens as a view of Profile', async ({ app }) => {
     const shell = new Shell(app.window)
+    // Asserts the graph view itself (needs Profile's views, #115), not only the active entry.
     await shell.openGraph()
-    await expect(shell.navLink('profile')).toHaveAttribute('aria-current', 'page')
+    await expect(app.window.getByText(/^Jobs overlay \(\d+\)$/)).toBeVisible()
   })
 
   test('New tailored resume and Settings sections open their page', async ({ app }) => {

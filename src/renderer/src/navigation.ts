@@ -11,7 +11,8 @@ export interface PageParams {
   dashboard: undefined
   /** Every job as a card, from To do to Archived (#85). */
   board: undefined
-  jobs: undefined
+  /** `reload` (any new value) draws the page afresh, e.g. after the palette's "Paste a job" saved one. */
+  jobs: { reload?: number } | undefined
   /** Opens `url` in an in-app browser tab (or shows the open tabs when absent). */
   browser: { url?: string } | undefined
   /** Pre-fills the Tailor form, e.g. from a job found on the Jobs page. */

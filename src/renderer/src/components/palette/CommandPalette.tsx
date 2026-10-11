@@ -74,6 +74,11 @@ interface Props {
   /** The master profile on screen, searched for roles, projects and skills. */
   profile: MasterProfile | null
   onSwitchWorkspace(): void
+  /**
+   * The shell's unsaved-changes guard: runs `action` now, or once the user agrees to leave. Commands that
+   * leave the page run inside it, so nothing (marking a job tailored, starting Apply) happens on "Keep editing".
+   */
+  guarded(action: () => void): void
 }
 
 /**
@@ -81,14 +86,14 @@ interface Props {
  * or Settings section, and run actions (Tailor, Open posting, Apply, Paste a job, Switch theme). Arrow keys
  * move, Enter opens, Tab jumps to the next group, Escape closes; focus stays inside while it is open.
  */
-export function CommandPalette({ opened, onClose, profile, onSwitchWorkspace }: Props) {
+export function CommandPalette({ opened, onClose, profile, onSwitchWorkspace, guarded }: Props) {
   const { navigate, location } = useNavigation()
   const { resolved, setPreference } = useThemePreference()
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const [pasteOpen, setPasteOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const { apply, modal: applyModal } = useApply(setError)
+  const { apply, confirmOpen, modal: applyModal } = useApply(setError)
   const data = usePaletteData(opened)
   const listId = useId()
   const listRef = useRef<HTMLDivElement>(null)
@@ -111,13 +116,19 @@ export function CommandPalette({ opened, onClose, profile, onSwitchWorkspace }: 
 
   useEffect(() => setActive(0), [query])
 
-  // The in-app browser is a native view drawn above the page: hide it while something here covers it.
-  const covering = opened || pasteOpen || error !== null
+  // The in-app browser is a native view drawn above the page: hide it while something here covers it,
+  // and show it again only if the Browser page is still the one on screen. Choosing another page closes
+  // the palette in the same commit: the Browser page hides its view as it unmounts, and must stay hidden.
+  const covering = opened || pasteOpen || confirmOpen || error !== null
   const onBrowser = location.page === 'browser'
+  const here = useRef(location)
+  here.current = location
   useEffect(() => {
     if (!covering || !onBrowser) return
     void api.browser.setVisible(false)
-    return () => void api.browser.setVisible(true)
+    return () => {
+      if (here.current.page === 'browser') void api.browser.setVisible(true)
+    }
   }, [covering, onBrowser])
 
   useEffect(() => {
@@ -131,9 +142,9 @@ export function CommandPalette({ opened, onClose, profile, onSwitchWorkspace }: 
       case 'navigate':
         return navigate(command.location.page, command.location.params as never)
       case 'tailor-job':
-        return void prepareTailor(command.job, () => undefined).then((job) => navigate('tailor', tailorPrefillFor(job)))
+        return guarded(() => void prepareTailor(command.job, () => undefined).then((job) => navigate('tailor', tailorPrefillFor(job))))
       case 'apply':
-        return apply({ id: command.applicationId })
+        return guarded(() => apply({ id: command.applicationId }))
       case 'open-file':
         return void api.applications.openFile(command.applicationId, command.file).catch((err) => setError(errorText(err)))
       case 'reveal':
@@ -143,7 +154,7 @@ export function CommandPalette({ opened, onClose, profile, onSwitchWorkspace }: 
       case 'toggle-theme':
         return setPreference(resolved === 'dark' ? 'light' : 'dark')
       case 'switch-workspace':
-        return onSwitchWorkspace()
+        return guarded(onSwitchWorkspace)
     }
   }
 
@@ -250,7 +261,8 @@ export function CommandPalette({ opened, onClose, profile, onSwitchWorkspace }: 
         onClose={() => setPasteOpen(false)}
         onSaved={() => {
           setPasteOpen(false)
-          navigate('jobs')
+          // A fresh `reload` remounts the Jobs page (also when it is the page on screen), so it lists the new job.
+          navigate('jobs', { reload: Date.now() })
         }}
       />
       {applyModal}

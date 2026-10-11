@@ -84,7 +84,7 @@ export function App() {
               case 'board':
                 return <BoardPage />
               case 'jobs':
-                return <JobsPage />
+                return <JobsPage key={paramsFor(location, 'jobs')?.reload} />
               case 'browser':
                 return <BrowserPage params={paramsFor(location, 'browser')} />
               case 'tailor':

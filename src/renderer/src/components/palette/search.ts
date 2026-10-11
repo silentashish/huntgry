@@ -416,11 +416,12 @@ export function paletteItems(data: PaletteData): PaletteItem[] {
         command: nav(locationOf('profile', { section: 'projects' }))
       })
     })
-    const skills = new Set<string>()
-    for (const g of profile.skills) for (const s of g.items) if (s.trim()) skills.add(s.trim())
-    for (const skill of skills) {
+    // One entry per skill, whatever its case ("React" and "react" are the same skill).
+    const skills = new Map<string, string>()
+    for (const g of profile.skills) for (const s of g.items) if (s.trim() && !skills.has(s.trim().toLowerCase())) skills.set(s.trim().toLowerCase(), s.trim())
+    for (const [key, skill] of skills) {
       items.push({
-        id: `profile-skill:${skill.toLowerCase()}`,
+        id: `profile-skill:${key}`,
         group: 'profile',
         title: skill,
         subtitle: 'skill in your profile',
