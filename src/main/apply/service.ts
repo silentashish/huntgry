@@ -156,6 +156,11 @@ interface Context {
   fillingSeq: number | null
   /** Bumped on every load and on a single-page confirmation, so stale detects, fills and uploads give up. */
   loadSeq: number
+  /**
+   * The page generation (`loadSeq`) that showed the site's "application submitted" page (#119): nothing fills that
+   * page, and work still in flight for it (a draft's refill, an answer) never turns "Submitted" back into "Filled".
+   */
+  confirmedSeq: number | null
   timers: Set<ReturnType<typeof setTimeout>>
 }
 
@@ -253,6 +258,7 @@ export class ApplyService {
       recheck: false,
       fillingSeq: null,
       loadSeq: 0,
+      confirmedSeq: null,
       timers: new Set()
     }
     this.ctx = ctx
@@ -289,8 +295,7 @@ export class ApplyService {
       page.onMessage(AUTOFILL_CHANNELS.confirmation, () => {
         if (this.ctx !== ctx) return
         // The page is a different page now: any fill or upload still running for the form is stale.
-        ctx.loadSeq++
-        this.update({ status: 'submitted-detected', message: CONFIRMED })
+        this.confirmed(ctx, ++ctx.loadSeq)
       }),
       // A multi-step site (Workday) moved to another step, rendered more of it or stopped being busy, without a
       // navigation. The detect only invalidates running work when the page really differs from what it last saw.
@@ -386,7 +391,10 @@ export class ApplyService {
     try {
       scan = parsePageScan(await this.request(ctx, AUTOFILL_CHANNELS.detect, {}))
     } catch {
-      // The page navigated away or is still busy; the next load detects again.
+      // The page did not answer (the request reached a document that was being replaced, or the page timed out)
+      // or answered something unreadable. A newer load detects on its own; if none came, this page is still the
+      // current one and nothing else would ever scan it again (#119): try again, a bounded number of times.
+      if (seq !== null) this.detectAgain(ctx, seq, attempt)
       return
     }
     if (this.ctx !== ctx) return
@@ -409,12 +417,16 @@ export class ApplyService {
         seq = ctx.loadSeq
       }
     } else if (ctx.loadSeq !== seq) {
+      // A newer generation overtook this scan. Its own load detects it, except when nothing loads after the bump (a
+      // navigation that started but never committed): if this scan saw the confirmation page, look again at the
+      // current generation rather than trusting that a load follows (#119).
+      if (scan.confirmation) this.detectAgain(ctx, ctx.loadSeq, attempt)
       return
     }
     ctx.pageKey = key
     this.update({ ats: scan.ats, step: stepOf(scan) })
     if (scan.confirmation) {
-      this.update({ status: 'submitted-detected', message: CONFIRMED })
+      this.confirmed(ctx, seq)
       return
     }
     // Only the posting's own site (and where its redirects landed) or an auto-trusted ATS host (AUTO_TRUSTED_ATS) is filled (or
@@ -462,9 +474,7 @@ export class ApplyService {
         })
         return
       }
-      const delay = (this.deps.retryDelaysMs ?? DEFAULT_RETRIES)[attempt]
-      const at = seq
-      if (delay !== undefined) this.later(ctx, delay, () => void this.detect(ctx, at, attempt + 1))
+      this.detectAgain(ctx, seq, attempt)
       this.update({
         status: 'ready',
         message:
@@ -490,6 +500,22 @@ export class ApplyService {
     } else if (this.session?.status !== 'filled') {
       this.update({ status: 'ready', message: 'Press Fill form to fill this page.' })
     }
+  }
+
+  /**
+   * Schedules the next detect of generation `seq` (the retry delays bound how many), unless a newer generation
+   * already replaced it: that one's own load detects it.
+   */
+  private detectAgain(ctx: Context, seq: number, attempt: number): void {
+    const delay = (this.deps.retryDelaysMs ?? DEFAULT_RETRIES)[attempt]
+    if (delay === undefined || this.ctx !== ctx || ctx.loadSeq !== seq) return
+    this.later(ctx, delay, () => void this.detect(ctx, seq, attempt + 1))
+  }
+
+  /** Generation `seq` is the site's "application submitted" page. */
+  private confirmed(ctx: Context, seq: number): void {
+    ctx.confirmedSeq = seq
+    this.update({ status: 'submitted-detected', message: CONFIRMED })
   }
 
   /**
@@ -728,8 +754,12 @@ export class ApplyService {
   private async refill(ctx: Context): Promise<void> {
     if (ctx.fillingSeq !== null) throw new Error('Huntgry is still filling this page. Try again in a moment.')
     const seq = ctx.loadSeq
+    // The site already shows its "application submitted" page: there is no form left to fill (#119).
+    if (ctx.confirmedSeq === seq) return
     ctx.fillingSeq = seq
-    const current = () => this.ctx === ctx && ctx.loadSeq === seq
+    // A draft or an answer can take seconds; the page may have been submitted meanwhile. Its result is only for the
+    // form it was made for: never for the confirmation page, never over "Submitted" (#119).
+    const current = () => this.ctx === ctx && ctx.loadSeq === seq && ctx.confirmedSeq !== seq
     try {
       await this.refreshPick(ctx)
       const text = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { ...this.fillPayload(ctx), text: true }))
