@@ -207,13 +207,11 @@
 
 /* ---------- Move to menu ---------- */
 
-.menuHead,
-.menuCurrent {
+.menuHead {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  border-radius: var(--hg-radius-sm);
   font-size: 13px;
   line-height: 18px;
   color: var(--hg-text-primary);
@@ -223,11 +221,13 @@
   color: var(--hg-icon-default);
 }
 
-.menuCurrent {
-  justify-content: space-between;
+/* The current column is a disabled item that still reads as an ordinary row with an Ember tick. */
+:root[data-mantine-color-scheme] .menuCurrent:is(:disabled, [data-disabled]) {
+  opacity: 1;
+  color: var(--hg-text-primary);
   cursor: default;
 }
 
-.menuCurrent svg {
+:root[data-mantine-color-scheme] .menuCurrent .mantine-Menu-itemSection {
   color: var(--hg-text-accent);
 }

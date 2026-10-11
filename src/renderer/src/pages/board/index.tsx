@@ -247,6 +247,7 @@ export function BoardPage() {
                     onTailor={() => card.kind === 'job' && setTailorJob(card.job)}
                     onFollow={() => follow(card)}
                     onApply={() => card.kind === 'application' && applier.apply(card.app)}
+                    applying={applier.busy}
                   />
                 ))}
               </Column>

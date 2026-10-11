@@ -161,9 +161,9 @@ test.describe('adding and moving cards', () => {
   test('Move to writes the status; Archived records when, and leaving it clears that', async ({ app }) => {
     const page = await openBoard(app)
     const acme = 'software-engineer/acme/acme-4821'
-    // The menu ticks the card's own column (not an item) above the ones it can go to.
+    // The menu shows the card's own column ticked, as a disabled item, above the ones it can go to.
     await page.card(DEMO.acme).getByRole('button', { name: /^Move / }).click()
-    await expect(app.window.locator('[aria-current="true"]')).toHaveText('Ready to apply')
+    await expect(page.currentColumnItem('ready')).toBeDisabled()
     await app.window.keyboard.press('Escape')
     expect(await page.moveTargets(DEMO.acme)).toEqual(['Applied', 'Interviewing', 'Offer', 'Rejected', 'Archive'])
 
@@ -171,7 +171,7 @@ test.describe('adding and moving cards', () => {
     await expect.poll(async () => (await tracking(app.workspace!, acme)).status).toBe('applied')
     expect((await tracking(app.workspace!, acme)).appliedAt).toBe(new Date().toISOString().slice(0, 10))
 
-    await page.moveTo(DEMO.acme, 'archived')
+    await page.moveTo(DEMO.acme, 'archived', 'Archive')
     await expect.poll(async () => (await tracking(app.workspace!, acme)).status).toBe('archived')
     const archivedAt = Date.parse(String((await tracking(app.workspace!, acme)).archivedAt))
     expect(Math.abs(Date.now() - archivedAt)).toBeLessThan(5 * 60 * 1000)
@@ -198,7 +198,7 @@ test.describe('adding and moving cards', () => {
   test('archiving a To do job dismisses it; moving it back restores it', async ({ app }) => {
     const page = await openBoard(app)
     expect(await page.moveTargets(DEMO.savedJob)).toEqual(['Dismiss job'])
-    await page.moveTo(DEMO.savedJob, 'archived')
+    await page.moveTo(DEMO.savedJob, 'archived', 'Dismiss job')
     await expect.poll(async () => (await readJob(app.workspace!, 'hiring.cafe-demo-1.json')).dismissed).toBe(true)
     expect(Date.parse((await readJob(app.workspace!, 'hiring.cafe-demo-1.json')).dismissedAt)).not.toBeNaN()
     await expect(page.cards('todo')).toHaveCount(0)

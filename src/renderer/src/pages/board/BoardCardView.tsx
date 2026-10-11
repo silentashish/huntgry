@@ -6,10 +6,10 @@ import {
   IconCheck,
   IconClipboardCheck,
   IconDotsVertical,
+  IconEyeOff,
   IconSend,
   IconSparkles,
-  IconTerminal2,
-  IconTrash
+  IconTerminal2
 } from '@tabler/icons-react'
 import { BOARD_COLUMNS, BOARD_COLUMN_LABEL, moveTargets, type BoardCard, type BoardColumnId } from '@shared/board'
 import { CompanyAvatar, MonoLabel, ScoreRing, StatusPill, scoreLabel } from '../../components/ui'
@@ -35,10 +35,12 @@ interface Props {
   onFollow(): void
   /** Ready to apply: start auto-apply in the in-app browser. */
   onApply(): void
+  /** An Apply is starting (the page's `useApply` is busy): the Apply button waits. */
+  applying?: boolean
 }
 
 /** One job on the Board (Figma Kanban card): company, role, Scent, where it stands, its next step and Move to. */
-export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDragEnd, onOpen, onMove, onTailor, onFollow, onApply }: Props) {
+export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDragEnd, onOpen, onMove, onTailor, onFollow, onApply, applying }: Props) {
   const targets = moveTargets(card)
   const company = companyOf(card)
   const meta = cardMeta(card)
@@ -86,7 +88,7 @@ export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDrag
           {meta}
         </MonoLabel>
         <div onClick={stop}>
-          <NextStep card={card} lead={lead} onTailor={onTailor} onFollow={onFollow} onApply={onApply} />
+          <NextStep card={card} lead={lead} onTailor={onTailor} onFollow={onFollow} onApply={onApply} applying={applying} />
         </div>
       </div>
     </article>
@@ -144,10 +146,16 @@ function MoveMenu({ card, targets, onMove }: { card: BoardCard; targets: BoardCo
         <Menu.Divider />
         {columns.map((c) =>
           c === card.column ? (
-            <div key={c} className={classes.menuCurrent} aria-current="true">
+            // The card's own column: shown ticked and announced, but not something to pick.
+            <Menu.Item
+              key={c}
+              disabled
+              aria-label={`${BOARD_COLUMN_LABEL[c]} (current column)`}
+              className={classes.menuCurrent}
+              rightSection={<IconCheck size={14} aria-hidden />}
+            >
               {BOARD_COLUMN_LABEL[c]}
-              <IconCheck size={14} aria-label="current column" />
-            </div>
+            </Menu.Item>
           ) : (
             <Menu.Item key={c} onClick={() => onMove(c)}>
               {BOARD_COLUMN_LABEL[c]}
@@ -158,7 +166,7 @@ function MoveMenu({ card, targets, onMove }: { card: BoardCard; targets: BoardCo
           <>
             <Menu.Divider />
             {card.kind === 'job' ? (
-              <Menu.Item color="danger" leftSection={<IconTrash size={16} />} onClick={() => onMove('archived')}>
+              <Menu.Item leftSection={<IconEyeOff size={16} />} onClick={() => onMove('archived')}>
                 Dismiss job
               </Menu.Item>
             ) : (
@@ -173,7 +181,7 @@ function MoveMenu({ card, targets, onMove }: { card: BoardCard; targets: BoardCo
   )
 }
 
-function NextStep({ card, lead, onTailor, onFollow, onApply }: Pick<Props, 'card' | 'lead' | 'onTailor' | 'onFollow' | 'onApply'>) {
+function NextStep({ card, lead, onTailor, onFollow, onApply, applying }: Pick<Props, 'card' | 'lead' | 'onTailor' | 'onFollow' | 'onApply' | 'applying'>) {
   if (card.kind === 'job' && card.column === 'todo') {
     return (
       <Button size="xs" variant={lead ? 'filled' : 'secondary'} className={classes.action} leftSection={<IconSparkles size={14} />} onClick={onTailor}>
@@ -202,7 +210,7 @@ function NextStep({ card, lead, onTailor, onFollow, onApply }: Pick<Props, 'card
   if (card.kind === 'application' && card.column === 'ready' && applyBlocker(card.app) === null) {
     return (
       <Tooltip label="Fill the application form in the in-app browser; you submit it" multiline maw={240} openDelay={400}>
-        <Button size="xs" className={classes.action} leftSection={<IconSend size={14} />} onClick={onApply}>
+        <Button size="xs" className={classes.action} leftSection={<IconSend size={14} />} loading={applying} disabled={applying} onClick={onApply}>
           Apply
         </Button>
       </Tooltip>
