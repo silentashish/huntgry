@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Anchor, Badge, Button, Center, Group, Loader, Paper, ScrollArea, Stack, Text, TextInput, Title } from '@mantine/core'
-import { IconLink, IconRefresh } from '@tabler/icons-react'
+import { Alert, Button, Center, Group, Loader, ScrollArea, Stack, Text, TextInput } from '@mantine/core'
+import { IconLink, IconPlus, IconRefresh } from '@tabler/icons-react'
 import type { ApplicationRecord, ApplicationTracking } from '@shared/applications-types'
 import {
   ARCHIVE_TTL_DAYS,
@@ -10,10 +10,13 @@ import {
   type BoardColumn,
   type BoardColumnId
 } from '@shared/board'
+import { profileSignals, type ProfileSignals } from '@shared/job-relevance'
 import { tailorPrefillFor, type Job } from '@shared/jobs-types'
+import { emptyProfile } from '@shared/master-profile'
 import { api, errorText } from '../../api'
 import { useApply } from '../../components/apply/useApply'
 import { useQueue } from '../../components/queue/useQueue'
+import { PageHeader, toneStyle } from '../../components/ui'
 import { useNavigation } from '../../navigation'
 import { ApplicationDrawer } from '../dashboard/ApplicationDrawer'
 import { BulkTailorModal } from '../jobs/BulkTailorModal'
@@ -22,12 +25,14 @@ import { mergeJobs } from '../jobs/merge'
 import { PasteModal } from '../jobs/PasteModal'
 import { prepareTailor } from '../jobs/handoff'
 import { BoardCardView } from './BoardCardView'
+import { cardScent, COLUMN_TONE, type Scent } from './card'
+import classes from './board.module.css'
 
 const isUrl = (s: string) => /^https?:\/\//i.test(s.trim())
 
 /**
  * Every job of the workspace on one Kanban board (#85): saved jobs (To do), runs (Tailoring,
- * Waiting for review) and applications by status, one card per job. A link pasted into To do saves
+ * Needs review) and applications by status, one card per job. A link pasted into To do saves
  * the job; cards move by drag and drop or their Move to menu; archived cards leave the board a week later.
  */
 export function BoardPage() {
@@ -46,6 +51,15 @@ export function BoardPage() {
   const [openAppId, setOpenAppId] = useState<string | null>(null)
   const [tailorJob, setTailorJob] = useState<Job | null>(null)
   const applier = useApply(setError)
+  /** What the master profile says to score jobs on (the Scent ring); `null` until read. */
+  const [signals, setSignals] = useState<ProfileSignals | null>(null)
+
+  useEffect(() => {
+    api.profile.read().then(
+      (doc) => setSignals(profileSignals(doc.profile)),
+      () => setSignals(profileSignals(emptyProfile()))
+    )
+  }, [])
 
   // Mount, focus and watch events can overlap; only the latest load may update the page.
   const latest = useRef(0)
@@ -80,6 +94,11 @@ export function BoardPage() {
     () => (jobs && apps ? buildBoard({ jobs, applications: apps, queue: queue?.items ?? [] }) : null),
     [jobs, apps, queue]
   )
+  // Scored once per board, not on every drag-state render.
+  const scents = useMemo(() => {
+    const now = new Date()
+    return new Map<string, Scent>(board?.columns.flatMap((c) => c.cards.map((card) => [card.key, cardScent(card, signals, now)] as const)) ?? [])
+  }, [board, signals])
   // The tailor modal re-plans whenever its job list changes: keep the array stable.
   const tailorJobs = useMemo(() => (tailorJob ? [tailorJob] : []), [tailorJob])
   const upsert = (list: Job[]) => setJobs((cur) => mergeJobs(cur ?? [], list))
@@ -132,13 +151,22 @@ export function BoardPage() {
   const openApp = (apps ?? []).find((a) => a.id === openAppId) ?? null
 
   return (
-    <Stack gap="md">
-      <Group justify="space-between">
-        <Title order={2}>Board</Title>
-        <Button variant="default" leftSection={<IconRefresh size={16} />} onClick={load}>
-          Refresh
-        </Button>
-      </Group>
+    <Stack gap="lg">
+      <PageHeader
+        eyebrow="Every job, from sniffed to signed"
+        title="Board"
+        subtitle={`Drag a card or use Move to. Archived cards leave after ${ARCHIVE_TTL_DAYS} days; nothing is deleted.`}
+        actions={
+          <>
+            <Button variant="subtle" leftSection={<IconRefresh size={16} />} onClick={load}>
+              Refresh
+            </Button>
+            <Button variant="primary" leftSection={<IconPlus size={16} />} onClick={() => setPasteOpen(true)}>
+              Paste a job
+            </Button>
+          </>
+        }
+      />
 
       {error && (
         <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
@@ -154,7 +182,7 @@ export function BoardPage() {
 
       {board && (
         <ScrollArea type="auto" offsetScrollbars>
-          <Group align="flex-start" wrap="nowrap" gap="sm" pb="sm">
+          <div className={classes.lanes}>
             {board.columns.map((column) => (
               <Column
                 key={column.id}
@@ -170,25 +198,24 @@ export function BoardPage() {
                 }}
                 header={
                   column.id === 'todo' ? (
-                    <Stack gap={6}>
-                      <Group gap={4} wrap="nowrap">
+                    <Stack gap={10}>
+                      <Group gap={6} wrap="nowrap" align="center">
                         <TextInput
-                          size="xs"
                           style={{ flex: 1 }}
-                          leftSection={<IconLink size={14} />}
+                          leftSection={<IconLink size={16} />}
                           placeholder="Paste a posting link"
                           aria-label="Paste a posting link"
                           value={url}
                           onChange={(e) => setUrl(e.currentTarget.value)}
                           onKeyDown={(e) => e.key === 'Enter' && void addUrl()}
                         />
-                        <Button size="xs" onClick={addUrl} loading={adding} disabled={!isUrl(url)}>
+                        <Button size="xs" variant="secondary" onClick={addUrl} loading={adding} disabled={!isUrl(url)}>
                           Add
                         </Button>
                       </Group>
-                      <Anchor size="xs" component="button" type="button" onClick={() => setPasteOpen(true)}>
+                      <button type="button" className={classes.pasteLink} onClick={() => setPasteOpen(true)}>
                         or paste the description
-                      </Anchor>
+                      </button>
                       {addError && (
                         <Alert color="red" variant="light" p="xs" withCloseButton onClose={() => setAddError(null)}>
                           <Text size="xs">{addError}</Text>
@@ -196,17 +223,19 @@ export function BoardPage() {
                       )}
                     </Stack>
                   ) : column.id === 'archived' ? (
-                    <Text size="xs" c="dimmed">
+                    <div className={classes.laneNote}>
                       Cards leave the board {ARCHIVE_TTL_DAYS} days after they are archived.
                       {board.hiddenArchived > 0 && ` ${board.hiddenArchived} older not shown.`}
-                    </Text>
+                    </div>
                   ) : null
                 }
               >
-                {column.cards.map((card) => (
+                {column.cards.map((card, i) => (
                   <BoardCardView
                     key={card.key}
                     card={card}
+                    scent={scents.get(card.key) ?? { mode: 'initial', letter: '?' }}
+                    lead={column.id === 'todo' && i === 0}
                     dragging={dragging?.key === card.key}
                     onDragStart={() => setDragging(card)}
                     onDragEnd={() => {
@@ -217,11 +246,12 @@ export function BoardPage() {
                     onMove={(to) => void move(card, to)}
                     onTailor={() => card.kind === 'job' && setTailorJob(card.job)}
                     onFollow={() => follow(card)}
+                    onApply={() => card.kind === 'application' && applier.apply(card.app)}
                   />
                 ))}
               </Column>
             ))}
-          </Group>
+          </div>
         </ScrollArea>
       )}
 
@@ -275,50 +305,36 @@ interface ColumnProps {
 
 function Column({ column, header, dropTarget, over, onDragOver, onDragLeave, onDrop, children }: ColumnProps) {
   return (
-    <Paper
-      component="section"
+    <section
       aria-label={column.label}
-      withBorder
-      radius="md"
-      p="xs"
-      w={272}
-      miw={272}
-      bg="var(--mantine-color-default-hover)"
-      onDragOver={(e: React.DragEvent) => {
+      className={classes.lane}
+      data-drop={dropTarget === null ? undefined : String(dropTarget)}
+      data-over={over && dropTarget ? 'true' : undefined}
+      onDragOver={(e) => {
         if (!dropTarget) return
         e.preventDefault()
         e.dataTransfer.dropEffect = 'move'
         onDragOver()
       }}
       onDragLeave={onDragLeave}
-      onDrop={(e: React.DragEvent) => {
+      onDrop={(e) => {
         if (!dropTarget) return
         e.preventDefault()
         onDrop()
       }}
-      style={{
-        opacity: dropTarget === false ? 0.45 : 1,
-        borderColor: over && dropTarget ? 'var(--mantine-primary-color-filled)' : undefined,
-        transition: 'opacity 120ms'
-      }}
     >
-      <Stack gap="xs">
-        <Group justify="space-between" wrap="nowrap">
-          <Title order={4} size="sm">
-            {column.label}
-          </Title>
-          <Badge size="sm" variant="light" color="gray" aria-label={`${column.cards.length} cards`}>
-            {column.cards.length}
-          </Badge>
-        </Group>
-        {header}
-        {children}
-        {column.cards.length === 0 && (
-          <Text size="xs" c="dimmed" ta="center" py="sm">
-            Nothing here
-          </Text>
-        )}
-      </Stack>
-    </Paper>
+      <div className={classes.laneHead}>
+        <span className={classes.laneDot} style={toneStyle(COLUMN_TONE[column.id])} aria-hidden />
+        <h3 className={classes.laneTitle}>
+          {column.label}
+        </h3>
+        <span className={classes.laneCount} aria-label={`${column.cards.length} cards`}>
+          {column.cards.length}
+        </span>
+      </div>
+      {header}
+      {children}
+      {column.cards.length === 0 && <div className={classes.laneEmpty}>Nothing here</div>}
+    </section>
   )
 }
