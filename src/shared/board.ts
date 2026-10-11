@@ -24,7 +24,7 @@ export type BoardColumnId = (typeof BOARD_COLUMNS)[number]
 export const BOARD_COLUMN_LABEL: Record<BoardColumnId, string> = {
   todo: 'To do',
   tailoring: 'Tailoring',
-  review: 'Waiting for review',
+  review: 'Needs review',
   ready: 'Ready to apply',
   applied: 'Applied',
   interviewing: 'Interviewing',
@@ -82,7 +82,7 @@ const STATUS_COLUMN: Record<ApplicationStatus, BoardColumnId> = {
   archived: 'archived'
 }
 
-/** Queue statuses that keep a card on Tailoring / Waiting for review; done and cancelled hand it back. */
+/** Queue statuses that keep a card on Tailoring / Needs review; done and cancelled hand it back. */
 const WORKING = new Set<QueueItem['status']>(['queued', 'preparing', 'running', 'needs-reply'])
 
 /** Letters and digits only, lower case: `Tyrell Robotics` and the folder's `tyrell-robotics` compare equal. */
@@ -232,7 +232,7 @@ const COLUMN_STATUS: Partial<Record<BoardColumnId, ApplicationStatus>> = {
 
 /**
  * The write behind dropping `card` on column `to`, or `null` when the move means nothing.
- * Tailoring and Waiting for review are run by the queue and the Review page and take no drops;
+ * Tailoring and Needs review are run by the queue and the Review page and take no drops;
  * a queue card cannot be moved; a result discarded on Review stays where it is; a result still
  * waiting for review can only be archived or rejected.
  */
