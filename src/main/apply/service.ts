@@ -509,7 +509,10 @@ export class ApplyService {
   private detectAgain(ctx: Context, seq: number, attempt: number): void {
     const delay = (this.deps.retryDelaysMs ?? DEFAULT_RETRIES)[attempt]
     if (delay === undefined || this.ctx !== ctx || ctx.loadSeq !== seq) return
-    this.later(ctx, delay, () => void this.detect(ctx, seq, attempt + 1))
+    this.later(ctx, delay, () => {
+      // A load meanwhile detects its own page; this retry would only scan it for a generation already gone.
+      if (ctx.loadSeq === seq) void this.detect(ctx, seq, attempt + 1)
+    })
   }
 
   /** Generation `seq` is the site's "application submitted" page. */
@@ -526,9 +529,13 @@ export class ApplyService {
    */
   private async fillPage(ctx: Context): Promise<void> {
     const seq = ctx.loadSeq
+    // The site shows its "application submitted" page: there is no form left to fill (#119).
+    if (ctx.confirmedSeq === seq) return
     if (ctx.fillingSeq === seq) return
     ctx.fillingSeq = seq
-    const current = () => this.ctx === ctx && ctx.loadSeq === seq
+    // A page whose scan was still pending when Fill form was pressed can turn out to be the confirmation page: the
+    // fill then never shows "Filled" over "Submitted" (#119).
+    const current = () => this.ctx === ctx && ctx.loadSeq === seq && ctx.confirmedSeq !== seq
     this.update({ status: 'filling', message: null })
     try {
       await this.refreshPick(ctx)
@@ -568,7 +575,7 @@ export class ApplyService {
       this.markHandled(ctx, report)
       report = this.withDrafts(ctx, report)
       this.update({ status: 'filled', ats: report.ats, report, message: summary(report.fields) })
-      void this.learn(ctx, report)
+      void this.learn(ctx, report, seq)
       if (ctx.recheck) {
         ctx.recheck = false
         // Fields the step rendered meanwhile get filled now (finally clears fillingSeq first).
@@ -607,9 +614,9 @@ export class ApplyService {
    * suggestions; they are never written until the user confirms one. A
    * missing CLI, a timeout or a bad reply leaves the fields as they are.
    */
-  private async learn(ctx: Context, report: FillReport): Promise<void> {
+  private async learn(ctx: Context, report: FillReport, seq: number): Promise<void> {
     await this.mapUnknown(ctx, report)
-    await this.draft(ctx, report)
+    await this.draft(ctx, report, seq)
   }
 
   private async mapUnknown(ctx: Context, report: FillReport): Promise<void> {
@@ -668,7 +675,7 @@ export class ApplyService {
    * session only and is typed into an empty field only (the user's own text
    * stays); the panel marks it as an AI draft to read before Submit.
    */
-  private async draft(ctx: Context, report: FillReport): Promise<void> {
+  private async draft(ctx: Context, report: FillReport, seq: number): Promise<void> {
     const draft = this.deps.answers?.draft?.bind(this.deps.answers)
     if (!draft || this.ctx !== ctx) return
     const current = this.session?.report
@@ -709,6 +716,10 @@ export class ApplyService {
       added = true
     }
     if (!added || this.session?.report?.url !== report.url || ctx.fillingSeq !== null) return
+    // The drafts are typed only into the form they were made for (generation `seq`, the fill that reported the
+    // questions). Once the page changed (submitted, another page, a navigation that never committed, an in-page URL
+    // change) they stay with the session and go in with the next fill instead (#119).
+    if (ctx.loadSeq !== seq) return
     await this.refill(ctx).catch(() => undefined)
   }
 
@@ -755,7 +766,7 @@ export class ApplyService {
     if (ctx.fillingSeq !== null) throw new Error('Huntgry is still filling this page. Try again in a moment.')
     const seq = ctx.loadSeq
     // The site already shows its "application submitted" page: there is no form left to fill (#119).
-    if (ctx.confirmedSeq === seq) return
+    if (ctx.confirmedSeq === seq || this.session?.status === 'submitted-detected') return
     ctx.fillingSeq = seq
     // A draft or an answer can take seconds; the page may have been submitted meanwhile. Its result is only for the
     // form it was made for: never for the confirmation page, never over "Submitted" (#119).
