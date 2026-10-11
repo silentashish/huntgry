@@ -47,7 +47,7 @@ export function ScoreRing({ mode = 'score', value = 0, letter, size = 'md', tone
   const resolved: UiTone = tone ?? (mode === 'done' ? 'success' : mode === 'initial' ? 'neutral' : scoreTone(score))
   const label = rest['aria-label'] ?? (mode === 'done' ? 'Done' : mode === 'initial' ? (letter ?? '?') : `Scent ${score} of 100`)
   const iconSize = size === 'lg' ? 24 : size === 'md' ? 18 : 14
-  const content = mode === 'done' ? <IconCheck size={iconSize} stroke={2.5} aria-hidden /> : mode === 'initial' ? (letter ?? '?').slice(0, 2) : score
+  const content = mode === 'done' ? <IconCheck size={iconSize} stroke={2.5} aria-hidden /> : mode === 'initial' ? Array.from(letter ?? '?').slice(0, 2).join('') : score
   return (
     <span className={className ? `${classes.scoreRing} ${className}` : classes.scoreRing}>
       <span className={classes.ring} style={toneStyle(resolved)} data-tone={resolved} data-size={size} data-mode={mode} role="img" aria-label={label}>
