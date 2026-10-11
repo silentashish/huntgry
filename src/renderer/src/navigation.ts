@@ -37,11 +37,19 @@ export interface PageParams {
   /** Unattended results to review (#31); opens on one application when given. */
   review: { applicationId?: string } | undefined
   graph: { nodeId?: string } | undefined
-  profile: { section?: ProfileSection } | undefined
+  /**
+   * The master profile (#95: Profile absorbs the Knowledge graph). `view` picks the Editor, the
+   * Knowledge graph or the Skills table (Editor when absent); `section` deep-links into an Editor
+   * section and `nodeId` selects a graph node (graph view).
+   */
+  profile: { view?: ProfileView; section?: ProfileSection; nodeId?: string } | undefined
   settings: undefined
 }
 
 export type Page = keyof PageParams
+
+/** Views of the Profile page. */
+export type ProfileView = 'editor' | 'graph' | 'skills'
 
 /** Tabs of the master profile editor, used to deep-link into a section. */
 export type ProfileSection = 'contact' | 'summary' | 'experience' | 'projects' | 'education' | 'credentials' | 'notes'

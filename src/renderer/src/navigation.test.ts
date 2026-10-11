@@ -53,6 +53,14 @@ describe('navigation', () => {
     expect(paramsFor(locationOf('profile', { section: 'experience' }), 'profile')?.section).toBe('experience')
   })
 
+  it('opens a Profile view and a graph node (#107: Profile + Knowledge graph)', () => {
+    expect(paramsFor(locationOf('profile', { view: 'graph', nodeId: 'skill:postgres' }), 'profile')).toEqual({
+      view: 'graph',
+      nodeId: 'skill:postgres'
+    })
+    expect(paramsFor(locationOf('profile', { view: 'skills' }), 'profile')?.view).toBe('skills')
+  })
+
   it('has a full-bleed Browser page between Jobs and Tailor that takes a URL', () => {
     expect(PAGES.indexOf('browser')).toBe(PAGES.indexOf('jobs') + 1)
     expect(PAGES.indexOf('tailor')).toBe(PAGES.indexOf('browser') + 1)

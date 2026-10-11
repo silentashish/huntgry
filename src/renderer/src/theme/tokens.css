@@ -1,0 +1,205 @@
+/*
+ * Scent Trail design tokens (Figma "Huntgry — Product & Website Design", 🧭 Foundations).
+ * Same names as the Figma variables' WEB code syntax and the same values as mobile/src/ui/theme.ts.
+ *
+ * Primitives (--hg-ink-*, --hg-ember-*, …) are the raw palette; pages use the semantic tokens
+ * (--hg-bg-*, --hg-text-*, --hg-accent-*, --hg-status-*), which switch with Mantine's colour scheme
+ * (the `data-mantine-color-scheme` attribute on <html>). Light is the base.
+ */
+
+:root {
+  /* Primitives */
+  --hg-white: #ffffff;
+  --hg-ink-950: #07090d;
+  --hg-ink-900: #0b0f15;
+  --hg-ink-850: #10161f;
+  --hg-ink-800: #151d28;
+  --hg-ink-700: #1e2836;
+  --hg-ink-600: #2a3645;
+  --hg-ink-500: #3d4a5c;
+  --hg-ink-400: #5b6b80;
+  --hg-ink-300: #8494a8;
+  --hg-ink-200: #b3bfce;
+  --hg-ink-100: #d9e0e8;
+  --hg-ink-50: #eef2f6;
+  --hg-bone-50: #fbfaf7;
+  --hg-bone-100: #f4f2ec;
+  --hg-bone-200: #e9e5dc;
+  --hg-bone-300: #dad4c6;
+  --hg-ember-100: #ffefdf;
+  --hg-ember-200: #ffd9ae;
+  --hg-ember-300: #ffc46b;
+  --hg-ember-400: #ffa53d;
+  --hg-ember-500: #ff8a1f;
+  --hg-ember-600: #e66e0a;
+  --hg-ember-700: #b85405;
+  --hg-ember-900: #2a1b0e;
+  --hg-trail-100: #dff7f1;
+  --hg-trail-400: #3be3c2;
+  --hg-trail-600: #0e9e85;
+  --hg-trail-900: #0e2a26;
+  --hg-green-100: #dcf7e6;
+  --hg-green-500: #3ecf72;
+  --hg-green-600: #1fa85a;
+  --hg-green-900: #0e2a1a;
+  --hg-red-100: #fde2e3;
+  --hg-red-500: #f2555a;
+  --hg-red-600: #d23a40;
+  --hg-red-900: #2e1214;
+  --hg-amber-100: #fff4cc;
+  --hg-amber-500: #f5b700;
+  --hg-amber-600: #c99400;
+  --hg-amber-900: #2a2208;
+  --hg-blue-100: #e0ebff;
+  --hg-blue-500: #4f8dff;
+  --hg-blue-600: #3470e0;
+  --hg-blue-900: #0f1b33;
+  --hg-violet-100: #ece6ff;
+  --hg-violet-500: #9b7bff;
+  --hg-violet-600: #7a5be0;
+  --hg-violet-900: #1c1533;
+
+  /* Type: Bricolage Grotesque for display, Geist for UI, Geist Mono for every readout. */
+  --hg-font-display: 'Bricolage Grotesque Variable', 'Bricolage Grotesque', 'Geist Variable', system-ui, sans-serif;
+  --hg-font-ui: 'Geist Variable', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --hg-font-mono: 'Geist Mono Variable', 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Spacing (Figma Spacing 0–11) */
+  --hg-space-0: 0px;
+  --hg-space-1: 2px;
+  --hg-space-2: 4px;
+  --hg-space-3: 8px;
+  --hg-space-4: 12px;
+  --hg-space-5: 16px;
+  --hg-space-6: 20px;
+  --hg-space-7: 24px;
+  --hg-space-8: 32px;
+  --hg-space-9: 40px;
+  --hg-space-10: 48px;
+  --hg-space-11: 64px;
+
+  /* Radius */
+  --hg-radius-xs: 4px;
+  --hg-radius-sm: 6px;
+  --hg-radius-md: 10px;
+  --hg-radius-lg: 14px;
+  --hg-radius-xl: 20px;
+  --hg-radius-2xl: 28px;
+  --hg-radius-full: 999px;
+
+  /* Effects */
+  --hg-shadow-card: 0 4px 16px -2px rgb(0 0 0 / 18%), 0 1px 2px 0 rgb(0 0 0 / 8%);
+  --hg-shadow-float: 0 24px 48px -12px rgb(0 0 0 / 35%), 0 2px 6px 0 rgb(0 0 0 / 12%);
+  /* glow/ember: the screen's one primary call to action. */
+  --hg-glow-ember: 0 0 32px 0 rgb(255 138 31 / 45%), 0 8px 12px -4px rgb(255 138 31 / 25%);
+}
+
+/* Light (the base, also used before Mantine sets the attribute) */
+:root,
+:root[data-mantine-color-scheme='light'] {
+  color-scheme: light;
+
+  --hg-bg-canvas: var(--hg-bone-50);
+  --hg-bg-surface: var(--hg-white);
+  --hg-bg-surface-raised: var(--hg-white);
+  --hg-bg-surface-sunken: var(--hg-bone-100);
+  --hg-bg-subtle: var(--hg-bone-200);
+  --hg-bg-hover: rgb(11 15 21 / 6%);
+  --hg-bg-active: rgb(11 15 21 / 12%);
+  --hg-bg-overlay: rgb(11 15 21 / 60%);
+  --hg-bg-inverse: var(--hg-ink-900);
+
+  --hg-border-subtle: var(--hg-bone-200);
+  --hg-border-default: var(--hg-ink-100);
+  --hg-border-strong: var(--hg-ink-200);
+  --hg-border-focus: var(--hg-ember-600);
+
+  --hg-text-primary: var(--hg-ink-900);
+  --hg-text-secondary: var(--hg-ink-500);
+  --hg-text-muted: var(--hg-ink-400);
+  --hg-text-on-accent: var(--hg-ink-950);
+  --hg-text-accent: var(--hg-ember-600);
+  --hg-text-link: var(--hg-trail-600);
+  --hg-text-inverse: var(--hg-white);
+
+  --hg-icon-default: var(--hg-ink-500);
+  --hg-icon-muted: var(--hg-ink-300);
+
+  --hg-accent-primary: var(--hg-ember-600);
+  --hg-accent-primary-hover: var(--hg-ember-700);
+  --hg-accent-primary-soft: var(--hg-ember-100);
+  --hg-accent-secondary: var(--hg-trail-600);
+  --hg-accent-secondary-soft: var(--hg-trail-100);
+
+  --hg-status-success: var(--hg-green-600);
+  --hg-status-success-soft: var(--hg-green-100);
+  --hg-status-warning: var(--hg-amber-600);
+  --hg-status-warning-soft: var(--hg-amber-100);
+  --hg-status-danger: var(--hg-red-600);
+  --hg-status-danger-soft: var(--hg-red-100);
+  --hg-status-info: var(--hg-blue-600);
+  --hg-status-info-soft: var(--hg-blue-100);
+  --hg-status-review: var(--hg-violet-600);
+  --hg-status-review-soft: var(--hg-violet-100);
+}
+
+:root[data-mantine-color-scheme='dark'] {
+  color-scheme: dark;
+
+  --hg-bg-canvas: var(--hg-ink-950);
+  --hg-bg-surface: var(--hg-ink-900);
+  --hg-bg-surface-raised: var(--hg-ink-850);
+  --hg-bg-surface-sunken: var(--hg-ink-950);
+  --hg-bg-subtle: var(--hg-ink-800);
+  --hg-bg-hover: rgb(255 255 255 / 6%);
+  --hg-bg-active: rgb(255 255 255 / 12%);
+  --hg-bg-overlay: rgb(0 0 0 / 70%);
+  --hg-bg-inverse: var(--hg-bone-50);
+
+  --hg-border-subtle: var(--hg-ink-800);
+  --hg-border-default: var(--hg-ink-700);
+  --hg-border-strong: var(--hg-ink-600);
+  --hg-border-focus: var(--hg-ember-500);
+
+  --hg-text-primary: var(--hg-ink-50);
+  --hg-text-secondary: var(--hg-ink-300);
+  --hg-text-muted: var(--hg-ink-400);
+  --hg-text-on-accent: var(--hg-ink-950);
+  --hg-text-accent: var(--hg-ember-400);
+  --hg-text-link: var(--hg-trail-400);
+  --hg-text-inverse: var(--hg-ink-950);
+
+  --hg-icon-default: var(--hg-ink-300);
+  --hg-icon-muted: var(--hg-ink-500);
+
+  --hg-accent-primary: var(--hg-ember-500);
+  --hg-accent-primary-hover: var(--hg-ember-400);
+  --hg-accent-primary-soft: var(--hg-ember-900);
+  --hg-accent-secondary: var(--hg-trail-400);
+  --hg-accent-secondary-soft: var(--hg-trail-900);
+
+  --hg-status-success: var(--hg-green-500);
+  --hg-status-success-soft: var(--hg-green-900);
+  --hg-status-warning: var(--hg-amber-500);
+  --hg-status-warning-soft: var(--hg-amber-900);
+  --hg-status-danger: var(--hg-red-500);
+  --hg-status-danger-soft: var(--hg-red-900);
+  --hg-status-info: var(--hg-blue-500);
+  --hg-status-info-soft: var(--hg-blue-900);
+  --hg-status-review: var(--hg-violet-500);
+  --hg-status-review-soft: var(--hg-violet-900);
+}
+
+body {
+  margin: 0;
+  background-color: var(--hg-bg-canvas);
+  color: var(--hg-text-primary);
+  font-family: var(--hg-font-ui);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background-color: var(--hg-accent-primary-soft);
+  color: var(--hg-text-primary);
+}
