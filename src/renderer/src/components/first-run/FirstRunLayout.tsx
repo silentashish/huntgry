@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { PawLogo } from './PawLogo'
+import { PawLogo } from '../ui'
 import classes from './first-run.module.css'
 
 interface Props {

@@ -7,7 +7,7 @@ Figma: Dashboard `5:2` (Sidebar `5:3`), Dashboard — Command palette (⌘K) `17
 
 | Area | Files | What |
 | --- | --- | --- |
-| Sidebar | `components/shell/Sidebar.tsx`, `shell.module.css`, `PawLogo.tsx`, `version.ts` | Paw logo, "Huntgry", mono version line (`v0.1 · the hound`, from package.json through a Vite `define`, the same version `app.getVersion()` reports). "Sniff anything…" button with the ⌘K / Ctrl K hint opens the palette. 8 nav items with icons and no description lines, Ember active state (`data-active`, `aria-current="page"`). Count badges on Tailor (runs waiting for a reply + runs working) and Review (unattended results waiting). Bottom: unattended pipeline mini-card, System / Light / Dark toggle, workspace path (mono, truncated at the start, full path in a tooltip) with a Switch workspace button. |
+| Sidebar | `components/shell/Sidebar.tsx`, `shell.module.css`, `version.ts` (paw logo from `components/ui`) | Paw logo, "Huntgry", mono version line (`v0.1 · the hound`, from package.json through a Vite `define`, the same version `app.getVersion()` reports). "Sniff anything…" button with the ⌘K / Ctrl K hint opens the palette. 8 nav items with icons and no description lines, Ember active state (`data-active`, `aria-current="page"`). Count badges on Tailor (runs waiting for a reply + runs working) and Review (unattended results waiting). Bottom: unattended pipeline mini-card, System / Light / Dark toggle, workspace path (mono, truncated at the start, full path in a tooltip) with a Switch workspace button. |
 | Counts | `components/shell/useNavCounts.ts`, `counts.ts` | Runs from `runner.listRuns()` once, then `runner:run` events; Review from `review.list()`, re-read (debounced) on `applications:changed` / `pipeline:changed`. |
 | Pipeline card | `components/shell/pipelineMini.ts` | Shown while a pipeline exists and is not finished (`usePipeline`): status pill (Running / Paused / Waiting / Budget hit / Stopping), trail progress bar, `N of M jobs · ~X min · $spent / $budget` (time only while running, budget only when set). Clicking it opens Tailor → Queue. |
 | Leave guard | `components/shell/AppLayout.tsx` | The navigation guard asks with the Profile page's `ConfirmModal` (#115, Figma leave guard 17:1030): warning icon tile, "Discard unsaved changes?", the page's message, Keep editing / Discard and leave. `navigate()` still runs the guard check synchronously. |
@@ -51,7 +51,7 @@ Figma: Dashboard `5:2` (Sidebar `5:3`), Dashboard — Command palette (⌘K) `17
 - **Jobs open** their posting in the Browser (or the Tailor form when they have no URL): the Jobs drawer has no navigation parameter.
 - **Tailor badge** counts runs waiting for a reply plus runs working (the label says which); neutral tone, like the frame.
 - **Footer** says "tab next group" (what Tab does) instead of "tab actions".
-- The paw logo is a copy of `components/first-run/PawLogo.tsx` (#117) (#117 is not merged yet); to be deduplicated after it merges.
+- The paw logo is the shared `components/ui/PawLogo.tsx` (deduplicated with #117 after both merged).
 
 ## Coordination
 
