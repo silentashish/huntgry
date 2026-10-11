@@ -42,8 +42,9 @@ The sidebar in the screenshots is the current shell (#108 restyles it).
 - **No agent name in the path line** ("· Claude ·"): `ReviewDetail` has no agent field.
 - **Empty state secondary button** is "Tailoring queue" instead of "Find jobs": unattended runs start
   on Jobs, so the primary already goes there; two buttons to the same page would be redundant.
-- **Width**: the shell still caps pages at 1040 px (Figma: 1136), so the list is about 270 px and
-  the main column about 430 px; the Verify pills wrap to a second line at that width. Below a 680 px
+- **Width**: the screenshots were taken with the shell's old 1040 px page cap (Figma: 1136, which
+  the Shell ticket #108 adopts), so the list is about 270 px and the main column about 430 px there
+  and the Verify pills wrap; at 1136 px the columns come out at Figma's 300 / 500 / 300. Below a 680 px
   detail width the Decision card moves under the content; below a 1100 px window the list moves
   above the detail.
 
