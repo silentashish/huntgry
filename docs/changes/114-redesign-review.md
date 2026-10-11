@@ -23,6 +23,9 @@ Behaviour is unchanged: the same IPC calls, each decision still carries the revi
 `stale` still asks for a reload, and a decision reloads the list and moves on to the next result.
 One tightening: only ticked reframings that belong to the revision on screen are sent
 (`shownTicked`), so a reload that brings other reframings never sends ids the user did not see.
+Opening a result is guarded against out-of-order responses (only the latest `review.get` is shown),
+and after Approve / Discard the next result is the first one the current filter shows. The stale
+block is neutral ("You saw rev …" plus main's message), since the change may come from the phone.
 
 ## Screenshots
 
@@ -52,6 +55,8 @@ The sidebar in the screenshots is the current shell (#108 restyles it).
 
 - New `review-ui.test.ts`: filter, eyebrow counts, relative age, revision, the ticked-and-shown
   reframing ids, the Approve hint, and the build warnings parser.
+- New `ReviewPage.test.tsx` (jsdom): auto-open only without an asked-for result, a late response
+  for an earlier result is ignored, and the next result after a decision respects the filter.
 - `npm run typecheck:web / :node / :e2e`, `npx vitest run`, `npx electron-vite build`.
 - e2e on Linux (xvfb): `review-gate.spec.ts`, `tailor-review-refresh.spec.ts` (no label changed:
   `/^Approve/`, the two-step `Discard` and "Archive this result (files are kept)?" are kept) and

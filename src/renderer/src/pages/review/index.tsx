@@ -39,20 +39,30 @@ export function ReviewPage({ params }: { params: PageParams['review'] }) {
       .catch(() => setApprovals(null))
   }, [])
 
+  // Each open() takes a ticket; a response that is not the latest one is dropped, so a slow
+  // review.get for an earlier click (or the auto-open) never replaces the result picked since.
+  const request = useRef(0)
   const open = useCallback(async (id: string | null) => {
+    const ticket = ++request.current
     setSelected(id)
     setDetail(null)
+    setLoadingDetail(Boolean(id))
     if (!id) return
-    setLoadingDetail(true)
     try {
-      setDetail(await api.review.get(id))
+      const next = await api.review.get(id)
+      if (ticket !== request.current) return
+      setDetail(next)
       setError(null)
     } catch (err) {
-      setError(errorText(err))
+      if (ticket === request.current) setError(errorText(err))
     } finally {
-      setLoadingDetail(false)
+      if (ticket === request.current) setLoadingDetail(false)
     }
   }, [])
+
+  // The filter as it is now, for decided() (which runs after awaits).
+  const filterRef = useRef(filter)
+  filterRef.current = filter
 
   useEffect(() => {
     void load()
@@ -73,12 +83,14 @@ export function ReviewPage({ params }: { params: PageParams['review'] }) {
   }, [items, selected, open])
 
   // Reflect a decision: reload the list and the detail (a re-run keeps it open).
+  // The next result to open is the first one the current filter shows (none: clear the selection).
   async function decided(next: ReviewDetail) {
+    request.current++
     setDetail(next)
     await load()
     if (next.state === 'approved' || next.state === 'discarded') {
       const rest = (await api.review.list()).filter((i) => i.applicationId !== next.applicationId)
-      await open(rest[0]?.applicationId ?? null)
+      await open(filterItems(rest, filterRef.current)[0]?.applicationId ?? null)
     }
   }
 

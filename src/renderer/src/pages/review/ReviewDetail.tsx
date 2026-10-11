@@ -122,8 +122,9 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
                 </span>
                 <div className={classes.changedBody}>
                   <p className={classes.changedTitle}>This result changed</p>
-                  <p className={classes.changedText} title={stale}>
-                    It was rebuilt since you opened it (you saw rev {shortRevision(d.revision)}). Reload it and decide again.
+                  {/* Neutral: it may have been rebuilt or decided elsewhere (the phone); main's message says why. */}
+                  <p className={classes.changedText}>
+                    You saw rev {shortRevision(d.revision)}. {stale}
                   </p>
                   <Button size="xs" variant="secondary" leftSection={<IconRefresh size={14} />} onClick={onReload}>
                     Reload
