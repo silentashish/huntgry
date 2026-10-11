@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Job } from '@shared/jobs-types'
-import { ago, jobFacts, jobMeta, sponsorshipPill, workplacePill } from './labels'
+import { ago, jobFacts, jobMeta, scentDisplay, sponsorshipPill, workplacePill } from './labels'
 
 const job = (over: Partial<Job> = {}): Job =>
   ({
@@ -30,6 +30,16 @@ describe('job labels', () => {
     expect(ago('2026-10-10T08:00:00Z', now)).toBe('yesterday')
     expect(ago('2026-10-01T08:00:00Z', now)).toBe('10 days ago')
     expect(ago('2026-08-01T08:00:00Z', now)).toBe('2 months ago')
+  })
+
+  it('tones a Scent score by its strength, and neutral with the reason when Relevant leaves the job out', () => {
+    expect(scentDisplay({ score: 92, reasons: [], matched: true })).toEqual({ tone: 'accent', label: 'Strong scent', excluded: null })
+    expect(scentDisplay({ score: 65, reasons: [], matched: true })).toEqual({ tone: 'warning', label: 'Fair scent', excluded: null })
+    expect(scentDisplay({ score: 92, reasons: [], matched: true, excluded: 'Says it does not sponsor visas' })).toEqual({
+      tone: 'neutral',
+      label: 'Left out of Relevant',
+      excluded: 'Says it does not sponsor visas'
+    })
   })
 
   it('joins only the known parts of the meta line', () => {

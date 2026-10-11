@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import {
   Alert,
   Anchor,
@@ -444,34 +444,40 @@ function AgentChoice({
   value: AgentId
   onChange(agent: AgentId): void
 }) {
+  // Native radios in one named group: one tab stop, arrow keys move the choice.
+  const group = useId()
   return (
-    <div className={classes.agents} role="radiogroup" aria-labelledby="bulk-agent-label">
-      <span className={classes.agentsLabel} id="bulk-agent-label">
+    <div className={classes.agents} role="radiogroup" aria-labelledby={`${group}-label`}>
+      <span className={classes.agentsLabel} id={`${group}-label`}>
         Agent
       </span>
       {AGENT_IDS.map((id) => {
         const s = environment?.agents.find((a) => a.id === id)
         const unready = !!s && !s.ready
         const chip = (
-          <button
-            key={id}
-            type="button"
-            role="radio"
-            aria-checked={id === value}
-            aria-label={`${AGENT_LABEL[id]}${id === environment?.defaultAgent ? ' (default)' : ''}${unready ? ': not available' : ''}`}
-            className={classes.agent}
-            data-unready={unready || undefined}
-            onClick={() => onChange(id)}
-          >
+          <label key={id} className={classes.agent} data-checked={id === value || undefined} data-unready={unready || undefined}>
+            <input
+              type="radio"
+              className={classes.agentInput}
+              name={group}
+              value={id}
+              checked={id === value}
+              onChange={() => onChange(id)}
+              aria-label={`${AGENT_LABEL[id]}${id === environment?.defaultAgent ? ' (default)' : ''}${unready ? ': not available' : ''}`}
+            />
             <span className={classes.radio} aria-hidden />
-            {AGENT_LABEL[id]}
-            {id === environment?.defaultAgent && <MonoLabel size="xs">default</MonoLabel>}
+            <span aria-hidden>{AGENT_LABEL[id]}</span>
+            {id === environment?.defaultAgent && (
+              <span aria-hidden>
+                <MonoLabel size="xs">default</MonoLabel>
+              </span>
+            )}
             {unready && (
               <span className={classes.agentWarn} aria-hidden>
                 <IconAlertTriangle size={14} />
               </span>
             )}
-          </button>
+          </label>
         )
         return unready ? (
           <Tooltip key={id} label={s.problems[0]} multiline w={300} withArrow>

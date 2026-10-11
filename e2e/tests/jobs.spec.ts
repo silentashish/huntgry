@@ -255,6 +255,20 @@ test('"Open posting" from the drawer lands on the Browser page with the posting 
 })
 
 test.describe('Scent score and bulk actions (#111)', () => {
+  test('the Filters button folds the filter fields away and back', async ({ app }) => {
+    const jobs = await openJobs(app)
+    const button = app.window.getByRole('button', { name: /^Filters/ })
+    await expect(button).toHaveAttribute('aria-expanded', 'true')
+    await expect(jobs.sponsorshipFilter).toBeVisible()
+    await button.click()
+    await expect(button).toHaveAttribute('aria-expanded', 'false')
+    await expect(jobs.sponsorshipFilter).toBeHidden()
+    // The list and Select all stay.
+    await expect.poll(() => jobs.listedTitles()).toHaveLength(2)
+    await button.click()
+    await expect(jobs.sponsorshipFilter).toBeVisible()
+  })
+
   test('the job drawer shows the Scent score and why the job fits', async ({ app }) => {
     const jobs = await openJobs(app, 'Relevant')
     await jobs.openJob('Staff Backend Engineer')
@@ -271,6 +285,13 @@ test.describe('Scent score and bulk actions (#111)', () => {
     await expect(modal).toBeVisible()
     await expect(modal.getByRole('radio', { name: 'Run unattended' })).toBeChecked()
     await expect(modal.getByRole('button', { name: 'Continue' })).toBeVisible()
+    // The agents are one radio group: arrow keys move the choice.
+    const agents = modal.getByRole('radiogroup', { name: 'Agent' })
+    await expect(agents.getByRole('radio', { name: /^Claude\b/ })).toBeChecked()
+    await agents.getByRole('radio', { name: /^Claude\b/ }).focus()
+    await app.window.keyboard.press('ArrowRight')
+    await expect(agents.getByRole('radio', { name: /^Codex\b/ })).toBeChecked()
+    await expect(agents.getByRole('radio', { name: /^Codex\b/ })).toBeFocused()
     await modal.getByRole('button', { name: 'Cancel' }).click()
     await expect(modal).toBeHidden()
     await expect(jobs.selectionBar).toContainText('1 selected')

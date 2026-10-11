@@ -1,21 +1,27 @@
 import { matchesFilters, type JobFilters } from '@shared/job-filters'
-import { hasRelevanceSignals, scoreJob, type JobScore, type ProfileSignals, type ScoredJob } from '@shared/job-relevance'
+import {
+  hasRelevanceSignals,
+  rankRelevant,
+  scoreJob,
+  type JobScore,
+  type ProfileSignals,
+  type ScoredJob
+} from '@shared/job-relevance'
 import type { Job } from '@shared/jobs-types'
 
 /**
- * The Scent score of every saved job (the relevance score of #73, shown on each row and in the drawer),
- * by job id. Relevant jobs keep the score they were ranked by; the others are scored the same way.
- * Empty when the profile has nothing to match on.
+ * One scoring pass over the saved jobs: the Scent score of every job by id (the relevance score of #73,
+ * shown on each row and in the drawer), and the Relevant list ranked from those same scores (what
+ * `relevantJobs` gives). Both empty when the profile has nothing to match on.
  */
-export function scentScores(
+export function scentView(
   jobs: readonly Job[],
   signals: ProfileSignals | null,
-  relevant: readonly ScoredJob[] = [],
   now = new Date()
-): Map<string, JobScore> {
-  if (!signals || !hasRelevanceSignals(signals)) return new Map()
-  const ranked = new Map(relevant.map((r) => [r.job.id, r.score]))
-  return new Map(jobs.map((j) => [j.id, ranked.get(j.id) ?? scoreJob(j, signals, now)]))
+): { scores: Map<string, JobScore>; relevant: ScoredJob[] } {
+  if (!signals || !hasRelevanceSignals(signals)) return { scores: new Map(), relevant: [] }
+  const scored = jobs.map((job) => ({ job, score: scoreJob(job, signals, now) }))
+  return { scores: new Map(scored.map((s) => [s.job.id, s.score])), relevant: rankRelevant(scored) }
 }
 
 /** Segments of the saved-job list. */

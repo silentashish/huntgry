@@ -40,6 +40,10 @@
   flex-basis: 100%;
 }
 
+.filtersFields[hidden] {
+  display: none;
+}
+
 .clearFilters {
   font-size: 11px;
   line-height: 14px;
@@ -215,6 +219,17 @@
   color: var(--hg-text-secondary);
 }
 
+.excluded {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  color: var(--hg-text-muted);
+}
+
 /* ---------- Selection bar ---------- */
 
 .selectionDock {
@@ -330,6 +345,17 @@
   font-size: 12px;
   line-height: 16px;
   color: var(--hg-text-secondary);
+}
+
+.scentExcluded {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--hg-status-warning);
 }
 
 .actions {
@@ -461,7 +487,7 @@
 }
 
 .agent {
-  all: unset;
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -476,12 +502,21 @@
   cursor: pointer;
 }
 
-.agent:focus-visible {
+/* The native radio stays focusable and keyboard-driven; the chip draws it. */
+.agentInput {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.agent:has(.agentInput:focus-visible) {
   outline: 2px solid var(--hg-border-focus);
   outline-offset: 2px;
 }
 
-.agent[aria-checked='true'] {
+.agent[data-checked] {
   border-color: var(--hg-accent-primary);
   background-color: var(--hg-accent-primary-soft);
   color: var(--hg-text-accent);
@@ -503,7 +538,7 @@
   background-color: var(--hg-bg-surface);
 }
 
-.agent[aria-checked='true'] .radio {
+.agent[data-checked] .radio {
   border: 5px solid var(--hg-accent-primary);
 }
 

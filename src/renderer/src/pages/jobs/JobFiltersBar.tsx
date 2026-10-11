@@ -44,59 +44,58 @@ export function JobFiltersBar({ filters, onChange, open = true, footer }: Props)
   const set = <K extends keyof JobFilters>(k: K, v: JobFilters[K]) => onChange({ ...filters, [k]: v })
   return (
     <div className={classes.filters}>
-      {open && (
-        <div className={classes.filtersFields} id="jobs-filters">
-          <Select
-            w={220}
-            aria-label="Visa sponsorship"
-            data={SPONSORSHIP_OPTIONS}
-            value={filters.sponsorship}
-            allowDeselect={false}
-            onChange={(v) => set('sponsorship', (v as SponsorshipFilter) ?? 'any')}
-          />
-          <MultiSelect
-            w={200}
-            aria-label="Workplace"
-            placeholder={filters.workplace.length ? undefined : 'Any workplace'}
-            data={[...WORKPLACE_FILTERS]}
-            value={filters.workplace}
-            onChange={(v) => set('workplace', v as WorkplaceFilter[])}
-          />
-          <MultiSelect
-            w={220}
-            aria-label="Seniority"
-            placeholder={filters.seniority.length ? undefined : 'Any seniority'}
-            data={[...SENIORITY_LEVELS]}
-            value={filters.seniority}
-            onChange={(v) => set('seniority', v as SeniorityLevel[])}
-          />
-          <Select
-            w={160}
-            aria-label="Posted"
-            data={POSTED_WITHIN_DAYS.map((d) => ({ value: String(d), label: POSTED_LABEL[d] }))}
-            value={String(filters.postedWithinDays)}
-            allowDeselect={false}
-            onChange={(v) => set('postedWithinDays', Number(v ?? 0) as PostedWithinDays)}
-          />
-          <NumberInput
-            w={150}
-            aria-label="Min. salary / year"
-            placeholder="Min. salary / year"
-            min={0}
-            step={10000}
-            thousandSeparator=","
-            prefix="$ "
-            hideControls
-            value={filters.minSalary ?? ''}
-            onChange={(v) => set('minSalary', typeof v === 'number' && v > 0 ? v : null)}
-          />
-          {activeFilterCount(filters) > 0 && (
-            <Anchor className={classes.clearFilters} component="button" type="button" onClick={() => onChange(DEFAULT_FILTERS)}>
-              Clear filters
-            </Anchor>
-          )}
-        </div>
-      )}
+      {/* Folded, the fields stay mounted (the Filters button's aria-controls points here), only hidden. */}
+      <div className={classes.filtersFields} id="jobs-filters" hidden={!open}>
+        <Select
+          w={220}
+          aria-label="Visa sponsorship"
+          data={SPONSORSHIP_OPTIONS}
+          value={filters.sponsorship}
+          allowDeselect={false}
+          onChange={(v) => set('sponsorship', (v as SponsorshipFilter) ?? 'any')}
+        />
+        <MultiSelect
+          w={200}
+          aria-label="Workplace"
+          placeholder={filters.workplace.length ? undefined : 'Any workplace'}
+          data={[...WORKPLACE_FILTERS]}
+          value={filters.workplace}
+          onChange={(v) => set('workplace', v as WorkplaceFilter[])}
+        />
+        <MultiSelect
+          w={220}
+          aria-label="Seniority"
+          placeholder={filters.seniority.length ? undefined : 'Any seniority'}
+          data={[...SENIORITY_LEVELS]}
+          value={filters.seniority}
+          onChange={(v) => set('seniority', v as SeniorityLevel[])}
+        />
+        <Select
+          w={160}
+          aria-label="Posted"
+          data={POSTED_WITHIN_DAYS.map((d) => ({ value: String(d), label: POSTED_LABEL[d] }))}
+          value={String(filters.postedWithinDays)}
+          allowDeselect={false}
+          onChange={(v) => set('postedWithinDays', Number(v ?? 0) as PostedWithinDays)}
+        />
+        <NumberInput
+          w={150}
+          aria-label="Min. salary / year"
+          placeholder="Min. salary / year"
+          min={0}
+          step={10000}
+          thousandSeparator=","
+          prefix="$ "
+          hideControls
+          value={filters.minSalary ?? ''}
+          onChange={(v) => set('minSalary', typeof v === 'number' && v > 0 ? v : null)}
+        />
+        {activeFilterCount(filters) > 0 && (
+          <Anchor className={classes.clearFilters} component="button" type="button" onClick={() => onChange(DEFAULT_FILTERS)}>
+            Clear filters
+          </Anchor>
+        )}
+      </div>
       {footer}
     </div>
   )

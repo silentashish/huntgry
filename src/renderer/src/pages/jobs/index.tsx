@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Alert, Anchor, Button, Checkbox, Loader, SegmentedControl, Text, TextInput } from '@mantine/core'
 import { IconBriefcase, IconClipboardCheck, IconFilter, IconLink, IconPlus, IconSearch, IconSparkles } from '@tabler/icons-react'
 import { activeFilterCount, DEFAULT_FILTERS, type JobFilters } from '@shared/job-filters'
-import { hasRelevanceSignals, profileSignals, relevantJobs, type ProfileSignals } from '@shared/job-relevance'
+import { hasRelevanceSignals, profileSignals, type ProfileSignals } from '@shared/job-relevance'
 import { DEFAULT_JOBS_PREFS, type JobsPrefs } from '@shared/jobs-prefs'
 import { tailorPrefillFor, type Job } from '@shared/jobs-types'
 import { emptyProfile } from '@shared/master-profile'
@@ -19,7 +19,7 @@ import { PasteModal } from './PasteModal'
 import { SelectionBar } from './SelectionBar'
 import { mergeJobs } from './merge'
 import { activeQueueItems, selectable, selectAll, selectAllState, selectedJobs, toggle } from './selection'
-import { defaultShow, scentScores, visibleJobs, type Show } from './view'
+import { defaultShow, scentView, visibleJobs, type Show } from './view'
 import classes from './jobs.module.css'
 
 const isUrl = (s: string) => /^https?:\/\//i.test(s.trim())
@@ -90,8 +90,8 @@ export function JobsPage() {
     navigate('tailor', tailorPrefillFor(await prepareTailor(job, (j) => upsert([j]))))
   }
 
-  const relevant = useMemo(() => (signals && jobs ? relevantJobs(jobs, signals) : []), [jobs, signals])
-  const scores = useMemo(() => scentScores(jobs ?? [], signals, relevant), [jobs, signals, relevant])
+  // One scoring pass: every job's Scent score, and the Relevant list ranked from the same scores.
+  const { scores, relevant } = useMemo(() => scentView(jobs ?? [], signals), [jobs, signals])
   const shown = useMemo(
     () => visibleJobs({ jobs: jobs ?? [], show, relevant, filters, text: filter }),
     [jobs, show, relevant, filters, filter]

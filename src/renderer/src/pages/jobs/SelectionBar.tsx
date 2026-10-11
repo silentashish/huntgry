@@ -16,7 +16,7 @@ export function SelectionBar({ count, dismissing, onTailor, onUnattended, onDism
   if (count === 0) return null
   return (
     <div className={classes.selectionDock}>
-      <div className={classes.selectionBar} role="toolbar" aria-label="Selected jobs">
+      <div className={classes.selectionBar} role="group" aria-label="Selected jobs">
         <span className={classes.selectionCount}>{count} selected</span>
         <span className={classes.divider} aria-hidden />
         <Button size="xs" leftSection={<IconSparkles size={14} />} onClick={onTailor}>

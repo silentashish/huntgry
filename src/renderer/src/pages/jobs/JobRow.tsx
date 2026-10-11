@@ -1,11 +1,20 @@
 import { Checkbox } from '@mantine/core'
-import { IconCheck, IconFlame } from '@tabler/icons-react'
+import { IconCheck, IconEyeOff, IconFlame } from '@tabler/icons-react'
 import type { JobScore } from '@shared/job-relevance'
 import type { Job } from '@shared/jobs-types'
 import type { QueueItem } from '@shared/queue-types'
 import { initialsOf, MonoLabel, ScoreRing, StatusPill } from '../../components/ui'
 import { QUEUE_STATUS_LABEL } from '../tailor/status'
-import { ago, jobMeta, LIVE_QUEUE_STATUSES, QUEUE_STATUS_TONE, SOURCE_LABEL, sponsorshipPill, workplacePill } from './labels'
+import {
+  ago,
+  jobMeta,
+  LIVE_QUEUE_STATUSES,
+  QUEUE_STATUS_TONE,
+  scentDisplay,
+  SOURCE_LABEL,
+  sponsorshipPill,
+  workplacePill
+} from './labels'
 import classes from './jobs.module.css'
 
 interface Props {
@@ -27,6 +36,7 @@ interface Props {
 export function JobRow({ job, score, queueItem, selected, selectable, onToggle, onOpen }: Props) {
   const workplace = workplacePill(job)
   const visa = sponsorshipPill(job)
+  const scent = score ? scentDisplay(score) : null
   return (
     <li
       className={classes.job}
@@ -46,8 +56,8 @@ export function JobRow({ job, score, queueItem, selected, selectable, onToggle, 
         onChange={onToggle}
       />
       <div className={classes.score}>
-        {score ? (
-          <ScoreRing value={score.score} caption="scent" />
+        {score && scent ? (
+          <ScoreRing value={score.score} tone={scent.tone} caption="scent" />
         ) : (
           <ScoreRing mode="initial" letter={initialsOf(job.company || job.title)} aria-label="No Scent score yet" />
         )}
@@ -71,6 +81,12 @@ export function JobRow({ job, score, queueItem, selected, selectable, onToggle, 
         </div>
         {jobMeta(job) && <p className={classes.meta}>{jobMeta(job)}</p>}
         {job.description && <p className={classes.description}>{job.description}</p>}
+        {scent?.excluded && (
+          <p className={classes.excluded}>
+            <IconEyeOff size={14} aria-hidden />
+            {scent.label}: {scent.excluded}
+          </p>
+        )}
         {score && score.reasons.length > 0 && (
           <div className={classes.reasons}>
             <IconFlame size={14} aria-hidden />

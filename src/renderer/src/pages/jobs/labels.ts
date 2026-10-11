@@ -1,7 +1,17 @@
 import { seniorityOf, sponsorshipOf, workplaceOf } from '@shared/job-filters'
+import type { JobScore } from '@shared/job-relevance'
 import type { Job, JobSourceId } from '@shared/jobs-types'
 import type { QueueItemStatus } from '@shared/queue-types'
-import type { UiTone } from '../../components/ui'
+import { scoreLabel, scoreTone, type UiTone } from '../../components/ui'
+
+/**
+ * How a Scent score reads on a row and in the drawer. A job Relevant leaves out (dismissed, or "no
+ * sponsorship" for a profile that needs it) keeps its number but loses the colour, and says why.
+ */
+export function scentDisplay(score: JobScore): { tone: UiTone; label: string; excluded: string | null } {
+  if (score.excluded) return { tone: 'neutral', label: 'Left out of Relevant', excluded: score.excluded }
+  return { tone: scoreTone(score.score), label: scoreLabel(score.score), excluded: null }
+}
 
 export const SOURCE_LABEL: Record<JobSourceId, string> = {
   'hiring.cafe': 'hiring.cafe',

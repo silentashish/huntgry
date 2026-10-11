@@ -13,9 +13,9 @@ import {
 import type { JobScore } from '@shared/job-relevance'
 import { canFetchDetails, type Job } from '@shared/jobs-types'
 import { api, errorText } from '../../api'
-import { KpiTile, MonoLabel, ScoreRing, scoreLabel, scoreTone, StatusPill, toneStyle, type UiTone } from '../../components/ui'
+import { KpiTile, MonoLabel, ScoreRing, StatusPill, toneStyle, type UiTone } from '../../components/ui'
 import { useNavigation } from '../../navigation'
-import { jobFacts, jobMeta, SOURCE_LABEL, sponsorshipPill, workplacePill } from './labels'
+import { jobFacts, jobMeta, scentDisplay, SOURCE_LABEL, sponsorshipPill, workplacePill } from './labels'
 import classes from './jobs.module.css'
 
 interface Props {
@@ -174,14 +174,20 @@ function Pills({ job }: { job: Job }) {
   )
 }
 
-/** "Strong scent" with the score and every reason it fits. */
+/** "Strong scent" with the score and every reason it fits; a job Relevant leaves out says why, in neutral. */
 function ScentBox({ score }: { score: JobScore }) {
-  const tone = scoreTone(score.score)
+  const scent = scentDisplay(score)
   return (
-    <div className={classes.scent} style={toneStyle(tone)} data-tone={tone}>
-      <ScoreRing value={score.score} size="lg" />
+    <div className={classes.scent} style={toneStyle(scent.tone)} data-tone={scent.tone}>
+      <ScoreRing value={score.score} size="lg" tone={scent.tone} />
       <div className={classes.scentText}>
-        <span className={classes.scentLabel}>{scoreLabel(score.score)}</span>
+        <span className={classes.scentLabel}>{scent.label}</span>
+        {scent.excluded && (
+          <p className={classes.scentExcluded}>
+            <IconEyeOff size={14} aria-hidden />
+            {scent.excluded}
+          </p>
+        )}
         <p className={classes.scentReasons}>
           {score.reasons.length > 0 ? score.reasons.join(' · ') : 'Nothing in the posting matches your master profile yet.'}
         </p>

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_FILTERS } from '@shared/job-filters'
-import { scoreJob, type ProfileSignals, type ScoredJob } from '@shared/job-relevance'
+import { relevantJobs, scoreJob, type ProfileSignals, type ScoredJob } from '@shared/job-relevance'
 import type { Job } from '@shared/jobs-types'
-import { defaultShow, scentScores, visibleJobs } from './view'
+import { defaultShow, scentView, visibleJobs } from './view'
 
 const NOW = new Date('2026-10-06T12:00:00Z')
 
@@ -51,22 +51,34 @@ describe('Jobs page view', () => {
     expect(visibleJobs({ ...base, show: 'all', text: 'URL:B' }).map((j) => j.id)).toEqual(['url:b'])
   })
 
-  it('scores every saved job for its Scent ring, reusing the ranked scores', () => {
+  it('scores every saved job once and ranks Relevant from those scores exactly as relevantJobs does', () => {
     const signals: ProfileSignals = {
       titles: ['Backend Engineer'],
-      skills: ['Go'],
+      skills: ['Go', 'PostgreSQL'],
       location: '',
       remote: true,
-      needsSponsorship: false,
+      needsSponsorship: true,
       years: 6
     }
-    const go = job('url:go', { title: 'Backend Engineer', description: 'Go services', remote: true, postedAt: '2026-10-05T00:00:00Z' })
-    const other = job('url:other', { title: 'Sales Manager' })
-    const ranked = scored(go, 99)
-    const scores = scentScores([go, other], signals, [ranked], NOW)
-    expect(scores.get('url:go')).toBe(ranked.score)
-    expect(scores.get('url:other')).toEqual(scoreJob(other, signals, NOW))
-    expect(scentScores([go], { ...signals, titles: [] })).toEqual(new Map())
-    expect(scentScores([go], null)).toEqual(new Map())
+    const at = (d: string) => `2026-10-0${d}T00:00:00Z`
+    const saved = [
+      job('url:go', { title: 'Backend Engineer', description: 'Go services', remote: true, postedAt: at('5') }),
+      job('url:pg', { title: 'Backend Engineer', description: 'Go and PostgreSQL', remote: true, postedAt: at('4') }),
+      // Same score as url:go, newer: ranked first of the two.
+      job('url:go2', { title: 'Backend Engineer', description: 'Go services', remote: true, postedAt: at('6') }),
+      job('url:novisa', { title: 'Backend Engineer', description: 'Go. We do not sponsor visas.', remote: true, postedAt: at('5') }),
+      job('url:gone', { title: 'Backend Engineer', description: 'Go', remote: true, postedAt: at('5'), dismissed: true }),
+      job('url:other', { title: 'Sales Manager', postedAt: at('5') })
+    ]
+    const { scores, relevant } = scentView(saved, signals, NOW)
+    expect(relevant).toEqual(relevantJobs(saved, signals, NOW))
+    expect(relevant.map((r) => r.job.id)).toEqual(['url:pg', 'url:go2', 'url:go'])
+    // Every saved job has a score, including the ones Relevant leaves out, and Relevant reuses them.
+    expect([...scores.keys()]).toEqual(saved.map((j) => j.id))
+    for (const j of saved) expect(scores.get(j.id)).toEqual(scoreJob(j, signals, NOW))
+    for (const r of relevant) expect(r.score).toBe(scores.get(r.job.id))
+    expect(scores.get('url:novisa')?.excluded).toBe('Says it does not sponsor visas')
+    expect(scentView(saved, { ...signals, titles: [] })).toEqual({ scores: new Map(), relevant: [] })
+    expect(scentView(saved, null)).toEqual({ scores: new Map(), relevant: [] })
   })
 })
