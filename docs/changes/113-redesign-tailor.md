@@ -36,7 +36,7 @@ Taken under xvfb with the scripted e2e agents (their runs report 0 s active time
 - **Agent card second line.** The environment has the CLI version, the skill link and Claude's sign-in state; "signed in" is shown for Claude only (the other CLIs report no sign-in state), the others read "skill linked".
 - **Prefilled alert text.** "The full posting is filled in below (N words)" instead of "fetched from the employer's page", since the form cannot tell where the Jobs page got the text.
 - **Start estimate** is shown only once the workspace has a measured run of the picked agent.
-- **Content width.** The shell still caps pages at 1040 px (Figma: 1136); the metric labels truncate at that width. The Shell ticket owns the cap.
+- **Content width.** The screenshots were taken with the shell's old 1040 px cap (Figma: 1136), so the metric labels truncate there; the Shell ticket raises the cap to 1136 px for every page.
 
 ## Tests
 
