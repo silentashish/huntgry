@@ -1,15 +1,17 @@
 import { useState } from 'react'
-import { Button, Checkbox, Group, NativeSelect, Stack, Text, Textarea } from '@mantine/core'
+import { Button, Checkbox, Group, NativeSelect, Textarea } from '@mantine/core'
 import type { FieldReport } from '@shared/apply-types'
 import { api, errorText } from '../../api'
 import { answerChoices, isSensitive } from './apply-report'
+import classes from './browser.module.css'
 
 /**
- * Answers one question of the page from the Apply panel (#71): one of the
- * page's own options (a native select, so nothing pops over the page view) or
- * typed text, with "Remember" on by default. Main checks the answer against
- * the field and fills it in the page; a widget that only takes a click is
- * picked when the Settings switch allows it, otherwise suggested there.
+ * Answers one question of the page from the Apply panel (#71), the "answer
+ * once" box of the design: one of the page's own options (a native select,
+ * so nothing pops over the page view) or typed text, with "Remember" on by
+ * default. Main checks the answer against the field and fills it in the page;
+ * a widget that only takes a click is picked when the Settings switch allows
+ * it, otherwise suggested there.
  */
 export function AnswerControl({ sessionId, field, disabled }: { sessionId: string; field: FieldReport; disabled: boolean }) {
   const choices = answerChoices(field)
@@ -20,11 +22,19 @@ export function AnswerControl({ sessionId, field, disabled }: { sessionId: strin
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const name = field.label || 'this question'
+  const verb = field.suggestedBy === 'model' ? 'Confirm answer' : 'Answer'
 
   if (!open) {
     return (
-      <Button size="compact-xs" variant="subtle" px={4} disabled={disabled} onClick={() => setOpen(true)} aria-label={`Answer ${name}`}>
-        {field.suggestedBy === 'model' ? 'Confirm answer' : 'Answer'}
+      <Button
+        className={classes.answerToggle}
+        size="compact-xs"
+        variant="default"
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+        aria-label={`Answer ${name}`}
+      >
+        {verb}
       </Button>
     )
   }
@@ -43,10 +53,12 @@ export function AnswerControl({ sessionId, field, disabled }: { sessionId: strin
   }
 
   return (
-    <Stack gap={4} mt={4}>
+    <div className={classes.answer}>
+      <p className={classes.answerTitle}>
+        {verb} · {name}
+      </p>
       {choices.length > 0 ? (
         <NativeSelect
-          size="xs"
           aria-label={`Answer for ${name}`}
           data={[{ value: '', label: 'Choose…' }, ...choices]}
           value={value}
@@ -54,7 +66,6 @@ export function AnswerControl({ sessionId, field, disabled }: { sessionId: strin
         />
       ) : (
         <Textarea
-          size="xs"
           autosize
           minRows={1}
           maxRows={4}
@@ -71,23 +82,17 @@ export function AnswerControl({ sessionId, field, disabled }: { sessionId: strin
         onChange={(e) => setRemember(e.currentTarget.checked)}
       />
       {isSensitive(field) && (
-        <Text size="xs" c="dimmed">
-          Stored on this computer only, outside your workspace; never sent to the AI model.
-        </Text>
+        <p className={classes.answerNote}>Stored on this computer only, outside your workspace; never sent to the AI model.</p>
       )}
-      {error && (
-        <Text size="xs" c="red">
-          {error}
-        </Text>
-      )}
+      {error && <p className={classes.answerError}>{error}</p>}
       <Group gap={6}>
-        <Button size="compact-xs" loading={busy} disabled={!value.trim() || disabled} onClick={() => void submit()}>
+        <Button size="xs" loading={busy} disabled={!value.trim() || disabled} onClick={() => void submit()}>
           Use
         </Button>
-        <Button size="compact-xs" variant="subtle" color="gray" onClick={() => setOpen(false)}>
+        <Button size="xs" variant="subtle" onClick={() => setOpen(false)}>
           Cancel
         </Button>
       </Group>
-    </Stack>
+    </div>
   )
 }

@@ -74,9 +74,9 @@ export class ApplyPanel {
     return this.page.getByText(label, { exact: true })
   }
 
-  /** A report group heading, e.g. "Filled (7)". */
+  /** A report group heading: its title and count pill, e.g. "Filled 7". */
   group(title: 'Needs you' | 'Filled' | 'Your choice'): Locator {
-    return this.page.getByText(new RegExp(`^${title} \\(\\d+\\)$`))
+    return this.page.getByText(new RegExp(`^${title} \\d+$`))
   }
 
   /** The row of a reported field: its label, outcome badge and value. */

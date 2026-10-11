@@ -69,6 +69,7 @@ export function useApply(onError: (message: string) => void): {
           Cancel
         </Button>
         <Button
+          variant="primary"
           onClick={() => {
             const id = confirm?.id
             setConfirm(null)

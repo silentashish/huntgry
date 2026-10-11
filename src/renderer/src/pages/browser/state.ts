@@ -25,6 +25,19 @@ export function tabLabel(tab: BrowserTab): string {
   }
 }
 
+/** The shortcut modifier as the keyboard shows it: ⌘ on macOS, Ctrl+ elsewhere (the handlers accept both). */
+export function modKey(platform: string): string {
+  return /mac|iphone|ipad/i.test(platform) ? '⌘' : 'Ctrl+'
+}
+
+/**
+ * Whether the address bar shows a lock: an HTTPS page that has loaded. Main sets `url` before a load and keeps it
+ * after a failed one, so a loading or failed tab gets no lock.
+ */
+export function isSecure(tab: BrowserTab | null): boolean {
+  return tab !== null && !tab.loading && !tab.error && tab.url.startsWith('https://')
+}
+
 /** A tab already showing `url` (ignoring a trailing slash or `#fragment`), so a posting is not opened twice. */
 export function findTab(state: BrowserState, url: string): BrowserTab | null {
   const key = (u: string) => {
