@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Button, Center, Loader, MultiSelect, Select, TextInput, VisuallyHidden } from '@mantine/core'
+import { Alert, Button, Center, CloseButton, Loader, MultiSelect, Select, TextInput, VisuallyHidden } from '@mantine/core'
 import { IconArrowsSort, IconFilter, IconRefresh, IconSearch, IconSparkles } from '@tabler/icons-react'
 import {
   APPLICATION_STATUSES,
@@ -11,7 +11,7 @@ import {
 import { isProfileEmpty } from '@shared/master-profile'
 import { api, errorText } from '../../api'
 import { useApply } from '../../components/apply/useApply'
-import { KpiTile, MonoLabel, PageHeader } from '../../components/ui'
+import { KpiTile, MonoLabel, PageHeader, StatusPill } from '../../components/ui'
 import { useNavigation } from '../../navigation'
 import { ApplicationDrawer } from './ApplicationDrawer'
 import { ApplicationsTable } from './ApplicationsTable'
@@ -133,13 +133,13 @@ export function DashboardPage() {
     needs.reload()
   }
 
-  /** "Apply" in the strip: one result opens its drawer; several narrow the table to Generated. */
+  /** "Apply" in the strip: one result opens its drawer; several narrow the table to exactly those. */
   function goApply() {
     if (ready.length === 1) {
       setOpenId(ready[0].id)
       return
     }
-    setFilter({ ...filter, statuses: ['generated'] })
+    setFilter({ ...DEFAULT_FILTER, sort: filter.sort, ready: true })
     tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
@@ -150,7 +150,7 @@ export function DashboardPage() {
       value={<span data-testid="stat-value">{value}</span>}
       sub={subs[key]}
       selected={selected}
-      onClick={() => setFilter({ ...filter, statuses })}
+      onClick={() => setFilter({ ...filter, statuses, ready: false })}
     />
   )
 
@@ -164,14 +164,12 @@ export function DashboardPage() {
             {empty ? 'Welcome to the den.' : greetingLine(now, profile.name)}
           </>
         }
-        subtitle={empty ? 'Three steps and the hound starts running.' : list ? needsYouLine(things) : undefined}
+        subtitle={empty && things === 0 ? 'Three steps and the hound starts running.' : list || error ? needsYouLine(things) : undefined}
         actions={
           <>
-            {!empty && (
-              <Button variant="subtle" leftSection={<IconRefresh size={16} />} onClick={refresh}>
-                Refresh
-              </Button>
-            )}
+            <Button variant="subtle" leftSection={<IconRefresh size={16} />} onClick={refresh}>
+              Refresh
+            </Button>
             <Button variant="primary" leftSection={<IconSparkles size={16} />} onClick={() => navigate('tailor')}>
               New tailored resume
             </Button>
@@ -191,9 +189,23 @@ export function DashboardPage() {
         </Center>
       )}
 
-      {empty && (
+      {/* No applications (a first hunt, or a pipeline whose every job failed) or no list at all: what
+          needs the user, the last pipeline and the profile insights still show. */}
+      {(empty || (list === null && error)) && (
         <>
-          <FirstHunt profileReady={profile.ready} />
+          <NeedsYouStrip
+            waiting={needs.waiting}
+            review={needs.review}
+            ready={[]}
+            onReply={(run) => navigate('tailor', { runId: run.id })}
+            onReview={() => navigate('review')}
+            onApply={goApply}
+          />
+          {empty && <FirstHunt profileReady={profile.ready} />}
+          <div className={classes.sideRow} aria-label="Pipeline and profile" role="complementary">
+            <LastPipelineCard />
+            <ProfileInsightsCard />
+          </div>
           <UsageCard onOpenRun={(runId) => navigate('tailor', { runId })} hideWhenEmpty />
         </>
       )}
@@ -210,9 +222,9 @@ export function DashboardPage() {
           />
 
           <div className={classes.kpis} role="group" aria-label="Applications by status">
-            {tile('total', 'Total', apps.length, filter.statuses.length === 0, [])}
+            {tile('total', 'Total', apps.length, !filter.ready && filter.statuses.length === 0, [])}
             {SUMMARY.map((s) =>
-              tile(s, STATUS_META[s].label, counts[s], filter.statuses.length === 1 && filter.statuses[0] === s, [s])
+              tile(s, STATUS_META[s].label, counts[s], !filter.ready && filter.statuses.length === 1 && filter.statuses[0] === s, [s])
             )}
           </div>
 
@@ -250,6 +262,14 @@ export function DashboardPage() {
                   allowDeselect={false}
                   onChange={(v) => v && setFilter({ ...filter, sort: v as SortKey })}
                 />
+                {filter.ready && (
+                  <StatusPill tone="accent" size="md">
+                    <span className={classes.filterChip}>
+                      Ready to apply
+                      <CloseButton size="xs" aria-label="Show all applications" onClick={() => setFilter({ ...filter, ready: false })} />
+                    </span>
+                  </StatusPill>
+                )}
                 <MonoLabel>
                   {shown.length === apps.length ? `${apps.length}` : `${shown.length} of ${apps.length}`} application
                   {apps.length === 1 ? '' : 's'}

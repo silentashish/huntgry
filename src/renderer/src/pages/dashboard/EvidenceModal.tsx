@@ -102,12 +102,12 @@ export function EvidenceModal({ gap, onClose, onSaved }: Props) {
 
   const t = target ? parseTarget(target, category) : null
   const preview = useMemo(() => {
-    const none = { context: [] as string[], lines: [] as string[], error: null as string | null, next: null as MasterProfile | null }
+    const none = { removed: [] as string[], lines: [] as string[], error: null as string | null, next: null as MasterProfile | null }
     if (!doc || !t || !gap) return none
     try {
       const next = applyEvidence(doc.profile, { skill: gap.skill, target: t, bullet, addTechnology: t.kind === 'skills' || addTechnology })
       const change = changeLines(doc.profile, next, t)
-      return { context: change.context, lines: change.added, error: null, next }
+      return { removed: change.removed, lines: change.added, error: null, next }
     } catch (e) {
       return { ...none, error: errorText(e) }
     }
@@ -225,8 +225,8 @@ export function EvidenceModal({ gap, onClose, onSaved }: Props) {
             <div className={classes.diffTitle}>Change to master-profile.md</div>
             {preview.lines.length > 0 ? (
               <>
-                {preview.context.map((l) => (
-                  <div key={`c-${l}`} className={classes.diffContext}>{`  ${l}`}</div>
+                {preview.removed.map((l) => (
+                  <div key={`r-${l}`} className={classes.diffRemove}>{`- ${l}`}</div>
                 ))}
                 {preview.lines.map((l) => (
                   <div key={`a-${l}`} className={classes.diffAdd}>{`+ ${l}`}</div>

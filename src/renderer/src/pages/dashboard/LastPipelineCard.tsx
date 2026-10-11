@@ -6,7 +6,7 @@ import { api } from '../../api'
 import { MonoLabel, SectionCard, StatusPill, type UiTone } from '../../components/ui'
 import { useNavigation } from '../../navigation'
 import classes from './dashboard.module.css'
-import { shortDate } from './summary'
+import { pipelineOutcome, shortDate } from './summary'
 
 /** The count pills, in Figma order, each only when non-zero. */
 const COUNT_PILLS: { key: keyof PipelineCounts; tone: UiTone; label: (n: number) => string }[] = [
@@ -47,6 +47,7 @@ export function LastPipelineCard() {
   const look = c.needsAttention + c.needsReply + c.failed
   const toReview = c.unreviewed + c.needsAttention
   const when = new Date(summary.finishedAt)
+  const outcome = pipelineOutcome(summary)
   const meta = [
     `${shortDate(summary.finishedAt)} ${when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`,
     durationText(summary.startedAt, summary.finishedAt),
@@ -58,8 +59,8 @@ export function LastPipelineCard() {
       titleOrder={4}
       icon={<IconCpu size={18} />}
       badge={
-        <StatusPill tone="success" dot>
-          Finished
+        <StatusPill tone={outcome.tone} dot title={summary.stopReason}>
+          {outcome.label}
         </StatusPill>
       }
       padding="md"

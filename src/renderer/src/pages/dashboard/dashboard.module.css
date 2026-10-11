@@ -122,7 +122,21 @@
   }
 }
 
+/* Empty and error states: the pipeline and insights cards side by side, at their side-column width. */
+.sideRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--hg-space-4);
+  align-items: start;
+}
+
 /* ---------- Toolbar + table ---------- */
+
+.filterChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 
 .toolbar {
   display: flex;
@@ -550,6 +564,11 @@
 
 .diffContext {
   color: var(--hg-text-secondary);
+  white-space: pre;
+}
+
+.diffRemove {
+  color: var(--hg-status-danger);
   white-space: pre;
 }
 

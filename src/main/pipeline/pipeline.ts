@@ -19,7 +19,7 @@ import {
   type PipelineSummary
 } from '@shared/pipeline-types'
 import type { QueueItem, QueueItemOutcome } from '@shared/queue-types'
-import { REVIEW_NOTES_FILE } from '@shared/review-types'
+import { IN_PROGRESS_REASON, REVIEW_NOTES_FILE } from '@shared/review-types'
 import { AGENT_LABEL, type AgentId, type RunSummary } from '@shared/runner-types'
 import { summarizeBuild } from '../applications/scan'
 import { getReview, updateReview, type RecordedReview } from '../review/authority'
@@ -98,7 +98,7 @@ const REJECTED_HOLD_MS = 10 * 60_000
 const ACTIVE = new Set<QueueItem['status']>(['queued', 'preparing', 'running'])
 /** Summary outcomes that are review states (the others are where the run ended). */
 const REVIEW_OUTCOMES = new Set<string>(['unreviewed', 'needs-attention', 'approved', 'discarded'])
-export const IN_PROGRESS_REASON = 'Still being tailored unattended; not checked yet.'
+export { IN_PROGRESS_REASON } from '@shared/review-types'
 
 /**
  * The run's output folder when it is this job's: `<role>/<company>/<job-id>` with the job id the

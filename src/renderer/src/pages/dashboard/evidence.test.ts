@@ -11,26 +11,26 @@ function profile(): MasterProfile {
 }
 
 describe('changeLines', () => {
-  it('shows the technologies line it replaces as context and the added lines', () => {
+  it('shows the technologies line it replaces as removed and the added lines', () => {
     const before = profile()
     const target = { kind: 'experience', index: 0 } as const
     const after = applyEvidence(before, { skill: 'Kafka', target, bullet: 'Moved billing events onto Kafka.', addTechnology: true })
     expect(changeLines(before, after, target)).toEqual({
-      context: ['Technologies: Go, PostgreSQL'],
+      removed: ['Technologies: Go, PostgreSQL'],
       added: ['Technologies: Go, PostgreSQL, Kafka', '- Moved billing events onto Kafka.']
     })
   })
 
-  it('adds to an existing skill group, or starts a new one without context', () => {
+  it('adds to an existing skill group, or starts a new one without removing anything', () => {
     const before = profile()
     const existing = { kind: 'skills', category: 'Languages' } as const
     expect(changeLines(before, applyEvidence(before, { skill: 'Rust', target: existing, addTechnology: true }), existing)).toEqual({
-      context: ['Skills · Languages: Go, Python'],
+      removed: ['Skills · Languages: Go, Python'],
       added: ['Skills · Languages: Go, Python, Rust']
     })
     const fresh = { kind: 'skills', category: 'Data' } as const
     expect(changeLines(before, applyEvidence(before, { skill: 'Airflow', target: fresh, addTechnology: true }), fresh)).toEqual({
-      context: [],
+      removed: [],
       added: ['Skills · Data: Airflow']
     })
   })

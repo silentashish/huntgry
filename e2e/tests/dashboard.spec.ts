@@ -1,7 +1,9 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { expect, test } from '../fixtures/app'
+import type { PipelineSummary } from '../../src/shared/pipeline-types'
+import { expect, test, type Preparer } from '../fixtures/app'
 import { Dashboard } from '../pages/dashboard'
+import { InsightsCard } from '../pages/insights-card'
 import { Shell } from '../pages/shell'
 
 /**
@@ -278,5 +280,47 @@ test.describe('apply readiness', () => {
     })
     await dash.closeDrawer()
     await expect(wayne).toBeEnabled()
+  })
+})
+
+test.describe('no applications', () => {
+  // A first pipeline in which every job failed: no application folder, but a summary to look at.
+  const failedPipeline: Preparer = {
+    async prepare({ workspace }) {
+      const ws = workspace!
+      for (const role of ['software-engineer', 'backend-engineer', 'platform-engineer', 'data-engineer', 'frontend-engineer']) {
+        await rm(join(ws, role), { recursive: true, force: true })
+      }
+      const summary: PipelineSummary = {
+        id: 'p-20261005-060000-cccccc',
+        startedAt: '2026-10-05T06:00:00.000Z',
+        finishedAt: '2026-10-05T06:30:00.000Z',
+        counts: { queued: 0, running: 0, needsReply: 0, unreviewed: 0, needsAttention: 0, approved: 0, discarded: 0, failed: 2, cancelled: 0, skipped: 0, total: 2 },
+        costUsd: 0.42,
+        items: [
+          { jobId: 'pasted:a', title: 'Platform Engineer · Wayve', outcome: 'failed', error: 'The agent exited.' },
+          { jobId: 'pasted:b', title: 'Data Engineer · Umbrella', outcome: 'failed', error: 'The agent exited.' }
+        ],
+        skipped: []
+      }
+      await mkdir(join(ws, '.huntgry'), { recursive: true })
+      await writeFile(join(ws, '.huntgry/pipeline-summary.json'), JSON.stringify(summary, null, 2))
+    }
+  }
+  test.use({ prepare: failedPipeline })
+
+  test('the first-hunt page still shows the last pipeline, the profile insights and Refresh', async ({ app }) => {
+    const page = app.window
+    const dash = new Dashboard(page)
+    await expect(dash.emptyState).toBeVisible()
+    await expect(dash.heading).toHaveText(/Welcome to the den\.$/)
+    await expect(dash.refreshButton).toBeVisible()
+
+    const pipeline = page.locator('.mantine-Card-root').filter({ has: page.getByRole('heading', { name: 'Last unattended pipeline' }) })
+    await expect(pipeline).toBeVisible()
+    await expect(pipeline.getByText('Failed', { exact: true })).toBeVisible()
+    await expect(pipeline.getByText('2 failed', { exact: true })).toBeVisible()
+    await expect(pipeline.getByRole('button', { name: 'Open the queue' })).toBeVisible()
+    await expect(new InsightsCard(page).card).toBeVisible()
   })
 })

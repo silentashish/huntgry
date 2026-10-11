@@ -1,6 +1,6 @@
 import type { ApplicationRecord, ApplicationStatus } from '@shared/applications-types'
-import type { UsageDay, UsageRange } from '@shared/usage-types'
-import { applyBlocker } from '../../components/apply/blocker'
+import type { UsageDay, UsageFilter, UsageRange } from '@shared/usage-types'
+import { isReadyToApply } from './filter'
 
 /** Pure helpers behind the Dashboard header, "Needs you" strip, stat tiles and usage bars (#109). */
 
@@ -45,7 +45,7 @@ export function needsYouLine(things: number): string {
 
 /** Generated results that could be applied to now: not applied yet, resume built, posting known, review passed. */
 export function readyToApply(apps: readonly ApplicationRecord[]): ApplicationRecord[] {
-  return apps.filter((a) => a.tracking.status === 'generated' && applyBlocker(a) === null)
+  return apps.filter(isReadyToApply)
 }
 
 /** "A, B and 2 more" for a list of names. */
@@ -85,6 +85,33 @@ export function kpiSubs(apps: readonly ApplicationRecord[], now: Date = new Date
   }
 }
 
+/**
+ * The status pill of the last pipeline: why it ended (the main process's `stopReason`: Stop, a
+ * spend limit, the budget, an agent that could not start) or how it finished (`counts.failed`).
+ */
+export function pipelineOutcome(summary: { stopReason?: string; counts: { failed: number; total: number } }): {
+  label: string
+  tone: 'success' | 'warning' | 'danger' | 'neutral'
+} {
+  const reason = summary.stopReason
+  if (reason) {
+    if (reason.startsWith('Stopped by you')) return { label: 'Stopped by you', tone: 'neutral' }
+    if (reason.includes('spend limit')) return { label: 'Paused: spend limit', tone: 'warning' }
+    if (reason.startsWith('Budget reached')) return { label: 'Stopped: budget', tone: 'warning' }
+    if (reason.startsWith('Cannot start')) return { label: 'Could not start', tone: 'danger' }
+    return { label: 'Stopped', tone: 'warning' }
+  }
+  const { failed, total } = summary.counts
+  if (failed > 0 && failed >= total) return { label: 'Failed', tone: 'danger' }
+  if (failed > 0) return { label: `Finished · ${failed} failed`, tone: 'warning' }
+  return { label: 'Finished', tone: 'success' }
+}
+
+/** Usage filters set behind "Breakdown", which the card header does not show: models, statuses, several agents. */
+export function usageHiddenFilters(f: UsageFilter): number {
+  return (f.models?.length ? 1 : 0) + (f.statuses?.length ? 1 : 0) + ((f.agents?.length ?? 0) > 1 ? 1 : 0)
+}
+
 export interface DayBar {
   day: string
   costUsd: number
@@ -96,31 +123,42 @@ export interface DayBar {
 }
 
 /**
- * One bar per calendar day of the range, empty days included, so the chart reads as time:
- * 7 or 30 days, or for "All time" from the first day with a turn (at most the last 60 days).
+ * One bar per calendar day of the range, empty days included, so the chart reads as time. The bars
+ * start on the calendar day the totals start: the main process counts runs created since
+ * `now − N × 24 h` (7 or 30 days), which falls inside the day N days ago, so a bounded range shows
+ * N + 1 days. "All time" starts on the first day with a turn, at most the last 60 days.
  */
 export function dayBars(byDay: readonly UsageDay[], range: UsageRange | undefined, now: Date = new Date()): DayBar[] {
   const values = new Map(byDay.map((d) => [d.day, d]))
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  let span = range === '7d' ? 7 : range === '30d' ? 30 : 0
-  if (span === 0) {
+  const parse = (key: string) => {
+    const [y, m, d] = key.split('-').map(Number)
+    return new Date(y, m - 1, d)
+  }
+  let first: Date
+  if (range === '7d' || range === '30d') {
+    const since = new Date(now.getTime() - (range === '7d' ? 7 : 30) * DAY_MS)
+    first = new Date(since.getFullYear(), since.getMonth(), since.getDate())
+    // A turn can only start after its run was created, so no day is older than this; keep any that is.
+    if (byDay.length > 0 && parse(byDay[0].day) < first) first = parse(byDay[0].day)
+  } else {
     if (byDay.length === 0) return []
-    const [y, m, d] = byDay[0].day.split('-').map(Number)
-    const first = new Date(y, m - 1, d)
-    span = Math.min(60, Math.max(1, Math.round((today.getTime() - first.getTime()) / DAY_MS) + 1))
+    first = parse(byDay[0].day)
+    const floor = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 59)
+    if (first < floor) first = floor
   }
   const out: DayBar[] = []
-  for (let i = span - 1; i >= 0; i--) {
-    const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i)
+  for (let date = first; date <= today; date = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1)) {
     const key = dayKey(date)
     const v = values.get(key)
+    const back = Math.round((today.getTime() - date.getTime()) / DAY_MS)
     out.push({
       day: key,
       costUsd: v?.estimatedCostUsd ?? 0,
       tokens: v?.tokens ?? 0,
       activeMs: v?.activeMs ?? 0,
-      recent: i < 7,
-      today: i === 0
+      recent: back < 7,
+      today: back === 0
     })
   }
   return out

@@ -158,6 +158,21 @@ export const REVIEW_NOTES_INLINE_BYTES = 16 * 1024
 
 export const REVIEW_NOTES_FILE = 'review-notes.md'
 
+/** The reason an unattended result carries while its run still works on it (set by the pipeline). */
+export const IN_PROGRESS_REASON = 'Still being tailored unattended; not checked yet.'
+
+/** The reason a result carries while its run works on the user's answers (it is Unreviewed, not settled). */
+export const RERUN_REASON = 'Re-running with your answers.'
+
+/**
+ * A listed result whose run has finished with it: not one marked Unreviewed while its unattended
+ * run still works (`IN_PROGRESS_REASON`) or works on the user's answers (`RERUN_REASON`). What the
+ * phone and the Dashboard count as waiting for review (#42, #109).
+ */
+export function isSettledReview(item: Pick<ReviewItem, 'reason'>): boolean {
+  return item.reason !== IN_PROGRESS_REASON && item.reason !== RERUN_REASON
+}
+
 /** Why an application cannot be applied to because of its review state, or `null` (shared by main and the UI). */
 export function reviewBlocker(review: ReviewTracking | undefined): string | null {
   switch (review?.state) {

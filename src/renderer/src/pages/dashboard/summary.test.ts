@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { ApplicationRecord, ApplicationStatus } from '@shared/applications-types'
+import type { RunSummary } from '@shared/runner-types'
+import { summarizeUsage } from '@shared/usage'
 import { buildBadgeOf } from './BuildBadge'
-import { dayBars, dayKey, firstNameOf, greetingFor, greetingLine, kpiSubs, listNames, needsYouLine, readyToApply } from './summary'
+import { dayBars, dayKey, pipelineOutcome, usageHiddenFilters, firstNameOf, greetingFor, greetingLine, kpiSubs, listNames, needsYouLine, readyToApply } from './summary'
 
 const rec = (company: string, status: ApplicationStatus, extra: Partial<ApplicationRecord> = {}, appliedAt?: string): ApplicationRecord => ({
   id: `eng/${company.toLowerCase()}/1`,
@@ -91,20 +93,86 @@ describe('kpiSubs', () => {
 
 describe('dayBars', () => {
   const now = new Date(2026, 9, 7, 15)
-  it('has one bar per day of the range, empty days included, the last week marked', () => {
+  it('has one bar per calendar day from the day the totals start, empty days included, the last week marked', () => {
     const bars = dayBars([{ day: dayKey(new Date(2026, 9, 5)), tokens: 1000, estimatedCostUsd: 0.5, activeMs: 60_000 }], '30d', now)
-    expect(bars).toHaveLength(30)
-    expect(bars[29]).toMatchObject({ day: '2026-10-07', today: true, recent: true, costUsd: 0 })
-    expect(bars[27]).toMatchObject({ day: '2026-10-05', costUsd: 0.5, tokens: 1000, recent: true, today: false })
-    expect(bars[22].recent).toBe(false)
+    // now − 30 × 24 h falls on 7 Sep: 7 Sep … 7 Oct.
+    expect(bars).toHaveLength(31)
+    expect(bars[0].day).toBe('2026-09-07')
+    expect(bars[30]).toMatchObject({ day: '2026-10-07', today: true, recent: true, costUsd: 0 })
+    expect(bars[28]).toMatchObject({ day: '2026-10-05', costUsd: 0.5, tokens: 1000, recent: true, today: false })
+    expect(bars[23].recent).toBe(false)
     expect(bars.filter((b) => b.recent)).toHaveLength(7)
-    expect(dayBars([], '7d', now)).toHaveLength(7)
+    expect(dayBars([], '7d', now)).toHaveLength(8)
+  })
+
+  it('agrees with the usage totals: a run on the oldest day of the range keeps its bar', () => {
+    const run = (createdAt: Date, cost: number) =>
+      ({
+        id: createdAt.toISOString(),
+        title: 't',
+        params: { coverLetter: false, dateStyle: 'right' },
+        agent: 'claude',
+        status: 'finished',
+        sessionId: null,
+        createdAt: createdAt.toISOString(),
+        updatedAt: createdAt.toISOString(),
+        outputFolder: null,
+        outputFiles: [],
+        costUsd: 0,
+        live: false,
+        metrics: [
+          {
+            turn: 1,
+            startedAt: createdAt.toISOString(),
+            endedAt: createdAt.toISOString(),
+            activeMs: 1000,
+            model: null,
+            usage: { inputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 10, reasoningTokens: 0 },
+            estimatedCostUsd: cost,
+            ok: true
+          }
+        ]
+      }) as RunSummary
+    for (const range of ['7d', '30d'] as const) {
+      const days = range === '7d' ? 7 : 30
+      // An hour after the cutoff: inside the range, on the calendar day `days` days ago.
+      const oldest = new Date(now.getTime() - days * 86_400_000 + 3600_000)
+      const summary = summarizeUsage([run(oldest, 0.25), run(now, 1)], { range }, now.getTime())
+      expect(summary.totals.runs).toBe(2)
+      const bars = dayBars(summary.byDay, range, now)
+      expect(bars[0].day).toBe(dayKey(oldest))
+      expect(bars.reduce((sum, b) => sum + b.costUsd, 0)).toBeCloseTo(summary.totals.estimatedCostUsd, 6)
+    }
   })
 
   it('starts "All time" at the first day with a turn, at most 60 days back', () => {
     expect(dayBars([], 'all', now)).toEqual([])
     expect(dayBars([{ day: '2026-10-03', tokens: 1, estimatedCostUsd: 0, activeMs: 0 }], 'all', now)).toHaveLength(5)
     expect(dayBars([{ day: '2025-01-01', tokens: 1, estimatedCostUsd: 0, activeMs: 0 }], 'all', now)).toHaveLength(60)
+  })
+})
+
+describe('usageHiddenFilters', () => {
+  it('counts the filters set behind Breakdown, not the header ones', () => {
+    expect(usageHiddenFilters({ range: '30d' })).toBe(0)
+    expect(usageHiddenFilters({ range: '7d', agents: ['claude'], batchId: 'b' })).toBe(0)
+    expect(usageHiddenFilters({ models: ['m'], statuses: ['failed'], agents: ['claude', 'codex'] })).toBe(3)
+  })
+})
+
+describe('pipelineOutcome', () => {
+  const counts = (failed: number, total = 5) => ({ failed, total })
+  it('names why the pipeline stopped, else how it finished', () => {
+    expect(pipelineOutcome({ stopReason: 'Stopped by you.', counts: counts(0) })).toEqual({ label: 'Stopped by you', tone: 'neutral' })
+    expect(pipelineOutcome({ stopReason: 'Claude reached its spend limit: monthly cap', counts: counts(0) })).toEqual({
+      label: 'Paused: spend limit',
+      tone: 'warning'
+    })
+    expect(pipelineOutcome({ stopReason: 'Budget reached: $5.00 of $5.00 spent.', counts: counts(0) }).label).toBe('Stopped: budget')
+    expect(pipelineOutcome({ stopReason: 'Cannot start Codex: not found', counts: counts(0) })).toEqual({ label: 'Could not start', tone: 'danger' })
+    expect(pipelineOutcome({ counts: counts(5) })).toEqual({ label: 'Failed', tone: 'danger' })
+    expect(pipelineOutcome({ counts: counts(1) })).toEqual({ label: 'Finished · 1 failed', tone: 'warning' })
+    expect(pipelineOutcome({ counts: counts(0) })).toEqual({ label: 'Finished', tone: 'success' })
   })
 })
 

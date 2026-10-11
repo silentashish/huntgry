@@ -25,7 +25,7 @@ import { ESTIMATE_HINT } from '../../components/usage/RunMetrics'
 import { KpiTile, MonoLabel, StatusPill } from '../../components/ui'
 import { STATUS_LABEL } from '../tailor/status'
 import classes from './dashboard.module.css'
-import { dayBars, shortDate } from './summary'
+import { dayBars, shortDate, usageHiddenFilters } from './summary'
 
 const RANGE_LABEL: Record<UsageRange, string> = { '7d': '7 days', '30d': '30 days', all: 'All time' }
 const STATUSES: RunStatus[] = ['finished', 'failed', 'stopped', 'waiting', 'running']
@@ -151,6 +151,8 @@ export function UsageCard({ onOpenRun, hideWhenEmpty = false }: { onOpenRun(runI
   const allTokens = t ? totalTokens(t.usage) : 0
   const cachedShare = t && allTokens > 0 ? Math.round((t.usage.cacheReadTokens / allTokens) * 100) : null
   const agent = filter.agents?.length === 1 ? filter.agents[0] : ALL_AGENTS
+  // Filters set behind "Breakdown" (the header shows range, one agent and the batch itself).
+  const hiddenFilters = usageHiddenFilters(filter)
   const hasDetails = !!summary && (summary.byAgentModel.length > 0 || summary.batches.length > 0 || summary.runs.length > 0 || summary.models.length > 0)
 
   return (
@@ -195,16 +197,17 @@ export function UsageCard({ onOpenRun, hideWhenEmpty = false }: { onOpenRun(runI
               </span>
             </StatusPill>
           )}
-          {hasDetails && (
+          {(hasDetails || hiddenFilters > 0) && (
             <Button
               size="xs"
-              variant="subtle"
+              variant={hiddenFilters > 0 ? 'light' : 'subtle'}
               ml="auto"
               rightSection={details ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
               onClick={() => setDetails((d) => !d)}
               aria-expanded={details}
+              title={hiddenFilters > 0 ? 'Model, status or agent filters in the breakdown are narrowing these numbers' : undefined}
             >
-              Breakdown
+              Breakdown{hiddenFilters > 0 ? ` · ${hiddenFilters} filter${hiddenFilters === 1 ? '' : 's'}` : ''}
             </Button>
           )}
         </div>

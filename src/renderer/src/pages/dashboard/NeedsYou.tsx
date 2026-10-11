@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@mantine/core'
 import { IconArrowRight, IconBolt, IconClipboardCheck, IconSend } from '@tabler/icons-react'
 import type { ApplicationRecord } from '@shared/applications-types'
-import type { ReviewItem } from '@shared/review-types'
+import { isSettledReview, type ReviewItem } from '@shared/review-types'
 import { AGENT_LABEL, type RunSummary } from '@shared/runner-types'
 import { api } from '../../api'
 import { toneStyle, type UiTone } from '../../components/ui'
@@ -12,7 +12,7 @@ import { listNames } from './summary'
 export interface NeedsYouData {
   /** Tailor runs whose agent finished its turn and waits for the user's reply. */
   waiting: RunSummary[]
-  /** Unattended results waiting on the Review page. */
+  /** Unattended results waiting on the Review page; not those whose run still works on them (main's rule). */
   review: ReviewItem[]
 }
 
@@ -37,7 +37,7 @@ export function useNeedsYou(): NeedsYouData & { reload(): void } {
   const loadReview = useCallback(() => {
     const mine = ++reviewRequest.current
     api.review.list().then(
-      (items) => reviewRequest.current === mine && setReview(items),
+      (items) => reviewRequest.current === mine && setReview(items.filter(isSettledReview)),
       () => undefined
     )
   }, [])
