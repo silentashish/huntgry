@@ -3,7 +3,6 @@ import {
   Alert,
   Button,
   Checkbox,
-  Code,
   Group,
   Loader,
   Modal,
@@ -13,11 +12,13 @@ import {
   Textarea,
   TextInput
 } from '@mantine/core'
-import { IconSparkles } from '@tabler/icons-react'
+import { IconAlertTriangle, IconCheck, IconSparkles } from '@tabler/icons-react'
 import type { EvidenceTarget, GapInsight } from '@shared/insights-types'
 import type { MasterProfile, ProfileDocument } from '@shared/master-profile'
 import { applyEvidence } from '@shared/profile-insights'
 import { api, errorText } from '../../api'
+import classes from './dashboard.module.css'
+import { changeLines } from './evidence'
 
 interface Props {
   gap: GapInsight | null
@@ -26,25 +27,15 @@ interface Props {
   onSaved(): void
 }
 
+/** Figma: the modal title in the display face. */
+const MODAL_STYLES = {
+  title: { fontFamily: 'var(--hg-font-display)', fontSize: 24, lineHeight: '30px', fontWeight: 700, letterSpacing: '-0.01em' }
+} as const
+
 function parseTarget(value: string, category: string): EvidenceTarget {
   if (value === 'skills') return { kind: 'skills', category }
   const [kind, index] = value.split(':')
   return { kind: kind as 'experience' | 'project', index: Number(index) }
-}
-
-/** The lines the change adds, shown before anything is written. */
-function changeLines(before: MasterProfile, after: MasterProfile, t: EvidenceTarget): string[] {
-  if (t.kind === 'skills') {
-    const added = after.skills.find((g, i) => JSON.stringify(g) !== JSON.stringify(before.skills[i]))
-    return added ? [`Skills · ${added.category}: ${added.items.join(', ')}`] : []
-  }
-  const pick = (p: MasterProfile) => (t.kind === 'experience' ? p.experience[t.index] : p.projects[t.index])
-  const a = pick(before)
-  const b = pick(after)
-  const out: string[] = []
-  if (a.technologies !== b.technologies) out.push(`Technologies: ${b.technologies}`)
-  for (const h of b.highlights.filter((h) => !a.highlights.includes(h))) out.push(`- ${h}`)
-  return out
 }
 
 /**
@@ -111,12 +102,14 @@ export function EvidenceModal({ gap, onClose, onSaved }: Props) {
 
   const t = target ? parseTarget(target, category) : null
   const preview = useMemo(() => {
-    if (!doc || !t || !gap) return { lines: [] as string[], error: null as string | null, next: null as MasterProfile | null }
+    const none = { context: [] as string[], lines: [] as string[], error: null as string | null, next: null as MasterProfile | null }
+    if (!doc || !t || !gap) return none
     try {
       const next = applyEvidence(doc.profile, { skill: gap.skill, target: t, bullet, addTechnology: t.kind === 'skills' || addTechnology })
-      return { lines: changeLines(doc.profile, next, t), error: null, next }
+      const change = changeLines(doc.profile, next, t)
+      return { context: change.context, lines: change.added, error: null, next }
     } catch (e) {
-      return { lines: [], error: errorText(e), next: null }
+      return { ...none, error: errorText(e) }
     }
   }, [doc, target, category, bullet, addTechnology, gap])
 
@@ -166,10 +159,10 @@ export function EvidenceModal({ gap, onClose, onSaved }: Props) {
 
   const entryTarget = t && t.kind !== 'skills'
   return (
-    <Modal opened={gap !== null} onClose={close} title={gap ? `Add evidence for ${gap.skill}` : ''} size="lg" centered>
+    <Modal opened={gap !== null} onClose={close} title={gap ? `Add evidence for ${gap.skill}` : ''} size={620} centered styles={MODAL_STYLES}>
       {!doc && !error && <Loader size="sm" />}
       {doc && gap && (
-        <Stack gap="sm">
+        <Stack gap="md">
           <Text size="sm" c="dimmed">
             Only add what you actually did: every resume is picked from the master profile, and you will have to defend
             each line.
@@ -188,16 +181,17 @@ export function EvidenceModal({ gap, onClose, onSaved }: Props) {
               <Textarea
                 label="Your notes (for Claude)"
                 description="What you did with it, in your own words. Claude only rewords this; it adds nothing."
+                inputWrapperOrder={['label', 'input', 'description', 'error']}
                 autosize
-                minRows={2}
+                minRows={3}
                 value={notes}
                 onChange={(e) => setNotes(e.currentTarget.value)}
               />
-              <Group justify="flex-end">
+              <Group>
                 <Button
-                  size="xs"
                   variant="light"
-                  leftSection={<IconSparkles size={14} />}
+                  color="trail"
+                  leftSection={<IconSparkles size={16} />}
                   loading={drafting}
                   disabled={notes.trim().length < 10}
                   onClick={draft}
@@ -208,12 +202,18 @@ export function EvidenceModal({ gap, onClose, onSaved }: Props) {
               <Textarea
                 label="Highlight to add"
                 description="Optional. Write it yourself or edit Claude's draft."
+                inputWrapperOrder={['label', 'input', 'description', 'error']}
                 autosize
                 minRows={2}
                 maxLength={300}
                 value={bullet}
                 onChange={(e) => setBullet(e.currentTarget.value)}
               />
+              {warning && (
+                <Alert color="yellow" variant="light" icon={<IconAlertTriangle size={18} />}>
+                  {warning}
+                </Alert>
+              )}
               <Checkbox
                 label={`List ${gap.skill} in this entry's technologies`}
                 checked={addTechnology}
@@ -221,21 +221,19 @@ export function EvidenceModal({ gap, onClose, onSaved }: Props) {
               />
             </>
           )}
-          {warning && (
-            <Alert color="yellow" variant="light">
-              {warning}
-            </Alert>
-          )}
-          <div>
-            <Text size="sm" fw={600} mb={4}>
-              Change to master-profile.md
-            </Text>
+          <div className={classes.diff}>
+            <div className={classes.diffTitle}>Change to master-profile.md</div>
             {preview.lines.length > 0 ? (
-              <Code block>{preview.lines.map((l) => `+ ${l}`).join('\n')}</Code>
+              <>
+                {preview.context.map((l) => (
+                  <div key={`c-${l}`} className={classes.diffContext}>{`  ${l}`}</div>
+                ))}
+                {preview.lines.map((l) => (
+                  <div key={`a-${l}`} className={classes.diffAdd}>{`+ ${l}`}</div>
+                ))}
+              </>
             ) : (
-              <Text size="sm" c="dimmed">
-                {preview.error ?? 'Nothing to change: it is already there.'}
-              </Text>
+              <div className={classes.diffContext}>{preview.error ?? 'Nothing to change: it is already there.'}</div>
             )}
           </div>
           {error && (
@@ -244,10 +242,10 @@ export function EvidenceModal({ gap, onClose, onSaved }: Props) {
             </Alert>
           )}
           <Group justify="flex-end">
-            <Button variant="default" onClick={close}>
+            <Button variant="subtle" onClick={close}>
               Cancel
             </Button>
-            <Button onClick={save} loading={saving} disabled={!preview.next || preview.lines.length === 0}>
+            <Button leftSection={<IconCheck size={16} />} onClick={save} loading={saving} disabled={!preview.next || preview.lines.length === 0}>
               Save to master profile
             </Button>
           </Group>

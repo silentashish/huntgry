@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, Anchor, Badge, Button, Card, Collapse, Group, Stack, Text, Title, Tooltip } from '@mantine/core'
+import { ActionIcon, Alert, Anchor, Button, Collapse, Group, Stack, Text, Tooltip, UnstyledButton } from '@mantine/core'
+import { IconArrowUpRight, IconUser, IconX } from '@tabler/icons-react'
 import type { GapInsight, ProfileInsights } from '@shared/insights-types'
 import { api, errorText } from '../../api'
+import { MonoLabel, ProgressBar, SectionCard, StatusPill } from '../../components/ui'
 import { useNavigation, type ProfileSection } from '../../navigation'
+import classes from './dashboard.module.css'
 import { EvidenceModal } from './EvidenceModal'
 
 /** Fired after the master profile is saved from the dashboard, so the skills card refreshes too. */
@@ -66,136 +69,136 @@ export function ProfileInsightsCard() {
     }
   }, [load])
 
-
   if (error && !data) {
     return (
-      <Card withBorder radius="md" padding="md">
+      <SectionCard title="Master profile" titleOrder={4} icon={<IconUser size={18} />} padding="md">
         <Text size="sm" c="red">
           {error}
         </Text>
-      </Card>
+      </SectionCard>
     )
   }
   if (!data) return null
 
   const gaps = all ? data.gaps : data.gaps.slice(0, TOP)
   return (
-    <Card withBorder radius="md" padding="md">
-      <Group justify="space-between" align="flex-start" mb="xs" wrap="nowrap">
-        <div style={{ minWidth: 0 }}>
-          <Title order={4}>Master profile</Title>
-          <Text size="xs" c="dimmed">
-            {data.profile.updatedAt ? `Updated ${ago(data.profile.updatedAt)}` : 'Not saved yet'}
-            {data.jobCount > 0 && ` · compared with ${data.jobCount} job description${data.jobCount === 1 ? '' : 's'}`}
-          </Text>
-        </div>
-        <Button size="xs" variant="subtle" style={{ flexShrink: 0 }} onClick={() => navigate('profile')}>
+    <SectionCard
+      title="Master profile"
+      titleOrder={4}
+      icon={<IconUser size={18} />}
+      description={
+        <>
+          {data.profile.updatedAt ? `Updated ${ago(data.profile.updatedAt)}` : 'Not saved yet'}
+          {data.jobCount > 0 && ` · compared with ${data.jobCount} job description${data.jobCount === 1 ? '' : 's'}`}
+        </>
+      }
+      actions={
+        <Button size="xs" variant="subtle" rightSection={<IconArrowUpRight size={14} />} onClick={() => navigate('profile')}>
           Open
         </Button>
-      </Group>
+      }
+      padding="md"
+    >
+      <Stack gap="sm">
+        {error && (
+          <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
+            Could not refresh: {error}
+          </Alert>
+        )}
 
-      {error && (
-        <Alert color="red" variant="light" mb="sm" withCloseButton onClose={() => setError(null)}>
-          Could not refresh: {error}
-        </Alert>
-      )}
-
-      {data.profile.emptySections.length > 0 && (
-        <Group gap={6} mb="sm">
-          <Text size="xs" c="dimmed">
-            Empty:
-          </Text>
-          {data.profile.emptySections.map((s) => (
-            <Badge
-              key={s}
-              component="button"
-              type="button"
-              variant="light"
-              color="yellow"
-              style={{ cursor: 'pointer', border: 0 }}
-              onClick={() => navigate('profile', { section: s })}
-            >
-              {SECTION_LABEL[s]}
-            </Badge>
-          ))}
-        </Group>
-      )}
-
-      <Text size="xs" c="dimmed" tt="uppercase" fw={600} mb={4}>
-        Asked for by jobs, missing from your profile
-      </Text>
-      {data.gaps.length === 0 ? (
-        <Text size="sm" c="dimmed">
-          {data.jobCount === 0
-            ? 'Save jobs or tailor a resume, and the skills they ask for that your profile lacks show up here.'
-            : 'Nothing: your profile covers what these jobs ask for.'}
-        </Text>
-      ) : (
-        <Stack gap={6}>
-          {gaps.map((g) => (
-            <Group key={g.key} justify="space-between" wrap="nowrap">
-              <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
-                <Text size="sm" fw={500}>
-                  {g.skill}
-                </Text>
-                <Tooltip label={g.jobs.map((j) => j.title).join(' · ')} multiline maw={420} withinPortal>
-                  <Badge variant="light" color="gray">
-                    {g.jobs.length} job{g.jobs.length === 1 ? '' : 's'}
-                  </Badge>
-                </Tooltip>
-              </Group>
-              <Group gap={4} wrap="nowrap">
-                <Button size="compact-xs" variant="light" onClick={() => setEditing(g)}>
-                  I have this
-                </Button>
-                <Button size="compact-xs" variant="subtle" color="gray" onClick={() => apply(api.insights.dismiss(g.key, g.skill))}>
-                  Not me
-                </Button>
-              </Group>
-            </Group>
-          ))}
-          {data.gaps.length > TOP && (
-            <Anchor size="xs" component="button" onClick={() => setAll(!all)}>
-              {all ? 'Show fewer' : `Show all ${data.gaps.length}`}
-            </Anchor>
-          )}
-        </Stack>
-      )}
-
-      {(data.noted.length > 0 || data.dismissed.length > 0) && (
-        <Stack gap={4} mt="sm">
-          {data.noted.length > 0 && (
+        {data.profile.emptySections.length > 0 && (
+          <Group gap={6}>
             <Text size="xs" c="dimmed">
-              Already in your Gaps &amp; notes: {data.noted.join(', ')}
+              Empty:
             </Text>
-          )}
-          {data.dismissed.length > 0 && (
-            <>
+            {data.profile.emptySections.map((s) => (
+              <UnstyledButton key={s} onClick={() => navigate('profile', { section: s })} style={{ display: 'inline-flex' }}>
+                <StatusPill tone="warning">{SECTION_LABEL[s]}</StatusPill>
+              </UnstyledButton>
+            ))}
+          </Group>
+        )}
+
+        <MonoLabel component="div">Asked for by jobs, missing from your profile</MonoLabel>
+        {data.gaps.length === 0 ? (
+          <Text size="sm" c="dimmed">
+            {data.jobCount === 0
+              ? 'Save jobs or tailor a resume, and the skills they ask for that your profile lacks show up here.'
+              : 'Nothing: your profile covers what these jobs ask for.'}
+          </Text>
+        ) : (
+          <Stack gap="sm">
+            {gaps.map((g) => (
+              <div key={g.key} className={classes.gapRow}>
+                <div className={classes.gapLine}>
+                  <p className={classes.gapSkill}>{g.skill}</p>
+                  <Tooltip label={g.jobs.map((j) => j.title).join(' · ')} multiline maw={420} withinPortal>
+                    <span>
+                      <MonoLabel>
+                        {g.jobs.length} job{g.jobs.length === 1 ? '' : 's'}
+                      </MonoLabel>
+                    </span>
+                  </Tooltip>
+                  <Button size="xs" variant="light" color="trail" onClick={() => setEditing(g)}>
+                    I have this
+                  </Button>
+                  <Tooltip label="Not me: hide this skill">
+                    <ActionIcon size="sm" variant="subtle" color="gray" aria-label="Not me" onClick={() => apply(api.insights.dismiss(g.key, g.skill))}>
+                      <IconX size={14} />
+                    </ActionIcon>
+                  </Tooltip>
+                </div>
+                <ProgressBar
+                  size="xs"
+                  value={data.jobCount > 0 ? Math.min(100, (g.jobs.length / data.jobCount) * 100) : 0}
+                  aria-label={`${g.skill}: asked for by ${g.jobs.length} of ${data.jobCount} jobs`}
+                />
+              </div>
+            ))}
+          </Stack>
+        )}
+
+        {(data.gaps.length > TOP || data.dismissed.length > 0) && (
+          <Group gap={6}>
+            {data.gaps.length > TOP && (
+              <Anchor size="xs" component="button" onClick={() => setAll(!all)}>
+                {all ? 'Show fewer' : `Show all ${data.gaps.length}`}
+              </Anchor>
+            )}
+            {data.gaps.length > TOP && data.dismissed.length > 0 && (
+              <Text size="xs" c="dimmed" aria-hidden>
+                ·
+              </Text>
+            )}
+            {data.dismissed.length > 0 && (
               <Anchor size="xs" component="button" onClick={() => setShowDismissed(!showDismissed)} ta="left">
                 {showDismissed ? 'Hide' : 'Show'} {data.dismissed.length} marked “not me”
               </Anchor>
-              <Collapse expanded={showDismissed}>
-                <Group gap={6}>
-                  {data.dismissed.map((d) => (
-                    <Badge
-                      key={d.key}
-                      variant="outline"
-                      color="gray"
-                      rightSection={
-                        <Anchor size="xs" component="button" onClick={() => apply(api.insights.restore(d.key))}>
-                          restore
-                        </Anchor>
-                      }
-                    >
-                      {d.skill}
-                    </Badge>
-                  ))}
-                </Group>
-              </Collapse>
-            </>
-          )}
-        </Stack>
-      )}
+            )}
+          </Group>
+        )}
+        {data.dismissed.length > 0 && (
+          <Collapse expanded={showDismissed}>
+            <Group gap={6}>
+              {data.dismissed.map((d) => (
+                <StatusPill key={d.key} variant="outline" title={`Marked “not me” ${ago(d.at)}`}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span>{d.skill}</span>
+                    <Anchor size="xs" component="button" onClick={() => apply(api.insights.restore(d.key))}>
+                      restore
+                    </Anchor>
+                  </span>
+                </StatusPill>
+              ))}
+            </Group>
+          </Collapse>
+        )}
+        {data.noted.length > 0 && (
+          <Text size="xs" c="dimmed">
+            Already in your Gaps &amp; notes: {data.noted.join(', ')}
+          </Text>
+        )}
+      </Stack>
 
       <EvidenceModal
         gap={editing}
@@ -205,6 +208,6 @@ export function ProfileInsightsCard() {
           window.dispatchEvent(new Event(PROFILE_SAVED_EVENT))
         }}
       />
-    </Card>
+    </SectionCard>
   )
 }
