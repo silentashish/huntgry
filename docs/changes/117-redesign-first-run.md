@@ -23,9 +23,9 @@ cancelled dialogs changing nothing, and nothing written before Save.
 
 | | Dark | Light |
 | --- | --- | --- |
-| Workspace picker | ![](assets/redesign-first-run-dark.png) | ![](assets/redesign-first-run-light.png) |
-| Confirm modal | ![](assets/redesign-first-run-dark-confirm.png) | ![](assets/redesign-first-run-light-confirm.png) |
-| Profile setup | ![](assets/redesign-first-run-dark-profile-setup.png) | ![](assets/redesign-first-run-light-profile-setup.png) |
+| Workspace picker | ![Workspace picker, dark theme](assets/redesign-first-run-dark.png) | ![Workspace picker, light theme](assets/redesign-first-run-light.png) |
+| Confirm modal | ![Confirm modal for adding workspace files, dark theme](assets/redesign-first-run-dark-confirm.png) | ![Confirm modal for adding workspace files, light theme](assets/redesign-first-run-light-confirm.png) |
+| Profile setup | ![Profile setup with resume import options, dark theme](assets/redesign-first-run-dark-profile-setup.png) | ![Profile setup with resume import options, light theme](assets/redesign-first-run-light-profile-setup.png) |
 
 ## Deviations from Figma
 
