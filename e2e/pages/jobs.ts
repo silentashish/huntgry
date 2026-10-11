@@ -24,7 +24,7 @@ export class JobsPage {
     this.urlInput = page.getByPlaceholder(/^Add a job by its posting URL/)
     this.addButton = page.getByRole('button', { name: 'Add', exact: true })
     this.pasteButton = page.getByRole('button', { name: 'Paste a job' })
-    this.filterInput = page.getByPlaceholder(/^Filter saved jobs/)
+    this.filterInput = page.getByRole('textbox', { name: 'Filter saved jobs' })
     this.drawer = page.getByRole('dialog').filter({ has: page.getByRole('button', { name: 'Tailor resume' }) })
     this.pasteModal = page.getByRole('dialog', { name: 'Paste a job' })
     this.selectionBar = page.getByLabel('Selected jobs')
@@ -48,8 +48,8 @@ export class JobsPage {
     await expect(this.segment(name)).toBeChecked()
   }
 
-  /** Picks a sponsorship filter option. */
-  async filterSponsorship(option: 'Any' | 'Hide "no sponsorship"' | 'Only sponsors'): Promise<void> {
+  /** Picks a sponsorship filter option (the select has no visible label, so each option names the filter). */
+  async filterSponsorship(option: 'Visa: any' | 'Visa: hide “no sponsorship”' | 'Visa: only sponsors'): Promise<void> {
     await this.sponsorshipFilter.click()
     await this.page.getByRole('option', { name: option, exact: true }).click()
     await expect(this.sponsorshipFilter).toHaveValue(option)
@@ -66,6 +66,21 @@ export class JobsPage {
   /** Any red error notice (add by URL, queue). */
   get error(): Locator {
     return this.page.getByRole('alert')
+  }
+
+  /** A saved-job row (a list item named by the job's title). */
+  card(title: string): Locator {
+    return this.page.getByRole('list', { name: 'Saved jobs' }).getByRole('listitem', { name: title, exact: true })
+  }
+
+  /** The Scent score ring of a saved-job row, e.g. "Scent 72 of 100". */
+  scoreRing(title: string): Locator {
+    return this.card(title).getByRole('img', { name: /^Scent \d+ of 100$/ })
+  }
+
+  /** Why a saved job fits the profile, as listed on its row ("Title: Backend Engineer", "Skills: Go", …). */
+  async reasons(title: string): Promise<string[]> {
+    return this.card(title).getByRole('list', { name: 'Why it fits' }).getByRole('listitem').allInnerTexts()
   }
 
   /** The title line of a saved-job card. */
@@ -89,7 +104,7 @@ export class JobsPage {
     return this.drawer.getByRole('button', { name, exact: true })
   }
 
-  /** Escape closes the drawer (its close button has no accessible name of its own). */
+  /** Escape closes the drawer (it also has a "Close" button). */
   async closeDrawer(): Promise<void> {
     await this.page.keyboard.press('Escape')
     await expect(this.drawer).toBeHidden()

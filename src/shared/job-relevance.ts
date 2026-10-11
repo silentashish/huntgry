@@ -226,8 +226,18 @@ export function relevantJobs(
   threshold = RELEVANCE_THRESHOLD
 ): ScoredJob[] {
   if (!hasRelevanceSignals(s)) return []
-  return jobs
-    .map((job) => ({ job, score: scoreJob(job, s, now) }))
+  return rankRelevant(
+    jobs.map((job) => ({ job, score: scoreJob(job, s, now) })),
+    threshold
+  )
+}
+
+/**
+ * The relevant jobs among already scored ones, best first (ties: newest posting first): what
+ * `relevantJobs` returns, for a caller that keeps the score of every job (the Jobs page's Scent rings).
+ */
+export function rankRelevant(scored: readonly ScoredJob[], threshold = RELEVANCE_THRESHOLD): ScoredJob[] {
+  return scored
     .filter(({ score }) => !score.excluded && score.matched && score.score >= threshold)
     .sort(
       (a, b) =>
