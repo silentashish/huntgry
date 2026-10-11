@@ -60,7 +60,7 @@ export class SettingsPage {
 
   /** System / Light / Dark in the Appearance card. */
   appearanceOption(label: 'System' | 'Light' | 'Dark'): Locator {
-    return this.page.getByRole('radio', { name: label, exact: true })
+    return this.page.getByRole('radiogroup', { name: 'Appearance' }).getByRole('radio', { name: label, exact: true })
   }
 
   /** The radio that makes `agent` the default. */

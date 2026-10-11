@@ -12,15 +12,18 @@ import {
 } from '@tabler/icons-react'
 import classes from './settings.module.css'
 
-/** The cards of the Settings page, in page order (Figma "Settings" section nav). */
+/**
+ * The cards of the Settings page, in page order (Figma "Settings" section nav). The ids are the
+ * shell's `SettingsSection` (navigation.ts): the ⌘K palette finds a card by `data-settings-section`.
+ */
 export type SettingsSectionId =
   | 'agents'
-  | 'approvals'
-  | 'answers'
+  | 'standing-approvals'
+  | 'saved-answers'
   | 'pricing'
   | 'claude'
-  | 'deps'
-  | 'remote'
+  | 'skill-dependencies'
+  | 'remote-control'
   | 'appearance'
 
 export const SETTINGS_SECTIONS: readonly {
@@ -29,12 +32,12 @@ export const SETTINGS_SECTIONS: readonly {
   icon: ComponentType<{ size?: number; stroke?: number }>
 }[] = [
   { id: 'agents', label: 'Agents', icon: IconCpu },
-  { id: 'approvals', label: 'Standing approvals', icon: IconShieldCheck },
-  { id: 'answers', label: 'Saved answers', icon: IconLock },
+  { id: 'standing-approvals', label: 'Standing approvals', icon: IconShieldCheck },
+  { id: 'saved-answers', label: 'Saved answers', icon: IconLock },
   { id: 'pricing', label: 'Pricing', icon: IconCurrencyDollar },
   { id: 'claude', label: 'Claude', icon: IconTerminal2 },
-  { id: 'deps', label: 'Skill dependencies', icon: IconListCheck },
-  { id: 'remote', label: 'Remote control', icon: IconDeviceMobile },
+  { id: 'skill-dependencies', label: 'Skill dependencies', icon: IconListCheck },
+  { id: 'remote-control', label: 'Remote control', icon: IconDeviceMobile },
   { id: 'appearance', label: 'Appearance', icon: IconSun }
 ]
 
@@ -47,7 +50,8 @@ const READ_LINE = 140
 /**
  * The section to highlight: the last one whose top has passed `line` (px from the viewport top),
  * the first one before any has, and the last one once the page is scrolled to the bottom (a short
- * last card never reaches the line). `tops` follow `ids`; `null` is a section not on screen.
+ * last card never reaches the line). Cards side by side share a top: the first of them wins.
+ * `tops` follow `ids` in page order; `null` is a section not on screen.
  */
 export function activeSection<T extends string>(
   ids: readonly T[],
@@ -58,18 +62,40 @@ export function activeSection<T extends string>(
   const present = ids.filter((_, i) => tops[i] !== null)
   if (present.length === 0) return null
   if (atBottom) return present[present.length - 1]
-  let active = present[0]
+  let active: T | null = null
+  let activeTop = -Infinity
   ids.forEach((id, i) => {
     const top = tops[i]
-    if (top !== null && top <= line) active = id
+    if (top !== null && top <= line && (active === null || top > activeTop)) {
+      active = id
+      activeTop = top
+    }
   })
-  return active
+  return active ?? present[0]
 }
 
-function scrolledToBottom(target: EventTarget | null): boolean {
-  const el = target instanceof Element ? target : document.scrollingElement
-  if (!el) return false
-  return el.scrollHeight - el.scrollTop - el.clientHeight < 2
+/** The element that scrolls `el`: its nearest scrollable ancestor, or the document. */
+function scrollerOf(el: Element): Element | null {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node)
+    if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight) return node
+  }
+  return document.scrollingElement
+}
+
+/** Scrolled to the end; a page that does not scroll at all is not "at the bottom". */
+function atEnd(scroller: Element | null): boolean {
+  if (!scroller || scroller.scrollHeight - scroller.clientHeight < 2) return false
+  return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 2
+}
+
+/** The first section wrapper on the page, if any is rendered. */
+function firstSection(sections: readonly SettingsSectionId[]): HTMLElement | null {
+  for (const id of sections) {
+    const el = document.getElementById(sectionDomId(id))
+    if (el) return el
+  }
+  return null
 }
 
 /** One card of the page: the anchor the nav scrolls to and watches. */
@@ -93,18 +119,25 @@ export function SectionNav({ sections }: { sections: readonly SettingsSectionId[
 
   useEffect(() => {
     let frame = 0
-    const update = (target: EventTarget | null) => {
+    const update = () => {
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => {
         if (Date.now() < pinnedUntil.current) return
+        const first = firstSection(sections)
+        if (!first) return
         const tops = sections.map(
           (id) => document.getElementById(sectionDomId(id))?.getBoundingClientRect().top ?? null
         )
-        const next = activeSection(sections, tops, READ_LINE, scrolledToBottom(target))
+        const next = activeSection(sections, tops, READ_LINE, atEnd(scrollerOf(first)))
         if (next) setActive(next)
       })
     }
     const onScroll = (e: Event) => {
+      // Only scrolls that move the cards count: not the install log, a table, the audit log or a dropdown.
+      if (e.target instanceof Element) {
+        const first = firstSection(sections)
+        if (!first || !e.target.contains(first)) return
+      }
       // A click's smooth scroll keeps its entry highlighted until the scrolling stops, even when the
       // page cannot bring that card up to the reading line (the last cards).
       const now = Date.now()
@@ -112,17 +145,16 @@ export function SectionNav({ sections }: { sections: readonly SettingsSectionId[
         pinnedUntil.current = Math.max(pinnedUntil.current, now + 250)
         return
       }
-      update(e.target === document ? null : e.target)
+      update()
     }
-    const onResize = () => update(null)
     // Scroll events do not bubble: listen in the capture phase to see the shell's scroller too.
     document.addEventListener('scroll', onScroll, { capture: true, passive: true })
-    window.addEventListener('resize', onResize)
-    update(null)
+    window.addEventListener('resize', update)
+    update()
     return () => {
       cancelAnimationFrame(frame)
       document.removeEventListener('scroll', onScroll, { capture: true })
-      window.removeEventListener('resize', onResize)
+      window.removeEventListener('resize', update)
     }
     // `key` stands for `sections` (a new array on every render of the page).
   }, [key])

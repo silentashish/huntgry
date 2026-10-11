@@ -79,6 +79,10 @@ test.describe('section nav and appearance', () => {
     let settings = await openSettings(app)
     await expect(settings.sectionLink('Agents')).toHaveAttribute('aria-current', 'true')
 
+    // An agent's name is its radio's label: clicking it makes the agent the default.
+    await settings.agentRow('Codex').getByText('Codex', { exact: true }).click()
+    await expect(settings.defaultRadio('Codex')).toBeChecked()
+
     await settings.sectionLink('Pricing').click()
     await expect(settings.cardHeading('Pricing')).toBeInViewport()
     await expect(settings.sectionLink('Pricing')).toHaveAttribute('aria-current', 'true')

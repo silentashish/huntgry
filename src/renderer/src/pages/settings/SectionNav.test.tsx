@@ -23,6 +23,12 @@ describe('activeSection', () => {
     expect(activeSection(ids, [-1600, -900, -100, 500], 140, true)).toBe('appearance')
   })
 
+  it('keeps the first of two cards side by side (same top), so both can be reached', () => {
+    const pair = ['pricing', 'claude', 'skill-dependencies', 'remote-control'] as const
+    expect(activeSection(pair, [-600, 40, 40, 700], 140, false)).toBe('claude')
+    expect(activeSection(pair, [-600, -300, -300, 120], 140, false)).toBe('remote-control')
+  })
+
   it('skips sections that are not rendered', () => {
     expect(activeSection(ids, [null, null, 600, 900], 140, false)).toBe('remote')
     expect(activeSection(ids, [-500, 100, null, null], 140, true)).toBe('pricing')
@@ -63,6 +69,7 @@ describe('AppearanceCard', () => {
         </MantineProvider>
       )
     )
+    expect(container.querySelector('[role="radiogroup"]')?.getAttribute('aria-label')).toBe('Appearance')
     expect(option('System').getAttribute('aria-checked')).toBe('true')
     expect(option('Dark').getAttribute('aria-checked')).toBe('false')
 

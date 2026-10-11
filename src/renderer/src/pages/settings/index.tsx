@@ -33,8 +33,15 @@ const INSTALL_KIND_LABEL = { native: 'native install', homebrew: 'Homebrew', npm
 type Installer = 'python' | 'claude' | 'update' | 'skill' | 'reinstall-skill' | 'sync-skill' | `link-${AgentId}`
 
 /** Sections that need the runner environment (the agent check) before they render. */
-const ENV_SECTIONS: readonly SettingsSectionId[] = ['agents', 'approvals', 'answers', 'pricing', 'claude', 'deps']
-const ALWAYS_SECTIONS: readonly SettingsSectionId[] = ['remote', 'appearance']
+const ENV_SECTIONS: readonly SettingsSectionId[] = [
+  'agents',
+  'standing-approvals',
+  'saved-answers',
+  'pricing',
+  'claude',
+  'skill-dependencies'
+]
+const ALWAYS_SECTIONS: readonly SettingsSectionId[] = ['remote-control', 'appearance']
 
 /**
  * Settings (#116, Figma "Settings"): a sticky section nav on the left and the cards on the right:
@@ -223,11 +230,11 @@ export function SettingsPage() {
                 />
               </SettingsSection>
 
-              <SettingsSection id="approvals">
+              <SettingsSection id="standing-approvals">
                 <StandingApprovalsCard />
               </SettingsSection>
 
-              <SettingsSection id="answers">
+              <SettingsSection id="saved-answers">
                 <SavedAnswersCard />
               </SettingsSection>
 
@@ -250,7 +257,7 @@ export function SettingsPage() {
                   </ClaudeCard>
                 </SettingsSection>
 
-                <SettingsSection id="deps">
+                <SettingsSection id="skill-dependencies">
                   <SettingsCard
                     title="Skill dependencies"
                     description={
@@ -321,7 +328,7 @@ brew install poppler`}</Code>
             </>
           )}
 
-          <SettingsSection id="remote">
+          <SettingsSection id="remote-control">
             <RemoteCard />
           </SettingsSection>
 
@@ -555,10 +562,13 @@ function AgentRow({
     <Table.Tr data-default={isDefault || undefined}>
       <Table.Td w={200}>
         <Group gap={12} wrap="nowrap" align="center">
-          <Radio value={a.id} aria-label={`Make ${a.label} the default agent`} size="sm" />
+          <Radio id={`default-agent-${a.id}`} value={a.id} aria-label={`Make ${a.label} the default agent`} size="sm" />
           <Stack gap={2} style={{ minWidth: 0 }}>
             <Group gap={6} wrap="nowrap">
-              <span className={classes.agentName}>{a.label}</span>
+              {/* Clicking the name selects the agent, as the radio's label did before (#116). */}
+              <label htmlFor={`default-agent-${a.id}`} className={classes.agentName}>
+                {a.label}
+              </label>
               <StatusPill tone={a.ready ? 'success' : 'danger'} dot>
                 {a.ready ? 'Ready' : 'Not ready'}
               </StatusPill>
