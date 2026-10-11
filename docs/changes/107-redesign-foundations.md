@@ -42,9 +42,9 @@ the shell are not restyled here beyond what the theme gives them.
 6. **Keep accessible names.** e2e page objects find page titles as `heading level 2`, cards as
    `.mantine-Card-root` with a heading, navbar entries by label. `PageHeader` renders an `h2`,
    `SectionCard` renders Mantine's `Card` with an `h3`.
-7. **Figma references**: screenshots of every App · Dark / Light frame are in
-   `/home/user/figma-cache/frames/` (`<page>-<nodeId>-<slug>.png`), token values in
-   `/home/user/figma-cache/variables.json`. Check there before calling Figma.
+7. **Figma references**: the file is `zhNccc831dRnOhj2tmqqkc` (linked from #95). Frames are on
+   🖥 App · Dark (`2:4`) and 🖥 App · Light (`2:5`); token values and text styles are the Figma
+   variables on 🧭 Foundations (`2:2`). Each page ticket (#108–#117) lists its frame node ids.
 
 ### Button and colour cheat sheet
 
