@@ -22,7 +22,9 @@ test.describe('profile setup', () => {
     await editor.expectTabSelected('Contact')
     await expect(editor.heading('Your master profile')).toBeVisible()
     await expect(app.window.getByLabel('Full name', { exact: true })).toHaveValue('')
-    await expect(editor.saveButton).toBeDisabled()
+    // Nothing to save: the save bar only appears once the form differs from the file.
+    await expect(editor.saveButton).toHaveCount(0)
+    await expect(editor.savedBadge).toBeVisible()
   })
 
   test('a cancelled resume dialog leaves the setup step as it was', async ({ app }) => {

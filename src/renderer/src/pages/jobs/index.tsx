@@ -1,43 +1,32 @@
 import { useEffect, useMemo, useState } from 'react'
-import {
-  ActionBar,
-  Alert,
-  Anchor,
-  Badge,
-  Button,
-  Card,
-  Checkbox,
-  Group,
-  Loader,
-  SegmentedControl,
-  Stack,
-  Text,
-  TextInput,
-  Title
-} from '@mantine/core'
-import { IconClipboardText, IconEyeOff, IconLink, IconSparkles } from '@tabler/icons-react'
-import { DEFAULT_FILTERS, sponsorshipOf, type JobFilters } from '@shared/job-filters'
-import { hasRelevanceSignals, profileSignals, relevantJobs, type JobScore, type ProfileSignals } from '@shared/job-relevance'
+import { Alert, Anchor, Button, Checkbox, Loader, SegmentedControl, Text, TextInput } from '@mantine/core'
+import { IconBriefcase, IconClipboardCheck, IconFilter, IconLink, IconPlus, IconSearch, IconSparkles } from '@tabler/icons-react'
+import { activeFilterCount, DEFAULT_FILTERS, type JobFilters } from '@shared/job-filters'
+import { hasRelevanceSignals, profileSignals, type ProfileSignals } from '@shared/job-relevance'
 import { DEFAULT_JOBS_PREFS, type JobsPrefs } from '@shared/jobs-prefs'
 import { tailorPrefillFor, type Job } from '@shared/jobs-types'
 import { emptyProfile } from '@shared/master-profile'
 import { api, errorText } from '../../api'
 import { useQueue } from '../../components/queue/useQueue'
+import { EmptyState, MonoLabel, PageHeader } from '../../components/ui'
 import { useNavigation } from '../../navigation'
-import { QUEUE_STATUS_LABEL } from '../tailor/status'
-import { BulkTailorModal } from './BulkTailorModal'
+import { BulkTailorModal, type BulkMode } from './BulkTailorModal'
 import { JobDrawer } from './JobDrawer'
 import { JobFiltersBar } from './JobFiltersBar'
+import { JobRow } from './JobRow'
 import { prepareTailor } from './handoff'
-import { ago, SOURCE_LABEL } from './labels'
 import { PasteModal } from './PasteModal'
+import { SelectionBar } from './SelectionBar'
 import { mergeJobs } from './merge'
 import { activeQueueItems, selectable, selectAll, selectAllState, selectedJobs, toggle } from './selection'
-import { defaultShow, visibleJobs, type Show } from './view'
+import { defaultShow, scentView, visibleJobs, type Show } from './view'
+import classes from './jobs.module.css'
+
+const isUrl = (s: string) => /^https?:\/\//i.test(s.trim())
 
 /**
  * Jobs added by URL or pasted; a job can be sent to the Tailor page. Opens on the saved jobs relevant to the
- * master profile. Huntgry does not search job boards (#78).
+ * master profile, each with its Scent score and why it fits. Huntgry does not search job boards (#78).
  */
 export function JobsPage() {
   const { navigate } = useNavigation()
@@ -47,6 +36,7 @@ export function JobsPage() {
   const [pasteOpen, setPasteOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
+  const [filtersOpen, setFiltersOpen] = useState(true)
   /** `null` until the user picks a segment: then the default (Relevant when the profile allows) applies. */
   const [pickedShow, setShow] = useState<Show | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
@@ -56,7 +46,8 @@ export function JobsPage() {
   const [signals, setSignals] = useState<ProfileSignals | null>(null)
   /** Jobs ticked for "Tailor all". */
   const [selection, setSelection] = useState<Set<string>>(new Set())
-  const [bulkOpen, setBulkOpen] = useState(false)
+  /** The Tailor all modal, and the mode it opens in. */
+  const [bulk, setBulk] = useState<BulkMode | null>(null)
   const [dismissing, setDismissing] = useState(false)
   const [queue] = useQueue()
 
@@ -99,8 +90,8 @@ export function JobsPage() {
     navigate('tailor', tailorPrefillFor(await prepareTailor(job, (j) => upsert([j]))))
   }
 
-  const relevant = useMemo(() => (signals && jobs ? relevantJobs(jobs, signals) : []), [jobs, signals])
-  const scoreOf = useMemo(() => new Map<string, JobScore>(relevant.map((r) => [r.job.id, r.score])), [relevant])
+  // One scoring pass: every job's Scent score, and the Relevant list ranked from the same scores.
+  const { scores, relevant } = useMemo(() => scentView(jobs ?? [], signals), [jobs, signals])
   const shown = useMemo(
     () => visibleJobs({ jobs: jobs ?? [], show, relevant, filters, text: filter }),
     [jobs, show, relevant, filters, filter]
@@ -113,6 +104,7 @@ export function JobsPage() {
   const allState = selectAllState(selection, shown)
   const queued = useMemo(() => activeQueueItems(queue?.items ?? []), [queue])
   const queueItemOf = (j: Job) => queued.get(j.id) ?? j.aliases?.map((a) => queued.get(a)).find(Boolean)
+  const filterCount = activeFilterCount(filters)
 
   const open = (jobs ?? []).find((j) => j.id === openId) ?? null
 
@@ -128,19 +120,42 @@ export function JobsPage() {
     setDismissing(false)
   }
 
+  const afterBulk = () => {
+    setBulk(null)
+    setSelection(new Set())
+    navigate('tailor', { view: 'queue' })
+  }
+
   return (
-    <Stack gap="md">
-      <Group justify="space-between">
-        <Title order={2}>Jobs</Title>
-        <Group gap="sm">
-          <Button variant="light" leftSection={<IconClipboardText size={16} />} onClick={() => setPasteOpen(true)}>
-            Paste a job
-          </Button>
-        </Group>
-      </Group>
+    <div className={classes.page}>
+      <PageHeader
+        eyebrow={`The scent board · ${jobs?.length ?? 0} saved`}
+        title="Jobs"
+        subtitle={
+          canRelevant
+            ? 'Ranked by how strongly each posting smells like your master profile.'
+            : 'Postings you added by URL or pasted, newest first.'
+        }
+        actions={
+          <>
+            <Button variant="default" leftSection={<IconClipboardCheck size={16} />} onClick={() => setPasteOpen(true)}>
+              Paste a job
+            </Button>
+            <Button
+              variant="primary"
+              leftSection={<IconSparkles size={16} />}
+              disabled={selected.length === 0}
+              title={selected.length === 0 ? 'Tick the jobs to tailor first' : undefined}
+              onClick={() => setBulk('approve')}
+            >
+              {selected.length > 0 ? `Tailor all (${selected.length})` : 'Tailor all'}
+            </Button>
+          </>
+        }
+      />
 
       {signals && !canRelevant && (
-        <Alert variant="light" color="blue" title="See the jobs that fit you">
+        <Alert variant="light" color="info" title="See the jobs that fit you">
           <Text size="sm">
             Add a headline or a role to your{' '}
             <Anchor component="button" type="button" size="sm" onClick={() => navigate('profile', { section: 'contact' })}>
@@ -152,42 +167,43 @@ export function JobsPage() {
       )}
 
       {error && (
-        <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
+        <Alert color="danger" variant="light" withCloseButton onClose={() => setError(null)}>
           {error}
         </Alert>
       )}
 
-      <Group gap="sm" align="flex-end">
+      <div className={classes.row}>
         <TextInput
-          style={{ flex: 1 }}
+          className={classes.grow}
           leftSection={<IconLink size={16} />}
-          placeholder="Add a job by its posting URL (company careers page, Greenhouse, Lever, …)"
+          placeholder="Add a job by its posting URL (company careers page, Greenhouse, Lever, Ashby, Workday …)"
           value={url}
           onChange={(e) => setUrl(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === 'Enter' && /^https?:\/\//i.test(url.trim()) && !adding && void addUrl()}
+          onKeyDown={(e) => e.key === 'Enter' && isUrl(url) && !adding && void addUrl()}
         />
-        <Button variant="default" onClick={addUrl} loading={adding} disabled={!/^https?:\/\//i.test(url.trim())}>
+        <Button variant="secondary" leftSection={<IconPlus size={16} />} onClick={addUrl} loading={adding} disabled={!isUrl(url)}>
           Add
         </Button>
-      </Group>
+      </div>
 
       {jobs === null || prefs === null || signals === null ? (
         <Loader />
       ) : jobs.length === 0 ? (
-        <Card withBorder radius="md" padding="xl">
-          <Text c="dimmed" ta="center">
-            No saved jobs yet. Add a posting by URL above, or paste one.
-          </Text>
-        </Card>
+        <EmptyState
+          className={classes.empty}
+          compact
+          icon={<IconBriefcase size={22} />}
+          title="No saved jobs yet"
+          description="Add a posting by its URL above, or paste one."
+          actions={
+            <Button variant="default" leftSection={<IconClipboardCheck size={16} />} onClick={() => setPasteOpen(true)}>
+              Paste a job
+            </Button>
+          }
+        />
       ) : (
         <>
-          <Group gap="sm">
-            <TextInput
-              style={{ flex: 1 }}
-              placeholder="Filter saved jobs by title, company, location, technology"
-              value={filter}
-              onChange={(e) => setFilter(e.currentTarget.value)}
-            />
+          <div className={classes.row}>
             <SegmentedControl
               value={show}
               onChange={(v) => setShow(v as Show)}
@@ -199,151 +215,101 @@ export function JobsPage() {
                 { value: 'dismissed', label: 'Dismissed' }
               ]}
             />
-          </Group>
-          <JobFiltersBar filters={filters} onChange={(f) => savePrefs({ filters: f })} />
-          <Group gap="md">
-            <Checkbox
-              size="xs"
-              label={`Select all shown (${shown.filter(selectable).length})`}
-              checked={allState === 'all'}
-              indeterminate={allState === 'some'}
-              disabled={!shown.some(selectable)}
-              onChange={() => setSelection(allState === 'all' ? new Set() : selectAll(selection, shown))}
+            <TextInput
+              className={classes.grow}
+              leftSection={<IconSearch size={16} />}
+              placeholder="Filter by title, company, location, technology"
+              aria-label="Filter saved jobs"
+              value={filter}
+              onChange={(e) => setFilter(e.currentTarget.value)}
             />
-            {selected.length > 0 && (
-              <Anchor size="xs" component="button" type="button" onClick={() => setSelection(new Set())}>
-                Clear
-              </Anchor>
-            )}
-            <Text size="xs" c="dimmed" ml="auto">
-              {shown.length} of {jobs.length} saved jobs
-            </Text>
-          </Group>
+            <Button
+              variant="default"
+              leftSection={<IconFilter size={16} />}
+              aria-expanded={filtersOpen}
+              aria-controls="jobs-filters"
+              onClick={() => setFiltersOpen((o) => !o)}
+            >
+              {filterCount > 0 ? `Filters · ${filterCount}` : 'Filters'}
+            </Button>
+          </div>
+          <JobFiltersBar
+            filters={filters}
+            onChange={(f) => savePrefs({ filters: f })}
+            open={filtersOpen}
+            footer={
+              <div className={classes.selectAll}>
+                <Checkbox
+                  size="xs"
+                  label={`Select all shown (${shown.filter(selectable).length})`}
+                  checked={allState === 'all'}
+                  indeterminate={allState === 'some'}
+                  disabled={!shown.some(selectable)}
+                  onChange={() => setSelection(allState === 'all' ? new Set() : selectAll(selection, shown))}
+                />
+                <span className={classes.dot} aria-hidden>
+                  ·
+                </span>
+                <MonoLabel>
+                  {shown.length} of {jobs.length} saved jobs
+                </MonoLabel>
+              </div>
+            }
+          />
           {show === 'relevant' && shown.length === 0 && (
-            <Text size="sm" c="dimmed" ta="center" py="md">
+            <p className={classes.note}>
               {relevant.length === 0
                 ? 'No saved job matches your master profile yet. Add one by URL or paste it.'
                 : 'No relevant job passes these filters.'}
-            </Text>
+            </p>
           )}
-          <Stack gap="xs">
+          <ul className={classes.list} aria-label="Saved jobs">
             {shown.map((j) => (
-              <Card
+              <JobRow
                 key={j.id}
-                withBorder
-                radius="md"
-                padding="sm"
-                onClick={() => setOpenId(j.id)}
-                style={{ cursor: 'pointer' }}
-              >
-                <Group justify="space-between" wrap="nowrap" align="flex-start">
-                  <Checkbox
-                    mt={2}
-                    aria-label={`Select ${j.title}`}
-                    checked={selection.has(j.id) && selectable(j)}
-                    disabled={!selectable(j)}
-                    // Ticking selects the job; it must not open the drawer.
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={() => setSelection((sel) => toggle(sel, j.id))}
-                  />
-                  <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
-                    <Text fw={600} size="sm" truncate>
-                      {j.title}
-                    </Text>
-                    <Text size="sm" c="dimmed" truncate>
-                      {[j.company, j.location, j.salary].filter(Boolean).join(' · ')}
-                    </Text>
-                    <Text size="xs" c="dimmed" lineClamp={2}>
-                      {j.description}
-                    </Text>
-                    {show === 'relevant' && scoreOf.get(j.id) && (
-                      <Text size="xs" c="teal" truncate>
-                        {scoreOf.get(j.id)!.reasons.join(' · ')}
-                      </Text>
-                    )}
-                  </Stack>
-                  <Stack gap={4} align="flex-end" style={{ flexShrink: 0 }}>
-                    <Badge size="sm" variant="light">
-                      {SOURCE_LABEL[j.source]}
-                    </Badge>
-                    {j.remote && (
-                      <Badge size="sm" variant="light" color="teal">
-                        Remote
-                      </Badge>
-                    )}
-                    {sponsorshipOf(j) === true && (
-                      <Badge size="sm" variant="light" color="grape">
-                        Sponsors visa
-                      </Badge>
-                    )}
-                    {sponsorshipOf(j) === false && (
-                      <Badge size="sm" variant="light" color="orange">
-                        No sponsorship
-                      </Badge>
-                    )}
-                    {queueItemOf(j) && (
-                      <Badge size="sm" variant="light" color={QUEUE_STATUS_LABEL[queueItemOf(j)!.status].color}>
-                        {QUEUE_STATUS_LABEL[queueItemOf(j)!.status].label}
-                      </Badge>
-                    )}
-                    {j.tailoredAt && (
-                      <Badge size="sm" variant="light" color="green">
-                        Tailored
-                      </Badge>
-                    )}
-                    <Text size="xs" c="dimmed">
-                      {ago(j.postedAt)}
-                    </Text>
-                  </Stack>
-                </Group>
-              </Card>
+                job={j}
+                score={scores.get(j.id)}
+                queueItem={queueItemOf(j)}
+                selected={selection.has(j.id)}
+                selectable={selectable(j)}
+                onToggle={() => setSelection((sel) => toggle(sel, j.id))}
+                onOpen={() => setOpenId(j.id)}
+              />
             ))}
-          </Stack>
+          </ul>
         </>
       )}
 
-      <ActionBar opened={selected.length > 0} onClose={() => setSelection(new Set())} aria-label="Selected jobs">
-        <Text size="sm" fw={500} px="xs">
-          {selected.length} selected
-        </Text>
-        <ActionBar.Divider />
-        <Button size="xs" leftSection={<IconSparkles size={14} />} onClick={() => setBulkOpen(true)}>
-          Tailor all
-        </Button>
-        <Button
-          size="xs"
-          variant="light"
-          color="gray"
-          leftSection={<IconEyeOff size={14} />}
-          loading={dismissing}
-          onClick={() => void dismissSelected()}
-        >
-          Dismiss
-        </Button>
-        <Button size="xs" variant="subtle" onClick={() => setSelection(new Set())}>
-          Clear
-        </Button>
-      </ActionBar>
+      <SelectionBar
+        count={selected.length}
+        dismissing={dismissing}
+        onTailor={() => setBulk('approve')}
+        onUnattended={() => setBulk('unattended')}
+        onDismiss={() => void dismissSelected()}
+        onClear={() => setSelection(new Set())}
+      />
       <BulkTailorModal
         jobs={selected}
-        opened={bulkOpen}
-        onClose={() => setBulkOpen(false)}
+        opened={bulk !== null}
+        initialMode={bulk ?? undefined}
+        onClose={() => setBulk(null)}
         onQueued={(res) => {
-          setBulkOpen(false)
           if (res.added === 0) {
+            setBulk(null)
             setError(`Nothing was queued: ${[...new Set(res.skipped.map((s) => s.reason))].join(' ')}`)
             return
           }
-          setSelection(new Set())
-          navigate('tailor', { view: 'queue' })
+          afterBulk()
         }}
-        onStarted={() => {
-          setBulkOpen(false)
-          setSelection(new Set())
-          navigate('tailor', { view: 'queue' })
-        }}
+        onStarted={afterBulk}
       />
-      <JobDrawer job={open} onClose={() => setOpenId(null)} onChange={(j) => upsert([j])} onTailor={tailor} />
+      <JobDrawer
+        job={open}
+        score={open ? scores.get(open.id) : undefined}
+        onClose={() => setOpenId(null)}
+        onChange={(j) => upsert([j])}
+        onTailor={tailor}
+      />
       <PasteModal
         opened={pasteOpen}
         onClose={() => setPasteOpen(false)}
@@ -353,6 +319,6 @@ export function JobsPage() {
           setOpenId(j.id)
         }}
       />
-    </Stack>
+    </div>
   )
 }

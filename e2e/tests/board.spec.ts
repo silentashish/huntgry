@@ -103,6 +103,10 @@ test.describe('board columns', () => {
     await expect(page.card(ARCHIVED.old.title)).toHaveCount(0)
     await expect(page.column('archived')).toContainText('Cards leave the board 7 days after they are archived. 1 older not shown.')
 
+    // Each card carries the Scent ring (#110): the job's score against the profile, or a check for a result with no saved job.
+    await expect(page.card(DEMO.savedJob).getByRole('img', { name: /^Scent \d+ of 100$/ })).toBeVisible()
+    await expect(page.card(DEMO.umbrella).getByRole('img', { name: 'Tailored' })).toBeVisible()
+
     // Each column header counts its cards.
     await expect(page.column('ready').getByLabel('2 cards')).toBeVisible()
     await expect(page.column('review').getByLabel('2 cards')).toBeVisible()
@@ -157,13 +161,17 @@ test.describe('adding and moving cards', () => {
   test('Move to writes the status; Archived records when, and leaving it clears that', async ({ app }) => {
     const page = await openBoard(app)
     const acme = 'software-engineer/acme/acme-4821'
-    expect(await page.moveTargets(DEMO.acme)).toEqual(['Applied', 'Interviewing', 'Offer', 'Rejected', 'Archived'])
+    // The menu shows the card's own column ticked, as a disabled item, above the ones it can go to.
+    await page.card(DEMO.acme).getByRole('button', { name: /^Move / }).click()
+    await expect(page.currentColumnItem('ready')).toBeDisabled()
+    await app.window.keyboard.press('Escape')
+    expect(await page.moveTargets(DEMO.acme)).toEqual(['Applied', 'Interviewing', 'Offer', 'Rejected', 'Archive'])
 
     await page.moveTo(DEMO.acme, 'applied')
     await expect.poll(async () => (await tracking(app.workspace!, acme)).status).toBe('applied')
     expect((await tracking(app.workspace!, acme)).appliedAt).toBe(new Date().toISOString().slice(0, 10))
 
-    await page.moveTo(DEMO.acme, 'archived')
+    await page.moveTo(DEMO.acme, 'archived', 'Archive')
     await expect.poll(async () => (await tracking(app.workspace!, acme)).status).toBe('archived')
     const archivedAt = Date.parse(String((await tracking(app.workspace!, acme)).archivedAt))
     expect(Math.abs(Date.now() - archivedAt)).toBeLessThan(5 * 60 * 1000)
@@ -189,8 +197,8 @@ test.describe('adding and moving cards', () => {
 
   test('archiving a To do job dismisses it; moving it back restores it', async ({ app }) => {
     const page = await openBoard(app)
-    expect(await page.moveTargets(DEMO.savedJob)).toEqual(['Archived'])
-    await page.moveTo(DEMO.savedJob, 'archived')
+    expect(await page.moveTargets(DEMO.savedJob)).toEqual(['Dismiss job'])
+    await page.moveTo(DEMO.savedJob, 'archived', 'Dismiss job')
     await expect.poll(async () => (await readJob(app.workspace!, 'hiring.cafe-demo-1.json')).dismissed).toBe(true)
     expect(Date.parse((await readJob(app.workspace!, 'hiring.cafe-demo-1.json')).dismissedAt)).not.toBeNaN()
     await expect(page.cards('todo')).toHaveCount(0)
@@ -207,7 +215,7 @@ test.describe('adding and moving cards', () => {
     for (const title of ['Site Reliability Engineer', 'Machine Learning Engineer']) {
       await expect(page.card(title).getByRole('button', { name: /^Move / })).toHaveCount(0)
     }
-    expect(await page.moveTargets('Security Engineer')).toEqual(['Rejected', 'Archived'])
+    expect(await page.moveTargets('Security Engineer')).toEqual(['Rejected', 'Archive'])
   })
 })
 

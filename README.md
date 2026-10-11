@@ -116,7 +116,7 @@ Features only add files, plus one line in each registry:
 ## Board
 
 **Board** shows every job of the workspace as one card in Kanban columns: **To do** (saved jobs),
-**Tailoring** (queued and running), **Waiting for review** (a run that needs your reply, an
+**Tailoring** (queued and running), **Needs review** (a run that needs your reply, an
 unattended result to approve), **Ready to apply**, **Applied**, **Interviewing**, **Offer**,
 **Rejected** and **Archived**. Paste a posting link at the top of To do to save the job, and press
 **Tailor** on its card to queue it. The card then moves on by itself as the run goes. Drag a card

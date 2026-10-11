@@ -71,7 +71,7 @@ describe('buildBoard', () => {
     expect(board.columns.map((c) => c.label)).toEqual([
       'To do',
       'Tailoring',
-      'Waiting for review',
+      'Needs review',
       'Ready to apply',
       'Applied',
       'Interviewing',
@@ -216,7 +216,7 @@ describe('moveFor', () => {
     expect(moveTargets(card(board, 'job:url:z'))).toEqual(['todo'])
   })
 
-  it('moves an application between status columns, never into Tailoring or Waiting for review', () => {
+  it('moves an application between status columns, never into Tailoring or Needs review', () => {
     const ready = card(board, 'app:software-engineer/acme/r')
     expect(moveFor(ready, 'applied')).toEqual({
       kind: 'application',

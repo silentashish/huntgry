@@ -60,16 +60,16 @@ export class TailorPage {
   }
 
   /**
-   * One choice of the form's agent picker (a Mantine SegmentedControl): the radio
-   * input, named "Claude (default)", "Codex", "Antigravity" or "<name>: not available".
-   * The input itself is visually hidden; `pickAgent` clicks its label.
+   * One choice of the form's agent picker (radio cards): the native radio input, named
+   * "Claude (default)", "Codex", "Antigravity" or "<name>: not available". The input is
+   * transparent and covers its card, so clicking it is clicking the card.
    */
   agentChoice(label: 'Claude' | 'Codex' | 'Antigravity'): Locator {
     return this.page.getByRole('radio', { name: new RegExp(`^${label}\\b`) })
   }
 
   async pickAgent(label: 'Claude' | 'Codex' | 'Antigravity'): Promise<void> {
-    await this.agentChoice(label).locator('xpath=following-sibling::label[1]').click()
+    await this.agentChoice(label).click()
     await expect(this.agentChoice(label)).toBeChecked()
   }
 
@@ -98,9 +98,9 @@ export class TailorPage {
     return this.page.getByRole('heading', { name: title, level: 3 })
   }
 
-  /** The open run's status badge. */
+  /** The open run's status pill (next to its title; the metrics below also say "Waiting for you"). */
   async expectStatus(status: RunStatusText, timeout = 15_000): Promise<void> {
-    await expect(this.runCard.getByText(status, { exact: true })).toBeVisible({ timeout })
+    await expect(this.runCard.getByTestId('run-status').getByText(status, { exact: true })).toBeVisible({ timeout })
   }
 
   /** The transcript's badge of a tool call (`Read`, `Bash`, `view_file`, …). */

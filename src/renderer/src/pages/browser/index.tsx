@@ -1,19 +1,23 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ActionIcon, Alert, Box, Button, Center, CloseButton, Group, Loader, Stack, Text, TextInput, UnstyledButton } from '@mantine/core'
+import { ActionIcon, Alert, Button, CloseButton, Kbd, Loader, Text, TextInput, UnstyledButton } from '@mantine/core'
 import {
   IconArrowLeft,
   IconArrowRight,
   IconExternalLink,
+  IconLock,
   IconPlus,
   IconRefresh,
+  IconShieldCheck,
   IconWorld,
   IconX
 } from '@tabler/icons-react'
 import type { BrowserState } from '@shared/browser-types'
 import { api, errorText } from '../../api'
-import type { PageParams } from '../../navigation'
+import { EmptyState, MonoLabel, StatusPill } from '../../components/ui'
+import { useNavigation, type PageParams } from '../../navigation'
 import { ApplyPanel } from './ApplyPanel'
-import { activeTab, displayUrl, EMPTY_STATE, findTab, tabLabel } from './state'
+import classes from './browser.module.css'
+import { activeTab, displayUrl, EMPTY_STATE, findTab, isSecure, modKey, tabLabel } from './state'
 
 /**
  * The in-app browser. Pages are native views owned by main and drawn over the
@@ -28,6 +32,7 @@ export function BrowserPage({ params }: { params: PageParams['browser'] }) {
   const placeholder = useRef<HTMLDivElement>(null)
   const address = useRef<HTMLInputElement>(null)
   const handled = useRef<PageParams['browser'] | null>(null)
+  const { navigate } = useNavigation()
   const tab = activeTab(state)
 
   /** Runs a browser call; errors go to the notice row. Resolves to whether it succeeded. */
@@ -110,92 +115,98 @@ export function BrowserPage({ params }: { params: PageParams['browser'] }) {
   }
 
   const notice = error ?? tab?.error ?? null
+  const mod = modKey(navigator.platform)
+  const pageLoaded = tab !== null && tab.url !== 'about:blank'
 
   return (
-    <Stack gap={0} h="100dvh">
-      <Group gap={4} px="xs" pt={6} wrap="nowrap" style={{ overflowX: 'auto', flexShrink: 0 }}>
-        {state.tabs.map((t) => {
-          const selected = t.id === state.activeId
-          return (
-            <Group
-              key={t.id}
-              gap={4}
-              wrap="nowrap"
-              px={8}
-              py={4}
-              style={{
-                minWidth: 120,
-                maxWidth: 220,
-                flexShrink: 0,
-                borderRadius: 'var(--mantine-radius-md) var(--mantine-radius-md) 0 0',
-                background: selected ? 'var(--mantine-color-default)' : 'transparent',
-                border: '1px solid var(--mantine-color-default-border)',
-                borderBottom: selected ? '1px solid var(--mantine-color-default)' : undefined
-              }}
-            >
-              {t.loading ? <Loader size={12} /> : <IconWorld size={14} style={{ flexShrink: 0 }} />}
-              <UnstyledButton
-                onClick={() => void run(() => api.browser.activate(t.id))}
-                title={t.url}
-                style={{ flex: 1, minWidth: 0 }}
-              >
-                <Text size="xs" fw={selected ? 600 : 400} truncate>
-                  {tabLabel(t)}
-                </Text>
-              </UnstyledButton>
-              <CloseButton size="xs" aria-label={`Close ${tabLabel(t)}`} onClick={() => void run(() => api.browser.close(t.id))} />
-            </Group>
-          )
-        })}
-        <ActionIcon variant="subtle" color="gray" aria-label="New tab" onClick={newTab}>
-          <IconPlus size={16} />
+    <div className={classes.page}>
+      <div className={classes.strip}>
+        {state.tabs.length > 0 && (
+          <div className={classes.tabs}>
+            {state.tabs.map((t) => {
+              const selected = t.id === state.activeId
+              const label = tabLabel(t)
+              return (
+                <div key={t.id} className={classes.tab} data-active={selected || undefined}>
+                  <span className={classes.tabIcon} aria-hidden>
+                    {t.loading ? <Loader size={12} color="var(--hg-text-accent)" /> : <IconWorld size={14} />}
+                  </span>
+                  <UnstyledButton
+                    className={classes.tabLabel}
+                    onClick={() => void run(() => api.browser.activate(t.id))}
+                    title={t.url}
+                    aria-current={selected ? 'true' : undefined}
+                  >
+                    {label}
+                  </UnstyledButton>
+                  <CloseButton
+                    size="xs"
+                    icon={<IconX size={12} />}
+                    aria-label={`Close ${label}`}
+                    onClick={() => void run(() => api.browser.close(t.id))}
+                  />
+                </div>
+              )
+            })}
+          </div>
+        )}
+        <ActionIcon className={classes.newTab} variant="subtle" size="md" aria-label="New tab" onClick={newTab}>
+          <IconPlus size={14} />
         </ActionIcon>
-      </Group>
+        {state.tabs.length === 0 ? (
+          <span className={classes.noTabs}>No tabs</span>
+        ) : (
+          <MonoLabel size="xs" className={classes.stripHint}>
+            {mod}T new tab · {mod}L address
+          </MonoLabel>
+        )}
+      </div>
 
-      <Group
-        gap={4}
-        px="xs"
-        py={6}
-        wrap="nowrap"
-        style={{ flexShrink: 0, borderTop: '1px solid var(--mantine-color-default-border)', borderBottom: '1px solid var(--mantine-color-default-border)' }}
-      >
+      <div className={classes.toolbar}>
         <ActionIcon
           variant="subtle"
-          color="gray"
+          size="lg"
           aria-label="Back"
           disabled={!tab?.canGoBack}
           onClick={() => tab && void run(() => api.browser.back(tab.id))}
         >
-          <IconArrowLeft size={18} />
+          <IconArrowLeft size={16} />
         </ActionIcon>
         <ActionIcon
           variant="subtle"
-          color="gray"
+          size="lg"
           aria-label="Forward"
           disabled={!tab?.canGoForward}
           onClick={() => tab && void run(() => api.browser.forward(tab.id))}
         >
-          <IconArrowRight size={18} />
+          <IconArrowRight size={16} />
         </ActionIcon>
         {tab?.loading ? (
-          <ActionIcon variant="subtle" color="gray" aria-label="Stop" onClick={() => void run(() => api.browser.stop(tab.id))}>
-            <IconX size={18} />
+          <ActionIcon variant="subtle" size="lg" aria-label="Stop" onClick={() => void run(() => api.browser.stop(tab.id))}>
+            <IconX size={16} />
           </ActionIcon>
         ) : (
           <ActionIcon
             variant="subtle"
-            color="gray"
+            size="lg"
             aria-label="Reload"
-            disabled={!tab || tab.url === 'about:blank'}
+            disabled={!pageLoaded}
             onClick={() => tab && void run(() => api.browser.reload(tab.id))}
           >
-            <IconRefresh size={18} />
+            <IconRefresh size={16} />
           </ActionIcon>
         )}
         <TextInput
           ref={address}
-          size="xs"
-          style={{ flex: 1 }}
+          className={classes.address}
+          classNames={{ input: classes.addressInput }}
+          leftSection={
+            isSecure(tab) && draft === null ? (
+              <IconLock size={16} className={classes.addressIcon} data-secure aria-hidden />
+            ) : (
+              <IconWorld size={16} className={classes.addressIcon} aria-hidden />
+            )
+          }
           placeholder="Enter a URL, e.g. jobs.ashbyhq.com/company"
           aria-label="Address"
           spellCheck={false}
@@ -211,16 +222,21 @@ export function BrowserPage({ params }: { params: PageParams['browser'] }) {
             }
           }}
         />
+        {pageLoaded && (
+          <StatusPill tone="trail" leftSection={<IconShieldCheck size={12} />}>
+            Sandboxed · own cookie jar
+          </StatusPill>
+        )}
         <Button
           size="xs"
-          variant="default"
+          variant="subtle"
           leftSection={<IconExternalLink size={14} />}
-          disabled={!tab || tab.url === 'about:blank'}
+          disabled={!pageLoaded}
           onClick={() => tab && void run(() => api.browser.openExternal(tab.id))}
         >
           Open in browser
         </Button>
-      </Group>
+      </div>
 
       {notice && (
         <Alert color="red" variant="light" radius={0} py={6} withCloseButton={error !== null} onClose={() => setError(null)}>
@@ -228,27 +244,42 @@ export function BrowserPage({ params }: { params: PageParams['browser'] }) {
         </Alert>
       )}
 
-      <Group gap={0} wrap="nowrap" align="stretch" style={{ flex: 1, minHeight: 0 }}>
-        <Box ref={placeholder} style={{ flex: 1, minWidth: 0, minHeight: 0, position: 'relative' }}>
+      <div className={classes.body}>
+        <div ref={placeholder} className={classes.view}>
           {state.tabs.length === 0 && (
-            <Center h="100%">
-              <Stack align="center" gap="xs" maw={420}>
-                <IconWorld size={40} stroke={1.3} color="var(--mantine-color-dimmed)" />
-                <Text fw={600}>No pages open</Text>
-                <Text size="sm" c="dimmed" ta="center">
-                  Open a posting from Jobs or the Dashboard, or enter a URL above. Pages stay open while you use the rest of
-                  the app.
-                </Text>
-                <Button size="xs" variant="light" leftSection={<IconPlus size={14} />} onClick={newTab}>
-                  New tab
-                </Button>
-              </Stack>
-            </Center>
+            <div className={classes.empty}>
+              <EmptyState
+                icon={<IconWorld size={28} stroke={1.6} />}
+                title="No pages open"
+                titleOrder={2}
+                description={
+                  <>
+                    Open a posting from Jobs or the Dashboard, or enter a URL above. Pages stay open while you use the rest of
+                    the app, in their own sandboxed cookie jar.
+                  </>
+                }
+                actions={
+                  <>
+                    <Button variant="primary" leftSection={<IconPlus size={16} />} onClick={newTab}>
+                      New tab
+                    </Button>
+                    <Button variant="default" rightSection={<IconArrowRight size={16} />} onClick={() => navigate('jobs')}>
+                      Go to Jobs
+                    </Button>
+                  </>
+                }
+                hint={
+                  <>
+                    <Kbd size="xs">{mod}L</Kbd> address bar <Kbd size="xs">{mod}T</Kbd> new tab
+                  </>
+                }
+              />
+            </div>
           )}
-        </Box>
+        </div>
         {/* Auto-apply (#24): beside the page, never over it (the page is a native view). */}
         <ApplyPanel activeTabId={state.activeId} />
-      </Group>
-    </Stack>
+      </div>
+    </div>
   )
 }

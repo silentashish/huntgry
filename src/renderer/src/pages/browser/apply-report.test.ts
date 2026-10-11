@@ -71,8 +71,8 @@ describe('answers in the panel (#71)', () => {
       ['Needs you', ['Gender', 'Authorized']],
       ['Your choice', ['Country']]
     ])
-    expect(badgeOf(q({ fact: 'gender' }))).toEqual({ label: 'Answer once', color: 'orange' })
-    expect(badgeOf(q({}))).toEqual({ label: 'Your choice', color: 'gray' })
+    expect(badgeOf(q({ fact: 'gender' }))).toEqual({ label: 'Answer once', tone: 'warning' })
+    expect(badgeOf(q({}))).toEqual({ label: 'Your choice', tone: 'neutral' })
     expect(badgeOf(q({ fact: 'gender', outcome: 'filled' })).label).toBe('Filled')
   })
 

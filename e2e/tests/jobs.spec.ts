@@ -46,7 +46,13 @@ test.describe('relevant jobs and filters (#73)', () => {
     // Both seeded jobs fit "Backend Engineer" with Go: the closer title first.
     await expect(jobs.segment('Relevant')).toHaveAccessibleName('Relevant (2)')
     await expect.poll(() => jobs.listedTitles()).toEqual(['Staff Backend Engineer', 'Infrastructure Engineer'])
-    await expect(app.window.getByText(/^Title: Backend Engineer · Skills: .*\bGo\b.* · Remote$/)).toBeVisible()
+    // Each row has its Scent score and says why it fits (#111).
+    await expect(jobs.scoreRing('Staff Backend Engineer')).toBeVisible()
+    expect(await jobs.reasons('Staff Backend Engineer')).toEqual([
+      'Title: Backend Engineer',
+      expect.stringMatching(/^Skills: .*\bGo\b/),
+      'Remote'
+    ])
     // No board search or refresh is offered (#78).
     await expect(app.window.getByRole('button', { name: 'Refresh', exact: true })).toHaveCount(0)
     await expect(app.window.getByRole('button', { name: 'Search', exact: true })).toHaveCount(0)
@@ -59,17 +65,17 @@ test.describe('relevant jobs and filters (#73)', () => {
     await expect.poll(() => jobs.listedTitles()).toHaveLength(2)
 
     // Neither seeded job says it sponsors visas.
-    await jobs.filterSponsorship('Only sponsors')
+    await jobs.filterSponsorship('Visa: only sponsors')
     await expect.poll(() => jobs.listedTitles()).toEqual([])
     // The page shows a change before main has saved it; leave only once it is on disk.
     await expect.poll(async () => (await savedPrefs(app.workspace!)).filters?.sponsorship).toBe('only-yes')
 
     await shell.goTo('dashboard')
     await shell.goTo('jobs')
-    await expect(jobs.sponsorshipFilter).toHaveValue('Only sponsors')
+    await expect(jobs.sponsorshipFilter).toHaveValue('Visa: only sponsors')
 
     // Unknown counts as passing "Hide no sponsorship": every job is back.
-    await jobs.filterSponsorship('Hide "no sponsorship"')
+    await jobs.filterSponsorship('Visa: hide “no sponsorship”')
     await jobs.show('All')
     await expect.poll(() => jobs.listedTitles()).toHaveLength(2)
     await expect.poll(async () => (await savedPrefs(app.workspace!)).filters?.sponsorship).toBe('hide-no')
@@ -246,4 +252,48 @@ test('"Open posting" from the drawer lands on the Browser page with the posting 
   await jobs.drawerButton('Open posting').click()
   await new Shell(app.window).expectActive('browser')
   await expect(new BrowserPage(app.window).address).toHaveValue(`${mock.origin}/postings/lever-style`)
+})
+
+test.describe('Scent score and bulk actions (#111)', () => {
+  test('the Filters button folds the filter fields away and back', async ({ app }) => {
+    const jobs = await openJobs(app)
+    const button = app.window.getByRole('button', { name: /^Filters/ })
+    await expect(button).toHaveAttribute('aria-expanded', 'true')
+    await expect(jobs.sponsorshipFilter).toBeVisible()
+    await button.click()
+    await expect(button).toHaveAttribute('aria-expanded', 'false')
+    await expect(jobs.sponsorshipFilter).toBeHidden()
+    // The list and Select all stay.
+    await expect.poll(() => jobs.listedTitles()).toHaveLength(2)
+    await button.click()
+    await expect(jobs.sponsorshipFilter).toBeVisible()
+  })
+
+  test('the job drawer shows the Scent score and why the job fits', async ({ app }) => {
+    const jobs = await openJobs(app, 'Relevant')
+    await jobs.openJob('Staff Backend Engineer')
+    await expect(jobs.drawer.getByRole('img', { name: /^Scent \d+ of 100$/ })).toBeVisible()
+    await expect(jobs.drawer).toContainText(/(Strong|Fair|Faint) scent/)
+    await expect(jobs.drawer).toContainText('Title: Backend Engineer')
+  })
+
+  test('"Run unattended" in the selection bar opens Tailor all unattended, and Cancel keeps the selection', async ({ app }) => {
+    const jobs = await openJobs(app)
+    await jobs.select('Infrastructure Engineer').check()
+    await jobs.selectionBar.getByRole('button', { name: 'Run unattended' }).click()
+    const modal = app.window.getByRole('dialog', { name: 'Tailor 1 job' })
+    await expect(modal).toBeVisible()
+    await expect(modal.getByRole('radio', { name: 'Run unattended' })).toBeChecked()
+    await expect(modal.getByRole('button', { name: 'Continue' })).toBeVisible()
+    // The agents are one radio group: arrow keys move the choice.
+    const agents = modal.getByRole('radiogroup', { name: 'Agent' })
+    await expect(agents.getByRole('radio', { name: /^Claude\b/ })).toBeChecked()
+    await agents.getByRole('radio', { name: /^Claude\b/ }).focus()
+    await app.window.keyboard.press('ArrowRight')
+    await expect(agents.getByRole('radio', { name: /^Codex\b/ })).toBeChecked()
+    await expect(agents.getByRole('radio', { name: /^Codex\b/ })).toBeFocused()
+    await modal.getByRole('button', { name: 'Cancel' }).click()
+    await expect(modal).toBeHidden()
+    await expect(jobs.selectionBar).toContainText('1 selected')
+  })
 })

@@ -6,6 +6,7 @@ import { buildBoard, type BoardCard } from '@shared/board'
 import type { Job } from '@shared/jobs-types'
 import type { QueueItem } from '@shared/queue-types'
 import { BoardCardView } from './BoardCardView'
+import { cardScent, type Scent } from './card'
 
 // The preload bridge does not exist here; a card only calls it through its handlers.
 vi.mock('../../api', () => ({ api: {}, errorText: String }))
@@ -64,11 +65,12 @@ const only = (input: Parameters<typeof buildBoard>[0]): BoardCard => {
 }
 
 const noop = () => undefined
-const render = (card: BoardCard) =>
+const render = (card: BoardCard, scent: Scent = cardScent(card, null)) =>
   renderToStaticMarkup(
     <MantineProvider>
       <BoardCardView
         card={card}
+        scent={scent}
         dragging={false}
         onDragStart={noop}
         onDragEnd={noop}
@@ -76,6 +78,7 @@ const render = (card: BoardCard) =>
         onMove={noop}
         onTailor={noop}
         onFollow={noop}
+        onApply={noop}
       />
     </MantineProvider>
   )
@@ -88,6 +91,17 @@ describe('BoardCardView', () => {
     expect(html).toMatch(/>Tailor</)
     expect(html).toContain('aria-label="Move Backend Engineer"')
     expect(html).toContain('draggable="true"')
+    // The company avatar and, without a profile to score against, the company's initial in the ring.
+    expect(html).toContain('role="img" aria-label="Acme"')
+    expect(html).toContain('aria-label="No Scent score yet"')
+    expect(html).toContain('Remote')
+  })
+
+  it('shows the Scent score in the ring when there is one', () => {
+    const card = only({ jobs: [job], applications: [], queue: [] })
+    const html = render(card, { mode: 'score', value: 87, reasons: ['Remote'] })
+    expect(html).toContain('aria-label="Scent 87 of 100"')
+    expect(html).toMatch(/>87</)
   })
 
   it('a run waiting for a reply links to it and cannot be moved', () => {
@@ -103,6 +117,8 @@ describe('BoardCardView', () => {
     expect(ready).toContain('ATS passed')
     expect(ready).toContain('applied 2026-10-05')
     expect(ready).not.toMatch(/>Review</)
+    // An application with nothing to score shows the "done" ring.
+    expect(ready).toContain('aria-label="Tailored"')
     const unreviewed = render(
       only({
         jobs: [],
@@ -112,5 +128,15 @@ describe('BoardCardView', () => {
     )
     expect(unreviewed).toContain('Unreviewed')
     expect(unreviewed).toMatch(/>Review</)
+    expect(unreviewed).not.toMatch(/>Apply</)
+  })
+
+  it('a result ready to apply with a posting URL and resume.pdf offers Apply', () => {
+    const ready = { ...app({}), jobUrl: 'https://jobs.example.com/g', files: ['resume.pdf', 'cover.pdf'] }
+    const html = render(only({ jobs: [], applications: [ready], queue: [] }))
+    expect(html).toMatch(/>Apply</)
+    expect(html).toContain('resume.pdf · cover.pdf')
+    const noUrl = render(only({ jobs: [], applications: [app({})], queue: [] }))
+    expect(noUrl).not.toMatch(/>Apply</)
   })
 })

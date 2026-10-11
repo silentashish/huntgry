@@ -5,7 +5,6 @@ import {
   DEFAULT_LOCATION,
   FULL_BLEED,
   NavigationContext,
-  SETTINGS_SECTION_LABEL,
   WIDE,
   locationOf,
   redirect,
@@ -15,7 +14,7 @@ import {
 } from '../../navigation'
 import { useThemePreference } from '../../theme'
 import { CommandPalette, MOD_LABEL } from '../palette/CommandPalette'
-import { LeaveGuardModal } from './LeaveGuardModal'
+import { ConfirmModal } from '../profile/ConfirmModal'
 import { Sidebar } from './Sidebar'
 import classes from './shell.module.css'
 
@@ -93,20 +92,17 @@ export function AppLayout({ workspacePath, initialLocation, profile = null, onSw
     return () => window.removeEventListener('keydown', onKey)
   }, [resolved, setPreference])
 
-  // "Settings → Pricing" from the palette: bring that section into view once the page has drawn it.
+  // "Settings → Pricing" from the palette: bring that card (`data-settings-section`, #116) into view once
+  // the page has drawn it (the cards appear after the environment check).
   const section = location.page === 'settings' ? location.params?.section : undefined
   useEffect(() => {
     if (!section) return
-    const label = SETTINGS_SECTION_LABEL[section].toLowerCase()
     let frames = 0
     let raf = 0
     const find = () => {
-      const root = main.current
-      const el =
-        root?.querySelector(`[data-settings-section="${section}"]`) ??
-        [...(root?.querySelectorAll('h2, h3, h4, h5') ?? [])].find((h) => h.textContent?.trim().toLowerCase() === label)
+      const el = main.current?.querySelector(`[data-settings-section="${section}"]`)
       if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' })
-      else if (++frames < 90) raf = requestAnimationFrame(find)
+      else if (++frames < 120) raf = requestAnimationFrame(find)
     }
     raf = requestAnimationFrame(find)
     return () => cancelAnimationFrame(raf)
@@ -147,7 +143,17 @@ export function AppLayout({ workspacePath, initialLocation, profile = null, onSw
         guarded={guarded}
       />
 
-      <LeaveGuardModal message={pending?.message ?? null} onKeep={() => setPending(null)} onDiscard={() => pending?.proceed()} />
+      {/* The leave guard (Figma 17:1030), the same question the Profile page asks itself. */}
+      <ConfirmModal
+        opened={pending !== null}
+        title="Discard unsaved changes?"
+        cancelLabel="Keep editing"
+        confirmLabel="Discard and leave"
+        onCancel={() => setPending(null)}
+        onConfirm={() => pending?.proceed()}
+      >
+        {pending?.message}
+      </ConfirmModal>
     </NavigationContext.Provider>
   )
 }

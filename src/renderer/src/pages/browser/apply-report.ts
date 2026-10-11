@@ -1,38 +1,54 @@
 import { FACTS, isDecline } from '@shared/apply-facts'
 import type { AdapterStep, ApplySession, ApplyStatus, FieldReport, FillOutcome, FillReport } from '@shared/apply-types'
+import type { UiTone } from '../../components/ui'
 
 /** Display helpers for the Apply panel (pure, unit-tested). */
 
-export const STATUS_META: Record<ApplyStatus, { label: string; color: string }> = {
-  opened: { label: 'Loading page', color: 'blue' },
-  ready: { label: 'Ready to fill', color: 'blue' },
-  waiting: { label: 'Your turn in the page', color: 'yellow' },
-  filling: { label: 'Filling', color: 'blue' },
-  filled: { label: 'Filled: review and submit', color: 'teal' },
-  'submitted-detected': { label: 'Submitted', color: 'teal' },
-  blocked: { label: 'Human check', color: 'orange' },
-  closed: { label: 'Tab closed', color: 'gray' },
-  error: { label: 'Error', color: 'red' }
+/** A pill: its text and Scent Trail tone. */
+export interface PillMeta {
+  label: string
+  tone: UiTone
 }
 
-export const OUTCOME_META: Record<FillOutcome, { label: string; color: string }> = {
-  filled: { label: 'Filled', color: 'teal' },
-  uploaded: { label: 'Attached', color: 'teal' },
-  kept: { label: 'Kept yours', color: 'gray' },
-  'skipped-no-value': { label: 'Not in profile', color: 'orange' },
-  'skipped-unsupported': { label: 'Your choice', color: 'gray' },
-  unmatched: { label: 'Fill in', color: 'orange' },
-  ambiguous: { label: 'Unsure', color: 'orange' },
-  rejected: { label: 'Rejected', color: 'red' },
-  'to-upload': { label: 'Pending', color: 'blue' },
-  'upload-failed': { label: 'Attach yourself', color: 'red' }
+export const STATUS_META: Record<ApplyStatus, PillMeta> = {
+  opened: { label: 'Loading page', tone: 'info' },
+  ready: { label: 'Ready to fill', tone: 'info' },
+  waiting: { label: 'Your turn in the page', tone: 'warning' },
+  filling: { label: 'Filling', tone: 'info' },
+  filled: { label: 'Filled: review and submit', tone: 'trail' },
+  'submitted-detected': { label: 'Submitted', tone: 'success' },
+  blocked: { label: 'Human check', tone: 'accent' },
+  closed: { label: 'Tab closed', tone: 'neutral' },
+  error: { label: 'Error', tone: 'danger' }
+}
+
+export const OUTCOME_META: Record<FillOutcome, PillMeta> = {
+  filled: { label: 'Filled', tone: 'trail' },
+  uploaded: { label: 'Attached', tone: 'trail' },
+  kept: { label: 'Kept yours', tone: 'neutral' },
+  'skipped-no-value': { label: 'Not in profile', tone: 'warning' },
+  'skipped-unsupported': { label: 'Your choice', tone: 'neutral' },
+  unmatched: { label: 'Fill in', tone: 'warning' },
+  ambiguous: { label: 'Unsure', tone: 'warning' },
+  rejected: { label: 'Rejected', tone: 'danger' },
+  'to-upload': { label: 'Pending', tone: 'info' },
+  'upload-failed': { label: 'Attach yourself', tone: 'danger' }
 }
 
 const DONE: ReadonlySet<FillOutcome> = new Set<FillOutcome>(['filled', 'uploaded', 'kept'])
 
+export type ReportGroupTitle = 'Needs you' | 'Filled' | 'Your choice'
+
 export interface ReportGroup {
-  title: string
+  title: ReportGroupTitle
   fields: FieldReport[]
+}
+
+/** The tone of a group's count pill: what waits for the user is warning, what is done is trail. */
+export const GROUP_TONE: Record<ReportGroupTitle, UiTone> = {
+  'Needs you': 'warning',
+  Filled: 'trail',
+  'Your choice': 'neutral'
 }
 
 /**
@@ -42,9 +58,9 @@ export interface ReportGroup {
 const learnable = (f: FieldReport) => f.outcome === 'skipped-unsupported' && (f.fact !== undefined || f.suggestion !== undefined)
 
 /** The badge of a report line: its outcome's, "AI draft" for a drafted answer (#82), or "Answer once" for a choice Huntgry can learn. */
-export function badgeOf(f: FieldReport): { label: string; color: string } {
-  if (f.suggestedBy === 'draft' && f.outcome === 'filled') return { label: 'AI draft', color: 'violet' }
-  return learnable(f) ? { label: 'Answer once', color: 'orange' } : OUTCOME_META[f.outcome]
+export function badgeOf(f: FieldReport): PillMeta {
+  if (f.suggestedBy === 'draft' && f.outcome === 'filled') return { label: 'AI draft', tone: 'review' }
+  return learnable(f) ? { label: 'Answer once', tone: 'warning' } : OUTCOME_META[f.outcome]
 }
 
 /** "Needs you" (required first), "Filled", "Your choice"; empty groups are left out. */
@@ -57,11 +73,12 @@ export function groupReport(report: FillReport | null): ReportGroup[] {
   const choices = report.fields
     .filter((f) => f.outcome === 'skipped-unsupported' && !learnable(f))
     .sort((a, b) => Number(b.required) - Number(a.required))
-  return [
+  const groups: ReportGroup[] = [
     { title: 'Needs you', fields: needs },
     { title: 'Filled', fields: done },
     { title: 'Your choice', fields: choices }
-  ].filter((g) => g.fields.length > 0)
+  ]
+  return groups.filter((g) => g.fields.length > 0)
 }
 
 const STEP_LABEL: Record<AdapterStep, string> = {

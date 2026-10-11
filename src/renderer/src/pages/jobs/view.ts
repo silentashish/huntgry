@@ -1,6 +1,28 @@
 import { matchesFilters, type JobFilters } from '@shared/job-filters'
-import type { ScoredJob } from '@shared/job-relevance'
+import {
+  hasRelevanceSignals,
+  rankRelevant,
+  scoreJob,
+  type JobScore,
+  type ProfileSignals,
+  type ScoredJob
+} from '@shared/job-relevance'
 import type { Job } from '@shared/jobs-types'
+
+/**
+ * One scoring pass over the saved jobs: the Scent score of every job by id (the relevance score of #73,
+ * shown on each row and in the drawer), and the Relevant list ranked from those same scores (what
+ * `relevantJobs` gives). Both empty when the profile has nothing to match on.
+ */
+export function scentView(
+  jobs: readonly Job[],
+  signals: ProfileSignals | null,
+  now = new Date()
+): { scores: Map<string, JobScore>; relevant: ScoredJob[] } {
+  if (!signals || !hasRelevanceSignals(signals)) return { scores: new Map(), relevant: [] }
+  const scored = jobs.map((job) => ({ job, score: scoreJob(job, signals, now) }))
+  return { scores: new Map(scored.map((s) => [s.job.id, s.score])), relevant: rankRelevant(scored) }
+}
 
 /** Segments of the saved-job list. */
 export type Show = 'relevant' | 'all' | 'new' | 'tailored' | 'dismissed'

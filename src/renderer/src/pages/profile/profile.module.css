@@ -1,0 +1,68 @@
+/* Profile page views (#115): Knowledge graph and Skills layout. Colours are --hg-* tokens. */
+
+.view {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.search {
+  flex: 1 1 220px;
+  max-width: 320px;
+}
+
+.jump {
+  width: 200px;
+}
+
+.sort {
+  width: 180px;
+}
+
+.spacer {
+  flex: 1 1 0;
+}
+
+/* Graph (or table) on the left, the node panel on the right (Figma: 800 + 16 + 320). */
+.split {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.split > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.side {
+  flex: 0 0 320px;
+  min-width: 0;
+  position: sticky;
+  top: 16px;
+}
+
+@media (max-width: 1100px) {
+  .split {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .side {
+    flex-basis: auto;
+    position: static;
+  }
+}
+
+.emptyCard {
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-xl);
+  background-color: var(--hg-bg-surface);
+}

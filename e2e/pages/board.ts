@@ -5,7 +5,7 @@ import type { BoardColumnId } from '../../src/shared/board'
 export const COLUMN: Record<BoardColumnId, string> = {
   todo: 'To do',
   tailoring: 'Tailoring',
-  review: 'Waiting for review',
+  review: 'Needs review',
   ready: 'Ready to apply',
   applied: 'Applied',
   interviewing: 'Interviewing',
@@ -13,6 +13,9 @@ export const COLUMN: Record<BoardColumnId, string> = {
   rejected: 'Rejected',
   archived: 'Archived'
 }
+
+/** The Move to menu's last item, which moves a card to Archived: "Archive", or "Dismiss job" on a saved job's card (#110). */
+export type ArchiveItem = 'Archive' | 'Dismiss job'
 
 /**
  * The Board page (#85): one column per stage (`<section aria-label="To do">`, …), one card per job
@@ -57,19 +60,32 @@ export class BoardPage {
     return this.cards(id).evaluateAll((cards) => cards.map((c) => c.getAttribute('aria-label') ?? ''))
   }
 
-  /** Moves a card with its Move to menu. */
-  async moveTo(title: string, id: BoardColumnId): Promise<void> {
+  /**
+   * Moves a card with its Move to menu. Archived is reached by the menu's last item, so name it:
+   * `'Archive'` for an application, `'Dismiss job'` for a saved job.
+   */
+  async moveTo(title: string, id: Exclude<BoardColumnId, 'archived'>): Promise<void>
+  async moveTo(title: string, id: 'archived', item: ArchiveItem): Promise<void>
+  async moveTo(title: string, id: BoardColumnId, item?: ArchiveItem): Promise<void> {
     await this.card(title).getByRole('button', { name: /^Move / }).click()
-    await this.page.getByRole('menuitem', { name: COLUMN[id], exact: true }).click()
+    await this.page.getByRole('menuitem', { name: id === 'archived' ? item : COLUMN[id], exact: true }).click()
     await this.expectIn(id, title)
   }
 
-  /** The columns a card's Move to menu offers, in order (the menu is closed again). */
+  /** The card's own column in its open Move to menu: a disabled item named "<column> (current column)". */
+  currentColumnItem(id: BoardColumnId): Locator {
+    return this.page.getByRole('menuitem', { name: `${COLUMN[id]} (current column)`, exact: true })
+  }
+
+  /**
+   * The menu items of a card's Move to menu, in order (the menu is closed again): the columns it can
+   * go to, then "Archive" / "Dismiss job". The current column's disabled item is left out.
+   */
   async moveTargets(title: string): Promise<string[]> {
     await this.card(title).getByRole('button', { name: /^Move / }).click()
     const items = this.page.getByRole('menuitem')
     await expect(items.first()).toBeVisible()
-    const names = await items.allInnerTexts()
+    const names = await items.and(this.page.locator(':not([data-disabled])')).allInnerTexts()
     await this.page.keyboard.press('Escape')
     await expect(items).toHaveCount(0)
     return names.map((n) => n.trim())
