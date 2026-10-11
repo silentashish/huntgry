@@ -29,21 +29,45 @@ test.describe('dashboard rows', () => {
     await expect(dash.row('Initech')).toContainText('hiring.cafe')
 
     // Status comes from huntgry.json; the applied date is shown under Created.
-    await expect(dash.rowStatus('Acme')).toHaveValue('Generated')
-    await expect(dash.rowStatus('Globex')).toHaveValue('Applied')
+    await expect(dash.rowStatus('Acme')).toHaveText('Generated')
+    await expect(dash.rowStatus('Globex')).toHaveText('Applied')
     await expect(dash.row('Globex')).toContainText('applied 2026-09-20')
-    await expect(dash.rowStatus('Initech')).toHaveValue('Interviewing')
-    await expect(dash.rowStatus('Wayne')).toHaveValue('Rejected')
+    await expect(dash.rowStatus('Initech')).toHaveText('Interviewing')
+    await expect(dash.rowStatus('Wayne')).toHaveText('Rejected')
 
     // Build result from build-report.json: ok, failed, missing.
     await expect(dash.row('Acme')).toContainText('ATS passed')
     await expect(dash.row('Globex')).toContainText('Build failed')
     await expect(dash.row('Umbrella')).toContainText('No report')
 
-    // Summary cards count the statuses.
+    // The stat tiles count the statuses; Total is the selected filter.
     for (const [label, count] of [['Total', '5'], ['Generated', '2'], ['Applied', '1'], ['Interviewing', '1'], ['Offer', '0'], ['Rejected', '1']] as const) {
-      await expect(dash.statCard(label)).toHaveText(`${label}${count}`)
+      await expect(dash.statValue(label)).toHaveText(count)
     }
+    await expect(dash.statCard('Total')).toHaveAttribute('aria-pressed', 'true')
+    await expect(dash.statCard('Applied')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  test('the header greets by the master profile\'s first name and the "Needs you" strip lists what is ready to apply', async ({ app }) => {
+    const dash = new Dashboard(app.window)
+    await dash.expectCompanies(ALL)
+    // The heading's text also holds its visually hidden "Dashboard:" prefix.
+    await expect(dash.heading).toHaveText(/Good (morning|afternoon|evening), Alex\.$/)
+    await expect(app.window.getByText(/^\d+ things? needs? you before the hunt moves on\.$/)).toBeVisible()
+
+    // Acme is the only Generated application with a resume.pdf and a posting URL.
+    const strip = app.window.getByRole('region', { name: 'Needs you' })
+    await expect(strip).toContainText('1 ready to apply')
+    await expect(strip).not.toContainText('waiting for your reply')
+    await strip.getByRole('button', { name: 'Apply', exact: true }).click()
+    await expect(dash.drawer).toBeVisible()
+    await expect(dash.drawer.getByRole('heading', { level: 2 })).toContainText('Acme')
+    await dash.closeDrawer()
+
+    // Marking it applied empties that card, and with nothing else waiting the strip goes away.
+    await dash.setRowStatus('Acme', 'Applied')
+    await expect(strip).toHaveCount(0)
+    await expect(app.window.getByText('Nothing needs you right now. The hound keeps sniffing.')).toBeVisible()
   })
 
   test('the status cards, the status filter and the search narrow the table', async ({ app }) => {
@@ -96,7 +120,7 @@ test.describe('dashboard rows', () => {
     // run that straddles UTC midnight accepts either day.
     const utcDate = () => new Date().toISOString().slice(0, 10)
     const before = utcDate()
-    await dash.pickStatus(dash.rowStatus('Acme'), 'Applied')
+    await dash.setRowStatus('Acme', 'Applied')
     await expect(dash.row('Acme')).toContainText(/applied \d{4}-\d{2}-\d{2}/)
     const after = utcDate()
     await expect.poll(() => tracking(app.workspace!, id)).toMatchObject({ status: 'applied', notes: '' })
@@ -106,12 +130,12 @@ test.describe('dashboard rows', () => {
     expect([before, after]).toContain(written.appliedAt)
     const today = written.appliedAt as string
 
-    // The summary cards follow.
-    await expect(dash.statCard('Applied')).toHaveText('Applied2')
-    await expect(dash.statCard('Generated')).toHaveText('Generated1')
+    // The stat tiles follow.
+    await expect(dash.statValue('Applied')).toHaveText('2')
+    await expect(dash.statValue('Generated')).toHaveText('1')
 
     // Back to generated: appliedAt stays (the date is history, the status is the user's call).
-    await dash.pickStatus(dash.rowStatus('Acme'), 'Interviewing')
+    await dash.setRowStatus('Acme', 'Interviewing')
     await expect.poll(() => tracking(app.workspace!, id)).toMatchObject({ status: 'interviewing', appliedAt: today })
   })
 })
@@ -142,7 +166,7 @@ test.describe('application drawer', () => {
     // Status from the drawer.
     await dash.pickStatus(drawer.getByRole('combobox', { name: 'Status' }), 'Interviewing')
     await expect.poll(() => tracking(app.workspace!, id)).toMatchObject({ status: 'interviewing' })
-    await expect(dash.rowStatus('Umbrella')).toHaveValue('Interviewing')
+    await expect(dash.rowStatus('Umbrella')).toHaveText('Interviewing')
 
     // Notes are written when the field loses focus.
     await drawer.getByLabel('Notes').fill('Recruiter: Dana. Take-home due Friday.')
@@ -211,8 +235,8 @@ test.describe('workspace watch', () => {
     await dash.expectCompanies([...ALL, 'Stark'])
     await expect(dash.row('Stark')).toContainText('SRE')
     await expect(dash.row('Stark')).toContainText('Site Reliability Engineer')
-    await expect(dash.rowStatus('Stark')).toHaveValue('Generated')
-    await expect(dash.statCard('Total')).toHaveText('Total6')
+    await expect(dash.rowStatus('Stark')).toHaveText('Generated')
+    await expect(dash.statValue('Total')).toHaveText('6')
 
     // A new job description also changes the insights: the SRE posting is counted.
     await expect(app.window.getByText(/compared with 7 job descriptions/)).toBeVisible()

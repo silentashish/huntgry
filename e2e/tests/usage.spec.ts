@@ -69,6 +69,8 @@ test.describe('run observability', () => {
     await expect(usage.kpi('runs')).toHaveText('1')
     await expect(usage.kpi('tokens')).toHaveText('8.6k')
     await expect(usage.kpi('cost')).toHaveText('$0.02')
+    await usage.breakdownToggle.click()
+    await expect(usage.breakdown).toBeVisible()
     await expect(usage.breakdown.getByRole('row').filter({ hasText: 'claude-haiku-4-5-20251001' })).toContainText('Claude')
 
     // Settings → Pricing: Haiku input at $2 instead of $1 → 2 × (2300 × 2 + 2000 × 5) / 1M = $0.0292.
