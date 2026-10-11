@@ -73,4 +73,45 @@ test.describe('profile setup', () => {
     await expect(editor.notice).toContainText('Imported from sample-resume.pdf')
     await expect(app.window.getByLabel('Full name', { exact: true })).toHaveValue('Jordan Example')
   })
+
+  test('a resume dropped on the window is imported like a picked one', async ({ app }) => {
+    const setup = new ProfileSetup(app.window)
+    await setup.expectVisible(app.workspace!)
+    await setup.dropFile(resumeFixture('sample-resume.docx'))
+
+    const shell = new Shell(app.window)
+    await shell.expectActive('profile')
+    const editor = new ProfileEditor(app.window)
+    await expect(editor.notice).toContainText('Imported from sample-resume.docx')
+    await expect(app.window.getByLabel('Full name', { exact: true })).toHaveValue('Jordan Example')
+    // Nothing is on disk until Save.
+    expect(await readFile(join(app.workspace!, 'master-profile.md'), 'utf8')).not.toContain('Jordan Example')
+  })
+
+  test('a dropped file that is not a resume, or several files at once, are refused', async ({ app }) => {
+    const setup = new ProfileSetup(app.window)
+    await setup.expectVisible(app.workspace!)
+
+    await setup.dropFiles([{ name: 'photo.png', content: 'not a resume' }])
+    await expect(setup.error).toContainText('photo.png: Unsupported file type. Use .docx, .pdf, .txt or .md.')
+
+    // Several files: nothing is imported, not even the first.
+    await setup.dropFiles([
+      { name: 'resume.md', content: '# Jordan Example' },
+      { name: 'other.md', content: '# Someone Else' }
+    ])
+    await expect(setup.error).toContainText('Drop one resume at a time.')
+    await setup.expectVisible(app.workspace!)
+  })
+
+  test('a dropped resume is read from its contents, not from a path', async ({ app }) => {
+    // A File made in the page has no path on disk; its bytes are all main gets.
+    const setup = new ProfileSetup(app.window)
+    await setup.expectVisible(app.workspace!)
+    await setup.dropFiles([{ name: 'cv.MD', content: '# Jordan Example\njordan.example@example.com\n' }])
+
+    await new Shell(app.window).expectActive('profile')
+    await expect(new ProfileEditor(app.window).notice).toContainText('Imported from cv.MD')
+    await expect(app.window.getByLabel('Full name', { exact: true })).toHaveValue('Jordan Example')
+  })
 })

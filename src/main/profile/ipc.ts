@@ -1,10 +1,10 @@
 import { BrowserWindow, dialog, ipcMain, shell, type OpenDialogOptions } from 'electron'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 import type { MasterProfile, ResumeImportResult, SaveProfileResult } from '@shared/master-profile'
 import { IPC_CHANNELS } from '@shared/workspace-types'
 import { requireCurrentWorkspace } from '../current-workspace'
-import { readResumeLines, RESUME_EXTENSIONS, ResumeReadError } from '../resume/extract'
-import { parseResume } from '../resume/parse'
+import { RESUME_EXTENSIONS } from '../resume/extract'
+import { importDroppedResume, importResumeFrom, isAppWindowTopFrame } from './resume-import'
 import { readProfile, saveProfile } from './store'
 
 /** The master profile file of the current workspace. The renderer never supplies this path. */
@@ -50,15 +50,15 @@ export function registerProfileIpc(): void {
     const win = BrowserWindow.fromWebContents(event.sender)
     const res = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
     if (res.canceled || res.filePaths.length === 0) return { ok: false, cancelled: true }
-    const file = res.filePaths[0]
-    try {
-      const { profile, warnings } = parseResume(await readResumeLines(file))
-      return { ok: true, fileName: basename(file), profile, warnings }
-    } catch (err) {
-      const reason = err instanceof ResumeReadError ? err.message : 'The file could not be read as a resume.'
-      console.error('Resume import failed:', err)
-      return { ok: false, cancelled: false, error: `${basename(file)}: ${reason}` }
-    }
+    return importResumeFrom(res.filePaths[0])
+  })
+
+  // A resume dropped on the window (profile setup): its bytes, never a path; same parser, no dialog.
+  // Only the app window's top frame may call it, not an in-app browser tab or a subframe.
+  ipcMain.handle(IPC_CHANNELS.profileImportResumeFile, async (event, dropped: unknown): Promise<ResumeImportResult> => {
+    const appContents = BrowserWindow.fromWebContents(event.sender)?.webContents
+    if (!isAppWindowTopFrame(event, appContents)) throw new Error('Not allowed from this page.')
+    return importDroppedResume(dropped)
   })
 
   ipcMain.handle(IPC_CHANNELS.profileOpenInEditor, async () => {

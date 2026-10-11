@@ -121,6 +121,27 @@ export type ResumeImportResult =
   | { ok: true; fileName: string; profile: MasterProfile; warnings: string[] }
   | { ok: false; cancelled: boolean; error?: string }
 
+/** Resume formats the import reads (picked or dropped). */
+export const RESUME_EXTENSIONS = ['docx', 'pdf', 'txt', 'md'] as const
+export type ResumeExtension = (typeof RESUME_EXTENSIONS)[number]
+
+/** Largest resume the import reads, picked or dropped. */
+export const MAX_RESUME_BYTES = 20 * 1024 * 1024
+
+/** A dropped resume as sent to main: its contents and display name, never a path. */
+export interface DroppedResume {
+  name: string
+  bytes: Uint8Array
+}
+
+/** The allow-listed extension of a file name (case-insensitive), or null. */
+export function resumeExtensionOf(name: string): ResumeExtension | null {
+  const dot = name.lastIndexOf('.')
+  if (dot === -1) return null
+  const ext = name.slice(dot + 1).toLowerCase()
+  return (RESUME_EXTENSIONS as readonly string[]).includes(ext) ? (ext as ResumeExtension) : null
+}
+
 export function emptyContact(): ContactInfo {
   return {
     name: '',
