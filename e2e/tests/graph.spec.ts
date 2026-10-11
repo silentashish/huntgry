@@ -12,7 +12,7 @@ import { Shell } from '../pages/shell'
 test.use({ workspace: 'demo' })
 
 async function openGraph(app: { window: import('@playwright/test').Page }): Promise<GraphPage> {
-  await new Shell(app.window).goTo('graph')
+  await new Shell(app.window).openGraph()
   const graph = new GraphPage(app.window)
   await graph.expectVisible()
   return graph
