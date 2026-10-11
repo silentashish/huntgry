@@ -13,7 +13,8 @@ test.describe('workspace picker', () => {
     const picker = new WorkspacePicker(app.window)
     await picker.expectVisible()
     await expect(picker.notice).toHaveCount(0)
-    await expect(app.window.getByRole('heading', { name: 'Huntgry' })).toBeVisible()
+    await expect(picker.recent).toHaveCount(0)
+    await expect(app.window.getByRole('heading', { name: 'Huntgry', level: 2 })).toBeVisible()
   })
 
   test('Create on a missing folder writes the three files and lands on profile setup', async ({ app }) => {
@@ -123,7 +124,7 @@ test.describe('remembered workspace', () => {
     const again = new Shell(app.window)
     await again.expectVisible(app.workspace!)
     await again.expectActive('dashboard')
-    await expect(app.window.getByRole('button', { name: 'Create New Workspace' })).toHaveCount(0)
+    await expect(new WorkspacePicker(app.window).createButton).toHaveCount(0)
   })
 
   test('a remembered workspace whose profile was deleted shows the notice and offers Create', async ({ app }) => {
@@ -135,12 +136,20 @@ test.describe('remembered workspace', () => {
     await picker.expectVisible()
     await expect(picker.notice).toContainText(`The last workspace (${app.workspace}) no longer has a master profile.`)
     await expect(picker.notice.getByRole('button', { name: 'Create workspace here' })).toBeVisible()
+    // A workspace that cannot be opened is not offered as the last one.
+    await expect(picker.recent).toHaveCount(0)
   })
 
-  test('Switch workspace returns to the picker', async ({ app }) => {
+  test('Switch workspace returns to the picker, which offers the last workspace again', async ({ app }) => {
     const shell = new Shell(app.window)
     await shell.expectVisible(app.workspace!)
     await shell.switchWorkspaceButton.click()
-    await new WorkspacePicker(app.window).expectVisible()
+    const picker = new WorkspacePicker(app.window)
+    await picker.expectVisible()
+
+    await expect(picker.recent).toContainText(app.workspace!)
+    await picker.recent.getByRole('button', { name: 'Open' }).click()
+    await shell.expectVisible(app.workspace!)
+    await shell.expectActive('dashboard')
   })
 })

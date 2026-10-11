@@ -71,4 +71,31 @@ test.describe('profile setup', () => {
     await expect(editor.notice).toContainText('Imported from sample-resume.pdf')
     await expect(app.window.getByLabel('Full name', { exact: true })).toHaveValue('Jordan Example')
   })
+
+  test('a resume dropped on the window is imported like a picked one', async ({ app }) => {
+    const setup = new ProfileSetup(app.window)
+    await setup.expectVisible(app.workspace!)
+    await setup.dropFile(resumeFixture('sample-resume.docx'))
+
+    const shell = new Shell(app.window)
+    await shell.expectActive('profile')
+    const editor = new ProfileEditor(app.window)
+    await expect(editor.notice).toContainText('Imported from sample-resume.docx')
+    await expect(app.window.getByLabel('Full name', { exact: true })).toHaveValue('Jordan Example')
+    // Nothing is on disk until Save.
+    expect(await readFile(join(app.workspace!, 'master-profile.md'), 'utf8')).not.toContain('Jordan Example')
+  })
+
+  test('a dropped file that is not a resume, or has no path on disk, is refused', async ({ app }) => {
+    const setup = new ProfileSetup(app.window)
+    await setup.expectVisible(app.workspace!)
+
+    await setup.dropScriptFile('photo.png', 'not a resume')
+    await expect(setup.error).toContainText('photo.png: Unsupported file type. Use .docx, .pdf, .txt or .md.')
+
+    // A File made by page script carries no path, so main has nothing to read.
+    await setup.dropScriptFile('resume.md', '# Jordan Example')
+    await expect(setup.error).toContainText('Only files from this computer can be imported.')
+    await setup.expectVisible(app.workspace!)
+  })
 })

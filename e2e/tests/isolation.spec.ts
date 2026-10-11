@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path'
 import { closeApp, createSandbox, destroySandbox, expect, launchApp, test, type AppFixture } from '../fixtures/app'
 import { rememberWorkspace, seedWorkspace } from '../fixtures/workspace'
 import { Shell } from '../pages/shell'
+import { WorkspacePicker } from '../pages/workspace-picker'
 
 /**
  * The harness's own guarantees: the app under test sees nothing of the
@@ -155,7 +156,7 @@ test.describe('agent CLI discovery', () => {
 test('closing the app removes its sandbox (userData, HOME, workspaces)', async () => {
   const sandbox = await createSandbox()
   const launched = await launchApp(sandbox)
-  await expect(launched.window.getByRole('button', { name: 'Create New Workspace' })).toBeVisible()
+  await expect(new WorkspacePicker(launched.window).createButton).toBeVisible()
   expect(existsSync(sandbox.userData)).toBe(true)
   await closeApp(launched.electronApp)
   await destroySandbox(sandbox)
