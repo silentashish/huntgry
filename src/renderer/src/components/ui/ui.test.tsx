@@ -85,6 +85,8 @@ describe('ScoreRing', () => {
     expect(done).toContain('<svg')
     const initial = render(<ScoreRing mode="initial" letter="Stripe" />)
     expect(initial).toContain('>St<')
+    // An astral character counts as one letter, not two halves of a surrogate pair.
+    expect(render(<ScoreRing mode="initial" letter="🦊x" />)).toContain('>🦊x<')
     expect(initial).toContain('data-tone="neutral"')
   })
 })
