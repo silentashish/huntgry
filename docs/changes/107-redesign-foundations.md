@@ -221,6 +221,10 @@ const { preference, setPreference, resolved } = useThemePreference()   // from '
 - e2e: `shell.spec.ts`, `dashboard.spec.ts`, `jobs.spec.ts`, `board.spec.ts`, `tailor.spec.ts`,
   `graph.spec.ts`, `profile-editor.spec.ts` under `xvfb-run` on Linux, with `DISPLAY` passed to
   the app by a local, uncommitted change to `e2e/fixtures/app.ts` (the harness does not pass it
-  on Linux; see `docs/testing/e2e.md`).
+  on Linux; see `docs/testing/e2e.md`). 40 of 42 pass; the two that fail
+  (`jobs.spec.ts` "Tailor all … opens the queue view with both", which finds leftover child
+  processes, and `profile-editor.spec.ts` "closing the window with unsaved edits …", where
+  closing the last window quits the app on Linux) fail the same way with `main`'s renderer, so
+  they are Linux harness issues, not this change. macOS CI runs the whole suite.
 - Screenshots of the running app (pages and a local parts gallery) in dark and light, compared
   with the Figma frames.
