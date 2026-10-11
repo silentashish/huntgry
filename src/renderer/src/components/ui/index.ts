@@ -3,6 +3,7 @@ export { CompanyAvatar, avatarToneOf, initialsOf, type AvatarTone, type CompanyA
 export { EmptyState, type EmptyStateProps } from './EmptyState'
 export { KpiTile, type KpiTileProps } from './KpiTile'
 export { MonoLabel, type MonoLabelProps } from './MonoLabel'
+export { PawLogo } from './PawLogo'
 export { PageHeader, type PageHeaderProps } from './PageHeader'
 export { ProgressBar, type ProgressBarProps } from './ProgressBar'
 export { ScoreRing, scoreLabel, scoreTone, type ScoreRingProps } from './ScoreRing'
