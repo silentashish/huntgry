@@ -19,6 +19,8 @@ interface Target {
 export function useApply(onError: (message: string) => void): {
   apply(target: Target): void
   busy: boolean
+  /** The "Already applied" question is open (a page under a native view hides it meanwhile). */
+  confirmOpen: boolean
   modal: ReactNode
 } {
   const { navigate } = useNavigation()
@@ -81,5 +83,5 @@ export function useApply(onError: (message: string) => void): {
       </Group>
     </Modal>
   )
-  return { apply, busy, modal }
+  return { apply, busy, confirmOpen: confirm !== null, modal }
 }

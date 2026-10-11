@@ -1,0 +1,275 @@
+/* App shell sidebar (Figma Dashboard 5:2 → Sidebar 5:3). */
+
+.navbar {
+  background-color: var(--hg-bg-surface);
+  border-right: 1px solid var(--hg-border-subtle);
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Brand: paw, name, version line. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px 12px;
+  flex: none;
+}
+
+.paw {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: block;
+}
+
+.brandName {
+  font-family: var(--hg-font-ui);
+  font-weight: 600;
+  font-size: 20px;
+  line-height: 26px;
+  letter-spacing: -0.005em;
+  color: var(--hg-text-primary);
+}
+
+.mono {
+  font-family: var(--hg-font-mono);
+  font-weight: 500;
+  font-size: 10px;
+  line-height: 12px;
+  letter-spacing: 0.08em;
+}
+
+.version {
+  composes: mono;
+  color: var(--hg-text-muted);
+  white-space: nowrap;
+}
+
+/* "Sniff anything…" opens the palette. */
+.search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--hg-border-default);
+  border-radius: var(--hg-radius-md);
+  background-color: var(--hg-bg-surface-sunken);
+  color: var(--hg-text-muted);
+  font-family: var(--hg-font-ui);
+  font-size: 13px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+  flex: none;
+}
+
+.search:hover {
+  border-color: var(--hg-border-strong);
+}
+
+.search:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: 1px;
+}
+
+.searchLabel {
+  flex: 1;
+  min-width: 0;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  flex: 0 1 auto;
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--hg-radius-md);
+  background: transparent;
+  color: var(--hg-text-secondary);
+  font-family: var(--hg-font-ui);
+  font-weight: 500;
+  font-size: 13px;
+  line-height: 16px;
+  text-align: left;
+  cursor: pointer;
+  flex: none;
+}
+
+.navItem:hover {
+  background-color: var(--hg-bg-hover);
+  color: var(--hg-text-primary);
+}
+
+.navItem:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: -2px;
+}
+
+.navItem[data-active] {
+  background-color: var(--hg-accent-primary-soft);
+  color: var(--hg-text-accent);
+}
+
+.navIcon {
+  flex: none;
+}
+
+.navLabel {
+  flex: 1;
+  min-width: 0;
+}
+
+.count {
+  composes: mono;
+  font-size: 11px;
+  line-height: 14px;
+  letter-spacing: 0.06em;
+  padding: 0 6px;
+  border-radius: var(--hg-radius-full);
+  background-color: var(--hg-bg-subtle);
+  color: var(--hg-text-secondary);
+}
+
+.spacer {
+  flex: 1 1 0;
+  min-height: 8px;
+}
+
+/* Unattended pipeline mini-card. */
+.pipeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-lg);
+  background-color: var(--hg-bg-surface-sunken);
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--hg-font-ui);
+  flex: none;
+}
+
+.pipeline:hover {
+  border-color: var(--hg-border-default);
+}
+
+.pipeline:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: 1px;
+}
+
+.pipelineHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--hg-accent-secondary);
+}
+
+.pipelineTitle {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--hg-text-primary);
+}
+
+.pipelineFacts {
+  composes: mono;
+  color: var(--hg-text-muted);
+}
+
+/* Bottom: theme toggle, workspace. */
+.bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 4px 0;
+  border-top: 1px solid var(--hg-border-subtle);
+  flex: none;
+  margin-top: 4px;
+}
+
+.theme {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-md);
+  background-color: var(--hg-bg-surface-sunken);
+}
+
+.themeOption {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 0;
+  border: 0;
+  border-radius: var(--hg-radius-sm);
+  background: transparent;
+  color: var(--hg-icon-muted);
+  cursor: pointer;
+}
+
+.themeOption:hover {
+  color: var(--hg-text-primary);
+}
+
+.themeOption:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: -1px;
+}
+
+.themeOption[aria-pressed='true'] {
+  background-color: var(--hg-bg-surface-raised);
+  color: var(--hg-text-primary);
+  box-shadow: var(--hg-shadow-card);
+}
+
+.workspace {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px 6px 8px;
+  border-radius: var(--hg-radius-md);
+  background-color: var(--hg-bg-surface-sunken);
+  color: var(--hg-icon-muted);
+  min-width: 0;
+}
+
+.workspacePath {
+  composes: mono;
+  flex: 1;
+  min-width: 0;
+  color: var(--hg-text-secondary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* Truncate at the start: the folder name at the end is what tells workspaces apart. */
+  direction: rtl;
+  text-align: left;
+}
+
+/* Page content: Figma's 1136 px column (1440 frame − 240 sidebar − 2 × 32 padding). */
+.content {
+  max-width: 1136px;
+  margin: 0 auto;
+}

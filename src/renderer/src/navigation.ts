@@ -11,7 +11,8 @@ export interface PageParams {
   dashboard: undefined
   /** Every job as a card, from To do to Archived (#85). */
   board: undefined
-  jobs: undefined
+  /** `reload` (any new value) draws the page afresh, e.g. after the palette's "Paste a job" saved one. */
+  jobs: { reload?: number } | undefined
   /** Opens `url` in an in-app browser tab (or shows the open tabs when absent). */
   browser: { url?: string } | undefined
   /** Pre-fills the Tailor form, e.g. from a job found on the Jobs page. */
@@ -36,6 +37,10 @@ export interface PageParams {
     | undefined
   /** Unattended results to review (#31); opens on one application when given. */
   review: { applicationId?: string } | undefined
+  /**
+   * The Knowledge graph lives in Profile now (#95, #108). Kept so callers can still `navigate('graph', …)`:
+   * `locationOf` turns it into `profile` with `{ view: 'graph', nodeId }`, so no location is ever on `graph`.
+   */
   graph: { nodeId?: string } | undefined
   /**
    * The master profile (#95: Profile absorbs the Knowledge graph). `view` picks the Editor, the
@@ -43,7 +48,8 @@ export interface PageParams {
    * section and `nodeId` selects a graph node (graph view).
    */
   profile: { view?: ProfileView; section?: ProfileSection; nodeId?: string } | undefined
-  settings: undefined
+  /** `section` asks Settings to show one of its sections (the ⌘K palette's "Settings → …" entries). */
+  settings: { section?: SettingsSection } | undefined
 }
 
 export type Page = keyof PageParams
@@ -51,14 +57,52 @@ export type Page = keyof PageParams
 /** Views of the Profile page. */
 export type ProfileView = 'editor' | 'graph' | 'skills'
 
+/** Sections of the Settings page, in its section nav order (Figma Settings 14:2). */
+export type SettingsSection =
+  | 'agents'
+  | 'standing-approvals'
+  | 'saved-answers'
+  | 'pricing'
+  | 'claude'
+  | 'skill-dependencies'
+  | 'remote-control'
+  | 'appearance'
+
 /** Tabs of the master profile editor, used to deep-link into a section. */
 export type ProfileSection = 'contact' | 'summary' | 'experience' | 'projects' | 'education' | 'credentials' | 'notes'
 
 /** Where the app is: a page and the parameters it was opened with. */
 export type Location = { [P in Page]: { page: P; params: PageParams[P] } }[Page]
 
-/** Navbar order. */
-export const PAGES: readonly Page[] = ['dashboard', 'board', 'jobs', 'browser', 'tailor', 'review', 'graph', 'profile', 'settings']
+/** Pages with an entry in the sidebar; `graph` is a view of Profile (#95). */
+export type NavPage = Exclude<Page, 'graph'>
+
+/** Navbar order: 8 entries (the Knowledge graph moved into Profile). */
+export const PAGES: readonly NavPage[] = ['dashboard', 'board', 'jobs', 'browser', 'tailor', 'review', 'profile', 'settings']
+
+/** Sidebar and palette label of each page (#108: "Master profile" is now "Profile"). */
+export const PAGE_LABEL: Record<NavPage, string> = {
+  dashboard: 'Dashboard',
+  board: 'Board',
+  jobs: 'Jobs',
+  browser: 'Browser',
+  tailor: 'Tailor',
+  review: 'Review',
+  profile: 'Profile',
+  settings: 'Settings'
+}
+
+/** Settings section names, as its section nav shows them. */
+export const SETTINGS_SECTION_LABEL: Record<SettingsSection, string> = {
+  agents: 'Agents',
+  'standing-approvals': 'Standing approvals',
+  'saved-answers': 'Saved answers',
+  pricing: 'Pricing',
+  claude: 'Claude',
+  'skill-dependencies': 'Skill dependencies',
+  'remote-control': 'Remote control',
+  appearance: 'Appearance'
+}
 
 /** Pages drawn edge to edge, without the shell's padding and max width. */
 export const FULL_BLEED: ReadonlySet<Page> = new Set<Page>(['browser'])
@@ -68,12 +112,24 @@ export const WIDE: ReadonlySet<Page> = new Set<Page>(['board'])
 
 export const DEFAULT_LOCATION: Location = { page: 'dashboard', params: undefined }
 
-/** Builds a location; params are optional only for pages whose params may be `undefined`. */
+/**
+ * Where a location really opens: `graph` (the old Knowledge graph page) becomes Profile's graph view,
+ * keeping the selected node. Every other location is returned as is.
+ */
+export function redirect(location: Location): Location {
+  if (location.page !== 'graph') return location
+  const nodeId = location.params?.nodeId
+  return { page: 'profile', params: nodeId ? { view: 'graph', nodeId } : { view: 'graph' } }
+}
+
+/**
+ * Builds a location (after `redirect`); params are optional only for pages whose params may be `undefined`.
+ */
 export function locationOf<P extends Page>(
   page: P,
   ...params: undefined extends PageParams[P] ? [PageParams[P]?] : [PageParams[P]]
 ): Location {
-  return { page, params: params[0] } as Location
+  return redirect({ page, params: params[0] } as Location)
 }
 
 /** Parameters of `location` when it is on `page`, else `undefined`. */

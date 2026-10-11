@@ -1,12 +1,32 @@
 import { describe, expect, it } from 'vitest'
 import { tailorPrefillFor, type Job } from '@shared/jobs-types'
-import { DEFAULT_LOCATION, FULL_BLEED, locationOf, PAGES, paramsFor, WIDE } from './navigation'
+import { DEFAULT_LOCATION, FULL_BLEED, locationOf, PAGES, paramsFor, redirect, WIDE, type Location } from './navigation'
 
 describe('navigation', () => {
   it('starts on the dashboard and lists every page once', () => {
     expect(DEFAULT_LOCATION.page).toBe('dashboard')
     expect(new Set(PAGES).size).toBe(PAGES.length)
     expect(PAGES).toContain('profile')
+  })
+
+  it('has 8 sidebar entries: the Knowledge graph is a view of Profile (#108)', () => {
+    expect(PAGES).toEqual(['dashboard', 'board', 'jobs', 'browser', 'tailor', 'review', 'profile', 'settings'])
+    expect(PAGES as readonly string[]).not.toContain('graph')
+  })
+
+  it('opens the graph page as the Profile graph view, keeping the node (#108)', () => {
+    expect(locationOf('graph')).toEqual({ page: 'profile', params: { view: 'graph' } })
+    expect(locationOf('graph', { nodeId: 'skill:postgres' })).toEqual({ page: 'profile', params: { view: 'graph', nodeId: 'skill:postgres' } })
+    const raw = { page: 'graph', params: { nodeId: 'role:0' } } as Location
+    expect(redirect(raw)).toEqual({ page: 'profile', params: { view: 'graph', nodeId: 'role:0' } })
+    expect(paramsFor(redirect(raw), 'graph')).toBeUndefined()
+  })
+
+  it('leaves every other location as it is', () => {
+    const tailor = locationOf('tailor', { runId: 'r-1' })
+    expect(redirect(tailor)).toBe(tailor)
+    expect(locationOf('profile', { view: 'skills' })).toEqual({ page: 'profile', params: { view: 'skills' } })
+    expect(paramsFor(locationOf('settings', { section: 'pricing' }), 'settings')?.section).toBe('pricing')
   })
 
   it('carries typed params to the target page', () => {
