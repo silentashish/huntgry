@@ -23,7 +23,7 @@ import { readApplication, scanApplications } from '../applications/scan'
 import { updateTracking } from '../applications/tracking'
 import { MAX_TEXT } from '../cli/command'
 import { RUN_ID_PATTERN } from '../cli/runs'
-import { IN_PROGRESS_REASON } from '../pipeline/pipeline'
+import { RERUN_REASON } from '@shared/review-types'
 import { HUNTGRY_DIR } from '../workspace/constants'
 import { getReview, sameReview, updateReview, type RecordedReview } from './authority'
 import { addApprovals, approvalsForPrompt, loadApprovals, removeAllApprovals, removeApproval } from './approvals'
@@ -400,17 +400,8 @@ export function approveReview(deps: ReviewDeps, input: ApproveReviewInput, via: 
   )
 }
 
-/** The reason a result carries while its run works on the user's answers (it is Unreviewed, not settled). */
-export const RERUN_REASON = 'Re-running with your answers.'
-
-/**
- * A listed result whose run has finished with it: not one marked Unreviewed while its unattended
- * run still works (`IN_PROGRESS_REASON`) or works on the user's answers (`RERUN_REASON`). What the
- * phone counts and is told about as waiting for review (#42).
- */
-export function isSettledReview(item: Pick<ReviewItem, 'reason'>): boolean {
-  return item.reason !== IN_PROGRESS_REASON && item.reason !== RERUN_REASON
-}
+/** Shared with the renderer (#109): the Dashboard counts results to review with the same rule. */
+export { isSettledReview, RERUN_REASON } from '@shared/review-types'
 
 /** What the agent is told on a re-run: the user's decisions, plus the ticked reframings as approved. */
 export function rerunMessage(answers: string, approved: { sourceFact: string; wording: string }[]): string {

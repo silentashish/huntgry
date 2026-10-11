@@ -1,30 +1,47 @@
 import { useEffect, useState } from 'react'
 import {
+  ActionIcon,
   Alert,
   Anchor,
-  Badge,
   Button,
   Drawer,
   Group,
   Image,
-  ScrollArea,
   Select,
+  SimpleGrid,
   Stack,
   Tabs,
   Text,
   TextInput,
   Textarea,
-  Tooltip
+  Tooltip,
+  UnstyledButton
 } from '@mantine/core'
-import { IconFileTypePdf, IconFolder, IconSend, IconWorld } from '@tabler/icons-react'
+import {
+  IconArrowUpRight,
+  IconCalendar,
+  IconExternalLink,
+  IconFileDescription,
+  IconFileText,
+  IconFolder,
+  IconLink,
+  IconSend
+} from '@tabler/icons-react'
 import { APPLICATION_STATUSES, type ApplicationRecord, type ApplicationTracking } from '@shared/applications-types'
 import { AGENT_LABEL, type RunSummary } from '@shared/runner-types'
 import { api, errorText } from '../../api'
 import { applyBlocker } from '../../components/apply/blocker'
 import { runBadge } from '../../components/usage/format'
+import { MonoLabel, StatusPill } from '../../components/ui'
 import { useNavigation } from '../../navigation'
+import { BuildBadge } from './BuildBadge'
+import classes from './dashboard.module.css'
 import { ReviewBadge } from './ReviewBadge'
 import { STATUS_META } from './status'
+import { shortDate } from './summary'
+
+/** Kept here for the Board, which imports the badge from the drawer module. */
+export { BuildBadge } from './BuildBadge'
 
 interface Props {
   app: ApplicationRecord | null
@@ -35,7 +52,7 @@ interface Props {
   applying: boolean
 }
 
-/** One application: page previews, the saved job description, tracking and notes. */
+/** One application: page previews, the saved job description, tracking and notes (Figma Dashboard — Application drawer). */
 export function ApplicationDrawer({ app, onClose, onUpdate, onApply, applying }: Props) {
   const { navigate } = useNavigation()
   const [jd, setJd] = useState<string | null>(null)
@@ -74,176 +91,185 @@ export function ApplicationDrawer({ app, onClose, onUpdate, onApply, applying }:
   }
 
   const has = (f: string) => app?.files.includes(f) ?? false
+  const blocker = app ? applyBlocker(app) : null
+  const reviewOpen = app?.tracking.review?.state === 'unreviewed' || app?.tracking.review?.state === 'needs-attention'
 
   return (
-    <Drawer
-      opened={app !== null}
-      onClose={onClose}
-      position="right"
-      size="xl"
-      title={
-        app && (
-          <Text fw={600}>
-            {app.company} · {app.role}
-          </Text>
-        )
-      }
-      scrollAreaComponent={ScrollArea.Autosize}
-    >
-      {app && (
-        <Stack gap="md">
-          {app.jobTitle && <Text c="dimmed">{app.jobTitle}</Text>}
-          <Group gap="xs">
-            <Tooltip label={applyBlocker(app) ?? 'Fills the form and attaches resume.pdf; you review and submit'} multiline maw={260}>
-              <Button
-                size="xs"
-                leftSection={<IconSend size={16} />}
-                disabled={applyBlocker(app) !== null}
-                loading={applying}
-                onClick={() => onApply(app)}
-              >
-                Apply in browser
-              </Button>
-            </Tooltip>
-            {has('resume.pdf') && (
-              <Button
-                size="xs"
-                variant="light"
-                leftSection={<IconFileTypePdf size={16} />}
-                onClick={() => act(() => api.applications.openFile(app.id, 'resume.pdf'))}
-              >
-                Open resume
-              </Button>
-            )}
-            {has('cover.pdf') && (
-              <Button
-                size="xs"
-                variant="light"
-                leftSection={<IconFileTypePdf size={16} />}
-                onClick={() => act(() => api.applications.openFile(app.id, 'cover.pdf'))}
-              >
-                Open cover letter
-              </Button>
-            )}
-            {app.jobUrl && (
-              <Button
-                size="xs"
-                variant="default"
-                onClick={() => app.jobUrl && navigate('browser', { url: app.jobUrl })}
-                leftSection={<IconWorld size={16} />}
-              >
-                Job posting
-              </Button>
-            )}
-            <Button
-              size="xs"
-              variant="default"
-              leftSection={<IconFolder size={16} />}
-              onClick={() => act(() => api.applications.reveal(app.id))}
-            >
-              Show in Finder
-            </Button>
-          </Group>
-
-          {error && (
-            <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
-              {error}
-            </Alert>
+    <Drawer.Root opened={app !== null} onClose={onClose} position="right" size={600}>
+      <Drawer.Overlay />
+      <Drawer.Content>
+        <Drawer.Header>
+          {app && (
+            <div className={classes.drawerHeader}>
+              <div className={classes.drawerHeading}>
+                <MonoLabel component="div" title={app.id}>
+                  Application · {app.id}
+                </MonoLabel>
+                <Drawer.Title className={classes.drawerTitle}>
+                  {app.company} · {app.role}
+                </Drawer.Title>
+                {app.jobTitle && app.jobTitle !== app.role && <p className={classes.drawerSubtitle}>{app.jobTitle}</p>}
+              </div>
+              <Drawer.CloseButton aria-label="Close" />
+            </div>
           )}
+        </Drawer.Header>
+        <Drawer.Body>
+          {app && (
+            <Stack gap="md">
+              <Group gap="xs">
+                <Tooltip label={blocker ?? 'Fills the form and attaches resume.pdf; you review and submit'} multiline maw={260}>
+                  <Button variant="primary" leftSection={<IconSend size={16} />} disabled={blocker !== null} loading={applying} onClick={() => onApply(app)}>
+                    Apply in browser
+                  </Button>
+                </Tooltip>
+                {has('resume.pdf') && (
+                  <Button
+                    variant="default"
+                    leftSection={<IconFileText size={16} />}
+                    aria-label="Open resume"
+                    onClick={() => act(() => api.applications.openFile(app.id, 'resume.pdf'))}
+                  >
+                    Resume
+                  </Button>
+                )}
+                {has('cover.pdf') && (
+                  <Button
+                    variant="default"
+                    leftSection={<IconFileDescription size={16} />}
+                    aria-label="Open cover letter"
+                    onClick={() => act(() => api.applications.openFile(app.id, 'cover.pdf'))}
+                  >
+                    Cover letter
+                  </Button>
+                )}
+                {app.jobUrl && (
+                  <Button
+                    variant="subtle"
+                    leftSection={<IconExternalLink size={16} />}
+                    aria-label="Job posting"
+                    onClick={() => app.jobUrl && navigate('browser', { url: app.jobUrl })}
+                  >
+                    Posting
+                  </Button>
+                )}
+                <Tooltip label="Show in Finder">
+                  <ActionIcon variant="default" size="lg" aria-label="Show in Finder" onClick={() => act(() => api.applications.reveal(app.id))}>
+                    <IconFolder size={16} />
+                  </ActionIcon>
+                </Tooltip>
+              </Group>
 
-          {runs.length > 0 && (
-            <Stack gap={2} data-testid="application-runs">
-              {runs.map((r) => (
-                <Group key={r.id} gap="xs">
-                  <Anchor component="button" size="sm" onClick={() => navigate('tailor', { runId: r.id })}>
-                    {AGENT_LABEL[r.agent]} run of{' '}
-                    {new Date(r.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
-                  </Anchor>
-                  <Text size="xs" c="dimmed">
-                    {runBadge(r) ?? ''}
-                  </Text>
-                </Group>
-              ))}
+              <Group gap="xs">
+                <BuildBadge app={app} />
+                <ReviewBadge app={app} />
+                {reviewOpen && (
+                  <UnstyledButton onClick={() => navigate('review', { applicationId: app.id })} style={{ display: 'inline-flex' }}>
+                    <StatusPill size="md" variant="outline" leftSection={<IconArrowUpRight size={12} />}>
+                      Open in Review
+                    </StatusPill>
+                  </UnstyledButton>
+                )}
+              </Group>
+
+              {error && (
+                <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
+                  {error}
+                </Alert>
+              )}
+
+              {runs.length > 0 && (
+                <div className={classes.builtBy} data-testid="application-runs">
+                  <MonoLabel component="div">Built by</MonoLabel>
+                  {runs.map((r) => (
+                    <div key={r.id} className={classes.runLine}>
+                      <StatusPill tone="accent" variant="outline" dot>
+                        {AGENT_LABEL[r.agent]}
+                      </StatusPill>
+                      <Anchor component="button" size="sm" c="var(--hg-accent-secondary)" onClick={() => navigate('tailor', { runId: r.id })}>
+                        run of {shortDate(r.createdAt)} {new Date(r.createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                      </Anchor>
+                      <MonoLabel>{runBadge(r) ?? ''}</MonoLabel>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <SimpleGrid cols={2} spacing="sm">
+                <Select
+                  label="Status"
+                  data={APPLICATION_STATUSES.map((s) => ({ value: s, label: STATUS_META[s].label }))}
+                  value={app.tracking.status}
+                  allowDeselect={false}
+                  onChange={(v) => v && act(() => onUpdate({ status: v as ApplicationTracking['status'] }))}
+                />
+                <TextInput
+                  label="Applied on"
+                  type="date"
+                  leftSection={<IconCalendar size={16} />}
+                  value={app.tracking.appliedAt ?? ''}
+                  onChange={(e) => act(() => onUpdate({ appliedAt: e.currentTarget.value }))}
+                />
+              </SimpleGrid>
+              <TextInput
+                label="Job posting URL"
+                placeholder="https://…"
+                leftSection={<IconLink size={16} />}
+                styles={{ input: { fontFamily: 'var(--hg-font-mono)' } }}
+                defaultValue={app.tracking.jobUrl ?? app.jobUrl ?? ''}
+                key={`url-${app.id}`}
+                onBlur={(e) => {
+                  const v = e.currentTarget.value.trim()
+                  if (v !== (app.tracking.jobUrl ?? app.jobUrl ?? '')) void act(() => onUpdate({ jobUrl: v }))
+                }}
+              />
+              <Textarea
+                label="Notes"
+                placeholder="Recruiter, referral, interview dates…"
+                autosize
+                minRows={3}
+                value={notes}
+                onChange={(e) => setNotes(e.currentTarget.value)}
+                onBlur={() => notes !== app.tracking.notes && act(() => onUpdate({ notes }))}
+              />
+
+              <div className={classes.previewCard}>
+                <Tabs value={tab} onChange={setTab} keepMounted={false}>
+                  <Tabs.List px="sm">
+                    <Tabs.Tab value="resume">Resume ({app.resumePages.length})</Tabs.Tab>
+                    <Tabs.Tab value="cover" disabled={app.coverPages.length === 0}>
+                      Cover letter ({app.coverPages.length})
+                    </Tabs.Tab>
+                    <Tabs.Tab value="jd">Job description</Tabs.Tab>
+                  </Tabs.List>
+                  <Tabs.Panel value="resume" className={classes.previewPanel}>
+                    <Pages app={app} pages={app.resumePages} />
+                  </Tabs.Panel>
+                  <Tabs.Panel value="cover" className={classes.previewPanel}>
+                    <Pages app={app} pages={app.coverPages} />
+                  </Tabs.Panel>
+                  <Tabs.Panel value="jd" className={classes.previewPanel}>
+                    {jd === null ? (
+                      <Text c="dimmed" size="sm">
+                        Loading…
+                      </Text>
+                    ) : jd === '' ? (
+                      <Text c="dimmed" size="sm">
+                        No job-description.md in this folder.
+                      </Text>
+                    ) : (
+                      <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+                        {jd}
+                      </Text>
+                    )}
+                  </Tabs.Panel>
+                </Tabs>
+              </div>
             </Stack>
           )}
-
-          <Group grow align="flex-start">
-            <Select
-              label="Status"
-              data={APPLICATION_STATUSES.map((s) => ({ value: s, label: STATUS_META[s].label }))}
-              value={app.tracking.status}
-              allowDeselect={false}
-              onChange={(v) => v && act(() => onUpdate({ status: v as ApplicationTracking['status'] }))}
-            />
-            <TextInput
-              label="Applied on"
-              type="date"
-              value={app.tracking.appliedAt ?? ''}
-              onChange={(e) => act(() => onUpdate({ appliedAt: e.currentTarget.value }))}
-            />
-          </Group>
-          <TextInput
-            label="Job posting URL"
-            placeholder="https://…"
-            defaultValue={app.tracking.jobUrl ?? app.jobUrl ?? ''}
-            key={`url-${app.id}`}
-            onBlur={(e) => {
-              const v = e.currentTarget.value.trim()
-              if (v !== (app.tracking.jobUrl ?? app.jobUrl ?? '')) void act(() => onUpdate({ jobUrl: v }))
-            }}
-          />
-          <Textarea
-            label="Notes"
-            placeholder="Recruiter, referral, interview dates…"
-            autosize
-            minRows={3}
-            value={notes}
-            onChange={(e) => setNotes(e.currentTarget.value)}
-            onBlur={() => notes !== app.tracking.notes && act(() => onUpdate({ notes }))}
-          />
-
-          <Group gap="xs">
-            <BuildBadge app={app} />
-            <ReviewBadge app={app} />
-            {(app.tracking.review?.state === 'unreviewed' || app.tracking.review?.state === 'needs-attention') && (
-              <Anchor component="button" size="sm" onClick={() => navigate('review', { applicationId: app.id })}>
-                Open in Review
-              </Anchor>
-            )}
-          </Group>
-
-          <Tabs value={tab} onChange={setTab} keepMounted={false}>
-            <Tabs.List>
-              <Tabs.Tab value="resume">Resume ({app.resumePages.length})</Tabs.Tab>
-              <Tabs.Tab value="cover" disabled={app.coverPages.length === 0}>
-                Cover letter ({app.coverPages.length})
-              </Tabs.Tab>
-              <Tabs.Tab value="jd">Job description</Tabs.Tab>
-            </Tabs.List>
-            <Tabs.Panel value="resume" pt="md">
-              <Pages app={app} pages={app.resumePages} />
-            </Tabs.Panel>
-            <Tabs.Panel value="cover" pt="md">
-              <Pages app={app} pages={app.coverPages} />
-            </Tabs.Panel>
-            <Tabs.Panel value="jd" pt="md">
-              {jd === null ? (
-                <Text c="dimmed">Loading…</Text>
-              ) : jd === '' ? (
-                <Text c="dimmed">No job-description.md in this folder.</Text>
-              ) : (
-                <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
-                  {jd}
-                </Text>
-              )}
-            </Tabs.Panel>
-          </Tabs>
-          <Text size="xs" c="dimmed" ff="monospace">
-            {app.id}/
-          </Text>
-        </Stack>
-      )}
-    </Drawer>
+        </Drawer.Body>
+      </Drawer.Content>
+    </Drawer.Root>
   )
 }
 
@@ -264,48 +290,10 @@ function Pages({ app, pages }: { app: ApplicationRecord; pages: string[] }) {
     )
   }
   return (
-    <Stack gap="md">
+    <div className={classes.pages}>
       {pages.map((p) => (
-        <Image
-          key={p}
-          src={api.applications.fileUrl(app.id, p)}
-          alt={p}
-          radius="sm"
-          style={{ border: '1px solid var(--mantine-color-default-border)' }}
-        />
+        <Image key={p} src={api.applications.fileUrl(app.id, p)} alt={p} className={classes.pageImage} />
       ))}
-    </Stack>
-  )
-}
-
-/** Build result of the skill's `build-report.json`; `short` for table cells, details in the tooltip. */
-export function BuildBadge({ app, short = false }: { app: ApplicationRecord; short?: boolean }) {
-  const b = app.build
-  const warnings = b.warnings > 0 ? `${b.warnings} warning${b.warnings === 1 ? '' : 's'}` : ''
-  const [color, label, detail] =
-    b.status === 'unknown'
-      ? ['gray', short ? 'No report' : 'No build report', 'build-report.json is missing or unreadable']
-      : b.status === 'pass'
-        ? [
-            'green',
-            short ? 'ATS passed' : `ATS checks passed${warnings ? ` · ${warnings}` : ''}`,
-            warnings || 'All checks passed'
-          ]
-        : [
-            'red',
-            short ? 'Build failed' : `Build failed${b.failed.length ? `: ${b.failed.join(', ')}` : ''}`,
-            b.failed.join(', ') || 'The build did not pass'
-          ]
-  const badge = (
-    <Badge variant="light" color={color}>
-      {label}
-    </Badge>
-  )
-  return short ? (
-    <Tooltip label={detail} withArrow>
-      {badge}
-    </Tooltip>
-  ) : (
-    badge
+    </div>
   )
 }

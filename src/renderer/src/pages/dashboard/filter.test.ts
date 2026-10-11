@@ -51,6 +51,12 @@ describe('dashboard filter', () => {
     ).toEqual(['Acme', 'Globex', 'Initech'])
     expect(filterApplications(apps, { ...DEFAULT_FILTER, sort: 'oldest' }).map((a) => a.id)).toEqual(['1', '2'])
   })
+  it('narrows to what is ready to apply', () => {
+    const ready = { ...rec('4', 'Hooli', '2026-09-04T00:00:00Z', 'generated'), files: ['resume.pdf'], jobUrl: 'https://jobs.example.com/4' }
+    const list = [...apps, ready]
+    expect(filterApplications(list, { ...DEFAULT_FILTER, ready: true }).map((a) => a.id)).toEqual(['4'])
+    expect(filterApplications(list, { ...DEFAULT_FILTER, ready: true, text: 'globex' })).toEqual([])
+  })
   it('counts per status', () => {
     expect(countByStatus(apps)).toMatchObject({ applied: 1, generated: 1, archived: 1, offer: 0 })
   })

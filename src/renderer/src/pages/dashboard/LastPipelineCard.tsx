@@ -1,9 +1,29 @@
 import { useEffect, useState } from 'react'
-import { Anchor, Badge, Card, Group, Stack, Text, Title } from '@mantine/core'
-import { IconRobot } from '@tabler/icons-react'
-import type { PipelineSummary } from '@shared/pipeline-types'
+import { Button, Group, Stack } from '@mantine/core'
+import { IconClipboardCheck, IconCpu } from '@tabler/icons-react'
+import type { PipelineCounts, PipelineSummary } from '@shared/pipeline-types'
 import { api } from '../../api'
+import { MonoLabel, SectionCard, StatusPill, type UiTone } from '../../components/ui'
 import { useNavigation } from '../../navigation'
+import classes from './dashboard.module.css'
+import { pipelineOutcome, shortDate } from './summary'
+
+/** The count pills, in Figma order, each only when non-zero. */
+const COUNT_PILLS: { key: keyof PipelineCounts; tone: UiTone; label: (n: number) => string }[] = [
+  { key: 'unreviewed', tone: 'warning', label: (n) => `${n} ready to review` },
+  { key: 'needsAttention', tone: 'accent', label: (n) => `${n} need${n === 1 ? 's' : ''} attention` },
+  { key: 'approved', tone: 'success', label: (n) => `${n} approved` },
+  { key: 'needsReply', tone: 'warning', label: (n) => `${n} need${n === 1 ? 's' : ''} your reply` },
+  { key: 'discarded', tone: 'neutral', label: (n) => `${n} discarded` },
+  { key: 'failed', tone: 'danger', label: (n) => `${n} failed` },
+  { key: 'cancelled', tone: 'neutral', label: (n) => `${n} cancelled` },
+  { key: 'skipped', tone: 'neutral', label: (n) => `${n} skipped` }
+]
+
+function durationText(startedAt: string, finishedAt: string): string {
+  const mins = Math.max(1, Math.round((Date.parse(finishedAt) - Date.parse(startedAt)) / 60_000))
+  return mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h ${mins % 60} min`
+}
 
 /** The morning card: what the last unattended pipeline did, and a link to review its results. */
 export function LastPipelineCard() {
@@ -25,81 +45,53 @@ export function LastPipelineCard() {
   if (!summary) return null
   const c = summary.counts
   const look = c.needsAttention + c.needsReply + c.failed
+  const toReview = c.unreviewed + c.needsAttention
   const when = new Date(summary.finishedAt)
-  const mins = Math.max(1, Math.round((Date.parse(summary.finishedAt) - Date.parse(summary.startedAt)) / 60_000))
+  const outcome = pipelineOutcome(summary)
+  const meta = [
+    `${shortDate(summary.finishedAt)} ${when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`,
+    durationText(summary.startedAt, summary.finishedAt),
+    summary.costUsd > 0 ? `$${summary.costUsd.toFixed(2)}` : null
+  ].filter(Boolean)
   return (
-    <Card withBorder radius="md" padding="md">
-      <Group justify="space-between" align="flex-start">
-        <Group gap="xs">
-          <IconRobot size={18} />
-          <Title order={4}>Last unattended pipeline</Title>
-        </Group>
-        <Text size="xs" c="dimmed">
-          {when.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })} · {mins} min
-          {summary.costUsd > 0 ? ` · $${summary.costUsd.toFixed(2)}` : ''}
-        </Text>
-      </Group>
-      <Stack gap={6} mt="sm">
-        <Group gap={6}>
-          {c.unreviewed > 0 && (
-            <Badge variant="light" color="yellow">
-              {c.unreviewed} ready to review
-            </Badge>
-          )}
-          {c.needsAttention > 0 && (
-            <Badge variant="light" color="orange">
-              {c.needsAttention} need attention
-            </Badge>
-          )}
-          {c.approved > 0 && (
-            <Badge variant="light" color="green">
-              {c.approved} approved
-            </Badge>
-          )}
-          {c.discarded > 0 && (
-            <Badge variant="light" color="gray">
-              {c.discarded} discarded
-            </Badge>
-          )}
-          {c.needsReply > 0 && (
-            <Badge variant="light" color="yellow">
-              {c.needsReply} need your reply
-            </Badge>
-          )}
-          {c.failed > 0 && (
-            <Badge variant="light" color="red">
-              {c.failed} failed
-            </Badge>
-          )}
-          {c.cancelled > 0 && (
-            <Badge variant="light" color="gray">
-              {c.cancelled} cancelled
-            </Badge>
-          )}
-          {c.skipped > 0 && (
-            <Badge variant="light" color="gray">
-              {c.skipped} skipped
-            </Badge>
-          )}
-        </Group>
-        {summary.stopReason && (
-          <Text size="sm" c="dimmed">
-            {summary.stopReason}
-          </Text>
+    <SectionCard
+      title="Last unattended pipeline"
+      titleOrder={4}
+      icon={<IconCpu size={18} />}
+      badge={
+        <StatusPill tone={outcome.tone} dot title={summary.stopReason}>
+          {outcome.label}
+        </StatusPill>
+      }
+      padding="md"
+    >
+      <Stack gap="sm">
+        <MonoLabel component="div" title={when.toLocaleString()}>
+          {meta.join(' · ')}
+        </MonoLabel>
+        <div className={classes.pills}>
+          {COUNT_PILLS.filter((p) => c[p.key] > 0).map((p) => (
+            <StatusPill key={p.key} tone={p.tone}>
+              {p.label(c[p.key])}
+            </StatusPill>
+          ))}
+        </div>
+        {summary.stopReason && <p className={classes.cardLine}>{summary.stopReason}</p>}
+        {(toReview > 0 || look - c.needsAttention > 0) && (
+          <Group gap="xs">
+            {toReview > 0 && (
+              <Button size="xs" variant="secondary" leftSection={<IconClipboardCheck size={14} />} onClick={() => navigate('review')}>
+                Review {toReview} result{toReview === 1 ? '' : 's'}
+              </Button>
+            )}
+            {look - c.needsAttention > 0 && (
+              <Button size="xs" variant="subtle" onClick={() => navigate('tailor', { view: 'queue' })}>
+                Open the queue
+              </Button>
+            )}
+          </Group>
         )}
-        <Group gap="md">
-          {c.unreviewed + c.needsAttention > 0 && (
-            <Anchor component="button" size="sm" onClick={() => navigate('review')}>
-              Review {c.unreviewed + c.needsAttention} result{c.unreviewed + c.needsAttention === 1 ? '' : 's'}
-            </Anchor>
-          )}
-          {look - c.needsAttention > 0 && (
-            <Anchor component="button" size="sm" onClick={() => navigate('tailor', { view: 'queue' })}>
-              Open the queue
-            </Anchor>
-          )}
-        </Group>
       </Stack>
-    </Card>
+    </SectionCard>
   )
 }

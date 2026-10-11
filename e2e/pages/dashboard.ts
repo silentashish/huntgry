@@ -6,6 +6,8 @@ import { expect, type Locator, type Page } from '@playwright/test'
  * company (the first line of the Application cell), never by position: the
  * table is ordered by file mtime, which a fresh workspace copy does not fix.
  */
+export type StatLabel = 'Total' | 'Generated' | 'Applied' | 'Interviewing' | 'Offer' | 'Rejected'
+
 export class Dashboard {
   readonly heading: Locator
   readonly refreshButton: Locator
@@ -21,7 +23,9 @@ export class Dashboard {
   readonly drawer: Locator
 
   constructor(readonly page: Page) {
-    this.heading = page.getByRole('heading', { name: 'Dashboard', level: 2 })
+    // The visible h2 is the greeting ("Good morning, Alex." / "Welcome to the den."); its accessible
+    // name starts with a visually hidden "Dashboard:", so the page still announces itself by name.
+    this.heading = page.getByRole('heading', { name: /^Dashboard:/, level: 2 })
     this.refreshButton = page.getByRole('button', { name: 'Refresh' })
     this.searchInput = page.getByRole('textbox', { name: 'Search applications' })
     this.statusFilter = page.getByRole('combobox', { name: 'Filter by status' })
@@ -44,12 +48,16 @@ export class Dashboard {
   }
 
   /**
-   * The summary card of a status ("Total", "Applied", …): the card around the
-   * visible label (the status selects keep their option lists mounted but
-   * hidden, so the label text alone is ambiguous). Its text is `<label><count>`.
+   * The stat tile of a status ("Total", "Applied", …): a toggle button (`aria-pressed`) whose
+   * accessible name starts with the label. Clicking it filters the table to that status.
    */
-  statCard(label: 'Total' | 'Generated' | 'Applied' | 'Interviewing' | 'Offer' | 'Rejected'): Locator {
-    return this.page.getByText(label, { exact: true }).filter({ visible: true }).locator('xpath=..')
+  statCard(label: StatLabel): Locator {
+    return this.page.getByRole('button', { name: new RegExp(`^${label}(?![A-Za-z])`) }).and(this.page.locator('[aria-pressed]'))
+  }
+
+  /** The count shown on a stat tile. */
+  statValue(label: StatLabel): Locator {
+    return this.statCard(label).getByTestId('stat-value')
   }
 
   /** A tooltip with this text. A disabled control gets no mouseleave, so its tooltip may stay open: match by text. */
@@ -57,12 +65,19 @@ export class Dashboard {
     return this.page.getByRole('tooltip', { name: text }).filter({ visible: true })
   }
 
-  /** The status combobox inside a row. */
+  /** The status pill of a row: a menu button named "Status: <status>", showing the status as its text. */
   rowStatus(company: string): Locator {
-    return this.row(company).getByRole('combobox')
+    return this.row(company).getByRole('button', { name: /^Status: / })
   }
 
-  /** Picks `status` in a Mantine Select: open it, click the option, wait for the value. */
+  /** Picks `status` from a row's status menu and waits for the pill to show it. */
+  async setRowStatus(company: string, status: string): Promise<void> {
+    await this.rowStatus(company).click()
+    await this.page.getByRole('menuitem', { name: status, exact: true }).click()
+    await expect(this.rowStatus(company)).toHaveText(status)
+  }
+
+  /** Picks `status` in a Mantine Select (the drawer's Status, the sort): open it, click the option, wait for the value. */
   async pickStatus(select: Locator, status: string): Promise<void> {
     await select.click()
     await this.page.getByRole('option', { name: status, exact: true }).click()

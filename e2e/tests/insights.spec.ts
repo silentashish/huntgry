@@ -97,15 +97,17 @@ test.describe('profile insights', () => {
     expect(after).toContain('- Technologies: Python, Django, Redis, GraphQL')
     expect(after).toContain('  - Exposed the reporting data through a GraphQL API used by two internal tools.')
     expect(after).toContain('- Technologies: Go, PostgreSQL, AWS\n')
-    // The Skills card on the dashboard follows without a reload: GraphQL is no longer a gap.
-    const skills = app.window
-      .locator('div')
-      .filter({ has: app.window.getByRole('heading', { name: 'Skills', level: 4 }) })
-      .filter({ hasText: 'Strongest evidence' })
-      .last()
-    await expect(skills.getByText('GraphQL · 3.5y')).toBeVisible()
-    await expect(skills.getByText('GraphQL · 1 job')).toHaveCount(0)
-    await expect(skills.getByText('Kafka · 2 jobs')).toBeVisible()
+    // The "Strongest evidence" card (the Skills card merged into the insights column) follows without a
+    // reload: GraphQL now has 3.5 years of evidence.
+    const evidence = app.window.locator('.mantine-Card-root').filter({ has: app.window.getByRole('heading', { name: 'Strongest evidence', level: 4 }) })
+    await expect(evidence.getByRole('button', { name: 'GraphQL · 3.5y' })).toBeVisible()
+
+    // A chip opens the Knowledge graph with that skill selected: its node panel is headed by the skill.
+    // (`navigate('graph', { nodeId })`: the graph page here; the Profile graph view once the Shell redirects it.)
+    await evidence.getByRole('button', { name: 'GraphQL · 3.5y' }).click()
+    await expect(new Dashboard(app.window).heading).toHaveCount(0)
+    await expect(app.window.getByRole('heading', { name: 'GraphQL', exact: true })).toBeVisible()
+    await expect(app.window.getByText('3.5 years', { exact: true })).toBeVisible()
 
     // The editor shows the evidence too.
     await new Shell(app.window).goTo('profile')

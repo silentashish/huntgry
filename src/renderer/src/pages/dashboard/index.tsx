@@ -1,26 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  ActionIcon,
-  Alert,
-  Anchor,
-  Badge,
-  Button,
-  Card,
-  Center,
-  Group,
-  Loader,
-  MultiSelect,
-  Paper,
-  Select,
-  SimpleGrid,
-  Stack,
-  Table,
-  Text,
-  TextInput,
-  Title,
-  Tooltip
-} from '@mantine/core'
-import { IconFileTypePdf, IconFolder, IconRefresh, IconSearch, IconSend, IconWorld } from '@tabler/icons-react'
+import { Alert, Button, Center, CloseButton, Loader, MultiSelect, Select, TextInput, VisuallyHidden } from '@mantine/core'
+import { IconArrowsSort, IconFilter, IconRefresh, IconSearch, IconSparkles } from '@tabler/icons-react'
 import {
   APPLICATION_STATUSES,
   type ApplicationRecord,
@@ -28,23 +8,59 @@ import {
   type ApplicationStatus,
   type ApplicationTracking
 } from '@shared/applications-types'
+import { isProfileEmpty } from '@shared/master-profile'
 import { api, errorText } from '../../api'
-import { APPLY_HINT, applyBlocker } from '../../components/apply/blocker'
 import { useApply } from '../../components/apply/useApply'
-import { SkillsSummaryCard } from '../../components/graph/SkillsSummaryCard'
-import { useKnowledgeGraph } from '../../components/graph/useKnowledgeGraph'
+import { KpiTile, MonoLabel, PageHeader, StatusPill } from '../../components/ui'
 import { useNavigation } from '../../navigation'
-import { ApplicationDrawer, BuildBadge } from './ApplicationDrawer'
+import { ApplicationDrawer } from './ApplicationDrawer'
+import { ApplicationsTable } from './ApplicationsTable'
+import classes from './dashboard.module.css'
+import { FirstHunt } from './FirstHunt'
 import { LastPipelineCard } from './LastPipelineCard'
-import { UsageCard } from './UsageCard'
-import { ReviewBadge } from './ReviewBadge'
+import { NeedsYouStrip, needsYouCount, useNeedsYou } from './NeedsYou'
 import { PROFILE_SAVED_EVENT, ProfileInsightsCard } from './ProfileInsightsCard'
+import { StrongestEvidenceCard } from './StrongestEvidenceCard'
+import { UsageCard } from './UsageCard'
 import { countByStatus, DEFAULT_FILTER, filterApplications, type Filter, type SortKey } from './filter'
 import { STATUS_META } from './status'
+import { eyebrowDate, greetingLine, kpiSubs, needsYouLine, readyToApply, type KpiKey } from './summary'
 
-const SUMMARY: ApplicationStatus[] = ['generated', 'applied', 'interviewing', 'offer', 'rejected']
+const SUMMARY: Exclude<ApplicationStatus, 'archived'>[] = ['generated', 'applied', 'interviewing', 'offer', 'rejected']
 
-/** Every generated resume and cover letter in the workspace, with tracking and links to the job postings. */
+/** The master profile's name and whether it has content, re-read after a save and on focus. */
+function useProfileGlance(): { name: string | null; ready: boolean | null } {
+  const [glance, setGlance] = useState<{ name: string | null; ready: boolean | null }>({ name: null, ready: null })
+  useEffect(() => {
+    let alive = true
+    const load = () =>
+      void api.profile.read().then(
+        (doc) => alive && setGlance({ name: doc.profile.contact.name, ready: !isProfileEmpty(doc.profile) }),
+        () => alive && setGlance({ name: null, ready: false })
+      )
+    load()
+    window.addEventListener(PROFILE_SAVED_EVENT, load)
+    window.addEventListener('focus', load)
+    return () => {
+      alive = false
+      window.removeEventListener(PROFILE_SAVED_EVENT, load)
+      window.removeEventListener('focus', load)
+    }
+  }, [])
+  return glance
+}
+
+/** Re-renders when the hour changes, so the greeting follows the clock. */
+function useNow(): Date {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 60_000)
+    return () => clearInterval(t)
+  }, [])
+  return now
+}
+
+/** Every generated resume and cover letter in the workspace, with tracking, what needs the user, and usage (#109). */
 export function DashboardPage() {
   const { navigate } = useNavigation()
   const [list, setList] = useState<ApplicationsList | null>(null)
@@ -52,6 +68,10 @@ export function DashboardPage() {
   const [filter, setFilter] = useState<Filter>(DEFAULT_FILTER)
   const [openId, setOpenId] = useState<string | null>(null)
   const applier = useApply(setError)
+  const needs = useNeedsYou()
+  const profile = useProfileGlance()
+  const now = useNow()
+  const tableRef = useRef<HTMLDivElement>(null)
 
   // Bumped by every successful tracking update; a list() that started before it may hold stale tracking.
   const generation = useRef(0)
@@ -88,7 +108,11 @@ export function DashboardPage() {
   const apps = useMemo(() => list?.applications ?? [], [list])
   const shown = useMemo(() => filterApplications(apps, filter), [apps, filter])
   const counts = useMemo(() => countByStatus(apps), [apps])
+  const subs = useMemo(() => kpiSubs(apps, now), [apps, now])
+  const ready = useMemo(() => filterApplications(readyToApply(apps), DEFAULT_FILTER), [apps])
   const open = apps.find((a) => a.id === openId) ?? null
+  const empty = list !== null && apps.length === 0
+  const things = needsYouCount(needs, ready)
 
   async function update(id: string, patch: Partial<ApplicationTracking>) {
     const next = await api.applications.updateTracking(id, patch)
@@ -104,17 +128,54 @@ export function DashboardPage() {
     }
   }
 
+  function refresh() {
+    void load()
+    needs.reload()
+  }
+
+  /** "Apply" in the strip: one result opens its drawer; several narrow the table to exactly those. */
+  function goApply() {
+    if (ready.length === 1) {
+      setOpenId(ready[0].id)
+      return
+    }
+    setFilter({ ...DEFAULT_FILTER, sort: filter.sort, ready: true })
+    tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  const tile = (key: KpiKey, label: string, value: number, selected: boolean, statuses: ApplicationStatus[]) => (
+    <KpiTile
+      key={key}
+      label={label}
+      value={<span data-testid="stat-value">{value}</span>}
+      sub={subs[key]}
+      selected={selected}
+      onClick={() => setFilter({ ...filter, statuses, ready: false })}
+    />
+  )
+
   return (
-    <Stack gap="md">
-      <Group justify="space-between">
-        <Title order={2}>Dashboard</Title>
-        <Group gap="xs">
-          <Button variant="default" leftSection={<IconRefresh size={16} />} onClick={load}>
-            Refresh
-          </Button>
-          <Button onClick={() => navigate('tailor')}>New tailored resume</Button>
-        </Group>
-      </Group>
+    <div className={classes.page}>
+      <PageHeader
+        eyebrow={`${eyebrowDate(now)} · ${empty ? 'nothing tracked yet' : 'the hound is awake'}`}
+        title={
+          <>
+            <VisuallyHidden>Dashboard: </VisuallyHidden>
+            {empty ? 'Welcome to the den.' : greetingLine(now, profile.name)}
+          </>
+        }
+        subtitle={empty && things === 0 ? 'Three steps and the hound starts running.' : list || error ? needsYouLine(things) : undefined}
+        actions={
+          <>
+            <Button variant="subtle" leftSection={<IconRefresh size={16} />} onClick={refresh}>
+              Refresh
+            </Button>
+            <Button variant="primary" leftSection={<IconSparkles size={16} />} onClick={() => navigate('tailor')}>
+              New tailored resume
+            </Button>
+          </>
+        }
+      />
 
       {error && (
         <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
@@ -128,132 +189,121 @@ export function DashboardPage() {
         </Center>
       )}
 
-      {list && <LastPipelineCard />}
-
-      {list && <UsageCard onOpenRun={(runId) => navigate('tailor', { runId })} />}
-
-      {list && apps.length === 0 && (
-        <Card withBorder radius="md" padding="xl">
-          <Stack align="center" gap="xs" py="lg">
-            <Title order={3}>No applications yet</Title>
-            <Text c="dimmed" ta="center" maw={520}>
-              Every resume the skill builds lands in this workspace as <code>role/company/job-id/</code> and shows up
-              here. Find a job or paste one to get started.
-            </Text>
-            <Group mt="sm">
-              <Button variant="light" onClick={() => navigate('jobs')}>
-                Find jobs
-              </Button>
-              <Button onClick={() => navigate('tailor')}>Tailor for a job</Button>
-            </Group>
-          </Stack>
-        </Card>
+      {/* No applications (a first hunt, or a pipeline whose every job failed) or no list at all: what
+          needs the user, the last pipeline and the profile insights still show. */}
+      {(empty || (list === null && error)) && (
+        <>
+          <NeedsYouStrip
+            waiting={needs.waiting}
+            review={needs.review}
+            ready={[]}
+            onReply={(run) => navigate('tailor', { runId: run.id })}
+            onReview={() => navigate('review')}
+            onApply={goApply}
+          />
+          {empty && <FirstHunt profileReady={profile.ready} />}
+          <div className={classes.sideRow} aria-label="Pipeline and profile" role="complementary">
+            <LastPipelineCard />
+            <ProfileInsightsCard />
+          </div>
+          <UsageCard onOpenRun={(runId) => navigate('tailor', { runId })} hideWhenEmpty />
+        </>
       )}
 
       {list && apps.length > 0 && (
         <>
-          <SimpleGrid cols={{ base: 3, md: 6 }}>
-            <StatCard
-              label="Total"
-              value={apps.length}
-              active={filter.statuses.length === 0}
-              onClick={() => setFilter({ ...filter, statuses: [] })}
-            />
-            {SUMMARY.map((s) => (
-              <StatCard
-                key={s}
-                label={STATUS_META[s].label}
-                color={STATUS_META[s].color}
-                value={counts[s]}
-                active={filter.statuses.length === 1 && filter.statuses[0] === s}
-                onClick={() => setFilter({ ...filter, statuses: [s] })}
-              />
-            ))}
-          </SimpleGrid>
+          <NeedsYouStrip
+            waiting={needs.waiting}
+            review={needs.review}
+            ready={ready}
+            onReply={(run) => navigate('tailor', { runId: run.id })}
+            onReview={() => navigate('review')}
+            onApply={goApply}
+          />
 
-          <Group gap="sm" align="flex-end">
-            <TextInput
-              style={{ flex: 1 }}
-              leftSection={<IconSearch size={16} />}
-              aria-label="Search applications"
-              placeholder="Search company, role, title, notes"
-              value={filter.text}
-              onChange={(e) => setFilter({ ...filter, text: e.currentTarget.value })}
-            />
-            <MultiSelect
-              w={260}
-              aria-label="Filter by status"
-              placeholder={filter.statuses.length ? undefined : 'All but archived'}
-              data={APPLICATION_STATUSES.map((s) => ({ value: s, label: STATUS_META[s].label }))}
-              value={filter.statuses}
-              onChange={(v) => setFilter({ ...filter, statuses: v as ApplicationStatus[] })}
-              clearable
-            />
-            <Select
-              aria-label="Sort applications"
-              w={150}
-              data={[
-                { value: 'newest', label: 'Newest first' },
-                { value: 'oldest', label: 'Oldest first' },
-                { value: 'company', label: 'Company' }
-              ]}
-              value={filter.sort}
-              allowDeselect={false}
-              onChange={(v) => v && setFilter({ ...filter, sort: v as SortKey })}
-            />
-          </Group>
+          <div className={classes.kpis} role="group" aria-label="Applications by status">
+            {tile('total', 'Total', apps.length, !filter.ready && filter.statuses.length === 0, [])}
+            {SUMMARY.map((s) =>
+              tile(s, STATUS_META[s].label, counts[s], !filter.ready && filter.statuses.length === 1 && filter.statuses[0] === s, [s])
+            )}
+          </div>
 
-          {list.truncated && (
-            <Alert color="yellow" variant="light">
-              The workspace is large; the scan stopped early and some applications may be missing.
-            </Alert>
-          )}
-
-          <Paper withBorder radius="md">
-            <Table highlightOnHover verticalSpacing="sm">
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Application</Table.Th>
-                  <Table.Th w={120}>Created</Table.Th>
-                  <Table.Th w={160}>Status</Table.Th>
-                  <Table.Th w={150}>Build</Table.Th>
-                  <Table.Th w={180} />
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {shown.map((a) => (
-                  <Row
-                    key={a.id}
-                    app={a}
-                    onOpen={() => setOpenId(a.id)}
-                    onUpdate={(p) => act(() => update(a.id, p))}
-                    onAct={act}
-                    onApply={() => applier.apply(a)}
-                    applying={applier.busy}
-                  />
-                ))}
-                {shown.length === 0 && (
-                  <Table.Tr>
-                    <Table.Td colSpan={5}>
-                      <Text c="dimmed" ta="center" py="md">
-                        Nothing matches.{' '}
-                        <Anchor component="button" onClick={() => setFilter(DEFAULT_FILTER)}>
-                          Clear filters
-                        </Anchor>
-                      </Text>
-                    </Table.Td>
-                  </Table.Tr>
+          <div className={classes.columns}>
+            <div className={classes.main} ref={tableRef}>
+              <div className={classes.toolbar}>
+                <TextInput
+                  className={classes.search}
+                  leftSection={<IconSearch size={16} />}
+                  aria-label="Search applications"
+                  placeholder="Search company, role, title, notes"
+                  value={filter.text}
+                  onChange={(e) => setFilter({ ...filter, text: e.currentTarget.value })}
+                />
+                <MultiSelect
+                  w={180}
+                  leftSection={<IconFilter size={16} />}
+                  aria-label="Filter by status"
+                  placeholder={filter.statuses.length ? undefined : 'All but archived'}
+                  data={APPLICATION_STATUSES.map((s) => ({ value: s, label: STATUS_META[s].label }))}
+                  value={filter.statuses}
+                  onChange={(v) => setFilter({ ...filter, statuses: v as ApplicationStatus[] })}
+                  clearable
+                />
+                <Select
+                  aria-label="Sort applications"
+                  w={156}
+                  leftSection={<IconArrowsSort size={16} />}
+                  data={[
+                    { value: 'newest', label: 'Newest first' },
+                    { value: 'oldest', label: 'Oldest first' },
+                    { value: 'company', label: 'Company' }
+                  ]}
+                  value={filter.sort}
+                  allowDeselect={false}
+                  onChange={(v) => v && setFilter({ ...filter, sort: v as SortKey })}
+                />
+                {filter.ready && (
+                  <StatusPill tone="accent" size="md">
+                    <span className={classes.filterChip}>
+                      Ready to apply
+                      <CloseButton size="xs" aria-label="Show all applications" onClick={() => setFilter({ ...filter, ready: false })} />
+                    </span>
+                  </StatusPill>
                 )}
-              </Table.Tbody>
-            </Table>
-          </Paper>
+                <MonoLabel>
+                  {shown.length === apps.length ? `${apps.length}` : `${shown.length} of ${apps.length}`} application
+                  {apps.length === 1 ? '' : 's'}
+                </MonoLabel>
+              </div>
+
+              {list.truncated && (
+                <Alert color="yellow" variant="light">
+                  The workspace is large; the scan stopped early and some applications may be missing.
+                </Alert>
+              )}
+
+              <ApplicationsTable
+                apps={shown}
+                openId={openId}
+                onOpen={setOpenId}
+                onUpdate={(id, p) => act(() => update(id, p))}
+                onAct={act}
+                onApply={(a: ApplicationRecord) => applier.apply(a)}
+                applying={applier.busy}
+                onClearFilters={() => setFilter(DEFAULT_FILTER)}
+              />
+            </div>
+
+            <aside className={classes.side} aria-label="Pipeline and profile">
+              <LastPipelineCard />
+              <ProfileInsightsCard />
+              <StrongestEvidenceCard />
+            </aside>
+          </div>
+
+          <UsageCard onOpenRun={(runId) => navigate('tailor', { runId })} />
         </>
       )}
-
-      <SimpleGrid cols={{ base: 1, md: 2 }}>
-        <ProfileInsightsCard />
-        <DashboardSkills />
-      </SimpleGrid>
 
       <ApplicationDrawer
         app={open}
@@ -263,162 +313,6 @@ export function DashboardPage() {
         applying={applier.busy}
       />
       {applier.modal}
-    </Stack>
-  )
-}
-
-/** The knowledge graph's "Strongest evidence / asked for, missing" card; nothing until the profile has skills. */
-function DashboardSkills() {
-  const { graph, reload } = useKnowledgeGraph()
-  // Same triggers as the application list: new or changed job descriptions change the job counts and gaps.
-  useEffect(() => {
-    const off = api.on('applications:changed', reload)
-    window.addEventListener('focus', reload)
-    window.addEventListener(PROFILE_SAVED_EVENT, reload)
-    return () => {
-      off()
-      window.removeEventListener('focus', reload)
-      window.removeEventListener(PROFILE_SAVED_EVENT, reload)
-    }
-  }, [reload])
-  if (!graph || graph.skills.length === 0) return null
-  return <SkillsSummaryCard graph={graph} />
-}
-
-function StatCard(props: { label: string; value: number; color?: string; active: boolean; onClick(): void }) {
-  return (
-    <Card
-      withBorder
-      radius="md"
-      padding="sm"
-      onClick={props.onClick}
-      style={{ cursor: 'pointer', borderColor: props.active ? 'var(--mantine-primary-color-filled)' : undefined }}
-    >
-      <Text size="xs" c="dimmed" tt="uppercase" fw={600}>
-        {props.label}
-      </Text>
-      <Text size="xl" fw={700} c={props.color && props.color !== 'gray' && props.value > 0 ? props.color : undefined}>
-        {props.value}
-      </Text>
-    </Card>
-  )
-}
-
-interface RowProps {
-  app: ApplicationRecord
-  onOpen(): void
-  onUpdate(patch: Partial<ApplicationTracking>): void
-  onAct(fn: () => Promise<unknown>): void
-  onApply(): void
-  /** An Apply is starting; every row's Apply waits for it. */
-  applying: boolean
-}
-
-function Row({ app, onOpen, onUpdate, onAct, onApply, applying }: RowProps) {
-  const { navigate } = useNavigation()
-  const has = (f: string) => app.files.includes(f)
-  // Controls inside the row must not also open the drawer.
-  const stop = (e: React.MouseEvent) => e.stopPropagation()
-  const dot = `var(--mantine-color-${STATUS_META[app.tracking.status].color}-filled)`
-  return (
-    <Table.Tr onClick={onOpen} style={{ cursor: 'pointer' }}>
-      <Table.Td>
-        <Text fw={600} size="sm">
-          {app.company}
-        </Text>
-        <Text size="sm">{app.role}</Text>
-        {app.jobTitle && app.jobTitle !== app.role && (
-          <Text size="xs" c="dimmed" lineClamp={1}>
-            {app.jobTitle}
-          </Text>
-        )}
-        {app.tracking.source && (
-          <Badge size="xs" variant="outline" color="gray" mt={4}>
-            {app.tracking.source}
-          </Badge>
-        )}
-      </Table.Td>
-      <Table.Td>
-        <Text size="sm">{new Date(app.createdAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}</Text>
-        {app.tracking.appliedAt && (
-          <Text size="xs" c="dimmed">
-            applied {app.tracking.appliedAt}
-          </Text>
-        )}
-      </Table.Td>
-      <Table.Td onClick={stop}>
-        <Select
-          size="xs"
-          data={APPLICATION_STATUSES.map((s) => ({ value: s, label: STATUS_META[s].label }))}
-          value={app.tracking.status}
-          allowDeselect={false}
-          onChange={(v) => v && onUpdate({ status: v as ApplicationStatus })}
-          leftSection={<span style={{ width: 8, height: 8, borderRadius: 4, background: dot }} />}
-        />
-      </Table.Td>
-      <Table.Td>
-        <Group gap={4}>
-          <BuildBadge app={app} short />
-          <ReviewBadge app={app} short />
-        </Group>
-      </Table.Td>
-      <Table.Td onClick={stop}>
-        <Group gap={4} justify="flex-end" wrap="nowrap">
-          <Tooltip label={applyBlocker(app) ?? APPLY_HINT} multiline maw={260}>
-            <ActionIcon
-              variant="subtle"
-              color="teal"
-              disabled={applyBlocker(app) !== null || applying}
-              onClick={onApply}
-              aria-label="Apply"
-            >
-              <IconSend size={18} />
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label="Open resume PDF">
-            <ActionIcon
-              variant="subtle"
-              disabled={!has('resume.pdf')}
-              onClick={() => onAct(() => api.applications.openFile(app.id, 'resume.pdf'))}
-              aria-label="Open resume"
-            >
-              <IconFileTypePdf size={18} />
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label="Open cover letter PDF">
-            <ActionIcon
-              variant="subtle"
-              color="grape"
-              disabled={!has('cover.pdf')}
-              onClick={() => onAct(() => api.applications.openFile(app.id, 'cover.pdf'))}
-              aria-label="Open cover letter"
-            >
-              <IconFileTypePdf size={18} />
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label={app.jobUrl ?? 'No posting URL'}>
-            <ActionIcon
-              variant="subtle"
-              color="gray"
-              disabled={!app.jobUrl}
-              onClick={() => app.jobUrl && navigate('browser', { url: app.jobUrl })}
-              aria-label="Open job posting"
-            >
-              <IconWorld size={18} />
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label="Show in Finder">
-            <ActionIcon
-              variant="subtle"
-              color="gray"
-              onClick={() => onAct(() => api.applications.reveal(app.id))}
-              aria-label="Show in Finder"
-            >
-              <IconFolder size={18} />
-            </ActionIcon>
-          </Tooltip>
-        </Group>
-      </Table.Td>
-    </Table.Tr>
+    </div>
   )
 }

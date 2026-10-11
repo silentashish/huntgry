@@ -1,4 +1,5 @@
 import type { ApplicationRecord, ApplicationStatus } from '@shared/applications-types'
+import { applyBlocker } from '../../components/apply/blocker'
 
 export type SortKey = 'newest' | 'oldest' | 'company'
 
@@ -7,9 +8,16 @@ export interface Filter {
   /** Empty = every status except archived. */
   statuses: ApplicationStatus[]
   sort: SortKey
+  /** Only what could be applied to now (the "Ready to apply" card); combines with the rest. */
+  ready?: boolean
 }
 
 export const DEFAULT_FILTER: Filter = { text: '', statuses: [], sort: 'newest' }
+
+/** Generated, not applied yet, and Apply is possible: resume built, posting known, review passed. */
+export function isReadyToApply(a: ApplicationRecord): boolean {
+  return a.tracking.status === 'generated' && applyBlocker(a) === null
+}
 
 /** Applies the dashboard's search, status filter and sort. Pure, for tests and `useMemo`. */
 export function filterApplications(apps: readonly ApplicationRecord[], f: Filter): ApplicationRecord[] {
@@ -17,6 +25,7 @@ export function filterApplications(apps: readonly ApplicationRecord[], f: Filter
   const out = apps.filter((a) => {
     const statusOk = f.statuses.length > 0 ? f.statuses.includes(a.tracking.status) : a.tracking.status !== 'archived'
     if (!statusOk) return false
+    if (f.ready && !isReadyToApply(a)) return false
     if (!q) return true
     return [a.company, a.role, a.jobTitle, a.jobId, a.tracking.notes].some((s) => s.toLowerCase().includes(q))
   })

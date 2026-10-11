@@ -35,8 +35,14 @@ export class UsagePage {
     return this.card.getByTestId(`usage-${name}`)
   }
 
+  /** The agent × model table, behind the card's "Breakdown" toggle. */
   get breakdown(): Locator {
     return this.card.getByTestId('usage-breakdown')
+  }
+
+  /** Shows or hides the breakdown (filters by model and status, agent × model, bulk requests, latest runs). */
+  get breakdownToggle(): Locator {
+    return this.card.getByRole('button', { name: 'Breakdown' })
   }
 
   get pricingCard(): Locator {
