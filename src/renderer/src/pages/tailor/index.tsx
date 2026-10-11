@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Grid, Loader, Stack, Title } from '@mantine/core'
+import { Alert, Button, Loader } from '@mantine/core'
+import { IconListCheck, IconSettings } from '@tabler/icons-react'
 import type { RunDetail, RunnerEnvironment, RunSummary, StartRunParams } from '@shared/runner-types'
 import { appendLive } from '@shared/transcript'
 import { api, errorText } from '../../api'
 import { usePipeline } from '../../components/queue/usePipeline'
 import { useQueue } from '../../components/queue/useQueue'
+import { PageHeader } from '../../components/ui'
 import { useNavigation, type PageParams } from '../../navigation'
 import { PipelinePanel } from './PipelinePanel'
 import { QueuePanel } from './QueuePanel'
 import { RunList } from './RunList'
 import { RunView } from './RunView'
 import { StartForm } from './StartForm'
+import classes from './tailor.module.css'
 
 /** Runs the Claude resume-tailor skill against the workspace, for one job or a queue of jobs. */
 export function TailorPage({ params }: { params: PageParams['tailor'] }) {
@@ -31,6 +34,13 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
   /** Run whose events are being read from disk, with the live events that arrived meanwhile. */
   const loading = useRef<{ id: string; buffer: { seq: number; event: unknown }[] } | null>(null)
   const runsById = useMemo(() => new Map(runs.map((r) => [r.id, r])), [runs])
+  // "Queue" in the header (or Tailor all on the Jobs page) shows the queue panel even when it is empty.
+  const [showQueue, setShowQueue] = useState(params?.view === 'queue')
+  useEffect(() => {
+    if (params?.view === 'queue') setShowQueue(true)
+  }, [params?.view])
+  const panels = useRef<HTMLDivElement>(null)
+  const activeInQueue = queue?.items.filter((i) => ['queued', 'preparing', 'running', 'needs-reply'].includes(i.status)).length ?? 0
 
   useEffect(() => {
     api.runner.listRuns().then(setRuns, (err) => setError(errorText(err)))
@@ -97,39 +107,71 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
     }
   }
 
+  const queueVisible = !!queue && ((showQueue && !pipeline) || otherItems.length > 0)
+
   return (
-    <Stack gap="md">
-      <Title order={2}>Tailor</Title>
+    <div className={classes.page}>
+      <PageHeader
+        eyebrow={`The kitchen · ${runs.length} run${runs.length === 1 ? '' : 's'} in this workspace`}
+        title="Tailor"
+        subtitle={
+          selected === null
+            ? 'Run the resume-tailor skill with Claude, Codex or Antigravity. Every run stops at the gap analysis for your approval.'
+            : undefined
+        }
+        actions={
+          <>
+            {queue && (
+              <Button
+                variant="default"
+                leftSection={<IconListCheck size={16} />}
+                onClick={() => {
+                  setShowQueue(true)
+                  // After the panel has rendered.
+                  setTimeout(() => panels.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 0)
+                }}
+              >
+                Queue · {activeInQueue}
+              </Button>
+            )}
+            <Button variant="subtle" leftSection={<IconSettings size={16} />} onClick={() => navigate('settings')}>
+              Settings
+            </Button>
+          </>
+        }
+      />
       {error && (
-        <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
+        <Alert color="danger" withCloseButton onClose={() => setError(null)}>
           {error}
         </Alert>
       )}
-      {queue && pipeline && (
-        <PipelinePanel
-          state={pipeline}
-          queue={{ ...queue, items: pipelineItems }}
-          onQueueChange={setQueue}
-          onPipelineChange={setPipeline}
-          onOpenRun={(id) => void open(id)}
-          onReview={review}
-          runs={runsById}
-        />
+      {((queue && pipeline) || queueVisible) && (
+        <div ref={panels} className={classes.page}>
+          {queue && pipeline && (
+            <PipelinePanel
+              state={pipeline}
+              queue={{ ...queue, items: pipelineItems }}
+              onQueueChange={setQueue}
+              onPipelineChange={setPipeline}
+              onOpenRun={(id) => void open(id)}
+              onReview={review}
+              runs={runsById}
+            />
+          )}
+          {queue && queueVisible && (
+            <QueuePanel
+              queue={{ ...queue, items: otherItems }}
+              onChange={setQueue}
+              onOpenRun={(id) => void open(id)}
+              onReview={review}
+              runs={runsById}
+            />
+          )}
+        </div>
       )}
-      {queue && ((params?.view === 'queue' && !pipeline) || otherItems.length > 0) && (
-        <QueuePanel
-          queue={{ ...queue, items: otherItems }}
-          onChange={setQueue}
-          onOpenRun={(id) => void open(id)}
-          onReview={review}
-          runs={runsById}
-        />
-      )}
-      <Grid gap="lg">
-        <Grid.Col span={{ base: 12, md: 3 }}>
-          <RunList runs={runs} selected={selected} onSelect={open} />
-        </Grid.Col>
-        <Grid.Col span={{ base: 12, md: 9 }}>
+      <div className={classes.split}>
+        <RunList runs={runs} selected={selected} onSelect={open} />
+        <div className={classes.main}>
           {selected === null ? (
             <StartForm
               key={JSON.stringify(params ?? {})}
@@ -138,6 +180,7 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
               busy={starting}
               onStart={start}
               onEnvironmentChange={setEnvironment}
+              runs={runs}
             />
           ) : detail && detail.run.id === selected ? (
             <RunView
@@ -148,8 +191,8 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
           ) : (
             <Loader />
           )}
-        </Grid.Col>
-      </Grid>
-    </Stack>
+        </div>
+      </div>
+    </div>
   )
 }

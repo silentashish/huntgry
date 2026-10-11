@@ -1,9 +1,11 @@
-import { Badge, Button, Group, NavLink, ScrollArea, Stack, Text } from '@mantine/core'
-import { IconPlus } from '@tabler/icons-react'
+import { Button, ScrollArea } from '@mantine/core'
+import { IconPlus, IconSend } from '@tabler/icons-react'
 import type { RunSummary } from '@shared/runner-types'
-import { AGENT_LABEL } from '@shared/runner-types'
+import { StatusPill } from '../../components/ui'
 import { runBadge } from '../../components/usage/format'
-import { AGENT_COLOR, runStatusLabel, STATUS_LABEL } from './status'
+import { AgentPill, MonoXs } from './parts'
+import { shortWhen, STATUS_LABEL } from './status'
+import classes from './tailor.module.css'
 
 interface Props {
   runs: RunSummary[]
@@ -14,64 +16,60 @@ interface Props {
 /** Past and active runs of this workspace, newest first. */
 export function RunList({ runs, selected, onSelect }: Props) {
   const waiting = runs.filter((r) => r.status === 'waiting').length
+  const now = new Date()
   return (
-    <Stack gap="xs">
+    <div className={classes.list}>
       <Button
+        fullWidth
         leftSection={<IconPlus size={16} />}
-        variant={selected === null ? 'filled' : 'light'}
+        variant={selected === null ? 'secondary' : 'default'}
         onClick={() => onSelect(null)}
       >
         New run
       </Button>
       {waiting > 0 && (
-        <Text size="xs" c="yellow.8" px="xs">
-          {waiting} run{waiting === 1 ? '' : 's'} waiting for your reply
-        </Text>
+        <div className={classes.waitingNote}>
+          <IconSend size={18} aria-hidden style={{ flex: '0 0 auto' }} />
+          <span>
+            {waiting} run{waiting === 1 ? '' : 's'} waiting for your reply
+          </span>
+        </div>
       )}
-      <ScrollArea.Autosize mah="calc(100vh - 180px)">
-        {runs.length === 0 && (
-          <Text size="sm" c="dimmed" p="xs">
-            No runs yet in this workspace.
-          </Text>
-        )}
-        {runs.map((r) => (
-          <NavLink
-            key={r.id}
-            // A real button: an <a> without href has no role, no accessible name and cannot take focus.
-            component="button"
-            type="button"
-            active={r.id === selected}
-            aria-current={r.id === selected ? 'true' : undefined}
-            onClick={() => onSelect(r.id)}
-            label={
-              <Text size="sm" fw={500} truncate>
-                {r.title}
-              </Text>
-            }
-            description={
-              <Stack gap={2}>
-                <Text size="xs" c="dimmed">
-                  {new Date(r.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
-                </Text>
-                <Group gap={4}>
-                  <Badge size="xs" variant="outline" color={AGENT_COLOR[r.agent]}>
-                    {AGENT_LABEL[r.agent]}
-                  </Badge>
-                  <Badge size="xs" variant="light" color={STATUS_LABEL[r.status].color}>
-                    {runStatusLabel(r.status, r.agent)}
-                  </Badge>
-                </Group>
-                {runBadge(r) && (
-                  <Text size="xs" c="dimmed" data-testid="run-usage">
-                    {runBadge(r)}
-                  </Text>
-                )}
-              </Stack>
-            }
-            style={{ borderRadius: 'var(--mantine-radius-md)' }}
-          />
-        ))}
+      <ScrollArea.Autosize mah="calc(100vh - 180px)" offsetScrollbars="y">
+        <div className={classes.list}>
+          {runs.length === 0 && <p className={classes.emptyList}>No runs yet in this workspace.</p>}
+          {runs.map((r) => {
+            const badge = runBadge(r)
+            const status = STATUS_LABEL[r.status]
+            return (
+              // A real button: focusable, named by its title (then its status line).
+              <button
+                key={r.id}
+                type="button"
+                className={classes.runItem}
+                aria-current={r.id === selected ? 'true' : undefined}
+                onClick={() => onSelect(r.id)}
+              >
+                <span className={classes.runItemHead}>
+                  <span className={classes.runItemTitle} title={r.title}>
+                    {r.title}
+                  </span>
+                  <StatusPill tone={status.tone} dot>
+                    {status.label}
+                  </StatusPill>
+                </span>
+                <span className={classes.runItemRow}>
+                  <AgentPill agent={r.agent} />
+                  <MonoXs title={new Date(r.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}>
+                    {shortWhen(r.createdAt, now)}
+                  </MonoXs>
+                </span>
+                {badge && <MonoXs testId="run-usage">{badge}</MonoXs>}
+              </button>
+            )
+          })}
+        </div>
       </ScrollArea.Autosize>
-    </Stack>
+    </div>
   )
 }
