@@ -51,4 +51,9 @@ describe('browser page state', () => {
     expect(isSecure(tab('tab-1', 'about:blank'))).toBe(false)
     expect(isSecure(null)).toBe(false)
   })
+
+  it('shows no lock while an HTTPS page is loading or after it failed to load', () => {
+    expect(isSecure({ ...tab('tab-1', 'https://a.example/'), loading: true })).toBe(false)
+    expect(isSecure({ ...tab('tab-1', 'https://a.example/'), error: 'Could not load a.example' })).toBe(false)
+  })
 })
