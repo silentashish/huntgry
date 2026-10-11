@@ -1,0 +1,420 @@
+/*
+ * Mantine component styles for Scent Trail (🧩 Components in Figma). Loaded after
+ * @mantine/core/styles.css; every rule starts with `:root[data-mantine-color-scheme]` so it outranks
+ * Mantine's scheme-specific rules, and every colour is a --hg-* token.
+ */
+
+/* ---------- Type ---------- */
+
+/* Page titles (h1/h2) use the display face from the theme; section and card titles are Geist. */
+:root[data-mantine-color-scheme] .mantine-Title-root:is(h1, h2) {
+  letter-spacing: -0.015em;
+}
+
+:root[data-mantine-color-scheme] .mantine-Title-root:is(h3, h4, h5, h6) {
+  font-family: var(--hg-font-ui);
+  letter-spacing: -0.005em;
+}
+
+:root[data-mantine-color-scheme] .mantine-Code-root {
+  font-family: var(--hg-font-mono);
+  background-color: var(--hg-bg-subtle);
+  color: var(--hg-text-primary);
+}
+
+/* ---------- Surfaces ---------- */
+
+:root[data-mantine-color-scheme] .mantine-Paper-root,
+:root[data-mantine-color-scheme] .mantine-Card-root {
+  --paper-border-color: var(--hg-border-subtle);
+  background-color: var(--hg-bg-surface);
+  color: var(--hg-text-primary);
+}
+
+:root[data-mantine-color-scheme] .mantine-Card-root[data-with-border],
+:root[data-mantine-color-scheme] .mantine-Paper-root[data-with-border] {
+  border-color: var(--hg-border-subtle);
+}
+
+:root[data-mantine-color-scheme] .mantine-Divider-root {
+  --divider-color: var(--hg-border-subtle);
+}
+
+/* ---------- Buttons ---------- */
+
+/* Figma sizes: sm 26 px / 11 px label, md 34 px / 13 px (Mantine's default `sm`), lg 46 px / 14 px semibold. */
+:root[data-mantine-color-scheme] .mantine-Button-root {
+  --button-height-xs: 26px;
+  --button-height-sm: 34px;
+  --button-height-md: 40px;
+  --button-height-lg: 46px;
+  --button-padding-x-xs: 10px;
+  --button-padding-x-sm: 14px;
+  --button-padding-x-md: 18px;
+  --button-padding-x-lg: 20px;
+  --button-height-compact-xs: 22px;
+  --button-height-compact-sm: 26px;
+  --button-height-compact-md: 30px;
+  font-weight: 500;
+}
+
+:root[data-mantine-color-scheme] .mantine-Button-root[data-size='lg'] {
+  font-weight: 600;
+}
+
+:root[data-mantine-color-scheme] .mantine-Button-section {
+  --button-section-margin: 8px;
+}
+
+/* glow/ember marks the screen's one primary action. */
+:root[data-mantine-color-scheme] .mantine-Button-root[data-variant='primary']:not(:disabled, [data-disabled]),
+:root[data-mantine-color-scheme] .mantine-ActionIcon-root[data-variant='primary']:not(:disabled, [data-disabled]) {
+  box-shadow: var(--hg-glow-ember);
+}
+
+:root[data-mantine-color-scheme] .mantine-Button-root:is(:disabled, [data-disabled]),
+:root[data-mantine-color-scheme] .mantine-ActionIcon-root:is(:disabled, [data-disabled]) {
+  background-color: var(--hg-bg-subtle);
+  color: var(--hg-text-muted);
+  border-color: transparent;
+}
+
+:root[data-mantine-color-scheme] .mantine-ActionIcon-root {
+  --ai-size-xs: 24px;
+  --ai-size-sm: 28px;
+  --ai-size-md: 32px;
+  --ai-size-lg: 36px;
+}
+
+:root[data-mantine-color-scheme] .mantine-CloseButton-root {
+  color: var(--hg-icon-default);
+}
+
+:root[data-mantine-color-scheme] :is(.mantine-Button-root, .mantine-ActionIcon-root, .mantine-CloseButton-root):focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: 2px;
+}
+
+/* ---------- Badges (status pills) ---------- */
+
+:root[data-mantine-color-scheme] .mantine-Badge-root {
+  --badge-height-xs: 16px;
+  --badge-height-sm: 18px;
+  --badge-height-md: 20px;
+  --badge-height-lg: 24px;
+  --badge-fz-xs: 10px;
+  --badge-fz-sm: 11px;
+  --badge-fz-md: 11px;
+  --badge-fz-lg: 12px;
+  --badge-padding-x-xs: 6px;
+  --badge-padding-x-sm: 8px;
+  --badge-padding-x-md: 8px;
+  --badge-padding-x-lg: 10px;
+  --badge-dot-size: 6px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+
+:root[data-mantine-color-scheme] .mantine-Badge-root[data-variant='dot'] {
+  border: 0;
+  background-color: var(--hg-bg-subtle);
+}
+
+/* ---------- Inputs ---------- */
+
+:root[data-mantine-color-scheme] .mantine-Input-wrapper[data-variant='default'],
+:root[data-mantine-color-scheme] .mantine-Input-wrapper[data-variant='filled'] {
+  --input-bd: var(--hg-border-default);
+  --input-bg: var(--hg-bg-surface-sunken);
+  --input-bd-focus: var(--hg-border-focus);
+  --input-color: var(--hg-text-primary);
+  --input-placeholder-color: var(--hg-text-muted);
+  --input-section-color: var(--hg-icon-muted);
+  --input-disabled-bg: var(--hg-bg-subtle);
+  --input-disabled-color: var(--hg-text-muted);
+  --input-height-xs: 30px;
+  --input-height-sm: 38px;
+  --input-height-md: 42px;
+}
+
+:root[data-mantine-color-scheme] .mantine-Input-wrapper[data-error] {
+  --input-bd: var(--hg-status-danger);
+}
+
+:root[data-mantine-color-scheme] .mantine-InputWrapper-label {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--hg-text-primary);
+  margin-bottom: 6px;
+}
+
+:root[data-mantine-color-scheme] .mantine-InputWrapper-description {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--hg-text-muted);
+}
+
+:root[data-mantine-color-scheme] .mantine-InputWrapper-error {
+  font-size: 12px;
+  color: var(--hg-status-danger);
+}
+
+:root[data-mantine-color-scheme] .mantine-InputWrapper-required {
+  color: var(--hg-status-danger);
+}
+
+/* ---------- Checkbox, Radio, Switch ---------- */
+
+:root[data-mantine-color-scheme] .mantine-Checkbox-input:not(:checked, [data-indeterminate]),
+:root[data-mantine-color-scheme] .mantine-Radio-radio:not(:checked) {
+  background-color: var(--hg-bg-surface);
+  border-color: var(--hg-border-strong);
+}
+
+:root[data-mantine-color-scheme] .mantine-Radio-root {
+  --radio-icon-color: var(--hg-text-on-accent);
+}
+
+:root[data-mantine-color-scheme] .mantine-Checkbox-label,
+:root[data-mantine-color-scheme] .mantine-Radio-label,
+:root[data-mantine-color-scheme] .mantine-Switch-label {
+  font-size: 13px;
+  color: var(--hg-text-primary);
+}
+
+:root[data-mantine-color-scheme] .mantine-Switch-input:not(:checked) + .mantine-Switch-track {
+  background-color: var(--hg-bg-subtle);
+  border-color: var(--hg-border-default);
+}
+
+:root[data-mantine-color-scheme] .mantine-Switch-thumb {
+  background-color: var(--hg-text-muted);
+  border: 0;
+}
+
+:root[data-mantine-color-scheme] .mantine-Switch-input:checked + .mantine-Switch-track .mantine-Switch-thumb {
+  background-color: var(--hg-text-on-accent);
+}
+
+/* ---------- Overlays: Modal, Drawer, Menu, Popover, Combobox, Tooltip ---------- */
+
+:root[data-mantine-color-scheme] :is(.mantine-Modal-overlay, .mantine-Drawer-overlay) {
+  --overlay-bg: var(--hg-bg-overlay);
+}
+
+:root[data-mantine-color-scheme] :is(.mantine-Modal-content, .mantine-Modal-header) {
+  background-color: var(--hg-bg-surface-raised);
+}
+
+:root[data-mantine-color-scheme] .mantine-Modal-content {
+  border: 1px solid var(--hg-border-default);
+  box-shadow: var(--hg-shadow-float);
+}
+
+:root[data-mantine-color-scheme] :is(.mantine-Drawer-content, .mantine-Drawer-header) {
+  background-color: var(--hg-bg-surface-raised);
+}
+
+:root[data-mantine-color-scheme] .mantine-Drawer-content {
+  border-inline-start: 1px solid var(--hg-border-default);
+}
+
+:root[data-mantine-color-scheme] :is(.mantine-Modal-title, .mantine-Drawer-title) {
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--hg-text-primary);
+}
+
+:root[data-mantine-color-scheme] :is(.mantine-Popover-dropdown, .mantine-Menu-dropdown, .mantine-Combobox-dropdown) {
+  --popover-border-color: var(--hg-border-default);
+  background-color: var(--hg-bg-surface-raised);
+  border-color: var(--hg-border-default);
+  color: var(--hg-text-primary);
+}
+
+:root[data-mantine-color-scheme] .mantine-Menu-dropdown {
+  padding: 6px;
+}
+
+:root[data-mantine-color-scheme] .mantine-Menu-item {
+  --menu-item-hover: var(--hg-bg-hover);
+  border-radius: var(--hg-radius-sm);
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+:root[data-mantine-color-scheme] .mantine-Menu-itemSection {
+  color: var(--hg-icon-default);
+}
+
+:root[data-mantine-color-scheme] .mantine-Menu-item[data-menu-item-color] .mantine-Menu-itemSection {
+  color: inherit;
+}
+
+:root[data-mantine-color-scheme] .mantine-Menu-label {
+  font-family: var(--hg-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--hg-text-muted);
+}
+
+:root[data-mantine-color-scheme] :is(.mantine-Menu-divider, .mantine-Combobox-search) {
+  border-color: var(--hg-border-subtle);
+}
+
+:root[data-mantine-color-scheme] .mantine-Combobox-option {
+  border-radius: var(--hg-radius-sm);
+  font-size: 13px;
+}
+
+:root[data-mantine-color-scheme] .mantine-Combobox-option:where([data-combobox-selected], :hover:not([data-combobox-disabled])) {
+  background-color: var(--hg-bg-hover);
+  color: var(--hg-text-primary);
+}
+
+:root[data-mantine-color-scheme] .mantine-Combobox-option[data-checked] {
+  color: var(--hg-text-accent);
+}
+
+:root[data-mantine-color-scheme] .mantine-Tooltip-tooltip {
+  --tooltip-bg: var(--hg-bg-inverse);
+  --tooltip-color: var(--hg-text-inverse);
+  font-size: 12px;
+  line-height: 16px;
+  padding: 5px 8px;
+}
+
+/* ---------- Tabs (underline + pills) and SegmentedControl ---------- */
+
+:root[data-mantine-color-scheme] .mantine-Tabs-root {
+  --tab-border-color: var(--hg-border-subtle);
+}
+
+:root[data-mantine-color-scheme] .mantine-Tabs-tab {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hg-text-secondary);
+  padding: 10px 12px;
+}
+
+:root[data-mantine-color-scheme] .mantine-Tabs-tab:where(:hover) {
+  background-color: transparent;
+  color: var(--hg-text-primary);
+}
+
+:root[data-mantine-color-scheme] .mantine-Tabs-tab[data-active] {
+  color: var(--hg-text-primary);
+}
+
+:root[data-mantine-color-scheme] .mantine-Tabs-tab[data-variant='pills'] {
+  border-radius: var(--hg-radius-md);
+  padding: 8px 12px;
+}
+
+:root[data-mantine-color-scheme] .mantine-Tabs-tab[data-variant='pills']:where(:hover) {
+  background-color: var(--hg-bg-hover);
+}
+
+:root[data-mantine-color-scheme] .mantine-Tabs-tab[data-variant='pills'][data-active] {
+  background-color: var(--hg-bg-subtle);
+  color: var(--hg-text-primary);
+}
+
+:root[data-mantine-color-scheme] .mantine-SegmentedControl-root {
+  background-color: var(--hg-bg-surface-sunken);
+  border: 1px solid var(--hg-border-subtle);
+  padding: 3px;
+  --sc-padding-xs: 5px 10px;
+  --sc-padding-sm: 6px 12px;
+  --sc-font-size: 11px;
+}
+
+:root[data-mantine-color-scheme] .mantine-SegmentedControl-root[data-size='sm'],
+:root[data-mantine-color-scheme] .mantine-SegmentedControl-root[data-size='md'] {
+  --sc-font-size: 13px;
+}
+
+:root[data-mantine-color-scheme] .mantine-SegmentedControl-indicator {
+  background-color: var(--hg-bg-surface-raised);
+  box-shadow: var(--hg-shadow-card);
+  border-radius: var(--hg-radius-sm);
+}
+
+:root[data-mantine-color-scheme] .mantine-SegmentedControl-label {
+  font-weight: 500;
+  color: var(--hg-text-secondary);
+}
+
+:root[data-mantine-color-scheme] .mantine-SegmentedControl-label[data-active],
+:root[data-mantine-color-scheme] .mantine-SegmentedControl-label:hover {
+  color: var(--hg-text-primary);
+}
+
+:root[data-mantine-color-scheme] .mantine-SegmentedControl-control::before {
+  border-color: transparent;
+}
+
+/* ---------- Table ---------- */
+
+:root[data-mantine-color-scheme] .mantine-Table-table {
+  --table-border-color: var(--hg-border-subtle);
+  --table-hover-color: var(--hg-bg-hover);
+  --table-striped-color: var(--hg-bg-surface-sunken);
+  font-size: 13px;
+}
+
+:root[data-mantine-color-scheme] .mantine-Table-th {
+  font-family: var(--hg-font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--hg-text-muted);
+  background-color: var(--hg-bg-surface-sunken);
+}
+
+/* ---------- Data display ---------- */
+
+:root[data-mantine-color-scheme] .mantine-Kbd-root {
+  font-family: var(--hg-font-mono);
+  font-weight: 500;
+  font-size: 10px;
+  line-height: 12px;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  color: var(--hg-text-muted);
+  background-color: var(--hg-bg-subtle);
+  border: 1px solid var(--hg-border-default);
+  border-radius: var(--hg-radius-xs);
+}
+
+
+:root[data-mantine-color-scheme] .mantine-Progress-root {
+  background-color: var(--hg-bg-subtle);
+}
+
+:root[data-mantine-color-scheme] .mantine-Anchor-root {
+  color: var(--hg-text-link);
+}
+
+:root[data-mantine-color-scheme] .mantine-Alert-root {
+  border-radius: var(--hg-radius-lg);
+}
+
+:root[data-mantine-color-scheme] .mantine-Alert-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+:root[data-mantine-color-scheme] .mantine-Alert-message {
+  color: var(--hg-text-secondary);
+  font-size: 13px;
+}
+
+:root[data-mantine-color-scheme] .mantine-Skeleton-root::after {
+  background-color: var(--hg-bg-subtle);
+}
