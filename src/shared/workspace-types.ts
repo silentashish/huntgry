@@ -85,6 +85,12 @@ export interface ProfileApi {
   save(profile: MasterProfile, version: string): Promise<SaveProfileResult>
   /** Pick a resume file and parse it into a draft. Nothing is written. */
   importResume(): Promise<ResumeImportResult>
+  /**
+   * Parse a resume the user dropped on the window into a draft. Nothing is written.
+   * Takes the dropped `File`; the preload resolves its path, so only files the user
+   * actually dropped (or picked) can be read.
+   */
+  importResumeFile(file: File): Promise<ResumeImportResult>
   /** Open the Markdown file in the user's default editor. */
   openInEditor(): Promise<void>
   /** Reveal the Markdown file in Finder / Explorer. */
@@ -100,6 +106,7 @@ export const IPC_CHANNELS = {
   profileRead: 'profile:read',
   profileSave: 'profile:save',
   profileImportResume: 'profile:import-resume',
+  profileImportResumeFile: 'profile:import-resume-file',
   profileOpenInEditor: 'profile:open-in-editor',
   profileReveal: 'profile:reveal'
 } as const
