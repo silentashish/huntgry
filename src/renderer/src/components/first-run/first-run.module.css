@@ -1,0 +1,541 @@
+/* First run (#117): workspace picker, profile setup and the loading state. Colours are --hg-* tokens. */
+
+/* ---------- Page: centred column on the canvas with the two scent glows ---------- */
+
+.page {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 48px 16px;
+  background: var(--hg-bg-canvas);
+  overflow-x: hidden;
+}
+
+/* Ember glow top left, Trail glow bottom right (Figma ellipses 640 / 720 px). */
+.page::before,
+.page::after {
+  content: '';
+  position: fixed;
+  z-index: -1;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.page::before {
+  width: 640px;
+  height: 640px;
+  left: -200px;
+  top: -260px;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--hg-accent-primary) 22%, transparent),
+    transparent
+  );
+}
+
+.page::after {
+  width: 720px;
+  height: 720px;
+  right: -280px;
+  bottom: -260px;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--hg-accent-secondary) 14%, transparent),
+    transparent
+  );
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 520px;
+  text-align: center;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--hg-font-display);
+  font-weight: 700;
+  font-size: 40px;
+  line-height: 46px;
+  letter-spacing: -0.02em;
+  color: var(--hg-text-primary);
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 15px;
+  line-height: 22px;
+  color: var(--hg-text-secondary);
+}
+
+.body {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.body[data-width='picker'] {
+  max-width: 620px;
+}
+
+.body[data-width='setup'] {
+  max-width: 720px;
+}
+
+.footnote {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--hg-text-muted);
+  text-align: center;
+}
+
+.loading {
+  display: flex;
+  justify-content: center;
+  padding-block: 8px;
+}
+
+/* ---------- Choice cards: Create / Import workspace, Import resume / Fill in manually ---------- */
+
+.choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 640px) {
+  .choices {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* A whole card that is one button (workspace picker). */
+.choice {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 20px;
+  border-radius: var(--hg-radius-xl);
+  border: 1px solid var(--hg-border-default);
+  background: var(--hg-bg-surface);
+  color: var(--hg-text-primary);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
+}
+
+.choice:hover:not(:disabled) {
+  border-color: var(--hg-border-strong);
+  background: var(--hg-bg-surface-raised);
+}
+
+.choice:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: 2px;
+}
+
+.choice:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.choice:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.choiceIcon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  color: var(--hg-text-accent);
+}
+
+.choiceTitle {
+  font-weight: 600;
+  font-size: 16px;
+  line-height: 22px;
+  letter-spacing: -0.01em;
+}
+
+.choiceText {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--hg-text-secondary);
+}
+
+/* The screen's one Ember action: Create new workspace. */
+.choice[data-accent] {
+  border-color: transparent;
+  background: var(--hg-accent-primary);
+  color: var(--hg-text-on-accent);
+  box-shadow: var(--hg-glow-ember);
+}
+
+.choice[data-accent]:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--hg-accent-primary-hover);
+}
+
+.choice[data-accent] .choiceIcon,
+.choice[data-accent] .choiceText {
+  color: var(--hg-text-on-accent);
+}
+
+.choice[data-accent]:disabled {
+  box-shadow: none;
+}
+
+/* A card with its own button (profile setup). */
+.option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px;
+  border-radius: var(--hg-radius-xl);
+  border: 1px solid var(--hg-border-subtle);
+  background: var(--hg-bg-surface);
+}
+
+.option[data-accent] {
+  border-color: var(--hg-accent-primary);
+}
+
+.optionTitle {
+  margin: 0;
+  font-family: var(--hg-font-ui);
+  font-weight: 600;
+  font-size: 16px;
+  line-height: 22px;
+  letter-spacing: -0.01em;
+  color: var(--hg-text-primary);
+}
+
+.optionText {
+  margin: 0;
+  flex: 1;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--hg-text-secondary);
+}
+
+.optionIcon {
+  display: inline-flex;
+  padding: 10px;
+  border-radius: var(--hg-radius-md);
+  background: var(--hg-bg-subtle);
+  color: var(--hg-icon-default);
+}
+
+.option[data-accent] .optionIcon {
+  background: var(--hg-accent-primary-soft);
+  color: var(--hg-text-accent);
+}
+
+/* ---------- Notice: soft tone banner (role="status" where it reports a result) ---------- */
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--hg-radius-lg);
+  background: var(--tone-soft);
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--hg-text-secondary);
+}
+
+.noticeIcon {
+  display: inline-flex;
+  flex: none;
+  margin-top: 1px;
+  color: var(--tone-fg);
+}
+
+.noticeBody {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.noticeLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 2px;
+}
+
+/* ---------- Path input ---------- */
+
+.pathInput {
+  font-family: var(--hg-font-mono);
+}
+
+.pathLabel {
+  font-weight: 500;
+  font-size: 13px;
+  line-height: 16px;
+  color: var(--hg-text-secondary);
+  margin-bottom: 6px;
+}
+
+.pathDescription {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--hg-text-muted);
+  margin-top: 6px;
+}
+
+/* ---------- Workspace status card ---------- */
+
+.status {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border-radius: var(--hg-radius-xl);
+  border: 1px solid var(--hg-border-subtle);
+  background: var(--hg-bg-surface);
+}
+
+.statusHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusTitle {
+  margin: 0;
+  font-family: var(--hg-font-ui);
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--hg-text-primary);
+}
+
+.statusBadge {
+  font-family: var(--hg-font-mono);
+  letter-spacing: 0.06em;
+}
+
+.statusPath {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.statusHint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--hg-text-secondary);
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  margin: 0;
+}
+
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+
+.factLabel {
+  font-family: var(--hg-font-mono);
+  font-weight: 500;
+  font-size: 11px;
+  line-height: 14px;
+  letter-spacing: 0.06em;
+  color: var(--hg-text-muted);
+}
+
+.factValue {
+  margin: 0;
+  font-family: var(--hg-font-mono);
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--hg-text-primary);
+}
+
+.issues {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.issue {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--tone-fg);
+}
+
+.issue > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+/* ---------- Recent workspace row ---------- */
+
+.recent {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--hg-radius-lg);
+  border: 1px solid var(--hg-border-subtle);
+  background: var(--hg-bg-surface);
+}
+
+.recentIcon {
+  display: inline-flex;
+  flex: none;
+  padding: 8px;
+  border-radius: var(--hg-radius-md);
+  background: var(--hg-accent-secondary-soft);
+  color: var(--hg-accent-secondary);
+}
+
+.recentText {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recentPath {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Confirm modal ---------- */
+
+.modalContent {
+  border-radius: var(--hg-radius-2xl);
+}
+
+.modalHeader {
+  padding: 24px 24px 0;
+}
+
+.modalTitle {
+  font-family: var(--hg-font-display);
+  font-weight: 600;
+  font-size: 24px;
+  line-height: 30px;
+  letter-spacing: -0.01em;
+}
+
+.modalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 24px 24px;
+}
+
+.modalText {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--hg-text-secondary);
+}
+
+.files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 12px;
+  list-style: none;
+  border-radius: var(--hg-radius-lg);
+  background: var(--hg-bg-surface-sunken);
+}
+
+.file {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 8px;
+}
+
+.file > svg {
+  flex: none;
+  color: var(--hg-text-accent);
+}
+
+.fileNote {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--hg-text-muted);
+}
+
+/* ---------- Resume drop zone ---------- */
+
+.dropZone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px;
+  border-radius: var(--hg-radius-xl);
+  border: 1px dashed var(--hg-border-strong);
+  background: var(--hg-bg-surface);
+  color: var(--hg-icon-muted);
+  text-align: center;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.dropZone[data-active] {
+  border-color: var(--hg-accent-primary);
+  background: var(--hg-accent-primary-soft);
+  color: var(--hg-text-accent);
+}
+
+.dropText {
+  margin: 0;
+  font-weight: 500;
+  font-size: 13px;
+  line-height: 16px;
+  color: var(--hg-text-secondary);
+}

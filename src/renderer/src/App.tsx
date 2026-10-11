@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Center, Container, Group, Image, Loader, Stack, Text, Title } from '@mantine/core'
+import { Loader } from '@mantine/core'
 import { isProfileEmpty, type MasterProfile, type ProfileDocument } from '@shared/master-profile'
 import { canImport, type WorkspaceInspection } from '@shared/workspace-types'
 import { api, errorText } from './api'
-import logo from './assets/logo.svg'
+import { FirstRunLayout } from './components/first-run/FirstRunLayout'
+import firstRun from './components/first-run/first-run.module.css'
 import { ProfileSetup } from './components/ProfileSetup'
 import { AppLayout } from './components/shell/AppLayout'
 import { WorkspacePicker } from './components/WorkspacePicker'
@@ -112,41 +113,40 @@ export function App() {
     )
   }
 
+  // First run (#117): loading, the workspace picker and the profile setup step.
   return (
-    <Container size="sm" py="xl">
-      <Stack gap="lg">
-        <Group gap="sm" wrap="nowrap">
-          <Image src={logo} alt="" w={40} h={40} />
-          <div>
-            <Title order={2} lh={1.1}>
-              Huntgry
-            </Title>
-            <Text c="dimmed" size="sm">
-              {view.name === 'setup'
-                ? 'Your master profile: every tailored resume is picked from it.'
-                : 'Set up the working directory for the Claude resume-tailor skill.'}
-            </Text>
-          </div>
-        </Group>
+    <FirstRunLayout
+      width={view.name === 'setup' ? 'setup' : 'picker'}
+      subtitle={
+        view.name === 'loading'
+          ? undefined
+          : view.name === 'setup'
+            ? 'Your master profile: every tailored resume is picked from it. Nothing is written until you save.'
+            : (
+                <>
+                  Hunt jobs like a hungry hound. First, pick the den: the folder the{' '}
+                  <span style={{ whiteSpace: 'nowrap' }}>resume-tailor</span> skill works in.
+                </>
+              )
+      }
+    >
+      {view.name === 'loading' && (
+        <div className={firstRun.loading}>
+          <Loader size="sm" aria-label="Opening your workspace" />
+        </div>
+      )}
 
-        {view.name === 'loading' && (
-          <Center py="xl">
-            <Loader />
-          </Center>
-        )}
+      {view.name === 'picker' && <WorkspacePicker initialNotice={view.notice ?? null} onOpened={open} />}
 
-        {view.name === 'picker' && <WorkspacePicker initialNotice={view.notice ?? null} onOpened={open} />}
-
-        {view.name === 'setup' && (
-          <ProfileSetup
-            workspacePath={view.inspection.path}
-            onImported={(draft) =>
-              setView({ name: 'shell', inspection: view.inspection, doc: view.doc, draft, start: locationOf('profile') })
-            }
-            onManual={() => setView({ name: 'shell', inspection: view.inspection, doc: view.doc, start: locationOf('profile') })}
-          />
-        )}
-      </Stack>
-    </Container>
+      {view.name === 'setup' && (
+        <ProfileSetup
+          workspacePath={view.inspection.path}
+          onImported={(draft) =>
+            setView({ name: 'shell', inspection: view.inspection, doc: view.doc, draft, start: locationOf('profile') })
+          }
+          onManual={() => setView({ name: 'shell', inspection: view.inspection, doc: view.doc, start: locationOf('profile') })}
+        />
+      )}
+    </FirstRunLayout>
   )
 }
