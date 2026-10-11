@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_FILTERS } from '@shared/job-filters'
-import type { ScoredJob } from '@shared/job-relevance'
+import { scoreJob, type ProfileSignals, type ScoredJob } from '@shared/job-relevance'
 import type { Job } from '@shared/jobs-types'
-import { defaultShow, visibleJobs } from './view'
+import { defaultShow, scentScores, visibleJobs } from './view'
 
 const NOW = new Date('2026-10-06T12:00:00Z')
 
@@ -49,5 +49,24 @@ describe('Jobs page view', () => {
     const remote = { ...DEFAULT_FILTERS, workplace: ['Remote' as const] }
     expect(visibleJobs({ ...base, show: 'all', filters: remote }).map((j) => j.id)).toEqual(['url:a'])
     expect(visibleJobs({ ...base, show: 'all', text: 'URL:B' }).map((j) => j.id)).toEqual(['url:b'])
+  })
+
+  it('scores every saved job for its Scent ring, reusing the ranked scores', () => {
+    const signals: ProfileSignals = {
+      titles: ['Backend Engineer'],
+      skills: ['Go'],
+      location: '',
+      remote: true,
+      needsSponsorship: false,
+      years: 6
+    }
+    const go = job('url:go', { title: 'Backend Engineer', description: 'Go services', remote: true, postedAt: '2026-10-05T00:00:00Z' })
+    const other = job('url:other', { title: 'Sales Manager' })
+    const ranked = scored(go, 99)
+    const scores = scentScores([go, other], signals, [ranked], NOW)
+    expect(scores.get('url:go')).toBe(ranked.score)
+    expect(scores.get('url:other')).toEqual(scoreJob(other, signals, NOW))
+    expect(scentScores([go], { ...signals, titles: [] })).toEqual(new Map())
+    expect(scentScores([go], null)).toEqual(new Map())
   })
 })
