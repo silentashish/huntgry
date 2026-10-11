@@ -9,6 +9,7 @@
 
 :root {
   /* Primitives */
+  --hg-white: #ffffff;
   --hg-ink-950: #07090d;
   --hg-ink-900: #0b0f15;
   --hg-ink-850: #10161f;
@@ -99,8 +100,8 @@
   color-scheme: light;
 
   --hg-bg-canvas: var(--hg-bone-50);
-  --hg-bg-surface: #ffffff;
-  --hg-bg-surface-raised: #ffffff;
+  --hg-bg-surface: var(--hg-white);
+  --hg-bg-surface-raised: var(--hg-white);
   --hg-bg-surface-sunken: var(--hg-bone-100);
   --hg-bg-subtle: var(--hg-bone-200);
   --hg-bg-hover: rgb(11 15 21 / 6%);
@@ -119,7 +120,7 @@
   --hg-text-on-accent: var(--hg-ink-950);
   --hg-text-accent: var(--hg-ember-600);
   --hg-text-link: var(--hg-trail-600);
-  --hg-text-inverse: #ffffff;
+  --hg-text-inverse: var(--hg-white);
 
   --hg-icon-default: var(--hg-ink-500);
   --hg-icon-muted: var(--hg-ink-300);

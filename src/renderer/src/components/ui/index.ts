@@ -1,0 +1,11 @@
+/** Scent Trail shared parts (#107). Import from 'components/ui', not the files. */
+export { CompanyAvatar, avatarToneOf, initialsOf, type AvatarTone, type CompanyAvatarProps } from './CompanyAvatar'
+export { EmptyState, type EmptyStateProps } from './EmptyState'
+export { KpiTile, type KpiTileProps } from './KpiTile'
+export { MonoLabel, type MonoLabelProps } from './MonoLabel'
+export { PageHeader, type PageHeaderProps } from './PageHeader'
+export { ProgressBar, type ProgressBarProps } from './ProgressBar'
+export { ScoreRing, scoreLabel, scoreTone, type ScoreRingProps } from './ScoreRing'
+export { SectionCard, type SectionCardProps } from './SectionCard'
+export { StatusPill, type StatusPillProps } from './StatusPill'
+export { TONE_VARS, UI_TONES, toneStyle, type UiTone } from './tones'

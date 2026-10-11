@@ -97,21 +97,21 @@ const TONES: Record<'ember' | 'trail' | 'success' | 'warning' | 'danger' | 'info
     hover: darker('var(--hg-status-danger)'),
     soft: 'var(--hg-status-danger-soft)',
     text: 'var(--hg-status-danger)',
-    onFill: '#ffffff'
+    onFill: 'var(--hg-white)'
   },
   info: {
     fill: 'var(--hg-status-info)',
     hover: darker('var(--hg-status-info)'),
     soft: 'var(--hg-status-info-soft)',
     text: 'var(--hg-status-info)',
-    onFill: '#ffffff'
+    onFill: 'var(--hg-white)'
   },
   review: {
     fill: 'var(--hg-status-review)',
     hover: darker('var(--hg-status-review)'),
     soft: 'var(--hg-status-review-soft)',
     text: 'var(--hg-status-review)',
-    onFill: '#ffffff'
+    onFill: 'var(--hg-white)'
   },
   neutral: {
     fill: 'var(--hg-text-muted)',
@@ -198,7 +198,7 @@ export const cssVariablesResolver: CSSVariablesResolver = () => ({
 /**
  * Variants: `filled` is the solid tone (ember by default, dark text on ember/trail/warning/success),
  * `light` the soft pill look, `default` the Figma "outline" kind, `subtle` the "ghost" kind
- * (secondary text unless a colour is given). Added: `primary` (ember + glow/ember, one per
+ * (secondary text in the default colour, tone text with any other `color`). Added: `primary` (ember + glow/ember, one per
  * screen), `secondary` (bg-subtle), `inverse`.
  */
 export const variantColorResolver: VariantColorsResolver = (input) => {
@@ -238,7 +238,8 @@ export const variantColorResolver: VariantColorsResolver = (input) => {
         border: '1px solid var(--hg-border-default)'
       }
     case 'subtle':
-      if (!input.color || tone === 'neutral') {
+      // Mantine passes the primary colour when none is given: that is the Figma "ghost" kind.
+      if (!input.color || input.color === input.theme.primaryColor || tone === 'neutral') {
         return {
           background: 'transparent',
           hover: 'var(--hg-bg-hover)',
