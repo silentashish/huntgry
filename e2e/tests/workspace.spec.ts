@@ -152,4 +152,20 @@ test.describe('remembered workspace', () => {
     await shell.expectVisible(app.workspace!)
     await shell.expectActive('dashboard')
   })
+
+  test('a last workspace that fails to open is no longer offered', async ({ app }) => {
+    const shell = new Shell(app.window)
+    await shell.expectVisible(app.workspace!)
+    await shell.switchWorkspaceButton.click()
+    const picker = new WorkspacePicker(app.window)
+    await expect(picker.recent).toContainText(app.workspace!)
+
+    await rm(join(app.workspace!, 'master-profile.md'))
+    await picker.recent.getByRole('button', { name: 'Open' }).click()
+    await expect(picker.notice).toContainText('No master profile (master-profile.md) was found')
+    await expect(picker.recent).toHaveCount(0)
+    // Nor does it come back once another folder is inspected.
+    await picker.typePath(join(app.sandbox.workspaces, 'elsewhere'))
+    await expect(picker.recent).toHaveCount(0)
+  })
 })

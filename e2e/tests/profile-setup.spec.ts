@@ -86,16 +86,30 @@ test.describe('profile setup', () => {
     expect(await readFile(join(app.workspace!, 'master-profile.md'), 'utf8')).not.toContain('Jordan Example')
   })
 
-  test('a dropped file that is not a resume, or has no path on disk, is refused', async ({ app }) => {
+  test('a dropped file that is not a resume, or several files at once, are refused', async ({ app }) => {
     const setup = new ProfileSetup(app.window)
     await setup.expectVisible(app.workspace!)
 
-    await setup.dropScriptFile('photo.png', 'not a resume')
+    await setup.dropFiles([{ name: 'photo.png', content: 'not a resume' }])
     await expect(setup.error).toContainText('photo.png: Unsupported file type. Use .docx, .pdf, .txt or .md.')
 
-    // A File made by page script carries no path, so main has nothing to read.
-    await setup.dropScriptFile('resume.md', '# Jordan Example')
-    await expect(setup.error).toContainText('Only files from this computer can be imported.')
+    // Several files: nothing is imported, not even the first.
+    await setup.dropFiles([
+      { name: 'resume.md', content: '# Jordan Example' },
+      { name: 'other.md', content: '# Someone Else' }
+    ])
+    await expect(setup.error).toContainText('Drop one resume at a time.')
     await setup.expectVisible(app.workspace!)
+  })
+
+  test('a dropped resume is read from its contents, not from a path', async ({ app }) => {
+    // A File made in the page has no path on disk; its bytes are all main gets.
+    const setup = new ProfileSetup(app.window)
+    await setup.expectVisible(app.workspace!)
+    await setup.dropFiles([{ name: 'cv.MD', content: '# Jordan Example\njordan.example@example.com\n' }])
+
+    await new Shell(app.window).expectActive('profile')
+    await expect(new ProfileEditor(app.window).notice).toContainText('Imported from cv.MD')
+    await expect(app.window.getByLabel('Full name', { exact: true })).toHaveValue('Jordan Example')
   })
 })

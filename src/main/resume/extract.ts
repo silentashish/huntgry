@@ -2,11 +2,10 @@ import { readFile, stat } from 'node:fs/promises'
 import { extname } from 'node:path'
 import { extractDocx } from './docx'
 import { extractPdf } from './pdf'
+import { MAX_RESUME_BYTES } from '@shared/master-profile'
 import type { ResumeLine } from './types'
 
-export const RESUME_EXTENSIONS = ['docx', 'pdf', 'txt', 'md'] as const
-
-const MAX_RESUME_BYTES = 20 * 1024 * 1024
+export { MAX_RESUME_BYTES, RESUME_EXTENSIONS } from '@shared/master-profile'
 
 export class ResumeReadError extends Error {}
 
@@ -15,8 +14,17 @@ export async function readResumeLines(path: string): Promise<ResumeLine[]> {
   const info = await stat(path)
   if (!info.isFile()) throw new ResumeReadError('That is not a file.')
   if (info.size > MAX_RESUME_BYTES) throw new ResumeReadError('The file is larger than 20 MB.')
-  const buf = await readFile(path)
-  const ext = extname(path).slice(1).toLowerCase()
+  return readResumeBuffer(await readFile(path), extname(path).slice(1))
+}
+
+/**
+ * Reads resume contents into lines. `extension` is the file's extension without the dot
+ * ('' when it has none). Format is chosen by content (magic bytes), then extension.
+ * Shared by a picked file (read from disk) and a dropped one (bytes sent by the window).
+ */
+export async function readResumeBuffer(buf: Buffer, extension: string): Promise<ResumeLine[]> {
+  if (buf.byteLength > MAX_RESUME_BYTES) throw new ResumeReadError('The file is larger than 20 MB.')
+  const ext = extension.toLowerCase()
 
   if (buf.subarray(0, 5).toString('latin1') === '%PDF-') return extractPdf(buf)
   if (buf.subarray(0, 4).toString('latin1') === 'PK\u0003\u0004') {

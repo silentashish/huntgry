@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@mantine/core'
 import { IconFileText, IconPencil, IconUpload } from '@tabler/icons-react'
-import type { MasterProfile, ResumeImportResult } from '@shared/master-profile'
+import { resumeExtensionOf, type MasterProfile, type ResumeImportResult } from '@shared/master-profile'
 import { api, errorText } from '../api'
 import { Notice } from './first-run/Notice'
 import classes from './first-run/first-run.module.css'
@@ -12,8 +12,6 @@ interface Props {
   onImported(draft: { profile: MasterProfile; fileName: string; warnings: string[] }): void
   onManual(): void
 }
-
-const RESUME_EXTENSIONS = ['docx', 'pdf', 'txt', 'md']
 
 /** True while the drag carries files (not text or a link). */
 const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes('Files') ?? false
@@ -43,10 +41,15 @@ export function ProfileSetup({ workspacePath, onImported, onManual }: Props) {
   }
 
   // "…or drop a resume anywhere on this window": the whole window is the drop target.
-  const importDropped = useRef<(file: File) => void>(() => {})
-  importDropped.current = (file: File) => {
-    const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-    if (!file.name.includes('.') || !RESUME_EXTENSIONS.includes(ext)) {
+  const importDropped = useRef<(files: FileList) => void>(() => {})
+  importDropped.current = (files: FileList) => {
+    if (files.length === 0) return
+    if (files.length > 1) {
+      setError('Drop one resume at a time.')
+      return
+    }
+    const file = files[0]
+    if (!resumeExtensionOf(file.name)) {
       setError(`${file.name}: Unsupported file type. Use .docx, .pdf, .txt or .md.`)
       return
     }
@@ -75,8 +78,7 @@ export function ProfileSetup({ workspacePath, onImported, onManual }: Props) {
       e.preventDefault()
       depth = 0
       setDragging(false)
-      const file = e.dataTransfer?.files[0]
-      if (file) importDropped.current(file)
+      if (e.dataTransfer) importDropped.current(e.dataTransfer.files)
     }
     window.addEventListener('dragenter', enter)
     window.addEventListener('dragleave', leave)

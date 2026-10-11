@@ -87,8 +87,9 @@ export interface ProfileApi {
   importResume(): Promise<ResumeImportResult>
   /**
    * Parse a resume the user dropped on the window into a draft. Nothing is written.
-   * Takes the dropped `File`; the preload resolves its path, so only files the user
-   * actually dropped (or picked) can be read.
+   * The preload reads the dropped `File` (20 MB cap) and sends its name and bytes; no
+   * path crosses IPC and main never opens a file for this call. Main checks the name's
+   * extension and the size again, and answers only the app window's top frame.
    */
   importResumeFile(file: File): Promise<ResumeImportResult>
   /** Open the Markdown file in the user's default editor. */

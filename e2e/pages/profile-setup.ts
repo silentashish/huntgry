@@ -22,8 +22,8 @@ export class ProfileSetup {
   }
 
   /**
-   * Drops a file on the window the way Finder does: the `File` comes from a file
-   * input that Playwright fills with the real path, so the app can resolve it.
+   * Drops a file from disk on the window the way Finder does: the `File` comes from
+   * a file input that Playwright fills from `path` (the app sends its bytes to main).
    */
   async dropFile(path: string): Promise<void> {
     const input = await this.page.evaluateHandle(() => {
@@ -44,17 +44,14 @@ export class ProfileSetup {
     })
   }
 
-  /** Drops a `File` built by page script: it has no path on disk, like a forged one. */
-  async dropScriptFile(name: string, content: string): Promise<void> {
-    await this.page.evaluate(
-      ([fileName, text]) => {
-        const dt = new DataTransfer()
-        dt.items.add(new File([text], fileName))
-        for (const type of ['dragenter', 'dragover', 'drop']) {
-          document.body.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true }))
-        }
-      },
-      [name, content]
-    )
+  /** Drops files built in the page from text (no path on disk); several at once when given several. */
+  async dropFiles(files: Array<{ name: string; content: string }>): Promise<void> {
+    await this.page.evaluate((list) => {
+      const dt = new DataTransfer()
+      for (const f of list) dt.items.add(new File([f.content], f.name))
+      for (const type of ['dragenter', 'dragover', 'drop']) {
+        document.body.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true }))
+      }
+    }, files)
   }
 }

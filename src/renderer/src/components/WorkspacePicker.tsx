@@ -89,6 +89,8 @@ export function WorkspacePicker({ onOpened, initialNotice = null }: Props) {
 
   async function runImport(path: string, gen: number) {
     const result = await api.workspace.open(path)
+    // The last opened workspace can no longer be opened: stop offering it.
+    if (!canImport(result)) setRecent((r) => (r && (r.path === result.path || r.path === path) ? null : r))
     if (gen !== generation.current) return
     setInspection(result)
     if (canImport(result)) {

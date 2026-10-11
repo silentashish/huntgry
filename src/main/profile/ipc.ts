@@ -4,7 +4,7 @@ import type { MasterProfile, ResumeImportResult, SaveProfileResult } from '@shar
 import { IPC_CHANNELS } from '@shared/workspace-types'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { RESUME_EXTENSIONS } from '../resume/extract'
-import { droppedResumePath, importResumeFrom } from './resume-import'
+import { importDroppedResume, importResumeFrom, isAppWindowTopFrame } from './resume-import'
 import { readProfile, saveProfile } from './store'
 
 /** The master profile file of the current workspace. The renderer never supplies this path. */
@@ -53,10 +53,12 @@ export function registerProfileIpc(): void {
     return importResumeFrom(res.filePaths[0])
   })
 
-  // A resume dropped on the window (profile setup): same parse, no dialog.
-  ipcMain.handle(IPC_CHANNELS.profileImportResumeFile, async (_event, path: unknown): Promise<ResumeImportResult> => {
-    const checked = droppedResumePath(path)
-    return checked.ok ? importResumeFrom(checked.path) : { ok: false, cancelled: false, error: checked.error }
+  // A resume dropped on the window (profile setup): its bytes, never a path; same parser, no dialog.
+  // Only the app window's top frame may call it, not an in-app browser tab or a subframe.
+  ipcMain.handle(IPC_CHANNELS.profileImportResumeFile, async (event, dropped: unknown): Promise<ResumeImportResult> => {
+    const appContents = BrowserWindow.fromWebContents(event.sender)?.webContents
+    if (!isAppWindowTopFrame(event, appContents)) throw new Error('Not allowed from this page.')
+    return importDroppedResume(dropped)
   })
 
   ipcMain.handle(IPC_CHANNELS.profileOpenInEditor, async () => {
