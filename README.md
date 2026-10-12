@@ -8,7 +8,7 @@
 
 [![e2e](https://github.com/silentashish/huntgry/actions/workflows/e2e.yml/badge.svg)](https://github.com/silentashish/huntgry/actions/workflows/e2e.yml)
 [![ci](https://github.com/silentashish/huntgry/actions/workflows/ci.yml/badge.svg)](https://github.com/silentashish/huntgry/actions/workflows/ci.yml)
-[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-PayPal-003087?logo=paypal&logoColor=white)](https://www.paypal.com/donate/?business=ashish.gm74%40gmail.com&currency_code=USD&item_name=Support+Huntgry)
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/silentashish)
 
 <img src="docs/assets/screenshots/dashboard.png" alt="Huntgry's Dashboard: applications with their status and build result, and the master profile's skill gaps" width="900">
 
@@ -433,6 +433,6 @@ APK needs none.
 
 Huntgry is a free, personal project. If it saved you an evening of rewriting resumes, you can buy me a coffee:
 
-<a href="https://www.paypal.com/donate/?business=ashish.gm74%40gmail.com&currency_code=USD&item_name=Support+Huntgry"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-PayPal-003087?style=for-the-badge&logo=paypal&logoColor=white" alt="Buy me a coffee with PayPal"></a>
+<a href="https://buymeacoffee.com/silentashish"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy me a coffee"></a>
 
 Bug reports and ideas are just as welcome in [Issues](https://github.com/silentashish/huntgry/issues).

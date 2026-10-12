@@ -33,9 +33,9 @@ picture of the app, no way to support the project.
   screenshot; the spec captures the window and the tab in the main process and draws the tab over its bounds.
 - The screenshot spec has its **own Playwright config** (`e2e/screenshots.config.ts`), so `npm run test:e2e`
   never writes into the repository. It is still type-checked by `npm run typecheck:e2e`.
-- **Buy me a coffee** is a shields.io badge linking to a PayPal donate page for `ashish.gm74@gmail.com`:
-  `https://www.paypal.com/donate/?business=ashish.gm74%40gmail.com&currency_code=USD&item_name=Support+Huntgry`.
-  It returns 200 and the PayPal donate page addressed to that account (checked with `curl`).
+- **Buy me a coffee** is a shields.io badge (Buy Me a Coffee yellow and logo) linking to the project's
+  Buy Me a Coffee page, `https://buymeacoffee.com/silentashish`. It returns 200 (checked with `curl`). The first
+  version linked a PayPal donate page; the Buy Me a Coffee page replaced it at the owner's request.
 - The README's existing sections keep their text, commands, tables and links; only the head was replaced and a
   blank line removed. Section headings are unchanged, so existing anchors into the README keep working.
 
@@ -57,7 +57,7 @@ npm run screenshots                          # regenerates the four PNGs (2 test
 ```
 
 Then open the README on the branch on GitHub in light and dark mode: the logo, badges and screenshots render, the
-Contents links jump to their sections, and the Buy me a coffee badges open PayPal.
+Contents links jump to their sections, and the Buy me a coffee badges open buymeacoffee.com/silentashish.
 
 ## Follow-ups
 
