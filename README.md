@@ -1,7 +1,72 @@
+<div align="center">
+
+<img src="docs/assets/logo.svg" alt="Huntgry logo: a paw on an orange tile" width="96" height="96">
+
 # Huntgry
+
+**A local-first desktop app (macOS first) that tracks the hunt, tailors a resume to every job with your own AI agent and fills the application form, without ever pressing Submit for you.**
 
 [![e2e](https://github.com/silentashish/huntgry/actions/workflows/e2e.yml/badge.svg)](https://github.com/silentashish/huntgry/actions/workflows/e2e.yml)
 [![ci](https://github.com/silentashish/huntgry/actions/workflows/ci.yml/badge.svg)](https://github.com/silentashish/huntgry/actions/workflows/ci.yml)
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/silentashish)
+
+<img src="docs/assets/screenshots/dashboard.png" alt="Huntgry's Dashboard: applications with their status and build result, and the master profile's skill gaps" width="900">
+
+</div>
+
+## What it does
+
+- **Board and Dashboard**: every saved job and application in one place, from *To do* to *Offer*, with build
+  results, PDFs, posting links and status tracking. See [Board](#board) and [Workspace](#workspace).
+- **Tailor**: runs the [resume-tailor skill](https://github.com/silentashish/claude-resume-generator-skill)
+  through Claude Code, Codex or Antigravity to write a resume and cover letter for one job, or a queue of them,
+  attended or unattended. See [Tailoring a resume](#tailoring-a-resume).
+- **Browser and Apply**: opens postings in a sandboxed in-app browser, fills Greenhouse, Lever and generic forms
+  from your master profile and attaches the tailored PDFs. You review and submit. See [Browser](#browser) and
+  [Applying](#applying).
+- **Master profile and knowledge graph**: one plain Markdown file is the only store; Huntgry shows your skills
+  as a graph and the ones jobs keep asking for that it has no evidence of. See
+  [Knowledge graph](#knowledge-graph) and [Keeping the master profile up to date](#keeping-the-master-profile-up-to-date).
+- **Remote control**: watch and steer runs from your phone over an end-to-end encrypted relay in your own
+  Cloudflare account. See [Remote control (phone)](#remote-control-phone).
+
+There is no Huntgry server and no database: the workspace is a folder on your computer, and the resumes are written by
+the agent CLI you already use.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/screenshots/board.png" alt="Board: jobs as cards in Kanban columns from To do to Ready to apply"><br><sub><b>Board</b>: every job as a card, from saved to signed.</sub></td>
+    <td width="50%"><img src="docs/assets/screenshots/tailor.png" alt="Tailor: a run of the resume-tailor skill waiting for the user's approval"><br><sub><b>Tailor</b>: a run waiting for your approval of its reframings.</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/assets/screenshots/apply.png" alt="Browser with the Apply panel: a Lever form filled from the master profile"><br><sub><b>Apply</b>: a form filled from your master profile in the in-app browser; you review it and press Submit.</sub></td>
+  </tr>
+</table>
+
+Screenshots come from the real app with the fictional e2e demo data; regenerate them with `npm run screenshots`
+(see [docs/changes/132-readme-refresh.md](docs/changes/132-readme-refresh.md)).
+
+## Contents
+
+- [What it does](#what-it-does)
+- [Screenshots](#screenshots)
+- [Initial Idea](#initial-idea)
+- [Development](#development)
+  - [Project layout](#project-layout)
+  - [Adding a feature](#adding-a-feature)
+- [Board](#board)
+- [Finding jobs](#finding-jobs)
+- [Browser](#browser)
+- [Applying](#applying)
+- [Tailoring a resume](#tailoring-a-resume)
+- [Knowledge graph](#knowledge-graph)
+- [Keeping the master profile up to date](#keeping-the-master-profile-up-to-date)
+- [Workspace](#workspace)
+  - [Master profile](#master-profile)
+- [Remote control (phone)](#remote-control-phone)
+- [Support](#support)
 
 ## Initial Idea
 
@@ -46,6 +111,7 @@ npm run build        # typecheck + production bundles in out/
 npm start            # preview the production build
 npm run dist         # packaged app (Huntgry.app / dmg / zip) in release/ via electron-builder
 npm run icons        # regenerate resources/icon.png + icon.icns from resources/icon.svg
+npm run screenshots  # build, then retake the README screenshots in docs/assets/screenshots/
 ```
 
 End-to-end tests live in `e2e/` and run the built app in a sandbox (own `userData`, `HOME`
@@ -89,8 +155,8 @@ src/
     ├── components/shell/       # AppLayout: navbar + page area
     └── pages/<page>/           # dashboard, jobs, browser, tailor, graph, profile, settings
 resources/                      # app icon (svg source, png, icns)
-scripts/                        # icon rendering, dev Electron branding, mock-ats.mjs + mock-ats/ (local test forms)
-e2e/                            # Playwright end-to-end tests: fixtures/ (sandbox, workspaces, fake-agent/, servers/), pages/, tests/
+scripts/                        # icon rendering, dev Electron branding, mock-ats.mjs + mock-ats/ (local test forms), doc link check
+e2e/                            # Playwright end-to-end tests: fixtures/ (sandbox, workspaces, fake-agent/, servers/), pages/, tests/, screenshots/
 ```
 
 ### Adding a feature
@@ -241,7 +307,6 @@ and years of use. Job descriptions of the workspace's applications are overlaid:
 your skills they ask for, and the technologies they ask for that the profile never
 mentions (gaps). A **Skills** view lists the same data as a sortable table.
 
-
 ## Keeping the master profile up to date
 
 The Dashboard's **Master profile** card compares the profile with every job description in the
@@ -363,3 +428,11 @@ TestFlight need the Apple Developer Program ($99/year); without it a local build
 Apple ID works without push and expires after 7 days. TestFlight internal builds expire after
 **90 days**. Google Play internal testing needs a Play Console account ($25 once); a preview
 APK needs none.
+
+## Support
+
+Huntgry is a free, personal project. If it saved you an evening of rewriting resumes, you can buy me a coffee:
+
+<a href="https://buymeacoffee.com/silentashish"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy me a coffee"></a>
+
+Bug reports and ideas are just as welcome in [Issues](https://github.com/silentashish/huntgry/issues).
