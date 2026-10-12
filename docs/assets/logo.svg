@@ -1,7 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72" fill="none" role="img" aria-label="Huntgry">
   <!-- Huntgry brand mark: the paw on an Ember gradient tile. Exported from
        src/renderer/src/components/ui/PawLogo.tsx with the tokens.css colours
-       inlined (--hg-ember-300 #ffc46b, --hg-ember-600 #e66e0a, --hg-ink-950 #07090d). -->
+       inlined: ember 300 #ffc46b, ember 600 #e66e0a, ink 950 #07090d (see
+       docs/changes/132-readme-refresh.md). No double hyphens in XML comments. -->
   <defs>
     <linearGradient id="hg-paw" x1="0" y1="0" x2="51.4286" y2="51.4286" gradientUnits="userSpaceOnUse">
       <stop stop-color="#ffc46b"/>
