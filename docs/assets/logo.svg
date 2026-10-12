@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72" fill="none" role="img" aria-label="Huntgry">
+  <!-- Huntgry brand mark: the paw on an Ember gradient tile. Exported from
+       src/renderer/src/components/ui/PawLogo.tsx with the tokens.css colours
+       inlined (--hg-ember-300 #ffc46b, --hg-ember-600 #e66e0a, --hg-ink-950 #07090d). -->
+  <defs>
+    <linearGradient id="hg-paw" x1="0" y1="0" x2="51.4286" y2="51.4286" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffc46b"/>
+      <stop offset="1" stop-color="#e66e0a"/>
+    </linearGradient>
+  </defs>
+  <rect width="72" height="72" rx="21.6" fill="url(#hg-paw)"/>
+  <g fill="#07090d">
+    <ellipse cx="18.72" cy="21.96" rx="6.84" ry="7.56"/>
+    <ellipse cx="30.24" cy="14.04" rx="6.84" ry="7.56"/>
+    <ellipse cx="41.76" cy="14.04" rx="6.84" ry="7.56"/>
+    <ellipse cx="53.28" cy="21.96" rx="6.84" ry="7.56"/>
+    <ellipse cx="36" cy="45.36" rx="16.56" ry="12.96"/>
+  </g>
+</svg>
