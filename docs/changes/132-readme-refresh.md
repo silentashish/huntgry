@@ -14,14 +14,16 @@ picture of the app, no way to support the project.
 | Logo | `docs/assets/logo.svg` | The paw brand mark as a standalone SVG. |
 | Screenshots | `docs/assets/screenshots/{dashboard,board,tailor,apply}.png`, `e2e/screenshots/readme.spec.ts`, `e2e/screenshots.config.ts`, `package.json` (`screenshots`) | Real screenshots of the built app, and the script that takes them. |
 | README | `README.md` | Centred hero (logo, title, tagline, e2e/ci badges, Buy me a coffee badge, Dashboard shot), "What it does", Screenshots, Contents, then every existing section unchanged in content and order, then "Support". |
-| Link check | `scripts/check-doc-links.mjs` | Checks every relative link, image and `#anchor` of a Markdown file. |
+| Link check | `scripts/check-doc-links.mjs`, `package.json` (`check:docs`, run by `npm test`) | Checks every relative link, image and `#anchor` of a Markdown file, and that every linked `.svg` is well-formed XML. |
 
 ## Decisions
 
 - **Logo source**: `src/renderer/src/components/ui/PawLogo.tsx` (Figma "Logo / Paw" `22:592`), geometry copied
   as is, with the CSS variables resolved from `src/renderer/src/theme/tokens.css`: `--hg-ember-300` `#ffc46b`,
   `--hg-ember-600` `#e66e0a`, `--hg-ink-950` `#07090d`. The mark is an opaque gradient tile with a dark paw, so it
-  needs no light/dark variants on GitHub. `resources/icon.svg` is the old magnifier app icon and is untouched
+  needs no light/dark variants on GitHub. The SVG must stay well-formed XML: an earlier version named the tokens
+  in an XML comment, and the `--` in them (forbidden inside XML comments) made browsers drop the image, so the
+  README showed no logo. `npm run check:docs` now parses every linked SVG with jsdom's XML parser. `resources/icon.svg` is the old magnifier app icon and is untouched
   (changing the app icon is out of scope). No PNG: GitHub renders the SVG through `<img>`.
 - **Screenshots** are taken from the built app through the e2e harness, not mocked up: the sandbox (own
   `userData`, `HOME`, `PATH`), the fictional `demo` workspace (Alex Rivera, Acme, Globex, Initech…), the fake
@@ -49,7 +51,7 @@ Look at every image before committing it. To add one, add a step to the spec (us
 ## How to test
 
 ```bash
-node scripts/check-doc-links.mjs README.md   # every relative link, image and anchor resolves
+npm run check:docs                           # every relative link, image and anchor resolves; linked SVGs parse
 npm run typecheck:e2e                        # the screenshot spec type-checks
 npm run screenshots                          # regenerates the four PNGs (2 tests pass)
 ```

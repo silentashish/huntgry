@@ -1,8 +1,20 @@
-// Checks that every relative link, image and #anchor in a Markdown file resolves (#132).
+// Checks that every relative link, image and #anchor in a Markdown file resolves (#132), and that every
+// linked .svg is well-formed XML (a browser shows nothing for a malformed one, e.g. `--` inside a comment).
 // Anchors follow GitHub's heading slugs. External (http/https/mailto) links are not fetched.
-// Run: node scripts/check-doc-links.mjs [README.md ...]
+// Run: node scripts/check-doc-links.mjs [README.md ...] (npm run check:docs, part of npm test)
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
+import { JSDOM } from 'jsdom'
+
+const { DOMParser } = new JSDOM('').window
+
+/** The XML parser's message for a malformed SVG, or null when it is well formed. */
+function svgError(path) {
+  const doc = new DOMParser().parseFromString(readFileSync(path, 'utf8'), 'image/svg+xml')
+  const error = doc.getElementsByTagName('parsererror')[0]
+  if (error) return error.textContent.trim()
+  return doc.documentElement.localName === 'svg' ? null : `root element is <${doc.documentElement.localName}>, not <svg>`
+}
 
 const slug = (heading) =>
   heading
@@ -51,6 +63,9 @@ for (const file of process.argv.slice(2).length ? process.argv.slice(2) : ['READ
     const dest = rel ? resolve(dirname(path), decodeURIComponent(rel)) : path
     if (!existsSync(dest)) {
       console.error(`${file}: missing file ${target}`)
+      failures++
+    } else if (dest.endsWith('.svg') && svgError(dest)) {
+      console.error(`${file}: malformed SVG ${target}: ${svgError(dest)}`)
       failures++
     } else if (hash !== undefined && dest.endsWith('.md') && !(rel ? anchors(readFileSync(dest, 'utf8')) : own).has(hash)) {
       console.error(`${file}: missing anchor ${target}`)
