@@ -21,6 +21,7 @@
     "test:watch": "vitest",
     "test:e2e": "npm run build && playwright test -c e2e/playwright.config.ts",
     "test:e2e:ui": "playwright test -c e2e/playwright.config.ts --ui",
+    "screenshots": "electron-vite build && playwright test -c e2e/screenshots.config.ts",
     "check:lockfiles": "node scripts/check-lockfiles.mjs",
     "typecheck": "npm run typecheck:node && npm run typecheck:web && npm run typecheck:page && npm run typecheck:remote && npm run typecheck:e2e && npm run typecheck:relay && npm run typecheck:mobile",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
