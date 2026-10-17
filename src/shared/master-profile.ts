@@ -16,6 +16,12 @@ export interface ContactInfo {
   github: string
   website: string
   workAuthorization: string
+  /** Street address (line 1), for application forms that ask for a postal address (#136). Optional. */
+  address: string
+  /** Postal / ZIP code (#136). Optional. City and state come from `location`. */
+  postalCode: string
+  /** Country (#136). Optional; forms get "United States" when `location` names a US state. */
+  country: string
   /** Any other `- Label: value` lines (portfolio, Twitter, ...), kept in order. */
   other: LabeledValue[]
 }
@@ -153,6 +159,9 @@ export function emptyContact(): ContactInfo {
     github: '',
     website: '',
     workAuthorization: '',
+    address: '',
+    postalCode: '',
+    country: '',
     other: []
   }
 }

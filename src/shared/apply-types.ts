@@ -48,6 +48,11 @@ export type FieldKey =
   | 'email'
   | 'phone'
   | 'location'
+  | 'addressLine1'
+  | 'city'
+  | 'state'
+  | 'postalCode'
+  | 'country'
   | 'linkedin'
   | 'github'
   | 'website'
@@ -65,6 +70,11 @@ export const FIELD_LABEL: Record<FieldKey, string> = {
   email: 'Email',
   phone: 'Phone',
   location: 'Location',
+  addressLine1: 'Address',
+  city: 'City',
+  state: 'State',
+  postalCode: 'Postal code',
+  country: 'Country',
   linkedin: 'LinkedIn',
   github: 'GitHub',
   website: 'Website',

@@ -69,6 +69,12 @@ export function fillValuesFrom(profile: MasterProfile): FillValues {
     email: c.email.trim(),
     phone: c.phone.trim(),
     location: c.location.trim(),
+    // Address parts (#136): the street, postal code and country as written; city and state are derived from `location`.
+    addressLine1: c.address.trim(),
+    city: '',
+    state: '',
+    postalCode: c.postalCode.trim(),
+    country: c.country.trim(),
     linkedin: asUrl(c.linkedin, 'https://www.linkedin.com/in/'),
     github: asUrl(c.github, 'https://github.com/'),
     website: asUrl(c.website),
