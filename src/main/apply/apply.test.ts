@@ -1990,8 +1990,15 @@ describe('application answers (#71)', () => {
         () => expect((doc().querySelector('#primaryQuestionnaire--motivation') as HTMLTextAreaElement).value).toBe('Fake model answer'),
         wait
       )
-      const motivation = service.current()!.report!.fields.find((f) => f.label === 'Why do you want to work at Acme?')
-      expect(motivation).toMatchObject({ outcome: 'filled', suggestedBy: 'model' })
+      // The page holds the answer before the refill's report reaches the session: wait for the report too.
+      await vi.waitFor(
+        () =>
+          expect(service.current()!.report!.fields.find((f) => f.label === 'Why do you want to work at Acme?')).toMatchObject({
+            outcome: 'filled',
+            suggestedBy: 'model'
+          }),
+        wait
+      )
 
       // Voluntary Disclosures: picked from the stored facts; the terms box untouched.
       tab.step(fixture('workday-voluntary-disclosures.html'))
