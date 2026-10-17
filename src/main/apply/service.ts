@@ -6,8 +6,10 @@ import {
   type ApplyAts,
   type ApplySession,
   type FieldReport,
+  type FillProfile,
   type FillReport,
   type FillValues,
+  EMPTY_FILL_PROFILE,
   type PageScan,
   type UploadState
 } from '@shared/apply-types'
@@ -87,6 +89,11 @@ export interface ApplyDeps {
   workspace(): Promise<string>
   /** Values from the current master profile. */
   values(): Promise<FillValues>
+  /**
+   * The master profile's repeatable sections (#136: work experience, education, skills, websites), sent with every
+   * fill for the adapters that fill them (Workday My Experience). Without it those sections are left alone.
+   */
+  profile?(): Promise<FillProfile>
   /** Remembered application answers (#71); without them only contact fields are filled. */
   answers?: AnswersDeps
   /**
@@ -112,6 +119,11 @@ export interface ApplyDeps {
   /** Delays for re-detecting a page whose form renders late; injectable for tests. */
   retryDelaysMs?: number[]
   requestTimeoutMs?: number
+  /**
+   * How long main waits for a Workday fill (#136). Default 60 s: My Experience adds blocks and picks skills inside
+   * the page (bounded there to 40 s), on top of the readiness wait, the other picks (8 s) and the verify pass.
+   */
+  workdayFillTimeoutMs?: number
   /** How long the site's widget may take to show an attached file. */
   uploadConfirmMs?: number
 }
@@ -122,6 +134,8 @@ interface Context {
   tabId: string
   page: ApplyPage
   values: FillValues
+  /** The profile's repeatable sections (#136), read at start like `values`. */
+  profile: FillProfile
   /** Remembered answers, loaded at start and after the user teaches one (#71). */
   answers: PageAnswers
   /** Pick trusted answers in click-only widgets (the Settings switch as of the last fill). */
@@ -197,6 +211,12 @@ const MAX_MAPPED = 40
 const MAX_DRAFTED = 10
 /** The preload waits for the page to settle (up to ~6 s) before it answers a detect. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
+/**
+ * A Workday fill (#136) may add My Experience blocks and pick skills in the page: the preload bounds that phase to
+ * 40 s and the other picks to 8 s, plus its readiness wait (3 s) and verify pass (~1.3 s). Main waits a little longer
+ * than that sum, and no more: a page that never answers still ends in "Filling failed".
+ */
+const WORKDAY_FILL_TIMEOUT_MS = 60_000
 const DEFAULT_UPLOAD_CONFIRM_MS = 10_000
 const MAX_EMBED_FOLLOWS = 3
 const DRAFTED = 'AI draft from your resume and this job description. Read and edit it in the page before you submit.'
@@ -245,6 +265,7 @@ export class ApplyService {
     })
     const coverPath = await resolveApplicationFile(workspace, applicationId, 'cover.pdf').catch(() => null)
     const values = await this.deps.values()
+    const profile = (await this.deps.profile?.().catch(() => null)) ?? EMPTY_FILL_PROFILE
     const answers = (await this.deps.answers?.load(workspace).catch(() => null)) ?? NO_ANSWERS
     const applyUrl = applyUrlFor(record.jobUrl)
 
@@ -256,6 +277,7 @@ export class ApplyService {
       tabId,
       page: this.deps.page(tabId),
       values,
+      profile,
       answers,
       once: {},
       replace: {},
@@ -574,7 +596,7 @@ export class ApplyService {
       await this.refreshPick(ctx)
       if (!current()) return
       // The preload waits for the page to settle, fills, then checks a moment later that the values held.
-      let report = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, this.fillPayload(ctx)))
+      let report = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, this.fillPayload(ctx), this.fillTimeout()))
       if (!current()) return
       if (report.step && report.step !== 'form') {
         // Fill form pressed on a step that is the user's (a sign-in wall…): the page was left untouched.
@@ -601,7 +623,7 @@ export class ApplyService {
         if (verified && report.uploadOrder === 'text-first') report = withTextFrom(report, parseFillReport(verified))
       }
       if (report.uploadOrder === 'files-first') {
-        const text = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { ...this.fillPayload(ctx), text: true }))
+        const text = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { ...this.fillPayload(ctx), text: true }, this.fillTimeout()))
         if (!current()) return
         report = withFilesFrom(text, report)
       }
@@ -628,14 +650,19 @@ export class ApplyService {
     }
   }
 
-  /** What a fill sends the page: the profile values and the answers (this session's own on top). */
-  private fillPayload(ctx: Context): { values: FillValues; answers: PageAnswers; pick: boolean } {
+  /** How long a fill request may take: longer on Workday (#136, see `WORKDAY_FILL_TIMEOUT_MS`), else the default. */
+  private fillTimeout(): number | undefined {
+    return this.session?.ats === 'workday' ? (this.deps.workdayFillTimeoutMs ?? WORKDAY_FILL_TIMEOUT_MS) : undefined
+  }
+
+  /** What a fill sends the page: the profile values and sections, and the answers (this session's own on top). */
+  private fillPayload(ctx: Context): { values: FillValues; profile: FillProfile; answers: PageAnswers; pick: boolean } {
     const questions = { ...ctx.answers.questions }
     for (const [question, value] of Object.entries(ctx.once)) {
       const replace = ctx.replace[question]
       questions[question] = { ...questions[question], value, confirmed: true, ...(replace ? { replace } : {}) }
     }
-    return { values: ctx.values, answers: { facts: ctx.answers.facts, questions, aiAnswers: ctx.ai }, pick: ctx.pick }
+    return { values: ctx.values, profile: ctx.profile, answers: { facts: ctx.answers.facts, questions, aiAnswers: ctx.ai }, pick: ctx.pick }
   }
 
   /** Reads the Settings switches for the coming fill: picking (off when it cannot be read), AI answers (#136, on). */
@@ -890,7 +917,7 @@ export class ApplyService {
     try {
       await this.collectEdits(ctx)
       await this.refreshPick(ctx)
-      const text = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { ...this.fillPayload(ctx), text: true }))
+      const text = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { ...this.fillPayload(ctx), text: true }, this.fillTimeout()))
       if (!current() || (text.step && text.step !== 'form')) return
       const previous = this.session?.report
       const report = this.withAi(ctx, this.withDrafts(ctx, previous && previous.url === text.url ? withFilesFrom(text, previous) : text))

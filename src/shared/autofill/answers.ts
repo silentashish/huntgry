@@ -12,7 +12,7 @@ import {
   setSelectValue,
   type FormControl
 } from './dom'
-import { widgetOf } from './pick'
+import { isWorkdaySearchBox, widgetOf } from './pick'
 import { editedByUser } from './user-edits'
 
 /**
@@ -213,7 +213,9 @@ export function answerField(
       line.reason = 'You changed it; left as is.'
       return false
     }
-    picks.push({ el, root, line, fact: found.fact ?? null, value: found.value })
+    // A Workday prompt ("How did you hear about us", #136) is searched for the answer and its suggestion picked.
+    const search = isWorkdaySearchBox(el) ? { search: answer } : {}
+    picks.push({ el, root, line, fact: found.fact ?? null, value: found.value, ...search })
     return false
   }
   // An AI answer that went in says so in the panel (#136); main marks picked ones the same way.

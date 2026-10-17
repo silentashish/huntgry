@@ -1,5 +1,5 @@
 import { NO_ANSWERS, normalizeText, resolveAnswer, type PageAnswers } from '../apply-facts'
-import type { AdapterStep, ApplyAts, FieldKey, FieldReport, FillReport, FillValues, PageScan, UploadState } from '../apply-types'
+import type { AdapterStep, ApplyAts, FieldKey, FieldReport, FillProfile, FillReport, FillValues, PageScan, UploadState } from '../apply-types'
 import { EMBED_RULES, embedPathMatches } from '../apply-embeds'
 import { chooseLocationOption, chooseOption, locationParts, matchesOption, phoneCountryOf, type ChoiceKey } from '../geo'
 import { adapterFor, type Adapter, type UploadProbe } from './adapters'
@@ -22,6 +22,7 @@ import { answerable, answerField, editedInGroup, strategyOf, writeAnswer, yesNoG
 import { isWorkdaySearchBox, pick, pickedValue, typeaheadOf, widgetOf, type PickWidget } from './pick'
 import { matchChoiceField, matchFileField, matchTextField, type Match } from './match'
 import { sleep } from './ready'
+import { runSections, type SectionJob } from './sections'
 import { defaultUploadAttached } from './upload-state'
 import { editedByUser } from './user-edits'
 
@@ -118,12 +119,27 @@ function pageUrl(doc: Document): URL {
   return new URL(doc.location?.href ?? doc.URL)
 }
 
-/** Every relevant control of the form, radios collapsed to one per group. */
-function controlsOf(root: Element): FormControl[] {
+/** Whether a control is left out of the plan: never touched, or filled by sections.ts (#136). */
+type Skip = (el: Element) => boolean
+
+const NO_SKIP: Skip = () => false
+
+/** The adapter's `excluded` controls and `sectionRoots` containers: the engine plans none of their controls. */
+function skipOf(adapter: Adapter, doc: Document): Skip {
+  const containers = [
+    ...(adapter.excluded ?? []).flatMap((selector) => Array.from(doc.querySelectorAll(selector))),
+    ...(adapter.sectionRoots?.(doc) ?? [])
+  ]
+  if (containers.length === 0) return NO_SKIP
+  return (el) => containers.some((c) => c === el || c.contains(el))
+}
+
+/** Every relevant control of the form, radios collapsed to one per group (minus the skipped ones). */
+function controlsOf(root: Element, skip: Skip = NO_SKIP): FormControl[] {
   const seenRadio = new Set<string>()
   const out: FormControl[] = []
   for (const el of Array.from(root.querySelectorAll('input, textarea, select'))) {
-    if (!isControl(el) || !isRelevant(el)) continue
+    if (!isControl(el) || !isRelevant(el) || skip(el)) continue
     if (kindOf(el) === 'radio') {
       const name = el.getAttribute('name') ?? ''
       if (seenRadio.has(name)) continue
@@ -170,25 +186,25 @@ function answerRootsOf(adapter: Adapter, doc: Document, root: Element): Element[
  * Dropdown buttons with a listbox (Workday): not form controls, but questions
  * answered from memory (#71). Reported as comboboxes; never matched to contact values.
  */
-function listboxButtons(adapter: Adapter, root: Element, planned: Planned[]): Planned[] {
+function listboxButtons(adapter: Adapter, root: Element, planned: Planned[], skip: Skip = NO_SKIP, answerOnly = false): Planned[] {
   const seen = new Set(planned.map((p) => p.el as Element))
-  const valueChoices = valueChoicesOf(adapter, root)
+  const valueChoices = answerOnly ? new Map<Element, ChoiceKey>() : valueChoicesOf(adapter, root)
   return Array.from(root.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="listbox"]'))
-    .filter((b) => !b.disabled && !seen.has(b))
+    .filter((b) => !b.disabled && !seen.has(b) && !skip(b))
     .slice(0, 50)
     .map((b): Planned => {
       const el = b as unknown as FormControl
-      // A country / state / phone dropdown takes the profile's value (#136).
-      const key = valueChoices.get(b) ?? matchChoiceField(el)?.key
+      // A country / state / phone dropdown takes the profile's value (#136); on an answer-only step, none does.
+      const key = answerOnly ? undefined : (valueChoices.get(b) ?? matchChoiceField(el)?.key)
       if (key) return choicePlanned(el, key, 'A choice; pick it yourself.')
       return { el, key: null, score: 0, outcome: 'skipped-unsupported', reason: 'A choice; pick it yourself.' }
     })
 }
 
 /** Questions of the extra containers: only ever answered from memory, never matched to contact values. */
-function answerOnlyPlanned(roots: Element[]): Planned[] {
+function answerOnlyPlanned(roots: Element[], skip: Skip = NO_SKIP): Planned[] {
   return roots.flatMap((root) =>
-    controlsOf(root)
+    controlsOf(root, skip)
       .filter((el) => kindOf(el) !== 'file')
       .map((el): Planned => {
         const kind = kindOf(el)
@@ -201,12 +217,12 @@ function answerOnlyPlanned(roots: Element[]): Planned[] {
 }
 
 /** Decides what each control gets: adapter fields first, then the generic matcher, one field per key. */
-function plan(adapter: Adapter, root: Element): Planned[] {
-  const controls = controlsOf(root)
+function plan(adapter: Adapter, root: Element, skip: Skip = NO_SKIP): Planned[] {
+  const controls = controlsOf(root, skip)
   const known = new Map<FormControl, FieldKey>()
   for (const [selector, key] of adapter.known) {
     const el = root.querySelector(selector)
-    if (el && isControl(el) && isRelevant(el) && !known.has(el)) known.set(el, key)
+    if (el && isControl(el) && isRelevant(el) && !skip(el) && !known.has(el)) known.set(el, key)
   }
   const claimedByAdapter = new Set(known.values())
   const choices = new Set<Element>()
@@ -268,6 +284,19 @@ function plan(adapter: Adapter, root: Element): Planned[] {
   return planned
 }
 
+/**
+ * Everything the engine plans on the page: the form's controls (or, on an answer-only step, its questions only),
+ * the adapter's extra answer containers and the dropdown buttons, minus the controls the adapter excludes or leaves
+ * to sections.ts (#136). The same list, in the same order, for the fill, the verify pass and the step's fields.
+ */
+function planPage(adapter: Adapter, doc: Document, root: Element): { planned: Planned[]; extraRoots: Element[]; answerOnly: boolean } {
+  const skip = skipOf(adapter, doc)
+  const answerOnly = adapter.answerOnly?.(doc) === true
+  const extraRoots = answerRootsOf(adapter, doc, root)
+  const base = [...(answerOnly ? answerOnlyPlanned([root], skip) : plan(adapter, root, skip)), ...answerOnlyPlanned(extraRoots, skip)]
+  return { planned: [...base, ...listboxButtons(adapter, root, base, skip, answerOnly)], extraRoots, answerOnly }
+}
+
 function hasSubmitButton(root: Element): boolean {
   return root.querySelector('button[type="submit"], input[type="submit"], button:not([type])') !== null
 }
@@ -277,14 +306,19 @@ export function scanPage(doc: Document): PageScan {
   const url = pageUrl(doc)
   const adapter = adapterFor(url, doc)
   const root = adapter.formRoot(doc)
-  const controls = root ? controlsOf(root) : []
+  const skip = skipOf(adapter, doc)
+  const controls = root ? controlsOf(root, skip) : []
+  // An answer-only step (#136) counts as a form with any question, a dropdown button or a section to fill.
+  const answerStep = root !== null && adapter.answerOnly?.(doc) === true && (adapter.step?.(doc) ?? 'form') === 'form'
+  const questions =
+    answerStep && (controls.length > 0 || root.querySelector('button[aria-haspopup="listbox"]') !== null || (adapter.sectionRoots?.(doc).length ?? 0) > 0)
   return {
     ats: adapter.ats,
     url: url.href,
     title: (doc.title ?? '').slice(0, 300),
     text: (doc.body?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 3000),
     confirmation: adapter.isConfirmation(url, doc),
-    formFound: controls.some((c) => kindOf(c) === 'text' || kindOf(c) === 'file'),
+    formFound: controls.some((c) => kindOf(c) === 'text' || kindOf(c) === 'file') || questions,
     hasResumeInput: controls.some((c) => matchFileField(c)?.key === 'resume'),
     embedUrl: embedUrlOf(doc, url),
     ...stepOf(adapter, doc, root)
@@ -317,9 +351,8 @@ function stepOf(adapter: Adapter, doc: Document, root: Element | null): StepInfo
 function fieldKeysOf(adapter: Adapter, root: Element | null): string {
   if (!root) return ''
   const keys = new Set<FieldKey>()
-  const base = plan(adapter, root)
   // Dropdown buttons count too (#136): Workday renders State only once a country is chosen.
-  for (const p of [...base, ...listboxButtons(adapter, root, base)]) if (p.key && !p.outcome) keys.add(p.key)
+  for (const p of planPage(adapter, root.ownerDocument, root).planned) if (p.key && !p.outcome) keys.add(p.key)
   return [...keys].sort().join(',')
 }
 
@@ -378,10 +411,17 @@ export interface FillOptions {
    * (`pendingPicks`) and run by `pickAnswers` after this synchronous fill.
    */
   pick?: boolean
+  /**
+   * The profile's repeatable sections (#136): an adapter with `sectionRoots` (Workday My Experience) gets them
+   * filled by `fillSections` after this synchronous fill. Without it those sections are left alone.
+   */
+  profile?: FillProfile
 }
 
 /** Picks a fill queued for `pickAnswers` (not part of the report sent to main). */
 const PENDING_PICKS = new WeakMap<FillReport, PickRequest[]>()
+/** The sections a fill queued for `fillSections` (#136). */
+const PENDING_SECTIONS = new WeakMap<FillReport, SectionJob>()
 
 export const pendingPicks = (report: FillReport): PickRequest[] => PENDING_PICKS.get(report) ?? []
 
@@ -513,14 +553,15 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
     for (const old of Array.from(doc.querySelectorAll(`[${attr}]`))) old.removeAttribute(attr)
   }
   let first: Element | null = null
-  const extraRoots = answerRootsOf(adapter, doc, root)
-  const base = [...plan(adapter, root), ...answerOnlyPlanned(extraRoots)]
-  const planned = [...base, ...listboxButtons(adapter, root, base)]
+  const { planned, extraRoots } = planPage(adapter, doc, root)
   const ids = fieldIdsOf(planned.map((p) => p.el))
   const clickOnly = clickOnlyOf(adapter, [root, ...extraRoots])
   const answers = options.answers ?? NO_ANSWERS
   const picks: PickRequest[] = []
   PENDING_PICKS.set(report, picks)
+  if (writeText && adapter.sectionRoots) {
+    PENDING_SECTIONS.set(report, { doc, report, profile: options.profile ?? null, answers, pick: options.pick === true, pageState: pageStateOf(doc) })
+  }
 
   for (const candidate of planned) {
     const kind = kindOf(candidate.el)
@@ -666,10 +707,8 @@ export async function verifyFill(
   const adapter = adapterFor(url, doc)
   const root = adapter.formRoot(doc)
   if (!root) return report
-  const extraRoots = answerRootsOf(adapter, doc, root)
-  const base = [...plan(adapter, root), ...answerOnlyPlanned(extraRoots)]
   // The same list (and so the same field ids) as the fill, Workday dropdown buttons included.
-  const planned = [...base, ...listboxButtons(adapter, root, base)]
+  const { planned, extraRoots } = planPage(adapter, doc, root)
   const clickOnly = clickOnlyOf(adapter, [root, ...extraRoots])
   const typeaheads = new Set(planned.filter((p) => p.typeahead).map((p) => p.el))
   const byKey = new Map<FieldKey, FormControl>()
@@ -685,8 +724,9 @@ export async function verifyFill(
     if (line.outcome === 'filled' && line.fieldId && line.value) {
       const el = byId.get(line.fieldId)
       // A picked widget: read it again from the page as it is now; never pressed again here.
-      if (el && (typeaheads.has(el) || yesNoGroup(el) || ['click-only', 'never'].includes(strategyOf(kindOf(el), clickOnly.has(el))))) {
-        recheckPick(line, el, rootOf.get(el) ?? root, typeaheads.has(el))
+      const typed = el ? typeaheads.has(el) || isWorkdaySearchBox(el) : false
+      if (el && (typed || yesNoGroup(el) || ['click-only', 'never'].includes(strategyOf(kindOf(el), clickOnly.has(el))))) {
+        recheckPick(line, el, rootOf.get(el) ?? root, typed)
         continue
       }
       if (!el) {
@@ -779,6 +819,27 @@ export function currentAdapter(doc: Document): Adapter {
   return adapterFor(pageUrl(doc), doc)
 }
 
+/** The page and step as the adapter sees them: a press that moves the page on stops the presses (pick.ts's safety net). */
+export function pageStateOf(doc: Document): () => string {
+  return () => {
+    const adapter = currentAdapter(doc)
+    return `${doc.location?.href ?? doc.URL}|${adapter.stepTitle?.(doc) ?? ''}|${adapter.step?.(doc) ?? 'form'}`
+  }
+}
+
+/**
+ * Fills the repeatable sections a fill queued (#136, Workday My Experience: blocks added with the section's Add
+ * button and filled from the profile, skills picked; and the answer-only steps' date questions and disability check
+ * boxes). Runs before `pickAnswers`; its lines are appended to the report. Mutates and returns `report`.
+ */
+export async function fillSections(report: FillReport): Promise<FillReport> {
+  const job = PENDING_SECTIONS.get(report)
+  if (!job) return report
+  PENDING_SECTIONS.delete(report)
+  report.fields.push(...(await runSections(job)))
+  return report
+}
+
 /** Picks at most this many answers per fill (each waits for its menu)… */
 const MAX_PICKS = 25
 /**
@@ -801,7 +862,7 @@ export async function pickAnswers(report: FillReport, picks: readonly PickReques
     if (left <= 0) break
     const doc = req.el.ownerDocument
     // The page and step as the adapter sees them: if a pick moves the page on, the safety net stops picking.
-    const pageState = () => `${doc.location?.href ?? doc.URL}|${currentAdapter(doc).stepTitle?.(doc) ?? ''}|${currentAdapter(doc).step?.(doc) ?? 'form'}`
+    const pageState = pageStateOf(doc)
     const typeahead = req.search !== undefined
     const widget = req.el.isConnected ? (typeahead ? typeaheadOf(req.el) : widgetOf(req.el)) : null
     if (!widget) continue

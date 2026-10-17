@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { factsFromProfile, isFactKey, type FactKey } from '@shared/apply-facts'
 import { APPLY_CHANNELS } from '@shared/apply-types'
-import { fillValuesFrom } from '@shared/apply-values'
+import { fillProfileFrom, fillValuesFrom } from '@shared/apply-values'
 import { browserManager, onPopupTab } from '../browser/manager'
 import { localUrlsAllowed } from '../cli/dev-urls'
 import { requireCurrentWorkspace, settingsFile } from '../current-workspace'
@@ -163,6 +163,7 @@ const aiAnswersSetting = async () => (await loadSettings(settingsFile())).aiAnsw
 const service = new ApplyService({
   workspace: workspacePath,
   values: async () => fillValuesFrom((await readProfile(await currentProfilePath())).profile),
+  profile: async () => fillProfileFrom((await readProfile(await currentProfilePath())).profile),
   answers,
   pickWidgets: pickSetting,
   aiAnswers: aiAnswersSetting,

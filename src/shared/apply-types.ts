@@ -63,6 +63,47 @@ export type FieldKey =
 /** Text values, all from the master profile's contact block (empty string = not known). */
 export type FillValues = Record<Exclude<FieldKey, 'resume' | 'coverLetter'>, string>
 
+/** A month and year from the master profile ("Jan 2022" → 1 / 2022). */
+export interface MonthYear {
+  month: number
+  year: number
+}
+
+/** One work-experience entry as the page fills it (#136, Workday My Experience). */
+export interface FillExperience {
+  company: string
+  role: string
+  location: string
+  start: MonthYear | null
+  /** Null while `current`, or when the profile gives no end date. */
+  end: MonthYear | null
+  current: boolean
+  /** The highlights, one per line (at most 2000 characters). */
+  description: string
+}
+
+export interface FillEducation {
+  school: string
+  degree: string
+  field: string
+  gpa: string
+  start: MonthYear | null
+  end: MonthYear | null
+}
+
+/**
+ * The master profile's repeatable sections (#136), sent with every fill next to the contact values: work
+ * experience, education, skills (flattened, deduplicated, at most 40) and websites (GitHub first).
+ */
+export interface FillProfile {
+  experience: FillExperience[]
+  education: FillEducation[]
+  skills: string[]
+  websites: string[]
+}
+
+export const EMPTY_FILL_PROFILE: FillProfile = { experience: [], education: [], skills: [], websites: [] }
+
 export const FIELD_LABEL: Record<FieldKey, string> = {
   firstName: 'First name',
   lastName: 'Last name',

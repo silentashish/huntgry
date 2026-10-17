@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom'
 import { describe, expect, it, vi } from 'vitest'
 import type { FillValues } from '../apply-types'
 import { fillPage, scanPage } from './engine'
-import { pick, refusal, typeaheadOf, widgetOf } from './pick'
+import { addRefusal, pick, pressAdd, pressToggle, refusal, toggleRefusal, typeaheadOf, widgetOf } from './pick'
 import { testValues } from './fixtures/values'
 
 /**
@@ -525,5 +525,104 @@ describe('typeaheads (#136) press only their own suggestions and key only a Work
     // The submit the page asked for was cancelled by the safety net before anything saw it; the pick fails closed.
     expect(c.submits).toEqual([])
     expect(result).toMatchObject({ status: 'failed', halt: true })
+  })
+})
+
+/**
+ * #136: the two presses outside a widget's options, for Workday My Experience. `pressAdd` presses only a section's
+ * own Add / Add Another button; `pressToggle` ticks only "I currently work here" or a disability status box.
+ */
+describe('pick.ts: Add buttons and the two allowed check boxes (#136)', () => {
+  function page() {
+    const dom = new JSDOM(
+      `<div data-automation-id="applyFlowPage">
+        <div data-automation-id="workExperienceSection" id="sec">
+          <div id="workExperience-1" role="group">
+            <div data-automation-id="formField-currentlyWorkHere"><input type="checkbox" id="current"><label for="current">I currently work here</label></div>
+            <button type="button" data-automation-id="panel-set-delete-button" id="delete">Delete</button>
+          </div>
+          <button type="button" data-automation-id="Add" aria-label="Add Another Work Experience" id="add">Add Another</button>
+          <button type="button" id="next-in-section">Next</button>
+          <button type="button" id="save-in-section" aria-label="Save">Add</button>
+          <a href="/x" id="link-add">Add</a>
+        </div>
+        <div data-automation-id="educationSection" id="edu"><button type="button" data-automation-id="Add" id="edu-add">Add</button></div>
+        <div data-automation-id="formField-acceptTermsAndAgreements"><input type="checkbox" id="terms"><label for="terms">I accept the terms</label></div>
+        <div data-automation-id="formField-other"><input type="checkbox" id="other"><label for="other">Remember me</label></div>
+        <div data-automation-id="pageFooter" id="footer"><button type="button" data-automation-id="Add" id="footer-add">Add</button>
+          <button type="button" data-automation-id="bottom-navigation-next-button" id="next">Save and Continue</button></div>
+      </div>`,
+      { url: 'https://acme.wd1.myworkdayjobs.com/x/apply' }
+    )
+    const doc = dom.window.document
+    const clicked: string[] = []
+    doc.addEventListener('click', (e) => clicked.push((e.target as Element).id), true)
+    const el = (id: string) => doc.getElementById(id) as HTMLElement
+    return { dom, doc, el, clicked, state: () => 'same' }
+  }
+
+  it('refuses Next, Save, Delete, links, footer buttons and buttons outside the section', () => {
+    const { el } = page()
+    const section = el('sec')
+    expect(addRefusal(el('add'), section)).toBeNull()
+    expect(addRefusal(el('next-in-section'), section)).toMatch(/not named Add/)
+    expect(addRefusal(el('save-in-section'), section)).toMatch(/not named Add/)
+    expect(addRefusal(el('delete'), section)).toMatch(/not named Add/)
+    expect(addRefusal(el('link-add'), section)).toMatch(/not a button/)
+    expect(addRefusal(el('edu-add'), section)).toMatch(/outside its section/)
+    expect(addRefusal(el('footer-add'), el('footer'))).toMatch(/navigation/)
+    expect(addRefusal(el('next'), section)).toMatch(/outside/)
+  })
+
+  it('presses nothing it refuses, and the Add button it may, once', async () => {
+    const { el, clicked, state } = page()
+    for (const id of ['next-in-section', 'save-in-section', 'delete', 'edu-add', 'footer-add', 'next']) {
+      expect(await pressAdd(el(id), el('sec'), () => true, { pageState: state, timeoutMs: 20 })).toMatchObject({ status: 'failed' })
+    }
+    expect(clicked).toEqual([])
+    const result = await pressAdd(el('add'), el('sec'), () => clicked.includes('add'), { pageState: state, timeoutMs: 50 })
+    expect(result).toMatchObject({ status: 'filled' })
+    expect(clicked).toEqual(['add'])
+  })
+
+  it('stops when a page handler re-sends the Add press to Save and Continue, or the step changes', async () => {
+    const { dom, el, clicked } = page()
+    el('add').addEventListener('click', () => el('next').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    const result = await pressAdd(el('add'), el('sec'), () => true, { pageState: () => 'same', timeoutMs: 20 })
+    expect(result).toMatchObject({ status: 'failed', halt: true })
+    let step = 'my-experience'
+    const moved = await pressAdd(el('add'), el('sec'), () => false, {
+      pageState: () => {
+        const now = step
+        step = 'next'
+        return now
+      },
+      timeoutMs: 20
+    })
+    expect(moved).toMatchObject({ status: 'failed' })
+    // The re-sent click never reached Save and Continue (the net cancels it before the page sees it).
+    expect(clicked.filter((id) => id === 'next')).toEqual([])
+  })
+
+  it('ticks only "I currently work here" (or a disability status box), never terms or another check box', async () => {
+    const { el, state } = page()
+    expect(toggleRefusal(el('terms'))).toMatch(/other than/)
+    expect(toggleRefusal(el('other'))).toMatch(/other than/)
+    expect(await pressToggle(el('terms') as HTMLInputElement, { pageState: state })).toMatchObject({ status: 'failed' })
+    expect(await pressToggle(el('other') as HTMLInputElement, { pageState: state })).toMatchObject({ status: 'failed' })
+    expect((el('terms') as HTMLInputElement).checked).toBe(false)
+    expect((el('other') as HTMLInputElement).checked).toBe(false)
+    expect(await pressToggle(el('current') as HTMLInputElement, { pageState: state, timeoutMs: 50 })).toMatchObject({ status: 'filled' })
+    expect((el('current') as HTMLInputElement).checked).toBe(true)
+    // Never unticked: a ticked box is refused.
+    expect(toggleRefusal(el('current'))).toMatch(/already ticked/)
+  })
+
+  it('puts back any other check box a page handler ticks during the toggle', async () => {
+    const { el, state } = page()
+    el('current').addEventListener('click', () => ((el('terms') as HTMLInputElement).checked = true))
+    const result = await pressToggle(el('current') as HTMLInputElement, { pageState: state, timeoutMs: 50 })
+    expect(result).toMatchObject({ status: 'failed', halt: true })
+    expect((el('terms') as HTMLInputElement).checked).toBe(false)
   })
 })
