@@ -217,7 +217,8 @@ describe('stored answers', () => {
     expect(factsFromProfile('L-1B')).toEqual(visa('L-1'))
     expect(factsFromProfile('E-3 (Australian)')).toEqual(visa('E-3'))
     expect(factsFromProfile('O-1 visa')).toEqual(visa('O-1'))
-    expect(factsFromProfile('EAD card')).toEqual(visa('EAD'))
+    // An EAD may rest on a spouse's status or asylum: authorized, sponsorship left unset.
+    expect(factsFromProfile('EAD card')).toEqual({ visaStatus: 'EAD', workAuthorized: 'yes' })
     // Negated, pending, expired or vague: nothing.
     expect(factsFromProfile('No H-1B')).toEqual({})
     expect(factsFromProfile('H-1B pending')).toEqual({})

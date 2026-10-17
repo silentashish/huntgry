@@ -346,7 +346,7 @@ export function displayAnswer(value: string): string {
 
 /**
  * Visa wordings the profile's Work authorization line may use, most specific first: the first match names the
- * status (`visaStatus`). Each is a currently valid US work status that needs, or will need, sponsorship.
+ * status (`visaStatus`). Each is a currently valid US work status; all but EAD need, or will need, sponsorship.
  */
 const VISAS: Array<[RegExp, string]> = [
   [/\bh ?1 ?b\b/, 'H-1B'],
@@ -364,8 +364,10 @@ const VISAS: Array<[RegExp, string]> = [
  * Facts the master profile already states, with no new data (#71, #136):
  * - "US citizen" → authorized, no sponsorship, status "US citizen";
  * - "green card" / "permanent resident" → authorized, no sponsorship, status "Permanent resident";
- * - a current visa ("H-1B", "F-1 OPT", "STEM OPT", "TN", "L-1", "E-3", "O-1", "EAD") → authorized, needs
- *   sponsorship, and the visa as the status.
+ * - a current visa ("H-1B", "F-1 OPT", "STEM OPT", "TN", "L-1", "E-3", "O-1") → authorized, needs sponsorship,
+ *   and the visa as the status;
+ * - "EAD" → authorized and status "EAD" only: an EAD may rest on a spouse's status, asylum or another basis that
+ *   needs no sponsorship, so sponsorship stays unset.
  * Negated, pending or expired wording, a bare "visa" or "sponsorship", and foreign statuses seed nothing.
  * The line is not sensitive (it is in the profile already); the seeds are never written to the answers store.
  */
@@ -375,6 +377,8 @@ export function factsFromProfile(workAuthorization: string): Partial<Record<Fact
   // Negations and anything pending: no seed ("Not a US citizen", "green card pending", "H-1B expired").
   if (/\b(not|non|no|never|no longer|without|former|expired|applying|applied|pending|awaiting|process|processing|progress)\b/.test(t)) return {}
   const visa = VISAS.find(([re]) => re.test(t))
+  // An EAD may rest on a spouse's status, asylum or another basis that needs no sponsorship: authorized only.
+  if (visa?.[1] === 'EAD') return { visaStatus: 'EAD', workAuthorized: 'yes' }
   if (visa) return { visaStatus: visa[1], workAuthorized: 'yes', needsSponsorship: 'yes' }
   // Other visa wording (CPT, "on a visa", "needs sponsorship"): too vague to seed.
   if (/\b(visa|cpt|f ?1|sponsor\w*)\b/.test(t)) return {}
