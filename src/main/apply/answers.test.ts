@@ -18,7 +18,7 @@ import {
 import { questionKey } from '@shared/apply-facts'
 import { parseEdits, parseFillReport } from './validate'
 import { agyDraftArgs, claudeDraftArgs, draftAnswers, draftPrompt, parseDraftOutput } from './draft-answers'
-import { agyMappingArgs, claudeMappingArgs, mappingPrompt, mapQuestions, parseMappingOutput, type MapContext, type MapQuestion } from './map-questions'
+import { agyMappingArgs, claudeMappingArgs, isCompanySpecificQuestion, mappingPrompt, mapQuestions, parseMappingOutput, type MapContext, type MapQuestion } from './map-questions'
 
 let root: string
 let ws: string
@@ -204,7 +204,7 @@ describe('question mapping call', () => {
     expect(await result).toEqual([
       { id: 'q1', fact: 'gender' },
       { id: 'q2', fact: 'needsSponsorship' },
-      { id: 'q3', fact: null }
+      { id: 'q3', fact: null, answer: 'Fake answer about this company', reusable: false }
     ])
     const made = await calls()
     expect(made).toHaveLength(1)
@@ -226,7 +226,7 @@ describe('question mapping call', () => {
 
   it('drops unknown ids and fact keys, and fails on malformed output, errors and timeouts', async () => {
     expect(await (await run({ FAKE_MAPPER: 'unknown' })).result).toEqual([
-      { id: 'q3', fact: null },
+      { id: 'q3', fact: null, answer: 'Fake answer about this company', reusable: false },
       { id: 'q2', fact: 'needsSponsorship' },
       { id: 'q1', fact: 'gender' }
     ])
@@ -277,14 +277,41 @@ describe('probable answers from the profile (#136)', () => {
     expect(system).toMatch(/gender, raceEthnicity/)
     expect(system).toMatch(/exactly the text of one option/)
     expect(system).toMatch(/untrusted/)
+    expect(system).toMatch(/reusable: true when the answer would be the same on any employer's form/)
+    expect(made[0].args[made[0].args.indexOf('--json-schema') + 1]).toContain('"reusable"')
+  })
+
+  it('treats motivation, "why us", "describe" and cover-letter questions as company-specific, whatever the model says', () => {
+    for (const q of [
+      'Why do you want to work at Acme?',
+      'Why are you interested in this role?',
+      'Why us?',
+      'Why this company?',
+      'What interests you about this position?',
+      'Tell us about a project you are proud of',
+      'Describe your experience with Kubernetes',
+      'What motivates you to apply?',
+      'Cover letter'
+    ]) {
+      expect(isCompanySpecificQuestion(q), q).toBe(true)
+    }
+    for (const q of ['Do you have experience with Go?', 'How many years of experience do you have with Python?', 'Do you hold a degree in computer science?']) {
+      expect(isCompanySpecificQuestion(q), q).toBe(false)
+    }
+    const out = JSON.stringify({ structured_output: { mappings: [{ id: 'a', factKey: null, answer: 'Yes' }] } })
+    // A reply without the flag is not reusable.
+    expect(parseMappingOutput(out, new Set(['a']), [{ id: 'a', question: 'Go?', kind: 'text', options: [] }])).toEqual([
+      { id: 'a', fact: null, answer: 'Yes', reusable: false }
+    ])
   })
 
   it('keeps answers that are bounded, among the options, and never for a sensitive fact or an EEO question', async () => {
     expect(await run()).toEqual([
       { id: 'q1', fact: 'gender' },
       { id: 'q2', fact: 'needsSponsorship' },
-      { id: 'q3', fact: null, answer: 'Yes' },
-      { id: 'q4', fact: null, answer: 'Yes' }
+      { id: 'q3', fact: null, answer: 'Yes', reusable: true },
+      // The model calls it reusable; main still refuses it for a "describe" question (isCompanySpecificQuestion).
+      { id: 'q4', fact: null, answer: 'Yes', reusable: true }
     ])
     // A model that over-reaches: a gender answer, an option the question lacks, a 400-character text.
     expect(await run({ FAKE_MAPPER: 'overreach' })).toEqual([
@@ -312,7 +339,7 @@ describe('probable answers from the profile (#136)', () => {
     ).toEqual([
       { id: 'a', fact: null },
       { id: 'b', fact: null },
-      { id: 'c', fact: null, answer: 'London' }
+      { id: 'c', fact: null, answer: 'London', reusable: false }
     ])
   })
 })

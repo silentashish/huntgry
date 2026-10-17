@@ -24,7 +24,7 @@ import { readApplication } from '../applications/scan'
 import { approvalDrift } from '../review/service'
 import { isBlockedPage } from '../jobs/blocked'
 import type { Draft, DraftQuestion } from './draft-answers'
-import type { Mapping, MapQuestion } from './map-questions'
+import { isCompanySpecificQuestion, type Mapping, type MapQuestion } from './map-questions'
 import { uploadFile, type Cdp } from './upload'
 import { parseEdits, parseFillReport, parsePageScan, parseUploadState, type PageEdit } from './validate'
 
@@ -146,6 +146,12 @@ interface Context {
   once: Record<string, string>
   /** An AI answer in the page the user's correction may replace (#136), by question key. */
   replace: Record<string, string>
+  /**
+   * Model answers that depend on this company, role or job description (#136: not `reusable`, or a draft-like
+   * question), by question key: written into this application's page as AI answers, never stored, so the next
+   * application asks the model again.
+   */
+  aiOnce: Record<string, { fact: FactKey | null; value: string }>
   /** The workspace the session started in; every answer read and write goes there (#71). */
   workspace: string
   /** Question keys already sent to the model this session (never sent twice). */
@@ -281,6 +287,7 @@ export class ApplyService {
       answers,
       once: {},
       replace: {},
+      aiOnce: {},
       pick: false,
       ai: true,
       workspace,
@@ -658,6 +665,12 @@ export class ApplyService {
   /** What a fill sends the page: the profile values and sections, and the answers (this session's own on top). */
   private fillPayload(ctx: Context): { values: FillValues; profile: FillProfile; answers: PageAnswers; pick: boolean } {
     const questions = { ...ctx.answers.questions }
+    // This application's own AI answers, unconfirmed (so they are written and marked as AI answers), unless the
+    // memory has something better for the question.
+    for (const [question, { fact, value }] of Object.entries(ctx.aiOnce)) {
+      const known = questions[question]
+      if (!known || (!known.confirmed && !known.value)) questions[question] = { fact, value, confirmed: false }
+    }
     for (const [question, value] of Object.entries(ctx.once)) {
       const replace = ctx.replace[question]
       questions[question] = { ...questions[question], value, confirmed: true, ...(replace ? { replace } : {}) }
@@ -705,6 +718,8 @@ export class ApplyService {
       if ((field.kind === 'select' || field.kind === 'radio') && !(field.options ?? []).includes(value)) continue
       if (ctx.once[field.question] === value) continue
       ctx.once[field.question] = value
+      // A question whose AI answer depended on this company: the person's version holds for this application only.
+      if (ctx.aiOnce[field.question]) continue
       learned.push({ question: field.question, label: field.label, fact: field.fact ?? null, value })
     }
     if (learned.length === 0) return
@@ -729,7 +744,9 @@ export class ApplyService {
   }
 
   /**
-   * The model's call (#71, #136): each unknown question's fact and probable answer, stored unconfirmed. When an
+   * The model's call (#71, #136): each unknown question's fact and probable answer, stored unconfirmed when the
+   * answer is reusable (the same on any employer's form); an answer that depends on this company, role or job
+   * description is kept for this application only (`aiOnce`), so the next application asks again. When an
    * answer came back for the page that is still loaded, the page is filled again: the answers are written and the
    * panel shows them as "AI answers; check them". Otherwise the lines get the suggestions.
    */
@@ -767,12 +784,22 @@ export class ApplyService {
         const f = byId.get(m.id)!
         // A sensitive fact or a demographic question never takes a model's answer (the parse drops it too).
         const eeo = (m.fact && FACTS[m.fact].sensitive) || isDemographicQuestion(f.label, f.options ?? [])
-        return { question: f.question!, label: f.label, fact: m.fact, value: eeo ? null : (m.answer?.slice(0, 300) ?? null) }
+        const value = eeo ? null : (m.answer?.slice(0, 300) ?? null)
+        // Reusable only when the model says so and the question is not about this employer (deterministic backstop).
+        const reusable = m.reusable === true && !isCompanySpecificQuestion(f.label)
+        return { question: f.question!, label: f.label, fact: m.fact, value, reusable }
       })
     if (learned.length === 0) return
+    // An answer that depends on this company is used on this application only (written, marked, never stored).
+    for (const l of learned) if (l.value && !l.reusable) ctx.aiOnce[l.question] = { fact: l.fact, value: l.value }
+    // Stored: the fact mapping, and the value only when it is reusable. A company-specific answer with no fact
+    // stores nothing, so the next application asks the model again.
+    const stored = learned
+      .filter((l) => !l.value || l.reusable || l.fact)
+      .map(({ question, label, fact, value, reusable }) => ({ question, label, fact, value: reusable ? value : null }))
     // Stored in the session's own workspace, even if the user switched workspaces meanwhile.
-    await answers.rememberMappings(ctx.workspace, learned).catch(() => undefined)
-    for (const l of learned) {
+    if (stored.length) await answers.rememberMappings(ctx.workspace, stored).catch(() => undefined)
+    for (const l of stored) {
       ctx.answers.questions[l.question] ??= { fact: l.fact, confirmed: false, ...(l.value ? { value: l.value } : {}) }
     }
     const current = this.session?.report
@@ -801,8 +828,8 @@ export class ApplyService {
   private withAi(ctx: Context, report: FillReport): FillReport {
     if (!ctx.ai) return report
     const fields = report.fields.map((f) => {
-      const entry = f.question ? ctx.answers.questions[f.question] : undefined
-      if (!entry || entry.confirmed || f.outcome !== 'filled' || f.suggestedBy === 'draft' || ctx.once[f.question!] !== undefined) return f
+      const entry = f.question ? (ctx.answers.questions[f.question] ?? ctx.aiOnce[f.question]) : undefined
+      if (!entry || ('confirmed' in entry && entry.confirmed) || f.outcome !== 'filled' || f.suggestedBy === 'draft' || ctx.once[f.question!] !== undefined) return f
       const fact = entry.fact && ctx.answers.facts[entry.fact] ? entry.fact : null
       return { ...f, suggestedBy: 'model' as const, reason: aiAnswerReason(fact) }
     })
@@ -827,7 +854,7 @@ export class ApplyService {
       if (f.kind !== 'text' && f.kind !== 'textarea') continue
       if (ctx.once[f.question] || ctx.drafts.has(f.question)) continue
       // Only questions the model already said ask for no personal fact; a remembered answer is filled, not drafted.
-      const known = ctx.answers.questions[f.question]
+      const known = ctx.answers.questions[f.question] ?? (ctx.aiOnce[f.question] ? { ...ctx.aiOnce[f.question], confirmed: false } : undefined)
       if (!known || known.fact || known.confirmed) continue
       if (!open.has(f.question)) open.set(f.question, f)
     }

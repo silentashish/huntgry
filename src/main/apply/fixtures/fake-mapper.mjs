@@ -2,7 +2,8 @@
 // Stands in for the one-shot question mapping call (#71) in tests, as `claude -p … --json-schema` (prompt on stdin)
 // or `agy … --print=<prompt>` (FAKE_MAPPER_AGENT=agy). It appends { args, stdin } to $FAKE_MAPPER_LOG and answers
 // by $FAKE_MAPPER: ok (default: "gender"/"sponsor" questions mapped, others null; "experience with" questions
-// answered "Yes", like a profile that lists the skill, #136) · bad (not JSON) · unknown (an unknown fact key and an
+// answered "Yes" and reusable, like a profile that lists the skill; "why do you want" questions get a company-specific,
+// non-reusable answer, #136) · bad (not JSON) · unknown (an unknown fact key and an
 // unknown id) · overreach (answers the parse must drop: a gender answer, an option the question lacks, a long text)
 // · error (is_error) · stall (never answers).
 import { appendFileSync } from 'node:fs'
@@ -25,7 +26,9 @@ process.stdin.on('end', async () => {
   const mappings = questions.map((q) => ({
     id: q.id,
     factKey: /gender/i.test(q.question) ? 'gender' : /sponsor/i.test(q.question) ? 'needsSponsorship' : null,
-    answer: /experience with/i.test(q.question) ? 'Yes' : null
+    answer: /experience with/i.test(q.question) ? 'Yes' : /why do you want/i.test(q.question) ? 'Fake answer about this company' : null,
+    // A skill is the same on any employer's form; a "why" answer is about this company.
+    reusable: /experience with/i.test(q.question)
   }))
   if (mode === 'overreach') {
     for (const m of mappings) {

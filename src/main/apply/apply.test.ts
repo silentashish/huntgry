@@ -1753,7 +1753,7 @@ describe('application answers (#71)', () => {
         calls.push({ applicationId, questions })
         return questions.map((q) =>
           /experience with/i.test(q.question)
-            ? { id: q.id, fact: null, answer: 'Yes' }
+            ? { id: q.id, fact: null, answer: 'Yes', reusable: true }
             : /identify/i.test(q.question)
               ? { id: q.id, fact: 'gender' as const, answer: 'Woman' }
               : { id: q.id, fact: null }
@@ -1789,6 +1789,46 @@ describe('application answers (#71)', () => {
       expect(checked(second.tab)).toBe('y')
       await new Promise((r) => setTimeout(r, 20))
       expect(calls).toHaveLength(1)
+    })
+
+    it('keeps a company-specific answer for this application only: written and marked, never stored, asked again next time', async () => {
+      const WHY = (n = 1) =>
+        `<form><label>Email <input name="email" type="email"></label>
+         <p><label for="why${n}">Why are you interested in this role?</label><textarea id="why${n}" name="why${n}"></textarea></p>
+         <p><label for="fit${n}">What would you bring to the team?</label><input id="fit${n}" name="fit${n}"></p>
+         <input type="file" name="resume"><button type="submit">Send</button></form>`
+      const calls: MapQuestion[][] = []
+      // The model says the "fit" answer is reusable, but it is not; "why" is caught by main's backstop either way.
+      const { deps } = answers({}, async (_w, _id, questions) => {
+        calls.push(questions)
+        return questions.map((q) =>
+          /interested/i.test(q.question)
+            ? { id: q.id, fact: null, answer: 'Acme builds the rockets I want to work on.', reusable: true }
+            : { id: q.id, fact: null, answer: 'Go services for Acme billing.', reusable: false }
+        )
+      })
+      const first = await open(deps, WHY(1))
+      const why = 'Why are you interested in this role?'
+      const fit = 'What would you bring to the team?'
+      await vi.waitFor(() => {
+        expect(line(first.service, why)).toMatchObject({ outcome: 'filled', suggestedBy: 'model', reason: 'AI answer from your profile; check it.' })
+        expect(line(first.service, fit)).toMatchObject({ outcome: 'filled', suggestedBy: 'model' })
+      })
+      expect((first.tab.dom.window.document.getElementById('why1') as HTMLTextAreaElement).value).toBe('Acme builds the rockets I want to work on.')
+      expect((first.tab.dom.window.document.getElementById('fit1') as HTMLInputElement).value).toBe('Go services for Acme billing.')
+      // Nothing about either question is in the memory.
+      await new Promise((r) => setTimeout(r, 20))
+      const labels = Object.values((await readAnswers(ws)).questions).map((q) => q.label)
+      expect(labels).not.toContain(why)
+      expect(labels).not.toContain(fit)
+
+      // Another employer's form: its first fill carries no answer for them, and the model is asked again.
+      const second = await open(deps, WHY(2), 'software-engineer/acme/lv-2')
+      const sent = Object.values(second.tab.answersSeen[0]!.questions).map((q) => q.value)
+      expect(sent).not.toContain('Acme builds the rockets I want to work on.')
+      expect(sent).not.toContain('Go services for Acme billing.')
+      await vi.waitFor(() => expect(calls).toHaveLength(2))
+      expect(calls[1].map((q) => q.question)).toEqual([why, fit])
     })
 
     it("a correction in the panel replaces the AI answer in the page and in memory, as the user's", async () => {

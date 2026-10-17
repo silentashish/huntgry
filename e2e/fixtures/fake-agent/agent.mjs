@@ -27,7 +27,7 @@
 //
 // One-shot calls (`claude -p … --json-schema …` with the prompt on stdin, `agy … --json-schema … --print=<prompt>`),
 // as the Apply question mapping makes them (#71), answer one JSON result whose `structured_output.mappings` maps
-// questions mentioning "gender" to `gender` and the rest to null (answering "experience with" questions Yes, #136); the answer drafting (#82, a schema with `answers`)
+// questions mentioning "gender" to `gender` and the rest to null (answering "experience with" questions Yes, reusable, #136); the answer drafting (#82, a schema with `answers`)
 // drafts "interests you" questions only. The marker records `mode: 'oneshot'` and the prompt.
 //
 // Every spawn appends a line to `$FAKE_AGENT_HOME/invocations.jsonl` (the marker the tests
@@ -120,7 +120,9 @@ if (args.includes('--json-schema') && (args.includes('-p') || (agent === 'agy' &
   const mappings = questions.map((q) => ({
     id: String(q.id),
     factKey: /gender/i.test(String(q.question)) ? 'gender' : null,
-    answer: /experience with/i.test(String(q.question)) ? 'Yes' : null
+    answer: /experience with/i.test(String(q.question)) ? 'Yes' : null,
+    // An answer about the applicant's skills is the same at any employer (#136).
+    reusable: /experience with/i.test(String(q.question))
   }))
   process.stdout.write(`${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, structured_output: { mappings }, total_cost_usd: 0.017 })}\n`)
   process.exit(0)
