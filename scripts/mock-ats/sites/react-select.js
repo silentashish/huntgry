@@ -4,7 +4,10 @@
  * (`.select__menu` > `role=listbox` > `role=option` elements, the input's `aria-controls` pointing at the listbox);
  * pressing in the menu does not blur the input (mousedown is cancelled, as react-select does); clicking an option
  * shows it in `.select__single-value`, puts it in the hidden input and closes the menu; blur
- * closes it too. Keys do nothing here. Options come from the container's `data-mock-options` ("Male|Female|…").
+ * closes it too (and drops text typed without a choice, as react-select does). Keys do nothing here. Options come
+ * from the container's `data-mock-options` ("Male|Female|…"). An async select (Greenhouse's "Location (City)",
+ * #136) has `data-mock-async-options` instead: its menu lists the options containing the typed text, loaded
+ * ~300 ms after typing (`data-mock-delay`), or "No options".
  * Used by the mock Greenhouse site (scripts/mock-ats/server.mjs) and by the jsdom tests of src/shared/autofill.
  */
 ;(() => {
@@ -14,23 +17,36 @@
     const input = container.querySelector('input[role="combobox"]')
     const placeholder = container.querySelector('[id$="-placeholder"]')
     const hidden = container.querySelector('input[aria-hidden="true"]')
-    const options = (container.dataset.mockOptions || '').split('|').filter(Boolean)
+    const async = container.dataset.mockAsyncOptions !== undefined
+    const all = ((async ? container.dataset.mockAsyncOptions : container.dataset.mockOptions) || '').split('|').filter(Boolean)
+    const delay = Number(container.dataset.mockDelay || 300)
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
     const listboxId = `react-select-${input.id}-listbox`
     let menu = null
+    let timer = 0
+    let loaded = []
     const close = () => {
       if (menu) menu.remove()
       menu = null
+      clearTimeout(timer)
       input.setAttribute('aria-expanded', 'false')
       input.removeAttribute('aria-controls')
     }
     const open = () => {
       if (menu) return
+      const options = async ? loaded : all
       menu = document.createElement('div')
       menu.className = 'select__menu'
       const list = document.createElement('div')
       list.className = 'select__menu-list'
       list.setAttribute('role', 'listbox')
       list.id = listboxId
+      if (options.length === 0) {
+        const notice = document.createElement('div')
+        notice.className = 'select__menu-notice select__menu-notice--no-options'
+        notice.textContent = 'No options'
+        list.append(notice)
+      }
       options.forEach((text, i) => {
         const option = document.createElement('div')
         option.className = 'select__option'
@@ -41,6 +57,7 @@
           placeholder.textContent = text
           placeholder.className = 'select__single-value'
           if (hidden) hidden.value = text
+          setter.call(input, '')
           close()
         })
         list.append(option)
@@ -58,9 +75,28 @@
       input.focus()
       open()
     })
-    input.addEventListener('blur', () => setTimeout(close, 0))
+    if (async) {
+      // Typing loads the matching options a moment later, like an async react-select fetching suggestions.
+      input.addEventListener('input', () => {
+        clearTimeout(timer)
+        const query = input.value.trim().toLowerCase()
+        timer = setTimeout(() => {
+          loaded = query ? all.filter((text) => text.toLowerCase().includes(query)) : []
+          if (menu) menu.remove()
+          menu = null
+          open()
+        }, delay)
+      })
+    }
+    input.addEventListener('blur', () =>
+      setTimeout(() => {
+        close()
+        // Text typed without choosing an option is dropped.
+        if (input.value) setter.call(input, '')
+      }, 0)
+    )
   }
-  const wireAll = () => document.querySelectorAll('[data-mock-options]').forEach(wire)
+  const wireAll = () => document.querySelectorAll('[data-mock-options], [data-mock-async-options]').forEach(wire)
   // The script comes after the server-rendered markup: wire now, and again once the document is parsed.
   wireAll()
   document.addEventListener('DOMContentLoaded', wireAll)

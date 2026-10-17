@@ -27,7 +27,8 @@ const PROFILE = {
   last: 'Rivera',
   email: 'alex.rivera@example.com',
   phone: '(555) 010-0199',
-  city: 'Portland, OR',
+  // The profile's location is "Portland, OR"; Workday's City gets the city only (#136).
+  city: 'Portland',
   linkedin: 'https://www.linkedin.com/in/alex-rivera-example/'
 }
 const TAB = '/workday/'
@@ -181,7 +182,8 @@ test.describe('apply on Workday', () => {
     for (const shown of [PROFILE.first, PROFILE.last, PROFILE.email, PROFILE.phone, PROFILE.city]) {
       await expect(app.window.getByText(shown, { exact: true }).locator('..')).toContainText('Filled')
     }
-    await expect(app.window.getByText(/^Country Phone Code/).locator('..')).toContainText('Your choice')
+    // Country Phone Code is a prompt picked from the profile's country (#136: "Portland, OR" is in the United States).
+    await expect(app.window.getByText(/^Country Phone Code/).locator('..')).toContainText('Filled')
     await screenshots(app, testInfo, 'workday-my-information', '#name--legalName--firstName')
 
     // The user presses Save and Continue: My Experience (same URL). resume.pdf goes to the drop zone and counts

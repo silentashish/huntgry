@@ -1,5 +1,5 @@
 import { normalizeText } from '../apply-facts'
-import { radioGroup, radioLabel } from './dom'
+import { radioGroup, radioLabel, typeText } from './dom'
 import { waitUntil } from './ready'
 import { asHuntgry } from './user-edits'
 
@@ -31,11 +31,20 @@ import { asHuntgry } from './user-edits'
  *   and stops picking when the page changes step.
  * Only pointer and mouse events are sent (pointerdown, mousedown, pointerup,
  * mouseup, click); never a key, so nothing can press Enter in a form. The
- * value is read back afterwards; a pick that did not stick is reported.
+ * one exception is `workdaySearchEnter` (#136): Workday's multiselect prompts
+ * search only on Enter, so an Enter keydown / keyup goes to a Workday search
+ * box, never anything else (see there). The value is read back afterwards; a
+ * pick that did not stick is reported.
+ *
+ * Typeaheads (#136: Greenhouse's and Lever's location, Workday's prompts) are
+ * a widget of their own: the search text is written with the native setter
+ * and an `input` event (dom.ts `typeText`), then the widget's own list is
+ * awaited, the matching suggestion pressed like an option and read back.
  */
 
 export type PickWidget =
   | { type: 'listbox'; scope: Element; opener: HTMLElement }
+  | { type: 'typeahead'; scope: Element; input: HTMLInputElement }
   | { type: 'buttons'; scope: Element; options: HTMLElement[] }
   | { type: 'radios'; scope: Element; options: HTMLInputElement[] }
 
@@ -103,6 +112,72 @@ export function widgetOf(el: Element): PickWidget | null {
   return null
 }
 
+/** Workday's multiselect prompt search box (Country Phone Code, Skills, School): it searches on Enter. */
+export function isWorkdaySearchBox(el: Element): boolean {
+  return (
+    tag(el) === 'input' &&
+    el.getAttribute('data-automation-id') === 'searchBox' &&
+    el.closest('[data-automation-id="multiSelectContainer"]') !== null &&
+    el.closest('form') === null
+  )
+}
+
+/**
+ * The typeahead `input` belongs to (#136): a search box whose suggestions the
+ * site renders as you type, and which drops free text (Greenhouse's
+ * react-select location, Lever's location, Workday's multiselect prompts).
+ * Null for anything that is not a text input.
+ */
+export function typeaheadOf(el: Element): PickWidget | null {
+  if (tag(el) !== 'input') return null
+  const input = el as HTMLInputElement
+  if (!['', 'text', 'search'].includes((input.getAttribute('type') ?? '').toLowerCase())) return null
+  const scope =
+    el.closest('[data-automation-id^="formField-"]') ??
+    el.closest('[class*="select__container"], [class*="SelectContainer"]') ??
+    ownScope(el)
+  return { type: 'typeahead', scope, input }
+}
+
+/**
+ * Lists in the document before Huntgry opened a widget (snapshot taken right
+ * before the press, or before typing into a typeahead). A list that appears
+ * afterwards may be the widget's own even when nothing names it; see
+ * `freshList`.
+ */
+const OPENED = new WeakMap<PickWidget, ReadonlySet<Element>>()
+
+/** Lists a typeahead's suggestions come in: ARIA listboxes, Workday's prompt list, Lever's location results. */
+const TYPEAHEAD_LISTS = '[role="listbox"], [data-automation-id="activeListContainer"], .dropdown-results'
+/** Suggestions in those lists. */
+const TYPEAHEAD_OPTIONS =
+  '[role="option"], [class*="__option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"], .dropdown-location'
+
+/**
+ * The one list that appeared in the document after the widget was opened
+ * (`OPENED`), when exactly one did and no other control claims it (its
+ * `aria-labelledby` or another control's `aria-controls` / `aria-owns` names
+ * someone else). Several new lists, or one tied to another control, are
+ * never used.
+ */
+function freshList(widget: PickWidget, selector: string, opener: Element): Element | null {
+  const before = OPENED.get(widget)
+  if (!before) return null
+  const doc = widget.scope.ownerDocument
+  const fresh = Array.from(doc.querySelectorAll(selector)).filter((box) => !before.has(box) && !Array.from(before).some((old) => old.contains(box)))
+  // A list inside another new list is part of it, not a second one.
+  const top = fresh.filter((box) => !fresh.some((other) => other !== box && other.contains(box)))
+  if (top.length !== 1) return null
+  const box = top[0]
+  if (box.id) {
+    const claimed = Array.from(doc.querySelectorAll('[aria-controls], [aria-owns]')).some(
+      (el) => el !== opener && (idsOf(el, 'aria-controls').includes(box.id) || idsOf(el, 'aria-owns').includes(box.id))
+    )
+    if (claimed) return null
+  }
+  return box
+}
+
 /**
  * Listboxes that demonstrably belong to the widget's control: named by its `aria-controls` / `aria-owns`, inside the
  * widget, or naming the control in their `aria-labelledby`. A listbox with no such tie is never used, however it
@@ -123,7 +198,43 @@ export function ownListboxes(widget: Extract<PickWidget, { type: 'listbox' }>): 
     for (const box of Array.from(doc.querySelectorAll('[role="listbox"]')))
       if (idsOf(box, 'aria-labelledby').includes(widget.opener.id)) candidates.add(box)
   }
-  return [...candidates].filter((box) => isOwnListbox(box, widget))
+  // Workday dropdown buttons (#136): some tenants render the popup without `aria-controls`. For a dropdown BUTTON
+  // only, the single listbox that appeared after Huntgry pressed it (snapshot in `pickInside`), tied to no other
+  // control, is its popup. Comboboxes (react-select) keep the strict tie: their menus always name the input. The
+  // reference Workday fillers rely on `aria-controls` → `ul#id` at the end of body, which the tie above covers.
+  if (candidates.size === 0 && tag(widget.opener) === 'button') {
+    const box = freshList(widget, '[role="listbox"]', widget.opener)
+    if (box) candidates.add(box)
+  }
+  return [...candidates].filter((box) => isOwnListbox(box, widget.opener, widget.scope))
+}
+
+/**
+ * The lists a typeahead's suggestions are in: named by its input's
+ * `aria-controls` / `aria-owns`, inside the widget, or (Workday renders its
+ * prompt list in a popup at the end of the page) the single list that
+ * appeared after Huntgry typed, tied to no other control.
+ */
+export function typeaheadLists(widget: Extract<PickWidget, { type: 'typeahead' }>): Element[] {
+  const doc = widget.input.ownerDocument
+  const candidates = new Set<Element>()
+  for (const id of [...idsOf(widget.input, 'aria-controls'), ...idsOf(widget.input, 'aria-owns')]) {
+    const box = doc.getElementById(id)
+    if (box) candidates.add(box)
+  }
+  for (const box of Array.from(widget.scope.querySelectorAll(`${TYPEAHEAD_LISTS}, [class*="__menu"]`))) candidates.add(box)
+  if (candidates.size === 0) {
+    const box = freshList(widget, TYPEAHEAD_LISTS, widget.input)
+    if (box) candidates.add(box)
+  }
+  return [...candidates].filter((box) => isOwnListbox(box, widget.input, widget.scope, TYPEAHEAD_LISTS))
+}
+
+/** The lists the widget's options may be pressed in (none for button and radio groups). */
+function listsOf(widget: PickWidget): Element[] {
+  if (widget.type === 'listbox') return ownListboxes(widget)
+  if (widget.type === 'typeahead') return typeaheadLists(widget)
+  return []
 }
 
 const idsOf = (el: Element, attr: string) => (el.getAttribute(attr) ?? '').split(/\s+/).filter(Boolean)
@@ -137,17 +248,17 @@ const OTHER_OPENERS = '[role="combobox"], [aria-haspopup="listbox"], select'
  * name another control as its owner, and holds no other field's opener or
  * list: a broad region (a panel with other fields) is never a listbox.
  */
-function isOwnListbox(box: Element, widget: Extract<PickWidget, { type: 'listbox' }>): boolean {
-  const isList = box.getAttribute('role') === 'listbox' || (widget.scope.contains(box) && /__menu\b/.test(box.className))
+function isOwnListbox(box: Element, opener: Element, scope: Element, lists = '[role="listbox"]'): boolean {
+  const isList = box.matches(lists) || (scope.contains(box) && /__menu\b/.test(box.className))
   if (!isList) return false
   const doc = box.ownerDocument
   const owners = idsOf(box, 'aria-labelledby')
     .map((id) => doc.getElementById(id))
     .filter((el): el is HTMLElement => el !== null && el.matches(OTHER_OPENERS))
-  if (owners.some((el) => el !== widget.opener)) return false
-  if (Array.from(box.querySelectorAll(OTHER_OPENERS)).some((el) => el !== widget.opener)) return false
+  if (owners.some((el) => el !== opener)) return false
+  if (Array.from(box.querySelectorAll(OTHER_OPENERS)).some((el) => el !== opener)) return false
   // A list inside the list (another widget's) is not ours either.
-  if (box.querySelector('[role="listbox"]')) return false
+  if (box.querySelector(lists)) return false
   return true
 }
 
@@ -164,6 +275,22 @@ function listboxOptions(boxes: Element[]): HTMLElement[] {
   }
   return out
 }
+
+/** A typeahead's suggestions in its own lists (the innermost element when Workday nests them), usable ones only. */
+function typeaheadOptions(lists: Element[]): HTMLElement[] {
+  const out: HTMLElement[] = []
+  for (const box of lists) {
+    const found = Array.from(box.querySelectorAll<HTMLElement>(TYPEAHEAD_OPTIONS))
+    for (const o of found) {
+      if (found.some((inner) => inner !== o && o.contains(inner))) continue
+      if (!out.includes(o) && o.getAttribute('aria-disabled') !== 'true') out.push(o)
+    }
+  }
+  return out
+}
+
+/** A suggestion's text: Workday names it in `data-automation-label`. */
+const optionText = (o: Element) => (o.getAttribute('data-automation-label') ?? text(o)).replace(/\s+/g, ' ').trim()
 
 /** Input types whose activation submits, resets, uploads or ticks: never pressed, nor a label pointing at one. */
 const NEVER_ACTIVATED = new Set(['submit', 'image', 'reset', 'button', 'file', 'checkbox'])
@@ -203,7 +330,7 @@ function elementRefusal(el: Element, isTarget: boolean, widget: PickWidget, with
   }
   // What a person reads as this element's name. A combobox input is named by its question (which may say
   // "continue"), so the opener counts only its shown text; everything else its label, title, value and text.
-  const opener = widget.type === 'listbox' && el === widget.opener
+  const opener = (widget.type === 'listbox' && el === widget.opener) || (widget.type === 'typeahead' && el === widget.input)
   const named = isTarget || t === 'button' || t === 'label' || ['button', 'option', 'menuitem', 'link'].includes(el.getAttribute('role') ?? '')
   const labelledBy = idsOf(el, 'aria-labelledby')
     .map((id) => el.ownerDocument.getElementById(id)?.textContent ?? '')
@@ -281,6 +408,14 @@ export function pickedValue(widget: PickWidget): string {
     const pressed = widget.options.find((b) => b.getAttribute('aria-pressed') === 'true' || /\b(active|selected)\b/i.test(b.className))
     return pressed ? text(pressed) : ''
   }
+  if (widget.type === 'typeahead') {
+    // Workday shows a prompt's choice as a pill; react-select as its single value; Lever in the input itself.
+    const pill = widget.scope.querySelector('[data-automation-id="selectedItem"]')
+    if (pill) return (pill.getAttribute('data-automation-label') ?? pill.getAttribute('title') ?? text(pill)).trim()
+    const chosen = widget.scope.querySelector('[class*="single-value"], [class*="singleValue"]')
+    if (chosen) return text(chosen)
+    return widget.input.value.trim()
+  }
   const single = widget.scope.querySelector('[class*="single-value"], [class*="singleValue"]')
   if (single) return text(single)
   // Text typed into the combobox (a search in progress) is the user's: it counts as an answer to keep.
@@ -308,6 +443,8 @@ export interface PickOptions {
   touched?: () => boolean
   /** The page and step the pick happens on (default: URL and first heading); a change stops picking. */
   pageState?: () => string
+  /** Typeaheads: the text to search for (the city, the country…). */
+  search?: string
 }
 
 /** Events a press could turn into an action elsewhere: blocked outside the widget while a pick runs. */
@@ -351,7 +488,7 @@ async function withSafetyNet(
     const el = node.nodeType === 1 ? (node as Element) : node.parentElement
     if (!el) return false
     if (widget.scope.contains(el)) return true
-    return widget.type === 'listbox' && ownListboxes(widget).some((box) => box.contains(el))
+    return listsOf(widget).some((box) => box.contains(el))
   }
   // Controls the pick itself may change: the radios of the group being answered, Ashby's yes/no mirror checkbox.
   const own = new Set<Element>(
@@ -416,7 +553,7 @@ async function withSafetyNet(
 
 export function pick(widget: PickWidget, choose: (options: string[]) => string | null, options: PickOptions = {}): Promise<PickResult> {
   return withSafetyNet(widget, options.pageState ?? defaultPageState(widget.scope.ownerDocument), (abort) =>
-    pickInside(widget, choose, options, abort)
+    widget.type === 'typeahead' ? typeaheadInside(widget, choose, options, abort) : pickInside(widget, choose, options, abort)
   )
 }
 
@@ -448,6 +585,8 @@ async function pickInside(
       return chosen ? { status: 'filled', value: current } : { status: 'kept', value: current }
     }
     if (touched()) return keep()
+    if (widget.type !== 'listbox') return { status: 'failed', reason: 'Not a list widget.' }
+    OPENED.set(widget, new Set(Array.from(doc.querySelectorAll('[role="listbox"]'))))
     press(widget.opener, widget, () => [], abort)
     let boxes: Element[] = []
     await waitUntil(
@@ -490,6 +629,118 @@ async function pickInside(
     return { status: 'failed', reason: 'The site did not take the pick.' }
   } catch (err) {
     closeMenu(widget)
+    return { status: 'failed', reason: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * The ONLY keyboard event Huntgry sends (#136, the Workday exception, guarded
+ * by guard.test.ts: this is the single KeyboardEvent constructor in the
+ * codebase). Workday's multiselect prompts (Country Phone Code, Skills,
+ * School) search only when Enter is pressed in their search box. Sent only:
+ * - to an `input[data-automation-id="searchBox"]` inside a
+ *   `[data-automation-id="multiSelectContainer"]` with no `<form>` ancestor
+ *   (checked again here, whatever the caller thought);
+ * - from `typeaheadInside`, inside the safety net (submit events cancelled,
+ *   clicks outside the widget cancelled), after Huntgry typed the search text
+ *   and no suggestion appeared within about 600 ms.
+ * Synthetic key events are untrusted and have no default action: the browser
+ * never submits a form or activates a button because of them; only the
+ * page's own key listeners see them.
+ */
+function workdaySearchEnter(input: HTMLInputElement): void {
+  if (!isWorkdaySearchBox(input) || input.form !== null || input.closest('form') !== null) {
+    throw new Error('Huntgry sends Enter only to a Workday search box.')
+  }
+  const view = input.ownerDocument.defaultView
+  if (!view) throw new Error('The page has no window.')
+  asHuntgry(() => {
+    for (const type of ['keydown', 'keyup']) {
+      input.dispatchEvent(new view.KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }))
+    }
+  })
+}
+
+/** How long a typeahead waits for suggestions before a Workday search box gets its Enter. */
+const ENTER_AFTER_MS = 600
+
+/**
+ * Picks in a typeahead (#136): presses the search box (like a person's click
+ * into it), types `search`, waits for the widget's own suggestions, presses
+ * the one `choose` names and reads it back. Text Huntgry typed but could not
+ * turn into a choice is cleared again; the field then goes to the user.
+ */
+async function typeaheadInside(
+  widget: Extract<PickWidget, { type: 'typeahead' }>,
+  choose: (options: string[]) => string | null,
+  { timeoutMs = 1500, touched = () => false, search = '' }: PickOptions,
+  abort: () => string | null = () => null
+): Promise<PickResult> {
+  const doc = widget.scope.ownerDocument
+  const input = widget.input
+  const keep = (): PickResult => ({ status: 'kept', value: pickedValue(widget) })
+  const current = pickedValue(widget)
+  let typed = false
+  /** Takes back the search text Huntgry typed (never text the person typed meanwhile). */
+  const untype = () => {
+    if (typed && input.isConnected && input.value === search && !touched()) typeText(input, '')
+    closeMenu(widget)
+  }
+  try {
+    if (current) {
+      const chosen = choose([current])
+      return chosen ? { status: 'filled', value: current } : { status: 'kept', value: current }
+    }
+    if (touched()) return keep()
+    if (!search.trim()) return { status: 'failed', reason: 'Nothing to search for.' }
+    OPENED.set(widget, new Set(Array.from(doc.querySelectorAll(TYPEAHEAD_LISTS))))
+    press(input, widget, () => [], abort)
+    const stoppedEarly = abort()
+    if (stoppedEarly) return { status: 'failed', reason: `Huntgry stopped: ${stoppedEarly}.` }
+    input.focus?.()
+    typeText(input, search)
+    typed = true
+    let options: HTMLElement[] = []
+    let texts: string[] = []
+    let chosen: string | null = null
+    const look = () => {
+      options = typeaheadOptions(typeaheadLists(widget))
+      texts = options.map(optionText)
+      chosen = choose(texts)
+      return chosen !== null
+    }
+    const workday = isWorkdaySearchBox(input)
+    let found = await waitUntil(doc, look, workday ? Math.min(ENTER_AFTER_MS, timeoutMs) : timeoutMs)
+    if (!found && workday && !abort() && !touched()) {
+      workdaySearchEnter(input)
+      found = await waitUntil(doc, look, timeoutMs)
+    }
+    const stopped = abort()
+    if (stopped) {
+      untype()
+      return { status: 'failed', reason: `Huntgry stopped: ${stopped}.` }
+    }
+    // The person may have typed or chosen while the suggestions loaded.
+    if (touched()) {
+      closeMenu(widget)
+      return keep()
+    }
+    if (texts.some((t) => CONSENT_OPTION.test(t))) {
+      untype()
+      return { status: 'failed', reason: 'Its options read like consent.' }
+    }
+    if (!found || chosen === null) {
+      untype()
+      return { status: 'failed', reason: texts.length ? 'None of the suggestions fits your profile.' : 'No suggestions appeared.' }
+    }
+    const pickText: string = chosen
+    press(options[texts.indexOf(pickText)], widget, () => typeaheadLists(widget), abort)
+    await waitUntil(doc, () => same(pickedValue(widget), pickText), timeoutMs)
+    if (same(pickedValue(widget), pickText)) return { status: 'filled', value: pickText }
+    untype()
+    return { status: 'failed', reason: 'The site did not take the pick.' }
+  } catch (err) {
+    untype()
     return { status: 'failed', reason: err instanceof Error ? err.message : String(err) }
   }
 }

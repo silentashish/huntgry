@@ -49,6 +49,10 @@ export interface PickRequest {
   line: FieldReport
   fact: FactKey | null
   value: string
+  /** Which option is the answer (default: the remembered answer resolved against the options). */
+  choose?: (options: string[]) => string | null
+  /** A typeahead (#136): the text to search for; the widget is then typed into, not opened. */
+  search?: string
 }
 
 export type WriteStrategy = 'text' | 'select' | 'radio' | 'click-only' | 'never'

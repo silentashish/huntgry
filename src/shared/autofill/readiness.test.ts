@@ -9,6 +9,7 @@ import { fillPage, scanPage, uploadStateOf, verifyFill } from './engine'
 import { PageSession, watchForForm } from './session'
 import { watchUserEdits } from './user-edits'
 import { anyShown, waitForReady } from './ready'
+import { testValues } from './fixtures/values'
 
 /**
  * #63: the page is filled only once it is ready, every value is verified a
@@ -20,23 +21,7 @@ const fixture = (name: string) => readFileSync(join(__dirname, 'fixtures', name)
 const GH = 'https://job-boards.greenhouse.io/acme/jobs/1000001'
 const LEVER = 'https://jobs.lever.co/acme/00000000-0000-4000-8000-000000000001/apply'
 
-const VALUES: FillValues = {
-  firstName: 'Ada',
-  lastName: 'Lovelace',
-  fullName: 'Ada Lovelace',
-  email: 'ada@example.com',
-  phone: '+1 555 123 4567',
-  location: 'London, UK',
-  linkedin: 'https://www.linkedin.com/in/ada',
-  github: 'https://github.com/ada',
-  website: 'https://ada.example',
-  currentCompany: 'Analytical Engines',
-  addressLine1: '',
-  city: '',
-  state: '',
-  postalCode: '',
-  country: ''
-}
+const VALUES: FillValues = testValues()
 
 const byKey = (report: FillReport, key: FieldReport['key']) => report.fields.find((f) => f.key === key)
 const input = (dom: JSDOM, selector: string) => dom.window.document.querySelector(selector) as HTMLInputElement

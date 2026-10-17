@@ -61,11 +61,18 @@ const withScript = (html, src) => html.replace('</body>', `<script src="${src}">
  */
 const GENDER_QUESTION = `<div class="field-wrapper"><div class="select"><div class="select__container select__container--outside-label" data-mock-options="Male|Female|Decline to self-identify"><label id="question_gender-label" for="question_gender" class="label select__label select__label--outside-label">Gender</label><div class="select-shell"><div><div class="select-shell"><div class="select-shell"><div class="select-shell" id="react-select-question_gender-placeholder">Select...</div><div class="select-shell" data-value=""><input class="select__input" autocomplete="off" id="question_gender" tabindex="0" type="text" aria-autocomplete="list" aria-expanded="false" aria-haspopup="true" aria-labelledby="question_gender-label" role="combobox" value=""/></div></div></div></div></div><input tabindex="-1" aria-hidden="true" class="select-shell" name="gender" value=""/></div></div></div>`
 
+/** The suggestions of the mock Greenhouse location picker (react-select.js filters them by the typed text). */
+const LOCATIONS = 'Portland, Oregon, United States|Portland, Maine, United States|Portsmouth, New Hampshire, United States|London, England, United Kingdom|Toronto, Ontario, Canada'
+
 /** The mock Greenhouse form: fields get names and the form posts to the mock (the real one submits through React). */
 const greenhouseForm = (read) =>
   withScript(
     read('greenhouse-form.html')
       .replace('<div class="application--submit">', `${GENDER_QUESTION}<div class="application--submit">`)
+      // The phone's Country picker (a react-select, #136: picked from the profile's country).
+      .replace('<div class="select__container"><label id="country-label"', '<div class="select__container" data-mock-options="Canada +1|India +91|United Kingdom +44|United States +1"><label id="country-label"')
+      // "Location (City)" loads its suggestions as you type (#136).
+      .replace('<div class="select__container"><label id="candidate-location-label"', `<div class="select__container" data-mock-async-options="${LOCATIONS}"><label id="candidate-location-label"`)
       .replace(/<form method="get" action="[^"]*"/, '<form method="post" enctype="multipart/form-data" action="/greenhouse/submit"')
       .replace(/<(input|textarea)( [^>]*?)? id="([^"]+)"/g, (m, tag, rest = '', id) =>
         / name="/.test(rest) ? m : `<${tag}${rest} name="${id}" id="${id}"`

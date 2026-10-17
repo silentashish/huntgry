@@ -4,7 +4,8 @@ import { JSDOM } from 'jsdom'
 import { describe, expect, it, vi } from 'vitest'
 import type { FillValues } from '../apply-types'
 import { fillPage, scanPage } from './engine'
-import { pick, refusal, widgetOf } from './pick'
+import { pick, refusal, typeaheadOf, widgetOf } from './pick'
+import { testValues } from './fixtures/values'
 
 /**
  * Huntgry never submits an application (owner decision, #24). This fails the
@@ -54,10 +55,47 @@ describe('no-submit guard', () => {
   for (const file of pageSources()) {
     it(`${file.slice(ROOT.length + 1)} cannot submit, click or type`, () => {
       const source = readFileSync(file, 'utf8')
-      for (const pattern of file === PICK_MODULE ? PICK_FORBIDDEN : FORBIDDEN) expect(source, `${pattern} in ${file}`).not.toMatch(pattern)
+      // pick.ts's one Enter for Workday's search boxes is checked on its own below; everything else in it is scanned.
+      const scanned = file === PICK_MODULE ? withoutWorkdayEnter(source) : source
+      for (const pattern of file === PICK_MODULE ? PICK_FORBIDDEN : FORBIDDEN) expect(scanned, `${pattern} in ${file}`).not.toMatch(pattern)
     })
   }
+
+  /**
+   * The Workday exception (#136): Workday's multiselect prompts search only on Enter. The single KeyboardEvent
+   * constructor in the code that runs in job pages must sit in pick.ts's `workdaySearchEnter`, which refuses any
+   * element but a Workday search box outside a form, and sends only Enter.
+   */
+  it('allows exactly one keyboard event: Enter, in pick.ts workdaySearchEnter, for a Workday search box', () => {
+    const sources = pageSources().map((f) => [f, readFileSync(f, 'utf8')] as const)
+    const keyboard = /new\s+[\w.]*KeyboardEvent\b/g
+    const hits = sources.flatMap(([f, src]) => [...src.matchAll(keyboard)].map(() => f))
+    expect(hits).toEqual([PICK_MODULE])
+    const source = readFileSync(PICK_MODULE, 'utf8')
+    const body = workdayEnterBody(source)
+    expect(body).toMatch(keyboard)
+    expect(body).toMatch(/isWorkdaySearchBox\(input\)/)
+    expect(body).toMatch(/closest\('form'\)/)
+    expect(body).toMatch(/key: 'Enter'/)
+    expect(body).not.toMatch(/key: '(?!Enter')/)
+    // The check it relies on names the search box, its container and the form.
+    const check = /export function isWorkdaySearchBox[\s\S]*?\n}\n/.exec(source)?.[0] ?? ''
+    expect(check).toMatch(/data-automation-id'\) === 'searchBox'/)
+    expect(check).toMatch(/multiSelectContainer/)
+    expect(check).toMatch(/closest\('form'\) === null/)
+    // Only the typeahead calls it.
+    expect([...source.matchAll(/workdaySearchEnter\(/g)]).toHaveLength(2)
+  })
 })
+
+/** The body of pick.ts's `workdaySearchEnter` (the function, from its signature to its closing brace). */
+function workdayEnterBody(source: string): string {
+  const match = /\nfunction workdaySearchEnter\([\s\S]*?\n}\n/.exec(source)
+  if (!match) throw new Error('pick.ts has no workdaySearchEnter function')
+  return match[0]
+}
+
+const withoutWorkdayEnter = (source: string) => source.replace(workdayEnterBody(source), '\n')
 
 /**
  * Buttons of the sites' apply flows that only the user presses: Workday's
@@ -80,23 +118,7 @@ const NEVER_TOUCHED = [
   'select-files'
 ]
 const NEVER_TYPED = ['email', 'password', 'verifyPassword', 'beecatcher', 'createAccountCheckbox']
-const VALUES: FillValues = {
-  firstName: 'Ada',
-  lastName: 'Lovelace',
-  fullName: 'Ada Lovelace',
-  email: 'ada@example.com',
-  phone: '+1 555 123 4567',
-  location: 'London',
-  linkedin: 'https://www.linkedin.com/in/ada',
-  github: '',
-  website: '',
-  currentCompany: '',
-  addressLine1: '',
-  city: '',
-  state: '',
-  postalCode: '',
-  country: ''
-}
+const VALUES: FillValues = testValues({ location: 'London', github: '', website: '', currentCompany: '' })
 
 describe('Workday buttons Huntgry never presses', () => {
   const fixtures = readdirSync(join(ROOT, 'src/shared/autofill/fixtures')).filter((f) => f.startsWith('workday-'))
@@ -412,5 +434,96 @@ describe("pick.ts presses only inside the field's widget", () => {
     expect(await pick(widget, female, { timeoutMs: 200 })).toMatchObject({ status: 'failed', halt: true })
     expect(handled).toEqual([])
     expect(clicked).not.toContain('opt')
+  })
+})
+
+describe('typeaheads (#136) press only their own suggestions and key only a Workday search box', () => {
+  /**
+   * A search box whose page renders `suggestions` on input, next to a form with a Submit button. `box` is the field's
+   * markup (its input has id "q").
+   */
+  function page(box: string, suggestions: string, { wrapForm = true } = {}) {
+    const body = wrapForm ? `<form id="f">${box}<button type="submit" id="submit">Submit application</button></form>` : box
+    const dom = new JSDOM(`${body}<div id="elsewhere"></div>`, { url: 'https://example.com/apply' })
+    const doc = dom.window.document
+    const keys: string[] = []
+    const submits: string[] = []
+    for (const type of ['keydown', 'keypress', 'keyup']) doc.addEventListener(type, (e) => keys.push(`${type}:${(e as KeyboardEvent).key}`), true)
+    doc.addEventListener('submit', (e) => {
+      submits.push('submit')
+      e.preventDefault()
+    }, true)
+    const submit = vi.spyOn(dom.window.HTMLFormElement.prototype, 'submit').mockImplementation(() => undefined)
+    const requestSubmit = vi.spyOn(dom.window.HTMLFormElement.prototype, 'requestSubmit').mockImplementation(() => undefined)
+    const input = doc.getElementById('q') as HTMLInputElement
+    input.addEventListener('input', () => doc.getElementById('elsewhere')!.insertAdjacentHTML('beforeend', suggestions))
+    const clicked: string[] = []
+    doc.addEventListener('click', (e) => clicked.push((e.target as Element).id || (e.target as Element).tagName), true)
+    const widget = typeaheadOf(input)!
+    const noSubmit = () => {
+      expect(submits).toEqual([])
+      expect(submit).not.toHaveBeenCalled()
+      expect(requestSubmit).not.toHaveBeenCalled()
+    }
+    return { doc, input, widget, keys, clicked, noSubmit, requestSubmit, submits }
+  }
+  const portland = (options: string[]) => options.find((o) => o.startsWith('Portland')) ?? null
+
+  it('refuses suggestions outside its own list, links and submit buttons', async () => {
+    // Two unrelated lists appear and nothing ties either to the input: neither is used.
+    const untied = page('<div class="field"><label for="q">City</label><input id="q"></div>', '<ul role="listbox"><li role="option" id="a">Portland</li></ul><ul role="listbox"><li role="option" id="b">Portland</li></ul>')
+    expect(await pick(untied.widget, portland, { timeoutMs: 150, search: 'Portland' })).toMatchObject({ status: 'failed' })
+    expect(untied.clicked).not.toContain('a')
+    expect(untied.clicked).not.toContain('b')
+    untied.noSubmit()
+    // Its own list (named by aria-controls), but the suggestion is a link, or a submit button.
+    for (const option of ['<a href="/away" role="option" id="opt">Portland</a>', '<button type="submit" role="option" id="opt">Portland</button>']) {
+      const own = page('<div class="field"><label for="q">City</label><input id="q" aria-controls="list"></div>', `<ul role="listbox" id="list">${option}</ul>`)
+      expect(await pick(own.widget, portland, { timeoutMs: 150, search: 'Portland' })).toMatchObject({ status: 'failed' })
+      expect(own.clicked).not.toContain('opt')
+      own.noSubmit()
+    }
+    // A refusal names the list explicitly: an option in another control's list is outside.
+    const other = page('<div class="field"><input id="q"></div><input role="combobox" aria-controls="theirs">', '<ul role="listbox" id="theirs"><li role="option" id="t">Portland</li></ul>')
+    expect(await pick(other.widget, portland, { timeoutMs: 150, search: 'Portland' })).toMatchObject({ status: 'failed' })
+    expect(refusal(other.doc.getElementById('t')!, other.widget)).toMatch(/outside/)
+    expect(other.keys).toEqual([])
+  })
+
+  it('never sends Enter outside a Workday search box (a plain input, a search box in a form or outside a prompt)', async () => {
+    const cases = [
+      page('<div class="field"><input id="q"></div>', ''),
+      page('<div data-automation-id="formField-x"><div data-automation-id="multiSelectContainer"><input id="q" data-automation-id="searchBox"></div></div>', ''),
+      page('<div data-automation-id="formField-x"><input id="q" data-automation-id="searchBox"></div>', '', { wrapForm: false })
+    ]
+    for (const c of cases) {
+      expect(await pick(c.widget, portland, { timeoutMs: 120, search: 'Portland' })).toMatchObject({ status: 'failed' })
+      expect(c.keys).toEqual([])
+      expect(c.input.value).toBe('')
+      c.noSubmit()
+    }
+  })
+
+  it('sends one Enter to a Workday search box outside any form, and still never submits', async () => {
+    const c = page(
+      '<div data-automation-id="formField-x"><div data-automation-id="multiSelectContainer"><input id="q" data-automation-id="searchBox"></div></div><form id="other"><button type="submit">Submit</button></form>',
+      '',
+      { wrapForm: false }
+    )
+    // Like Workday: results only on Enter; this page also asks a form to submit when it sees the key (for real).
+    c.requestSubmit.mockRestore()
+    c.input.addEventListener('keydown', (e) => {
+      if ((e as KeyboardEvent).key !== 'Enter') return
+      ;(c.doc.getElementById('other') as HTMLFormElement).requestSubmit()
+      c.doc.body.insertAdjacentHTML('beforeend', '<div data-automation-id="activeListContainer" role="listbox"><div data-automation-id="promptOption" data-automation-label="Portland" id="p">Portland</div></div>')
+    })
+    c.doc.addEventListener('click', (e) => {
+      if ((e.target as Element).id === 'p') c.doc.querySelector('[data-automation-id="multiSelectContainer"]')!.insertAdjacentHTML('afterbegin', '<div data-automation-id="selectedItem" data-automation-label="Portland">Portland</div>')
+    })
+    const result = await pick(c.widget, portland, { timeoutMs: 300, search: 'Portland' })
+    expect(c.keys).toEqual(['keydown:Enter', 'keyup:Enter'])
+    // The submit the page asked for was cancelled by the safety net before anything saw it; the pick fails closed.
+    expect(c.submits).toEqual([])
+    expect(result).toMatchObject({ status: 'failed', halt: true })
   })
 })

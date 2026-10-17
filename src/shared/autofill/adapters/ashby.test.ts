@@ -7,6 +7,7 @@ import { UPLOAD_ATTR } from '../../autofill-channels'
 import { detectConfirmation, fillPage, scanPage } from '../engine'
 import { ashby, ashbyUploadState } from './ashby'
 import { adapterFor } from './index'
+import { testValues } from '../fixtures/values'
 
 /** Ashby on the form captured from a live page (fixtures/ashby-form.html, 2026-10-03). */
 
@@ -14,23 +15,7 @@ const URL = 'https://jobs.ashbyhq.com/acme/0f3c1f5a-1111-4222-8333-944445555666/
 const FORM = readFileSync(join(__dirname, '../fixtures/ashby-form.html'), 'utf8')
 const LINKEDIN = '#a5b0ffff-0000-4000-8000-00000000ffff'
 
-const VALUES: FillValues = {
-  firstName: 'Ada',
-  lastName: 'Lovelace',
-  fullName: 'Ada Lovelace',
-  email: 'ada@example.com',
-  phone: '+1 555 123 4567',
-  location: 'London, UK',
-  linkedin: 'https://www.linkedin.com/in/ada',
-  github: 'https://github.com/ada',
-  website: 'https://ada.example',
-  currentCompany: 'Analytical Engines',
-  addressLine1: '',
-  city: '',
-  state: '',
-  postalCode: '',
-  country: ''
-}
+const VALUES: FillValues = testValues()
 
 const page = (html = FORM, url = URL) => new JSDOM(html, { url })
 const $ = (dom: JSDOM, selector: string) => dom.window.document.querySelector(selector) as HTMLInputElement

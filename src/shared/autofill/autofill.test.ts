@@ -9,6 +9,7 @@ import { setNativeValue } from './dom'
 import { detectConfirmation, fillPage, pendingPicks, pickAnswers, scanPage, verifyFill } from './engine'
 import { watchUserEdits } from './user-edits'
 import { identifierWords } from './match'
+import { testValues } from './fixtures/values'
 
 const fixture = (name: string) => readFileSync(join(__dirname, 'fixtures', name), 'utf8')
 
@@ -16,23 +17,7 @@ function page(name: string, url: string): JSDOM {
   return new JSDOM(fixture(name), { url })
 }
 
-const VALUES: FillValues = {
-  firstName: 'Ada',
-  lastName: 'Lovelace',
-  fullName: 'Ada Lovelace',
-  email: 'ada@example.com',
-  phone: '+1 555 123 4567',
-  location: 'London, UK',
-  linkedin: 'https://www.linkedin.com/in/ada',
-  github: 'https://github.com/ada',
-  website: 'https://ada.example',
-  currentCompany: 'Analytical Engines',
-  addressLine1: '',
-  city: '',
-  state: '',
-  postalCode: '',
-  country: ''
-}
+const VALUES: FillValues = testValues()
 
 /** Fails the test if anything submits, clicks or presses a key on the page. */
 function forbidSubmit(dom: JSDOM) {
@@ -96,7 +81,8 @@ describe('Greenhouse', () => {
     expect(input(dom, '#resume').getAttribute(UPLOAD_ATTR)).toBe('resume')
 
     // Choices stay with the user.
-    expect(field(report, 'Country')).toMatchObject({ kind: 'combobox', outcome: 'skipped-unsupported' })
+    // Country (the phone country picker) takes the profile's country (#136); this profile has none.
+    expect(field(report, 'Country')).toMatchObject({ kind: 'combobox', key: 'country', outcome: 'skipped-no-value' })
     expect(field(report, 'Are you legally authorized to work in the United States?').outcome).toBe(
       'skipped-unsupported'
     )
@@ -220,7 +206,9 @@ describe('generic heuristic', () => {
     expect(input(dom, '#f1').value).toBe('Ada')
     expect(field(report, 'Surname')).toMatchObject({ key: 'lastName', outcome: 'filled' })
     expect(field(report, 'Email address')).toMatchObject({ key: 'email', outcome: 'filled' })
-    expect(field(report, 'City')).toMatchObject({ key: 'location', outcome: 'filled' })
+    // A City field takes the city, never the whole location line (#136).
+    expect(field(report, 'City')).toMatchObject({ key: 'city', outcome: 'skipped-no-value' })
+    expect(input(dom, '#city').value).toBe('')
     expect(field(report, 'LinkedIn profile').outcome).toBe('filled')
     expect(field(report, 'GitHub').outcome).toBe('filled')
     expect(field(report, 'Personal website').outcome).toBe('filled')
@@ -563,6 +551,8 @@ describe('picking remembered answers in click-only widgets (#71, owner decision)
   const REACT_SELECT = readFileSync(join(__dirname, '../../../scripts/mock-ats/sites/react-select.js'), 'utf8')
   const AUTHORIZED = 'Are you legally authorized to work in the United States?'
   const facts = (f: PageAnswers['facts']): PageAnswers => ({ facts: f, questions: {} })
+  // No location and no phone: these tests are about remembered answers, not the profile's dropdowns (#136).
+  const VALUES = testValues({ location: '', phone: '' })
 
   /** No submit, requestSubmit or key event; pointer and mouse events only. */
   function forbidSubmitAndKeys(dom: JSDOM) {
@@ -661,15 +651,20 @@ describe('picking remembered answers in click-only widgets (#71, owner decision)
     check()
   })
 
-  it('never presses in a popup that is not tied to the dropdown, and leaves it to the user', async () => {
+  /** The Workday fixture whose How Did You Hear dropdown renders `popups` on click; returns what was pressed. */
+  async function sourceDropdown(popups: string) {
     const dom = new JSDOM(fixture('workday-my-information.html'), { url: WORKDAY })
     const doc = dom.window.document
     const button = doc.getElementById('source--source')!
     const pressed: string[] = []
     button.addEventListener('click', () => {
-      // One popup appears, but nothing ties it to this button: it could be any other widget's.
-      doc.body.insertAdjacentHTML('beforeend', '<ul role="listbox"><li role="option" id="stray">LinkedIn</li></ul>')
-      doc.getElementById('stray')!.addEventListener('click', () => pressed.push('stray'))
+      doc.body.insertAdjacentHTML('beforeend', popups)
+      for (const option of Array.from(doc.querySelectorAll('[role="option"]'))) {
+        option.addEventListener('click', () => {
+          pressed.push(option.id)
+          button.textContent = option.textContent
+        })
+      }
     })
     const first = fillPage(doc, VALUES, { answers: facts({}), pick: true })
     const question = field(first, 'How Did You Hear About Us?').question!
@@ -678,9 +673,32 @@ describe('picking remembered answers in click-only widgets (#71, owner decision)
       pick: true
     })
     await pickAnswers(report)
-    expect(pressed).toEqual([])
-    expect(field(report, 'How Did You Hear About Us?')).toMatchObject({ outcome: 'rejected', suggestion: 'LinkedIn' })
-    expect(button.textContent).toBe('Select One')
+    return { report, pressed, button }
+  }
+
+  it('never presses in a popup that is not tied to the dropdown, and leaves it to the user', async () => {
+    // Two popups appear and nothing ties either to this button: neither is used.
+    const two = await sourceDropdown(
+      '<ul role="listbox"><li role="option" id="stray">LinkedIn</li></ul><ul role="listbox"><li role="option" id="stray2">LinkedIn</li></ul>'
+    )
+    expect(two.pressed).toEqual([])
+    expect(field(two.report, 'How Did You Hear About Us?')).toMatchObject({ outcome: 'rejected', suggestion: 'LinkedIn' })
+    expect(two.button.textContent).toBe('Select One')
+    // One popup appears, but another control names it as its own.
+    const theirs = await sourceDropdown(
+      '<input role="combobox" aria-controls="other-list"><ul role="listbox" id="other-list"><li role="option" id="theirs">LinkedIn</li></ul>'
+    )
+    expect(theirs.pressed).toEqual([])
+    expect(theirs.button.textContent).toBe('Select One')
+  })
+
+  it('takes the single popup that appeared after pressing a Workday dropdown, even without aria-controls (#136)', async () => {
+    const { report, pressed, button } = await sourceDropdown(
+      '<ul role="listbox"><li role="option" id="board">Job board</li><li role="option" id="li">LinkedIn</li></ul>'
+    )
+    expect(pressed).toEqual(['li'])
+    expect(field(report, 'How Did You Hear About Us?')).toMatchObject({ outcome: 'filled', value: 'LinkedIn' })
+    expect(button.textContent).toBe('LinkedIn')
   })
 
   it('never answers or picks a certification, even when a "Yes" was remembered for it', async () => {

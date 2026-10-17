@@ -1,6 +1,7 @@
 import { NO_ANSWERS, normalizeText, resolveAnswer, type PageAnswers } from '../apply-facts'
 import type { AdapterStep, ApplyAts, FieldKey, FieldReport, FillReport, FillValues, PageScan, UploadState } from '../apply-types'
 import { EMBED_RULES, embedPathMatches } from '../apply-embeds'
+import { chooseLocationOption, chooseOption, locationParts, matchesOption, phoneCountryOf, type ChoiceKey } from '../geo'
 import { adapterFor, type Adapter, type UploadProbe } from './adapters'
 import { UPLOAD_ATTR, UPLOAD_GROUP_ATTR } from '../autofill-channels'
 import {
@@ -11,13 +12,15 @@ import {
   isRequired,
   kindOf,
   labelOf,
+  selectOptionTexts,
   setNativeValue,
+  setSelectValue,
   valueMatches,
   type FormControl
 } from './dom'
 import { answerable, answerField, editedInGroup, strategyOf, writeAnswer, yesNoGroup, type PickRequest } from './answers'
-import { pick, pickedValue, widgetOf } from './pick'
-import { matchFileField, matchTextField, type Match } from './match'
+import { isWorkdaySearchBox, pick, pickedValue, typeaheadOf, widgetOf, type PickWidget } from './pick'
+import { matchChoiceField, matchFileField, matchTextField, type Match } from './match'
 import { sleep } from './ready'
 import { defaultUploadAttached } from './upload-state'
 import { editedByUser } from './user-edits'
@@ -27,8 +30,11 @@ import { editedByUser } from './user-edits'
  * jsdom in tests. It fills text fields and marks file inputs for main to
  * upload over CDP, and answers the questions the user taught it (#71,
  * answers.ts): typed fields, native selects and native radios, never a
- * checkbox, never a widget that needs a click. It never submits a form or
- * presses a button. (guard.test.ts enforces the "never submits".)
+ * checkbox. Address parts, country / state dropdowns, phone type and code,
+ * and location typeaheads are filled from the profile (#136). Widgets that
+ * need a click are queued for pick.ts (`pickAnswers`), the only module that
+ * presses anything. It never submits a form or presses a flow button.
+ * (guard.test.ts enforces the "never submits".)
  */
 
 /** Upload marker values: `data-huntgry-upload="resume" | "cover"`. */
@@ -44,6 +50,66 @@ interface Planned {
   /** Set when the planner already knows the outcome (ambiguous, unsupported…). */
   outcome?: FieldReport['outcome']
   reason?: string
+  /**
+   * A dropdown or typeahead filled from the profile (#136): the value it takes, whether it is typed and picked
+   * (a typeahead) rather than opened, and what it is when the profile has no such value (a choice for the user).
+   */
+  choice?: ChoiceKey
+  typeahead?: boolean
+  fallback?: { outcome: FieldReport['outcome']; reason: string }
+}
+
+const FIELD_KEYS = new Set<string>(['location', 'addressLine1', 'city', 'state', 'postalCode', 'country'])
+const asFieldKey = (key: ChoiceKey): FieldKey | null => (FIELD_KEYS.has(key) ? (key as FieldKey) : null)
+
+/**
+ * Whether a profile dropdown is typed and picked: a text input (Lever's
+ * location), Workday's prompt search box, or a combobox asked for a place
+ * (Greenhouse's react-select location, which loads its options as you type).
+ */
+function usesTypeahead(el: Element, key: ChoiceKey): boolean {
+  if (el.tagName.toLowerCase() !== 'input') return false
+  return kindOf(el as FormControl) === 'text' || isWorkdaySearchBox(el) || key === 'location' || key === 'city'
+}
+
+function choicePlanned(el: FormControl, key: ChoiceKey, reason: string, root?: Element): Planned {
+  return {
+    el,
+    key: asFieldKey(key),
+    score: 0,
+    root,
+    choice: key,
+    typeahead: usesTypeahead(el, key),
+    fallback: { outcome: 'skipped-unsupported', reason }
+  }
+}
+
+/** The adapter's `valueChoices` found in `root`: element → the value it takes (the first selector wins). */
+function valueChoicesOf(adapter: Adapter, root: Element): Map<Element, ChoiceKey> {
+  const out = new Map<Element, ChoiceKey>()
+  for (const [selector, key] of adapter.valueChoices ?? [])
+    for (const el of Array.from(root.querySelectorAll(selector))) if (!out.has(el)) out.set(el, key)
+  return out
+}
+
+/** The profile value a dropdown takes; '' when the profile has none (phone defaults need a phone number). */
+export function choiceValueOf(key: ChoiceKey, values: FillValues): string {
+  if (key === 'phoneType') return values.phone.trim() ? 'Mobile' : ''
+  if (key === 'phoneCountryCode') return values.phone.trim() ? phoneCountryOf(values.country, values.phone) : ''
+  if (key === 'location') return values.location.trim() || [values.city, values.state].filter((v) => v.trim()).join(', ')
+  return values[key].trim()
+}
+
+/** Picks the option of `options` that is `value` (a place's suggestion list, or a dropdown's options). */
+function chooserFor(key: ChoiceKey, value: string): (options: string[]) => string | null {
+  if (key === 'location' || key === 'city') return (options) => chooseLocationOption(value, options)
+  return (options) => chooseOption(key, value, options)
+}
+
+/** What a typeahead is searched with: the city for a location ("Portland"), else the value itself. */
+function searchTextOf(key: ChoiceKey, value: string, values: FillValues): string {
+  if (key === 'location') return values.city.trim() || locationParts(value).city || value
+  return value
 }
 
 const MAX_FIELDS = 150
@@ -104,18 +170,19 @@ function answerRootsOf(adapter: Adapter, doc: Document, root: Element): Element[
  * Dropdown buttons with a listbox (Workday): not form controls, but questions
  * answered from memory (#71). Reported as comboboxes; never matched to contact values.
  */
-function listboxButtons(root: Element, planned: Planned[]): Planned[] {
+function listboxButtons(adapter: Adapter, root: Element, planned: Planned[]): Planned[] {
   const seen = new Set(planned.map((p) => p.el as Element))
+  const valueChoices = valueChoicesOf(adapter, root)
   return Array.from(root.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="listbox"]'))
     .filter((b) => !b.disabled && !seen.has(b))
     .slice(0, 50)
-    .map((b) => ({
-      el: b as unknown as FormControl,
-      key: null,
-      score: 0,
-      outcome: 'skipped-unsupported' as const,
-      reason: 'A choice; pick it yourself.'
-    }))
+    .map((b): Planned => {
+      const el = b as unknown as FormControl
+      // A country / state / phone dropdown takes the profile's value (#136).
+      const key = valueChoices.get(b) ?? matchChoiceField(el)?.key
+      if (key) return choicePlanned(el, key, 'A choice; pick it yourself.')
+      return { el, key: null, score: 0, outcome: 'skipped-unsupported', reason: 'A choice; pick it yourself.' }
+    })
 }
 
 /** Questions of the extra containers: only ever answered from memory, never matched to contact values. */
@@ -144,13 +211,22 @@ function plan(adapter: Adapter, root: Element): Planned[] {
   const claimedByAdapter = new Set(known.values())
   const choices = new Set<Element>()
   for (const selector of adapter.choices ?? []) for (const el of Array.from(root.querySelectorAll(selector))) choices.add(el)
+  const valueChoices = valueChoicesOf(adapter, root)
 
   const planned: Planned[] = controls.map((el) => {
     const adapterKey = known.get(el)
     if (adapterKey) return { el, key: adapterKey, score: 10 }
     const kind = kindOf(el)
+    const SUGGESTIONS = "Pick it from the site's suggestions."
+    const valueChoice = valueChoices.get(el)
+    if (valueChoice) return choicePlanned(el, valueChoice, choices.has(el) ? SUGGESTIONS : 'A choice; pick it yourself.')
     if (choices.has(el)) {
-      return { el, key: null, score: 0, outcome: 'skipped-unsupported', reason: "Pick it from the site's suggestions." }
+      return { el, key: null, score: 0, outcome: 'skipped-unsupported', reason: SUGGESTIONS }
+    }
+    if (kind === 'select' || kind === 'combobox') {
+      // A country, state or city dropdown takes the profile's value (#136); any other choice is the user's.
+      const match = matchChoiceField(el)
+      if (match) return choicePlanned(el, match.key, 'A choice; pick it yourself.')
     }
     if (kind === 'select' || kind === 'combobox' || kind === 'checkbox' || kind === 'radio') {
       return { el, key: null, score: 0, outcome: 'skipped-unsupported', reason: 'A choice; pick it yourself.' }
@@ -173,7 +249,8 @@ function plan(adapter: Adapter, root: Element): Planned[] {
 
   // One field per key: the best score wins; a tie leaves all of them to the user.
   const byKey = new Map<FieldKey, Planned[]>()
-  for (const p of planned) if (p.key && !p.outcome) byKey.set(p.key, [...(byKey.get(p.key) ?? []), p])
+  // Dropdowns filled from the profile are not contenders: a location question and the site's location picker both get it.
+  for (const p of planned) if (p.key && !p.outcome && !p.choice) byKey.set(p.key, [...(byKey.get(p.key) ?? []), p])
   for (const group of byKey.values()) {
     if (group.length < 2) continue
     const top = Math.max(...group.map((p) => p.score))
@@ -240,7 +317,9 @@ function stepOf(adapter: Adapter, doc: Document, root: Element | null): StepInfo
 function fieldKeysOf(adapter: Adapter, root: Element | null): string {
   if (!root) return ''
   const keys = new Set<FieldKey>()
-  for (const p of plan(adapter, root)) if (p.key && !p.outcome) keys.add(p.key)
+  const base = plan(adapter, root)
+  // Dropdown buttons count too (#136): Workday renders State only once a country is chosen.
+  for (const p of [...base, ...listboxButtons(adapter, root, base)]) if (p.key && !p.outcome) keys.add(p.key)
   return [...keys].sort().join(',')
 }
 
@@ -322,6 +401,97 @@ function markUpload(adapter: Adapter, el: FormControl, key: UploadKey): void {
 }
 
 /**
+ * A dropdown or typeahead with a profile value (#136). A native select is set
+ * at once (its option chosen with `chooseOption`: "OR" for Oregon, "United
+ * States of America" for USA); a widget that only takes a click is queued for
+ * pick.ts (with `pick` on), or else left to the user with the value to
+ * choose. A control that already shows another answer, or one the person
+ * touched, is `kept`. Returns whether it wrote.
+ */
+function fillChoice(
+  p: Planned,
+  key: ChoiceKey,
+  value: string,
+  line: FieldReport,
+  root: ParentNode,
+  pickOn: boolean,
+  picks: PickRequest[],
+  values: FillValues
+): boolean {
+  const el = p.el
+  const kind = kindOf(el)
+  const choose = chooserFor(key, value)
+  const fits = (shown: string) => choose([shown]) !== null || (key !== 'location' && key !== 'city' && matchesOption(key, value, shown))
+  const keep = (shown: string, reason: string) => {
+    line.outcome = 'kept'
+    line.value = shown.slice(0, 200)
+    line.reason = reason
+  }
+  if (kind === 'select') {
+    const select = el as HTMLSelectElement
+    const current = chosenOf(select, root)
+    if (editedByUser(select)) {
+      keep(current, 'You changed it; left as is.')
+      return false
+    }
+    if (current) {
+      if (!fits(current)) {
+        keep(current, 'Already chosen; left as is.')
+        return false
+      }
+      line.outcome = 'filled'
+      line.value = current
+      highlight(select, 'done')
+      return true
+    }
+    const chosen = choose(selectOptionTexts(select))
+    if (!chosen) {
+      line.outcome = 'rejected'
+      line.reason = `None of its options is "${value.slice(0, 80)}"; pick it yourself.`
+      highlight(select, 'attention')
+      return false
+    }
+    line.value = chosen
+    if (setSelectValue(select, chosen)) {
+      line.outcome = 'filled'
+      highlight(select, 'done')
+      return true
+    }
+    line.outcome = 'rejected'
+    line.reason = 'The site did not take the choice; pick it yourself.'
+    highlight(select, 'attention')
+    return false
+  }
+  const widget: PickWidget | null = p.typeahead ? typeaheadOf(el) : widgetOf(el)
+  if (!widget) {
+    line.outcome = 'skipped-unsupported'
+    line.reason = 'A choice; pick it yourself.'
+    return false
+  }
+  const shown = pickedValue(widget)
+  if (editedInGroup(el, kind, root)) {
+    keep(shown, 'You changed it; left as is.')
+    return false
+  }
+  if (shown) {
+    if (!fits(shown)) {
+      keep(shown, 'Already chosen; left as is.')
+      return false
+    }
+    line.outcome = 'filled'
+    line.value = shown.slice(0, 200)
+    highlight(widget.scope, 'done')
+    return true
+  }
+  line.outcome = 'skipped-unsupported'
+  line.reason = `This picker takes a click: choose "${value.slice(0, 80)}" yourself.`
+  if (pickOn) {
+    picks.push({ el, root, line, fact: null, value, choose, search: p.typeahead ? searchTextOf(key, value, values) : undefined })
+  }
+  return false
+}
+
+/**
  * Fills the form's text fields that are empty (a value the user typed is
  * kept), reads each one back, marks the file inputs (and their upload
  * widgets) for upload and outlines what it did. Returns one report line per
@@ -345,15 +515,25 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
   let first: Element | null = null
   const extraRoots = answerRootsOf(adapter, doc, root)
   const base = [...plan(adapter, root), ...answerOnlyPlanned(extraRoots)]
-  const planned = [...base, ...listboxButtons(root, base)]
+  const planned = [...base, ...listboxButtons(adapter, root, base)]
   const ids = fieldIdsOf(planned.map((p) => p.el))
   const clickOnly = clickOnlyOf(adapter, [root, ...extraRoots])
   const answers = options.answers ?? NO_ANSWERS
   const picks: PickRequest[] = []
   PENDING_PICKS.set(report, picks)
 
-  for (const p of planned) {
-    const kind = kindOf(p.el)
+  for (const candidate of planned) {
+    const kind = kindOf(candidate.el)
+    const choiceValue = candidate.choice ? choiceValueOf(candidate.choice, values) : ''
+    // A profile dropdown without a profile value: a profile field is reported as missing from the profile (keeping
+    // its key, so a multi-step flow counts it as handled); a phone default is a choice for the user again (and may
+    // be answered from memory).
+    const missing = candidate.choice && !choiceValue
+    const p: Planned = !missing
+      ? candidate
+      : candidate.key
+        ? { ...candidate, choice: undefined, outcome: 'skipped-no-value', reason: 'Not in your master profile; pick it yourself.' }
+        : { ...candidate, choice: undefined, outcome: candidate.fallback?.outcome, reason: candidate.fallback?.reason }
     const line: FieldReport = {
       key: p.key,
       label: labelOf(p.el),
@@ -366,7 +546,7 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
       line.reason = p.reason
       if (p.outcome !== 'skipped-unsupported') highlight(p.el, 'attention')
       // A question the contact block does not cover: answered from what the user taught Huntgry (#71).
-      if (writeText && p.outcome !== 'ambiguous' && answerable(kind) && (kind !== 'checkbox' || yesNoGroup(p.el))) {
+      if (writeText && !(missing && p.key) && p.outcome !== 'ambiguous' && answerable(kind) && (kind !== 'checkbox' || yesNoGroup(p.el))) {
         line.fieldId = ids.get(p.el)
         const policy = options.pick ? 'pick' : 'suggest'
         if (answerField(p.el, line, p.root ?? root, answers, clickOnly.has(p.el), policy, picks)) first ??= p.el
@@ -384,6 +564,11 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
     // Text left for the second pass of a files-first adapter is not reported yet.
     if (!writeText) continue
     report.fields.push(line)
+    if (p.choice) {
+      line.fieldId = ids.get(p.el)
+      if (fillChoice(p, p.choice, choiceValue, line, p.root ?? root, options.pick === true, picks, values)) first ??= p.el
+      continue
+    }
     if (!p.key || (kind !== 'text' && kind !== 'textarea')) continue
     const value = values[p.key]
     const el = p.el as HTMLInputElement | HTMLTextAreaElement
@@ -412,6 +597,8 @@ export function fillPage(doc: Document, values: FillValues, options: FillOptions
       highlight(el, 'attention')
     }
   }
+  // Picks run in page order (Workday: Country before the State list that depends on it), dropdown buttons included.
+  picks.sort((a, b) => (a.el === b.el ? 0 : a.el.compareDocumentPosition(b.el) & 4 ? -1 : 1))
   // Greenhouse shows the form below a long description: bring it into view so the user sees what was filled.
   ;(first as HTMLElement | null)?.scrollIntoView?.({ block: 'center' })
   return report
@@ -433,9 +620,9 @@ const keepUserEdit = (line: FieldReport, el: HTMLInputElement | HTMLTextAreaElem
  * or a resume parser may wipe it): still shown, fine; changed by the person,
  * kept; otherwise it goes to the user with the answer as a suggestion.
  */
-function recheckPick(line: FieldReport, el: FormControl, root: ParentNode): void {
+function recheckPick(line: FieldReport, el: FormControl, root: ParentNode, typeahead = false): void {
   const value = line.value ?? ''
-  const widget = el.isConnected ? widgetOf(el) : null
+  const widget = el.isConnected ? (typeahead ? typeaheadOf(el) : widgetOf(el)) : null
   const shown = widget ? pickedValue(widget) : ''
   if (widget && normalizeText(shown) === normalizeText(value)) return
   if (widget && editedInGroup(el, kindOf(el), root)) {
@@ -482,22 +669,24 @@ export async function verifyFill(
   const extraRoots = answerRootsOf(adapter, doc, root)
   const base = [...plan(adapter, root), ...answerOnlyPlanned(extraRoots)]
   // The same list (and so the same field ids) as the fill, Workday dropdown buttons included.
-  const planned = [...base, ...listboxButtons(root, base)]
+  const planned = [...base, ...listboxButtons(adapter, root, base)]
   const clickOnly = clickOnlyOf(adapter, [root, ...extraRoots])
+  const typeaheads = new Set(planned.filter((p) => p.typeahead).map((p) => p.el))
   const byKey = new Map<FieldKey, FormControl>()
-  for (const p of planned) if (p.key && !p.outcome && !byKey.has(p.key)) byKey.set(p.key, p.el)
+  for (const p of planned) if (p.key && !p.outcome && !p.choice && !byKey.has(p.key)) byKey.set(p.key, p.el)
   const byId = new Map([...fieldIdsOf(planned.map((p) => p.el))].map(([el, id]) => [id, el]))
   const rootOf = new Map(planned.map((p) => [p.el, p.root ?? root]))
 
   const rewritten: Array<{ line: FieldReport; el: HTMLInputElement | HTMLTextAreaElement; value: string }> = []
   const reanswered: Array<{ line: FieldReport; el: FormControl; value: string }> = []
   for (const line of report.fields) {
-    // A remembered answer Huntgry wrote (#71): the same check, keyed by the control's id.
-    if (!line.key && line.outcome === 'filled' && line.fieldId && line.value) {
+    // A remembered answer Huntgry wrote (#71), or a profile dropdown it chose (#136; only those lines carry both a
+    // key and a field id): the same check, keyed by the control's id.
+    if (line.outcome === 'filled' && line.fieldId && line.value) {
       const el = byId.get(line.fieldId)
       // A picked widget: read it again from the page as it is now; never pressed again here.
-      if (el && (yesNoGroup(el) || ['click-only', 'never'].includes(strategyOf(kindOf(el), clickOnly.has(el))))) {
-        recheckPick(line, el, rootOf.get(el) ?? root)
+      if (el && (typeaheads.has(el) || yesNoGroup(el) || ['click-only', 'never'].includes(strategyOf(kindOf(el), clickOnly.has(el))))) {
+        recheckPick(line, el, rootOf.get(el) ?? root, typeaheads.has(el))
         continue
       }
       if (!el) {
@@ -613,14 +802,18 @@ export async function pickAnswers(report: FillReport, picks: readonly PickReques
     const doc = req.el.ownerDocument
     // The page and step as the adapter sees them: if a pick moves the page on, the safety net stops picking.
     const pageState = () => `${doc.location?.href ?? doc.URL}|${currentAdapter(doc).stepTitle?.(doc) ?? ''}|${currentAdapter(doc).step?.(doc) ?? 'form'}`
-    const widget = req.el.isConnected ? widgetOf(req.el) : null
+    const typeahead = req.search !== undefined
+    const widget = req.el.isConnected ? (typeahead ? typeaheadOf(req.el) : widgetOf(req.el)) : null
     if (!widget) continue
     const line = req.line
-    const result = await pick(widget, (options) => resolveAnswer(req.fact, req.value, 'select', options), {
-      // A pick waits twice (menu, read-back): each wait gets at most half of what is left, so the budget is a hard limit.
-      timeoutMs: Math.min(1500, Math.max(100, Math.floor(left / 2))),
+    const choose = req.choose ?? ((options: string[]) => resolveAnswer(req.fact, req.value, 'select', options))
+    const result = await pick(widget, choose, {
+      // A pick waits twice (menu, read-back), a typeahead three times (suggestions, after Enter, read-back): each wait
+      // gets at most its share of what is left, so the budget is a hard limit.
+      timeoutMs: Math.min(1500, Math.max(100, Math.floor(left / (typeahead ? 3 : 2)))),
       touched: () => editedInGroup(req.el, kindOf(req.el), req.root),
-      pageState
+      pageState,
+      search: req.search
     })
     if (result.status === 'filled') {
       line.outcome = 'filled'
@@ -635,7 +828,7 @@ export async function pickAnswers(report: FillReport, picks: readonly PickReques
       line.reason = 'Already answered; left as is.'
     } else {
       line.outcome = 'rejected'
-      line.reason = `Huntgry could not pick "${(line.suggestion ?? '').slice(0, 80)}" (${result.reason.slice(0, 120)}); pick it yourself.`
+      line.reason = `Huntgry could not pick "${(line.suggestion ?? req.value).slice(0, 80)}" (${result.reason.slice(0, 120)}); pick it yourself.`
       highlight(widget.scope, 'attention')
       // The safety net caught the page acting outside the field: no more picks in this fill.
       if (result.halt) break

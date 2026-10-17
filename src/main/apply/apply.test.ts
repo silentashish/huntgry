@@ -29,7 +29,14 @@ const VALUES: FillValues = {
   fullName: 'Ada Lovelace',
   email: 'ada@example.com',
   phone: '+1 555 123 4567',
-  location: 'London',
+  // No location: the location typeaheads (#136) would wait for suggestions the static fixtures never show, longer
+  // than this harness's 500 ms request timeout (they are tested in src/shared/autofill/address.test.ts).
+  location: '',
+  addressLine1: '',
+  city: '',
+  state: '',
+  postalCode: '',
+  country: '',
   linkedin: 'https://www.linkedin.com/in/ada',
   github: '',
   website: '',

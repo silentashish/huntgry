@@ -146,6 +146,22 @@ export function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value
   return valueMatches(el, value, phone)
 }
 
+/**
+ * Types `value` into a search box the way the page's framework sees typing
+ * (#136, typeaheads): the native setter, then `input` only. No `change`, no
+ * blur (a typeahead clears its text and closes its list on blur), and no key.
+ */
+export function typeText(el: HTMLInputElement, value: string): void {
+  const view = el.ownerDocument.defaultView
+  if (!view) return
+  const setter = Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set
+  asHuntgry(() => {
+    if (setter) setter.call(el, value)
+    else el.value = value
+    el.dispatchEvent(new view.Event('input', { bubbles: true }))
+  })
+}
+
 const OUTLINE = { done: '#2f9e44', attention: '#f08c00' } as const
 
 /** Green outline for fields Huntgry filled, amber for fields that need the user. */
@@ -191,6 +207,11 @@ export function optionsOf(el: FormControl, root: ParentNode): string[] {
     options = radioGroup(el as HTMLInputElement, root).map(radioLabel)
   }
   return [...new Set(options.filter(Boolean))].slice(0, 30)
+}
+
+/** Every choice of a native select as `setSelectValue` names them (no limit: country lists run to 250). */
+export function selectOptionTexts(select: HTMLSelectElement): string[] {
+  return [...new Set(Array.from(select.options).filter((o) => !o.disabled && !isPlaceholder(o)).map((o) => boundedOption(clean(o.text))))].filter(Boolean)
 }
 
 /** What a select or radio group shows now (the option text), or '' when nothing is chosen. */

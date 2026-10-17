@@ -1,4 +1,5 @@
 import type { AdapterStep, FieldKey, UploadState } from '../../apply-types'
+import type { ChoiceKey } from '../../geo'
 import { atsForHost } from '../../apply-url'
 import { headingText, SUBMITTED } from './text'
 import type { Adapter, UploadProbe } from './types'
@@ -99,15 +100,51 @@ const KNOWN: ReadonlyArray<readonly [string, FieldKey]> = [
   [`${aid('formField-phone-number')} input`, 'phone'],
   [`${aid('formField-phoneNumber')} input`, 'phone'],
   ['input[id="phoneNumber--phoneNumber"]', 'phone'],
-  [`input${aid('addressSection_city')}`, 'location'],
-  [`${aid('formField-addressSection_city')} input`, 'location'],
-  [`${aid('formField-city')} input`, 'location'],
-  ['input[id="address--city"]', 'location'],
+  // Address (#136): line 1, city and postal code are typed; line 2 never. Workday has no single "location" field.
+  [`input${aid('addressSection_addressLine1')}`, 'addressLine1'],
+  [`${aid('formField-addressSection_addressLine1')} input`, 'addressLine1'],
+  [`${aid('formField-addressLine1')} input`, 'addressLine1'],
+  ['input[id="address--addressLine1"]', 'addressLine1'],
+  [`input${aid('addressSection_city')}`, 'city'],
+  [`${aid('formField-addressSection_city')} input`, 'city'],
+  [`${aid('formField-city')} input`, 'city'],
+  ['input[id="address--city"]', 'city'],
+  [`input${aid('addressSection_postalCode')}`, 'postalCode'],
+  [`${aid('formField-addressSection_postalCode')} input`, 'postalCode'],
+  [`${aid('formField-postalCode')} input`, 'postalCode'],
+  ['input[id="address--postalCode"]', 'postalCode'],
   [`input${aid('linkedinQuestion')}`, 'linkedin'],
   [`${aid('formField-linkedinQuestion')} input`, 'linkedin'],
   [`input${aid('websiteQuestion')}`, 'website'],
   [`${aid('formField-websiteQuestion')} input`, 'website'],
   [`input[type="file"]${aid('file-upload-input-ref')}`, 'resume']
+]
+
+/**
+ * My Information's dropdowns filled from the profile (#136): State (the
+ * address's `countryRegion`), Country, Phone Device Type (Mobile) and Country
+ * Phone Code (the profile country's code). Dropdowns are buttons with a
+ * listbox (picked by pick.ts); Country Phone Code is a multiselect prompt
+ * (a search box, typed and picked) on newer tenants and a dropdown on older.
+ */
+const VALUE_CHOICES: ReadonlyArray<readonly [string, ChoiceKey]> = [
+  [`button${aid('addressSection_countryRegion')}`, 'state'],
+  [`${aid('formField-addressSection_countryRegion')} button`, 'state'],
+  [`${aid('formField-countryRegion')} button`, 'state'],
+  ['button[id="address--countryRegion"]', 'state'],
+  [`button${aid('countryDropdown')}`, 'country'],
+  [`${aid('formField-countryDropdown')} button`, 'country'],
+  [`${aid('formField-country')} button`, 'country'],
+  ['button[id="country--country"]', 'country'],
+  [`button${aid('phone-device-type')}`, 'phoneType'],
+  [`${aid('formField-phone-device-type')} button`, 'phoneType'],
+  [`${aid('formField-phoneType')} button`, 'phoneType'],
+  ['button[id="phoneNumber--phoneType"]', 'phoneType'],
+  [`${aid('country-phone-code')}`, 'phoneCountryCode'],
+  [`${aid('formField-countryPhoneCode')} button`, 'phoneCountryCode'],
+  [`${aid('formField-countryPhoneCode')} input${aid('searchBox')}`, 'phoneCountryCode'],
+  [`${aid('formField-country-phone-code')} input${aid('searchBox')}`, 'phoneCountryCode'],
+  ['[id="phoneNumber--countryPhoneCode"]', 'phoneCountryCode']
 ]
 
 /** Whether `item` names exactly `name`: an element whose own text is the file name (not `old-resume.pdf`). */
@@ -139,6 +176,7 @@ export const workday: Adapter = {
   matches: (url, doc) => atsForHost(url.hostname) === 'workday' || doc.querySelector(MARKERS) !== null,
   formRoot: (doc) => doc.querySelector(aid('applyFlowPage')) ?? doc.querySelector('main') ?? doc.body,
   known: KNOWN,
+  valueChoices: VALUE_CHOICES,
   // A React app: its radios ("previously worked here") and checkboxes only take a click (#71: suggested, never set).
   clickOnly: ['input[type="radio"]', 'input[type="checkbox"]'],
   isConfirmation: (_url, doc) =>
