@@ -1,4 +1,5 @@
 import type { FillValues } from './apply-types'
+import { countryOf, locationParts } from './geo'
 import type { MasterProfile } from './master-profile'
 
 /** Form values from the master profile (pure; only the contact block and the current employer are used). */
@@ -58,10 +59,34 @@ export function asUrl(value: string, handleBase?: string): string {
   return v
 }
 
+/**
+ * The address parts forms ask for (#136), from the contact block: city and
+ * state come from `location` ("Portland, OR" → Portland / Oregon); the
+ * country is the contact's own, else the one the location names or implies
+ * (a US state → United States); the postal code is the contact's, else one
+ * written in the location ("Portland, OR 97201").
+ */
+export function addressValues(contact: { location: string; postalCode: string; country: string }): {
+  city: string
+  state: string
+  postalCode: string
+  country: string
+} {
+  const parts = locationParts(contact.location)
+  const own = contact.country.trim()
+  return {
+    city: parts.city,
+    state: parts.state,
+    postalCode: contact.postalCode.trim() || parts.postalCode,
+    country: own ? (countryOf(own) ?? own) : parts.country
+  }
+}
+
 export function fillValuesFrom(profile: MasterProfile): FillValues {
   const c = profile.contact
   const fullName = c.name.trim().replace(/\s+/g, ' ')
   const { first, last } = splitName(fullName)
+  const address = addressValues(c)
   return {
     firstName: first,
     lastName: last,
@@ -69,12 +94,11 @@ export function fillValuesFrom(profile: MasterProfile): FillValues {
     email: c.email.trim(),
     phone: c.phone.trim(),
     location: c.location.trim(),
-    // Address parts (#136): the street, postal code and country as written; city and state are derived from `location`.
     addressLine1: c.address.trim(),
-    city: '',
-    state: '',
-    postalCode: c.postalCode.trim(),
-    country: c.country.trim(),
+    city: address.city,
+    state: address.state,
+    postalCode: address.postalCode,
+    country: address.country,
     linkedin: asUrl(c.linkedin, 'https://www.linkedin.com/in/'),
     github: asUrl(c.github, 'https://github.com/'),
     website: asUrl(c.website),

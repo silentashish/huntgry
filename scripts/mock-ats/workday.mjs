@@ -24,6 +24,13 @@
  *   "alex.rivera@parsed.example"; phone and city stay empty). A My
  *   Information opened after the parse shows them pre-filled.
  *
+ * My Information's dropdowns work like Workday's (#136, `workdayWidgets`):
+ * a dropdown button renders its options as `<ul role="listbox">` at the end
+ * of the page (the id its `aria-controls` names) on click, and choosing one
+ * sets the button's text; Country Phone Code on newer tenants is a
+ * multiselect prompt whose search box searches only on Enter and shows the
+ * choice as a pill.
+ *
  * Nothing is submitted: the flow ends at Application Questions. `?tenant=legacy`
  * on the posting URL switches My Information to the older tenants' markup.
  * Plain ESM without `import.meta` (see server.mjs).
@@ -45,7 +52,132 @@ const VIEWS = new Set([
 ])
 
 const SHELL = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Workday</title></head>
-<body><div id="app"></div><script src="/workday/_app.js"></script></body></html>`
+<body><div id="app"></div><script src="/workday/_widgets.js"></script><script src="/workday/_app.js"></script></body></html>`
+
+/**
+ * Workday's dropdown and prompt widgets (#136), on whatever view is shown
+ * (delegated listeners). Runs in the browser and in jsdom tests
+ * (`window.eval(`(${workdayWidgets})()`)`); serialised with `toString()`, so
+ * it uses nothing from this module.
+ * - A dropdown button (`aria-haspopup="listbox"`) inside a known field
+ *   (State, Country, Phone Device Type, How Did You Hear, the older tenants'
+ *   Country Phone Code) renders `<ul role="listbox" id=<aria-controls>>` with
+ *   `<li role="option" data-automation-label>` options at the end of body on
+ *   click; clicking an option sets the button's text and `aria-label` and
+ *   removes the list; a click anywhere else closes it.
+ * - A prompt (`multiSelectContainer` with `searchBox`) searches only on Enter:
+ *   it renders `activeListContainer` (role=listbox) with `promptOption`
+ *   options that contain the typed text (or "No Items."), at the end of body;
+ *   clicking one replaces the field's `selectedItem` pill and clears the box.
+ */
+export function workdayWidgets() {
+  if (window.huntgryWorkdayWidgets) return
+  window.huntgryWorkdayWidgets = true
+  const STATES = 'Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming'.split('|')
+  const PHONE_CODES = ['United States of America (+1)', 'Canada (+1)', 'India (+91)', 'United Kingdom (+44)']
+  const OPTIONS = {
+    state: STATES,
+    country: ['United States of America', 'Canada', 'India', 'United Kingdom', 'Germany', 'Nepal'],
+    phoneType: ['Mobile', 'Home', 'Work'],
+    phoneCode: PHONE_CODES,
+    source: ['Job board', 'LinkedIn', 'Referral', 'Company website']
+  }
+  const fieldOf = (el) => el.closest('[data-automation-id^="formField-"]')?.getAttribute('data-automation-id') ?? ''
+  const kindOf = (button) => {
+    const field = fieldOf(button)
+    if (/countryRegion/.test(field)) return 'state'
+    if (/country-?phone-?code/i.test(field)) return 'phoneCode'
+    if (/phone-device-type|phoneType/.test(field)) return 'phoneType'
+    if (/countryDropdown|formField-country$/.test(field)) return 'country'
+    if (/source/i.test(field)) return 'source'
+    return null
+  }
+  const labelOf = (el) => {
+    const id = el.id
+    const label = id ? document.querySelector(`label[for="${id}"]`) : null
+    return (label?.firstChild?.textContent ?? '').trim()
+  }
+  let open = null
+  const close = () => {
+    if (!open) return
+    open.list.remove()
+    open.owner.setAttribute('aria-expanded', 'false')
+    open = null
+  }
+  const option = (text, prompt) => {
+    const el = document.createElement(prompt ? 'div' : 'li')
+    el.setAttribute('role', 'option')
+    el.setAttribute('data-automation-label', text)
+    el.setAttribute('data-mock-workday', prompt ? 'prompt' : 'dropdown')
+    if (prompt) el.setAttribute('data-automation-id', 'promptOption')
+    el.textContent = text
+    return el
+  }
+  function openDropdown(button) {
+    const list = document.createElement('ul')
+    list.setAttribute('role', 'listbox')
+    if (button.getAttribute('aria-controls')) list.id = button.getAttribute('aria-controls')
+    list.setAttribute('aria-label', labelOf(button))
+    for (const text of OPTIONS[kindOf(button)]) list.append(option(text, false))
+    document.body.append(list)
+    button.setAttribute('aria-expanded', 'true')
+    open = { list, owner: button }
+  }
+  function openPrompt(input) {
+    const query = input.value.trim().toLowerCase()
+    const list = document.createElement('div')
+    list.setAttribute('data-automation-id', 'activeListContainer')
+    list.setAttribute('role', 'listbox')
+    const found = PHONE_CODES.filter((text) => query && text.toLowerCase().includes(query))
+    if (found.length === 0) list.innerHTML = '<p data-automation-id="noItems">No Items.</p>'
+    for (const text of found) list.append(option(text, true))
+    document.body.append(list)
+    input.setAttribute('aria-expanded', 'true')
+    open = { list, owner: input }
+  }
+  document.addEventListener('click', (e) => {
+    const target = e.target
+    if (!(target instanceof Element)) return
+    const chosen = target.closest('[data-mock-workday]')
+    if (chosen && open && open.list.contains(chosen)) {
+      const text = chosen.getAttribute('data-automation-label')
+      const owner = open.owner
+      close()
+      if (owner.tagName === 'BUTTON') {
+        owner.textContent = text
+        owner.setAttribute('aria-label', `${labelOf(owner)} ${text} Required`)
+      } else {
+        const pills = owner.closest('[data-automation-id="multiSelectContainer"]').querySelector('[data-automation-id="selectedItemList"]')
+        const pill = document.createElement('div')
+        pill.setAttribute('data-automation-id', 'selectedItem')
+        pill.setAttribute('data-automation-label', text)
+        pill.setAttribute('title', text)
+        pill.innerHTML = '<p></p><span data-automation-id="DELETE_charm" aria-hidden="true">x</span>'
+        pill.firstChild.textContent = text
+        pills.replaceChildren(pill)
+        owner.value = ''
+      }
+      return
+    }
+    const button = target.closest('button[aria-haspopup="listbox"]')
+    if (button && kindOf(button)) {
+      const again = open?.owner === button
+      close()
+      if (!again) openDropdown(button)
+      return
+    }
+    if (open && !open.list.contains(target)) close()
+  })
+  // A prompt searches on Enter only (typing alone shows nothing).
+  document.addEventListener('keydown', (e) => {
+    const input = e.target
+    if (e.key !== 'Enter' || !(input instanceof Element) || input.getAttribute('data-automation-id') !== 'searchBox') return
+    if (!input.closest('[data-automation-id="multiSelectContainer"]')) return
+    e.preventDefault()
+    close()
+    openPrompt(input)
+  })
+}
 
 /** The page's own script. Runs in the browser; serialised with `toString()`. */
 function workdayApp() {
@@ -237,9 +369,9 @@ export function createWorkdayMock({ read, record, log }) {
       const url = new URL(req.url ?? '/', 'http://localhost')
       if (url.pathname !== '/workday' && !url.pathname.startsWith('/workday/')) return false
       const rest = url.pathname.slice('/workday/'.length)
-      if (rest === '_app.js') {
+      if (rest === '_app.js' || rest === '_widgets.js') {
         res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' })
-        res.end(`(${workdayApp.toString()})()\n`)
+        res.end(`(${(rest === '_app.js' ? workdayApp : workdayWidgets).toString()})()\n`)
       } else if (rest.startsWith('_view/')) {
         const name = rest.slice('_view/'.length)
         if (VIEWS.has(name)) json(res, 200, viewOf(name))

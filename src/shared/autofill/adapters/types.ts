@@ -1,4 +1,5 @@
 import type { AdapterStep, ApplyAts, FieldKey, UploadState } from '../../apply-types'
+import type { ChoiceKey } from '../../geo'
 
 /**
  * The adapter contract: per-ATS knowledge the autofill engine uses. Every
@@ -30,6 +31,16 @@ export interface Adapter {
    * user, never typed into.
    */
   choices?: readonly string[]
+  /**
+   * Selector → profile value for dropdowns and typeaheads (#136): a native
+   * select, a listbox button, a combobox or a suggestion input filled from
+   * the profile (country, state, location…) or a phone default (`phoneType`:
+   * Mobile; `phoneCountryCode`: the profile country's code). Tried before
+   * `choices`; with no value in the profile the control is a choice again.
+   * Click-only widgets are picked by pick.ts (listboxes) or typed and picked
+   * (text inputs, Workday search boxes, location comboboxes).
+   */
+  valueChoices?: ReadonlyArray<readonly [string, ChoiceKey]>
   /**
    * Selectors of native controls (radios, checkboxes, selects) whose
    * framework only takes a person's click: setting them and firing `change`

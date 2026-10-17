@@ -64,8 +64,11 @@ test.describe('apply', () => {
       'alex.rivera@example.com'
     )
     expect(await evaluateInTab<number>(app.electronApp, '/lever/', 'document.querySelector(\'input[name="resume"]\').files.length')).toBe(1)
-    // The location is an autocomplete (a suggestion must be picked): left to the user, never typed into.
-    await expect(browser.apply.field('Current location *')).toContainText("Pick it from the site's suggestions.")
+    // The location is an autocomplete (a suggestion must be picked): Huntgry types the city and picks the suggestion
+    // in the profile's state (#136).
+    await expect
+      .poll(() => evaluateInTab<string>(app.electronApp, '/lever/', 'document.querySelector(\'input[name="location"]\').value'))
+      .toBe('Portland, OR, United States')
     expect(await exists(mock.submissionFile)).toBe(false)
 
     // The test, not the app, answers the required questions and presses the site's Submit.

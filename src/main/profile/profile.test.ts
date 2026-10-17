@@ -20,6 +20,9 @@ function sampleProfile(): MasterProfile {
       github: 'https://github.com/janedoe',
       website: 'https://janedoe.dev',
       workAuthorization: 'US citizen',
+      address: '',
+      postalCode: '',
+      country: '',
       other: [{ label: 'Portfolio', value: 'https://dribbble.com/janedoe' }]
     },
     summary: 'Backend engineer with 6 years of experience.\n\nLoves boring technology.',
