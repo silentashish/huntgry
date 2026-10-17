@@ -426,7 +426,7 @@ class Filler {
       if (isConsentQuestion(label) || matchFact(label) !== 'earliestStart') continue
       const stored = this.job.answers.facts.earliestStart?.trim() ?? ''
       if (!stored) {
-        this.line(label, 'other', 'skipped-no-value', { reason: 'Answer it once in Settings > Saved application answers (earliest start date).' })
+        this.line(label, 'other', 'skipped-no-value', { reason: 'No saved earliest start date; enter the date yourself.' })
         continue
       }
       const date = fullDate(stored)
@@ -457,7 +457,7 @@ class Filler {
     }
     const stored = this.job.answers.facts.disabilityStatus
     if (!stored) {
-      this.line(label, 'radio', 'skipped-unsupported', { reason: 'Answer it once in the page; Huntgry remembers it from your saved answers.' })
+      this.line(label, 'radio', 'skipped-unsupported', { reason: 'No saved answer for it; tick the box yourself.' })
       return
     }
     const answer = resolveAnswer('disabilityStatus', stored, 'radio', options)

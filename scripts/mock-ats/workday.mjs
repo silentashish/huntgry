@@ -449,8 +449,13 @@ function workdayApp() {
     } else if (id === 'backToJobPosting') {
       go(base)
     } else if (id === 'bottom-navigation-next-button') {
+      // Counted for the e2e test (#136): only the test, as the user, ever presses the footer.
+      window.huntgryFooterPresses = (window.huntgryFooterPresses ?? 0) + 1
+      // Review's Submit is disabled: nothing is ever submitted.
+      if (e.target.closest('button')?.disabled) return
       advance(1)
     } else if (id === 'pageFooterBackButton') {
+      window.huntgryFooterPresses = (window.huntgryFooterPresses ?? 0) + 1
       advance(-1)
     }
   })
