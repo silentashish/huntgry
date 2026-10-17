@@ -540,6 +540,14 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(done!.counts.total).toBe(2)
   })
 
+  it('refuses to start once shut down: no record, no queued jobs (#134)', async () => {
+    jobs.set('url:a', job('url:a'))
+    await pipeline.shutdown()
+    await expect(pipeline.start(input(['url:a']))).rejects.toThrow(/quitting/)
+    expect(pipeline.state()).toBeNull()
+    expect(queue.state().items).toEqual([])
+  })
+
   it('requeues interrupted items once after a restart and resumes without Resume; a second interruption fails them', async () => {
     for (const id of ['url:a', 'url:b']) jobs.set(id, job(id, { description: 'SLOW WRITE_NOTES' }))
     await pipeline.start(input(['url:a', 'url:b'], { concurrency: 2 }))

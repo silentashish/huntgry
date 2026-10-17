@@ -204,6 +204,8 @@ function readRecord(v: unknown): PipelineRecord | null {
   }
 }
 
+const QUITTING = 'Huntgry is quitting; jobs can no longer be queued.'
+
 export class TailorQueue {
   private ws: string | null = null
   private items: QueueItem[] = []
@@ -364,6 +366,8 @@ export class TailorQueue {
   }
 
   async enqueue(input: EnqueueInput, expected?: string): Promise<EnqueueResult> {
+    // After shutdown nothing would ever start them: refuse instead of queuing them silently (#134).
+    if (this.stopped) throw new Error(QUITTING)
     await this.sync(expected)
     const ws = this.ws!
     const skipped: EnqueueResult['skipped'] = []
