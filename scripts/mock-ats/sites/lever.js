@@ -35,9 +35,9 @@
     show('.resume-upload-success', true)
   })
 
-  const location = document.getElementById('location-input')
-  const results = location && location.closest('.application-field').querySelector('.dropdown-results')
-  if (location && results) {
+  const locationInput = document.getElementById('location-input')
+  const results = locationInput && locationInput.closest('.application-field').querySelector('.dropdown-results')
+  if (locationInput && results) {
     const PLACES = [
       'Portland, OR, United States',
       'Portland, ME, United States',
@@ -51,11 +51,11 @@
     let timer = 0
     results.id = results.id || 'location-results'
     results.setAttribute('role', 'listbox')
-    location.setAttribute('aria-controls', results.id)
+    locationInput.setAttribute('aria-controls', results.id)
     const clear = () => results.replaceChildren()
-    location.addEventListener('input', () => {
+    locationInput.addEventListener('input', () => {
       clearTimeout(timer)
-      const query = location.value.trim().toLowerCase()
+      const query = locationInput.value.trim().toLowerCase()
       timer = setTimeout(() => {
         clear()
         for (const place of PLACES.filter((p) => query && p.toLowerCase().includes(query))) {
@@ -65,7 +65,7 @@
           option.textContent = place
           option.addEventListener('click', () => {
             chosen = place
-            setter.call(location, place)
+            setter.call(locationInput, place)
             if (selected) selected.value = JSON.stringify({ name: place })
             clear()
           })
@@ -73,9 +73,9 @@
         }
       }, 200)
     })
-    location.addEventListener('blur', () =>
+    locationInput.addEventListener('blur', () =>
       setTimeout(() => {
-        if (location.value !== chosen) setter.call(location, '')
+        if (locationInput.value !== chosen) setter.call(locationInput, '')
         clear()
       }, 150)
     )
