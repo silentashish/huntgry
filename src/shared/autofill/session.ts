@@ -1,8 +1,50 @@
 import type { PageAnswers } from '../apply-facts'
 import type { FillReport, FillValues, PageScan, UploadState } from '../apply-types'
 import { currentAdapter, embedUrlsOf, fillPage, pendingPicks, pickAnswers, scanPage, uploadStateOf, verifyFill, type UploadKey } from './engine'
+import { isConsentQuestion, normalizeText } from '../apply-facts'
+import { chosenOf } from './dom'
+import { controlOf, editedInGroup } from './answers'
+import { pickedValue, widgetOf } from './pick'
 import { anyShown, sleep, waitForReady, waitUntil } from './ready'
 import { watchUserEdits, type UserEditOptions } from './user-edits'
+
+/** A question the person answered or corrected in the page (#136), reported to main to remember. */
+export interface PageEdit {
+  fieldId: string
+  value: string
+}
+
+/** Longest edit reported (main checks it again). */
+const MAX_EDIT_CHARS = 500
+
+/**
+ * The questions of `report` the person changed in the page, with the value each shows now (#136). A typed field,
+ * native select or radio group counts once the person edited it (user-edits.ts). A widget that only takes a click
+ * (react-select, Workday's dropdown, Ashby's buttons) counts when it shows an answer other than what the fill left
+ * there, for a line that was not already answered before the fill (`kept`). Consent questions are never reported.
+ */
+export function editsOf(report: FillReport | null): PageEdit[] {
+  if (!report) return []
+  const out = new Map<string, string>()
+  for (const line of report.fields) {
+    if (!line.fieldId || !line.question || isConsentQuestion(line.label)) continue
+    const control = controlOf(line)
+    if (!control) continue
+    const { el, root, clickOnly } = control
+    let value = ''
+    if (clickOnly) {
+      const widget = widgetOf(el)
+      value = widget ? pickedValue(widget).trim() : ''
+      const left = line.outcome === 'filled' ? (line.value ?? '') : ''
+      if (line.outcome === 'kept' || !value || normalizeText(value) === normalizeText(left)) continue
+    } else {
+      if (!editedInGroup(el, line.kind, root)) continue
+      value = chosenOf(el, root).trim()
+    }
+    if (value && value.length <= MAX_EDIT_CHARS) out.set(line.fieldId, value)
+  }
+  return [...out].map(([fieldId, value]) => ({ fieldId, value }))
+}
 
 /**
  * What the tab's preload does for main, on one document, kept here (pure DOM)
@@ -63,6 +105,16 @@ export class PageSession {
     }
     if (text !== false) this.lastReport = report
     return report
+  }
+
+  /** The questions of the last fill the person changed in the page (#136), for main to remember. */
+  edits(): PageEdit[] {
+    return editsOf(this.lastReport)
+  }
+
+  /** The URL of the page the last fill reported (edits are filed against it). */
+  get reportUrl(): string | null {
+    return this.lastReport?.url ?? null
   }
 
   /** Waits (up to `timeoutMs`) for the site's widget to show the file main attached. */

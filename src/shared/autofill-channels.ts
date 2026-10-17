@@ -6,7 +6,10 @@
  * detect, and `formAppeared` when a form (or an embedded form) renders after
  * a detect found none. `step` is sent whenever a multi-step site (Workday)
  * moves to another step, renders more of it or finishes being busy, without
- * a navigation.
+ * a navigation. `edits` (#136) goes both ways: main asks for the questions
+ * the person changed in the page (answered on `result`), and the page sends
+ * them on its own when it is left (`pagehide`) and before it reports a step
+ * change, as `{ url, edits: [{ fieldId, value }] }`.
  */
 export const AUTOFILL_CHANNELS = {
   detect: 'huntgry:autofill:detect',
@@ -16,7 +19,8 @@ export const AUTOFILL_CHANNELS = {
   result: 'huntgry:autofill:result',
   confirmation: 'huntgry:autofill:confirmation',
   formAppeared: 'huntgry:autofill:form-appeared',
-  step: 'huntgry:autofill:step'
+  step: 'huntgry:autofill:step',
+  edits: 'huntgry:autofill:edits'
 } as const
 
 /** Attribute the page script puts on a file input so main can find it over CDP. */

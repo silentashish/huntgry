@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { FieldReport } from '@shared/apply-types'
-import { answerChoices, badgeOf, canAnswer, groupReport, stepLabel, suggestionNote } from './apply-report'
+import { answerChoices, badgeOf, canAnswer, GROUP_TONE, groupReport, isAiAnswer, stepLabel, suggestionNote } from './apply-report'
 
 const f = (label: string, outcome: FieldReport['outcome'], required = false): FieldReport => ({
   key: null,
@@ -93,5 +93,50 @@ describe('answers in the panel (#71)', () => {
     expect(suggestionNote(q({}))).toBeNull()
     expect(suggestionNote(q({ suggestion: 'Yes', suggestedBy: 'saved' }))).toMatch(/saved answers: "Yes". Pick it in the page/)
     expect(suggestionNote(q({ suggestion: 'Woman', suggestedBy: 'model', fact: 'gender' }))).toMatch(/AI matched this question to gender/)
+  })
+})
+
+describe('AI answers in the panel (#136)', () => {
+  const ai = (extra: Partial<FieldReport> = {}): FieldReport => ({
+    ...f('Do you have experience with Go?', 'filled'),
+    kind: 'radio',
+    fieldId: 'radio:go',
+    question: 'choice|do you have experience with go|1',
+    options: ['Yes', 'No'],
+    value: 'Yes',
+    suggestedBy: 'model',
+    reason: 'AI answer from your profile; check it.',
+    ...extra
+  })
+
+  it('lists AI answers in their own group between "Needs you" and "Filled", with an "AI answer" badge', () => {
+    const groups = groupReport({
+      ats: 'lever',
+      url: 'https://x.example',
+      hasSubmitButton: true,
+      fields: [f('Email', 'filled'), ai(), f('Why us?', 'unmatched'), f('Draft', 'filled'), { ...f('Essay', 'filled'), suggestedBy: 'draft' }]
+    })
+    expect(groups.map((g) => [g.title, g.fields.map((x) => x.label)])).toEqual([
+      ['Needs you', ['Why us?']],
+      ['AI answers — check these', ['Do you have experience with Go?']],
+      ['Filled', ['Email', 'Draft', 'Essay']]
+    ])
+    expect(GROUP_TONE['AI answers — check these']).toBe('review')
+    expect(badgeOf(ai())).toEqual({ label: 'AI answer', tone: 'review' })
+    // A model's suggestion that was not written stays a suggestion under "Needs you".
+    expect(isAiAnswer(ai({ outcome: 'skipped-unsupported', suggestion: 'Yes' }))).toBe(false)
+  })
+
+  it('offers a correction for an AI answer, not for other filled lines', () => {
+    expect(canAnswer(ai())).toBe(true)
+    expect(canAnswer(ai({ suggestedBy: undefined }))).toBe(false)
+    expect(canAnswer(ai({ suggestedBy: 'draft' }))).toBe(false)
+    expect(canAnswer(ai({ fieldId: undefined }))).toBe(false)
+  })
+
+  it("says a direct model suggestion comes from the profile", () => {
+    expect(suggestionNote(ai({ outcome: 'skipped-unsupported', suggestion: 'Yes' }))).toBe(
+      'Suggested: "Yes" (AI answer from your profile; confirm it once).'
+    )
   })
 })

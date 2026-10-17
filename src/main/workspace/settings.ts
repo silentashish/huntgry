@@ -25,6 +25,8 @@ export interface AppSettings {
   pricing?: PricingOverrides
   /** Apply (#71): pick remembered answers in dropdowns and button groups automatically; on unless set to false. */
   pickDropdowns?: boolean
+  /** Apply (#136): one model call per page answers unknown questions from the master profile; on unless set to false. */
+  aiAnswers?: boolean
 }
 
 /** Reads the settings file; a missing or corrupt file yields empty settings. */

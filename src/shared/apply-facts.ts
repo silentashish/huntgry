@@ -377,17 +377,31 @@ export interface PageAnswers {
   facts: Partial<Record<FactKey, string>>
   /** By `questionKey`. */
   questions: Record<string, QuestionAnswer>
+  /**
+   * Settings "Use AI to answer unknown questions" (#136), sent by main with each fill: a model's answers (and its
+   * mappings to a stored, non-sensitive fact) are written into the page as "AI answers; check them". Off or absent:
+   * they are only suggested.
+   */
+  aiAnswers?: boolean
 }
 
 export interface QuestionAnswer {
   /** The fact the question asks for (null: none; the answer is `value`). */
   fact?: FactKey | null
-  /** A direct answer to this question (no fact), e.g. one given in the panel. */
+  /**
+   * A direct answer to this question, e.g. one given in the panel; on an unconfirmed entry, a model's probable
+   * answer from the profile (#136).
+   */
   value?: string
   /** The exact option the user confirmed for this question (and these options); wins over the fact's value. */
   option?: string
   /** The user confirmed the mapping (or gave the answer). A model's mapping alone only suggests. */
   confirmed: boolean
+  /**
+   * The AI answer Huntgry wrote into this question (#136) that this confirmed answer corrects: the page replaces it
+   * while the control still shows exactly that and the person has not edited it.
+   */
+  replace?: string
 }
 
 export const NO_ANSWERS: PageAnswers = { facts: {}, questions: {} }

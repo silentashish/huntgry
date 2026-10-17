@@ -5,12 +5,12 @@ import { ATS_LABEL, type ApplySession, type FieldReport } from '@shared/apply-ty
 import { api, errorText } from '../../api'
 import { MonoLabel, StatusPill, toneStyle } from '../../components/ui'
 import { AnswerControl } from './AnswerControl'
-import { badgeOf, canAnswer, GROUP_TONE, groupReport, STATUS_META, stepLabel, suggestionNote } from './apply-report'
+import { badgeOf, canAnswer, GROUP_TONE, groupReport, isAiAnswer, STATUS_META, stepLabel, suggestionNote } from './apply-report'
 import classes from './browser.module.css'
 
 /**
  * Auto-apply beside the page: what was detected, filled and uploaded, what is
- * left to the user (grouped as Needs you / Filled / Your choice, with the
+ * left to the user (grouped as Needs you / AI answers — check these / Filled / Your choice, with the
  * inline "answer once" control), and "Mark as applied" once the site
  * confirms. Shown only while a session exists. It sits next to the native
  * page view (never over it), so it uses no tooltips or popovers that could
@@ -225,7 +225,7 @@ function ReportRow({ field: f, sessionId, filling }: { field: FieldReport; sessi
         </StatusPill>
       </div>
       {(f.value || f.reason) && <p className={classes.rowText}>{detail}</p>}
-      {f.suggestedBy === 'draft' && f.outcome === 'filled' && (
+      {((f.suggestedBy === 'draft' && f.outcome === 'filled') || isAiAnswer(f)) && f.reason && (
         <p className={classes.rowText} data-tone="review">
           {f.reason}
         </p>

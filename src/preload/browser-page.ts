@@ -17,7 +17,9 @@ import { PageSession, watchForForm } from '@shared/autofill/session'
  * After a detect it watches the page for the site's "application submitted"
  * view and, while no form is found, for a form or embedded form that renders
  * late, and reports a multi-step site's step changing in place (Workday keeps
- * its URL from the sign-in wall on).
+ * its URL from the sign-in wall on). It reports the questions the person
+ * answered or corrected in the page (#136) when main asks, before a step
+ * change and when the page is left, so main remembers them.
  */
 
 interface Request {
@@ -38,6 +40,17 @@ let confirmed = false
 let watchingForm = false
 /** This document's fill state; user edits are trusted (keyboard, paste) events only. */
 const page = new PageSession(document)
+
+/** Sends main the questions the person changed in the page (#136), filed under the page the last fill reported. */
+function sendEdits(): void {
+  const url = page.reportUrl
+  if (!url) return
+  const edits = page.edits()
+  if (edits.length) ipcRenderer.send(AUTOFILL_CHANNELS.edits, { url, edits })
+}
+
+// The person is leaving the page (a link, the site's own Submit, closing the tab): what they answered goes first.
+window.addEventListener('pagehide', sendEdits)
 
 function watchForConfirmation(): void {
   if (watching || confirmed) return
@@ -91,6 +104,8 @@ function watchForSteps(initial: string): void {
     const key = keyOf(pageStep(document))
     if (key === stepKey) return
     stepKey = key
+    // The edits of the step that was filled go before the step change, while main still holds its report.
+    sendEdits()
     ipcRenderer.send(AUTOFILL_CHANNELS.step, { url: location.href })
   }
   new MutationObserver(() => {
@@ -103,7 +118,7 @@ function answersOf(input: unknown): PageAnswers | undefined {
   if (typeof input !== 'object' || input === null) return undefined
   const { facts, questions } = input as Partial<PageAnswers>
   if (typeof facts !== 'object' || facts === null || typeof questions !== 'object' || questions === null) return undefined
-  return { facts, questions }
+  return { facts, questions, aiAnswers: (input as Partial<PageAnswers>).aiAnswers === true }
 }
 
 function reply(requestId: string, run: () => Promise<unknown>): void {
@@ -131,6 +146,10 @@ ipcRenderer.on(AUTOFILL_CHANNELS.fill, (_e, req: Request) => {
     if (!req.values) throw new Error('No values to fill.')
     return page.fill(req.values, req.text, answersOf(req.answers), req.pick === true)
   })
+})
+
+ipcRenderer.on(AUTOFILL_CHANNELS.edits, (_e, req: Request) => {
+  reply(req.requestId, async () => ({ url: page.reportUrl, edits: page.edits() }))
 })
 
 ipcRenderer.on(AUTOFILL_CHANNELS.uploadState, (_e, req: Request) => {

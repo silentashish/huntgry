@@ -82,9 +82,10 @@ function normalize(raw: unknown): Answers {
     for (const [key, v] of Object.entries(questions).slice(0, MAX_QUESTIONS * 2)) {
       if (typeof v !== 'object' || v === null || key.length > 300) continue
       const q = v as Record<string, unknown>
-      const value = text(q.value, 500)
-      const option = text(q.option, 500)
       const fact = isFactKey(q.fact) ? q.fact : null
+      // A model's answer is never kept for a sensitive fact, whatever the file says.
+      const value = q.source !== 'user' && fact && FACTS[fact].sensitive ? null : text(q.value, 500)
+      const option = text(q.option, 500)
       out.questions[key] = {
         label: text(q.label, 300) ?? '',
         fact,
@@ -175,10 +176,13 @@ export function rememberAnswer(workspace: string, answer: UserAnswer, now = new 
   })
 }
 
-/** A model's mappings, unconfirmed; a question the user already answered keeps the user's entry. */
+/**
+ * A model's mappings and probable answers (#136), unconfirmed; a question the user already answered keeps the
+ * user's entry. A sensitive fact never gets a model's answer.
+ */
 export function rememberMappings(
   workspace: string,
-  mappings: ReadonlyArray<{ question: string; label: string; fact: FactKey | null }>,
+  mappings: ReadonlyArray<{ question: string; label: string; fact: FactKey | null; value?: string | null }>,
   now = new Date()
 ): Promise<Answers> {
   const at = now.toISOString()
@@ -186,7 +190,15 @@ export function rememberMappings(
     const questions = { ...a.questions }
     for (const m of mappings) {
       if (questions[m.question]?.source === 'user') continue
-      questions[m.question] = { label: m.label.slice(0, 300), fact: m.fact, source: 'model', confirmed: false, updatedAt: at }
+      const value = m.fact && FACTS[m.fact].sensitive ? null : text(m.value, 300)
+      questions[m.question] = {
+        label: m.label.slice(0, 300),
+        fact: m.fact,
+        ...(value ? { value } : {}),
+        source: 'model',
+        confirmed: false,
+        updatedAt: at
+      }
     }
     return { ...a, questions }
   })
@@ -270,8 +282,9 @@ export async function clearAnswers(workspace: string): Promise<Answers> {
 
 /**
  * What the page gets with a fill: the stored facts over those the profile
- * states (`seeds`), and the question memory (direct answers only when the
- * user gave them).
+ * states (`seeds`), and the question memory: the user's direct answers
+ * (confirmed) and, since #136, a model's probable answers (unconfirmed; the
+ * page writes them only as "AI answers" when the Settings switch is on).
  */
 export function pageAnswers(answers: Answers, seeds: Partial<Record<FactKey, string>> = {}): PageAnswers {
   const facts: PageAnswers['facts'] = { ...seeds }
@@ -284,7 +297,7 @@ export function pageAnswers(answers: Answers, seeds: Partial<Record<FactKey, str
     questions[key] = {
       fact: q.fact,
       confirmed: q.confirmed,
-      ...(q.value && q.source === 'user' ? { value: q.value } : {}),
+      ...(q.value ? { value: q.value } : {}),
       ...(q.option && q.source === 'user' ? { option: q.option } : {})
     }
   }

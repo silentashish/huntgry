@@ -12,5 +12,7 @@ export const apply: ApplyApi = {
   forgetAnswer: (target) => ipcRenderer.invoke(APPLY_CHANNELS.forgetAnswer, target),
   forgetAllAnswers: () => ipcRenderer.invoke(APPLY_CHANNELS.forgetAllAnswers),
   pickSetting: () => ipcRenderer.invoke(APPLY_CHANNELS.pickSetting),
-  setPickSetting: (on) => ipcRenderer.invoke(APPLY_CHANNELS.setPickSetting, on)
+  setPickSetting: (on) => ipcRenderer.invoke(APPLY_CHANNELS.setPickSetting, on),
+  aiAnswersSetting: () => ipcRenderer.invoke(APPLY_CHANNELS.aiAnswersSetting),
+  setAiAnswersSetting: (on) => ipcRenderer.invoke(APPLY_CHANNELS.setAiAnswersSetting, on)
 }

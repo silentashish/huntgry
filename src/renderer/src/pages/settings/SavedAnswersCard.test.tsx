@@ -28,7 +28,9 @@ const apply = {
   })),
   forgetAllAnswers: vi.fn(async () => empty),
   pickSetting: vi.fn(async () => true),
-  setPickSetting: vi.fn(async (on: boolean) => on)
+  setPickSetting: vi.fn(async (on: boolean) => on),
+  aiAnswersSetting: vi.fn(async () => true),
+  setAiAnswersSetting: vi.fn(async (on: boolean) => on)
 }
 
 beforeAll(() => {
@@ -107,6 +109,15 @@ describe('SavedAnswersCard', () => {
     await act(async () => pick.click())
     expect(apply.setPickSetting).toHaveBeenCalledWith(false)
     expect(pick.checked).toBe(false)
+
+    // "Use AI to answer unknown questions" (#136): on by default, saved when turned off.
+    const ai = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((i) =>
+      (i.closest('.mantine-Switch-root')?.textContent ?? '').includes('Use AI to answer unknown questions')
+    )!
+    expect(ai.checked).toBe(true)
+    await act(async () => ai.click())
+    expect(apply.setAiAnswersSetting).toHaveBeenCalledWith(false)
+    expect(ai.checked).toBe(false)
 
     await act(async () => button('Forget all').click())
     await act(async () => button('Forget all').click())

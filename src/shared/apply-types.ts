@@ -126,6 +126,8 @@ export interface FieldReport {
    * not write: a widget that only takes a click (`saved`), or a model's
    * mapping the user has not confirmed yet (`model`). `draft` marks a line
    * Huntgry typed an AI draft into (#82), from the resume and job description.
+   * A `filled` line with `model` is an AI answer Huntgry wrote from the master
+   * profile (#136), for the user to check or correct.
    */
   fieldId?: string
   question?: string
@@ -242,6 +244,9 @@ export interface ApplyApi {
   /** Settings: "Pick dropdown answers automatically" (on by default). */
   pickSetting(): Promise<boolean>
   setPickSetting(on: boolean): Promise<boolean>
+  /** Settings: "Use AI to answer unknown questions" (#136, on by default). */
+  aiAnswersSetting(): Promise<boolean>
+  setAiAnswersSetting(on: boolean): Promise<boolean>
 }
 
 /** The saved application answers, as Settings lists them. */
@@ -267,7 +272,9 @@ export const APPLY_CHANNELS = {
   setFact: 'apply:answers:set-fact',
   forgetAllAnswers: 'apply:answers:clear',
   pickSetting: 'apply:pick-setting',
-  setPickSetting: 'apply:set-pick-setting'
+  setPickSetting: 'apply:set-pick-setting',
+  aiAnswersSetting: 'apply:ai-answers-setting',
+  setAiAnswersSetting: 'apply:set-ai-answers-setting'
 } as const
 
 export interface ApplyEvents {

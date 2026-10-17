@@ -16,9 +16,9 @@ import {
   setFact
 } from './answers-store'
 import { questionKey } from '@shared/apply-facts'
-import { parseFillReport } from './validate'
+import { parseEdits, parseFillReport } from './validate'
 import { agyDraftArgs, claudeDraftArgs, draftAnswers, draftPrompt, parseDraftOutput } from './draft-answers'
-import { agyMappingArgs, claudeMappingArgs, mapQuestions, parseMappingOutput, type MapQuestion } from './map-questions'
+import { agyMappingArgs, claudeMappingArgs, mappingPrompt, mapQuestions, parseMappingOutput, type MapContext, type MapQuestion } from './map-questions'
 
 let root: string
 let ws: string
@@ -66,6 +66,31 @@ describe('answers store', () => {
     expect(page.questions['q-user']).toEqual({ fact: 'gender', confirmed: true, option: 'Female' })
     expect(page.questions['q-model']).toEqual({ fact: 'gender', confirmed: false })
     expect(page.facts).toEqual({ gender: 'Female' })
+  })
+
+  it("stores a model's probable answers unconfirmed, sends them to the page, never one for a sensitive fact (#136)", async () => {
+    await rememberMappings(ws, [
+      { question: 'q-go', label: 'Experience with Go?', fact: null, value: 'Yes' },
+      { question: 'q-g', label: 'Your gender', fact: 'gender', value: 'Woman' },
+      { question: 'q-yrs', label: 'Years of experience?', fact: 'yearsExperience', value: '7' }
+    ])
+    const stored = await readAnswers(ws)
+    expect(stored.questions['q-go']).toMatchObject({ value: 'Yes', source: 'model', confirmed: false })
+    expect(stored.questions['q-g'].value).toBeUndefined()
+    const page = pageAnswers(stored)
+    expect(page.questions['q-go']).toEqual({ fact: null, confirmed: false, value: 'Yes' })
+    expect(page.questions['q-yrs']).toEqual({ fact: 'yearsExperience', confirmed: false, value: '7' })
+    expect(page.questions['q-g']).toEqual({ fact: 'gender', confirmed: false })
+    // Model answers are not "saved answers" in Settings until the user gives or corrects them.
+    expect(savedAnswers(stored).questions).toEqual([])
+    // The user's correction replaces the model's entry.
+    await rememberAnswer(ws, { question: 'q-go', label: 'Experience with Go?', fact: null, value: 'No' })
+    expect((await readAnswers(ws)).questions['q-go']).toMatchObject({ value: 'No', source: 'user', confirmed: true })
+    // A hand-edited file cannot slip a model answer in for a sensitive fact.
+    const raw = JSON.parse(await readFile(answersFile(ws), 'utf8'))
+    raw.questions['q-g'].value = 'Woman'
+    await writeFile(answersFile(ws), JSON.stringify(raw))
+    expect((await readAnswers(ws)).questions['q-g'].value).toBeUndefined()
   })
 
   it('puts stored facts over the profile seeds', async () => {
@@ -165,9 +190,9 @@ describe('question mapping call', () => {
     return { result, calls: async () => (await readFile(log, 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; stdin: string }) }
   }
 
-  it('runs Haiku once, tool-less, with no settings, MCP servers or saved session', async () => {
+  it('runs Sonnet once, tool-less, with no settings, MCP servers or saved session', async () => {
     const args = claudeMappingArgs()
-    expect(args[args.indexOf('--model') + 1]).toBe('haiku')
+    expect(args[args.indexOf('--model') + 1]).toBe('sonnet')
     expect(args[args.indexOf('--tools') + 1]).toBe('')
     expect(args[args.indexOf('--setting-sources') + 1]).toBe('')
     expect(args).toContain('--strict-mcp-config')
@@ -193,7 +218,7 @@ describe('question mapping call', () => {
     expect(args[args.indexOf('--model') + 1]).toBe('gemini-3.8-flash-low')
     expect(args).toContain('--sandbox')
     expect(args).toContain('--disable-slash-commands')
-    expect(args.at(-1)).toMatch(/^--print=You classify questions[\s\S]*Questions: \[\]$/)
+    expect(args.at(-1)).toMatch(/^--print=You fill in questions[\s\S]*Questions: \[\]$/)
     const { result, calls } = await run({}, 'antigravity')
     expect((await result).map((m) => m.fact)).toEqual(['gender', 'needsSponsorship', null])
     expect((await calls())[0].stdin).toBe('')
@@ -212,6 +237,82 @@ describe('question mapping call', () => {
     await expect(mapQuestions(QUESTIONS, { agent: 'claude', command: join(root, 'no-such-cli'), env: process.env })).rejects.toThrow()
     expect(parseMappingOutput(JSON.stringify({ result: { structured_output: { mappings: [{ id: 'a', factKey: 'over18' }] } } }), new Set(['a']))).toEqual([
       { id: 'a', fact: 'over18' }
+    ])
+  })
+})
+
+describe('probable answers from the profile (#136)', () => {
+  const script = join(__dirname, 'fixtures/fake-mapper.mjs')
+  const QUESTIONS: MapQuestion[] = [
+    { id: 'q1', question: 'What is your gender identity?', kind: 'select', options: ['Man', 'Woman'] },
+    { id: 'q2', question: 'Do you need an employer to sponsor you?', kind: 'radio', options: ['Yes', 'No'] },
+    { id: 'q3', question: 'Do you have experience with Go?', kind: 'radio', options: ['Yes', 'No'] },
+    { id: 'q4', question: 'Describe your experience with Kubernetes', kind: 'textarea', options: [] }
+  ]
+  const CONTEXT: MapContext = {
+    company: 'Acme Rockets',
+    role: 'Backend Engineer',
+    jobDescription: 'Acme builds rockets. We use Go. ' + 'j'.repeat(9000),
+    profile: '# Ada Lovelace\n## Experience\n- Engineer at Initech (2019–2024): Go, Kubernetes\n' + 'p'.repeat(17000)
+  }
+  const run = (env: Record<string, string> = {}) =>
+    mapQuestions(QUESTIONS, { agent: 'claude', command: process.execPath, args: [script], env: { ...process.env, FAKE_MAPPER_LOG: join(root, 'calls.jsonl'), ...env }, timeoutMs: 3000 }, CONTEXT)
+
+  it('gives the model the company, role, bounded job description and profile, the questions last, and no stored value', async () => {
+    await rememberAnswer(ws, { question: 'x', label: 'Gender', fact: 'gender', value: 'Female' })
+    const prompt = mappingPrompt(QUESTIONS, CONTEXT)
+    expect(prompt).toContain('Company: Acme Rockets')
+    expect(prompt).toContain('Role: Backend Engineer')
+    expect(prompt).toContain('Acme builds rockets')
+    expect(prompt).toContain('Engineer at Initech')
+    expect(prompt).not.toContain('j'.repeat(8001))
+    expect(prompt).not.toContain('p'.repeat(16001))
+    expect(prompt.lastIndexOf('Questions:')).toBeGreaterThan(prompt.indexOf('Engineer at Initech'))
+    await run()
+    const made = (await readFile(join(root, 'calls.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; stdin: string })
+    expect(made[0].stdin).toContain('Engineer at Initech')
+    expect(made[0].stdin).not.toMatch(/Female/)
+    // The rules: EEO, consent and unsupported questions get no answer; options are answered with one of them.
+    const system = made[0].args[made[0].args.indexOf('--system-prompt') + 1]
+    expect(system).toMatch(/gender, raceEthnicity/)
+    expect(system).toMatch(/exactly the text of one option/)
+    expect(system).toMatch(/untrusted/)
+  })
+
+  it('keeps answers that are bounded, among the options, and never for a sensitive fact or an EEO question', async () => {
+    expect(await run()).toEqual([
+      { id: 'q1', fact: 'gender' },
+      { id: 'q2', fact: 'needsSponsorship' },
+      { id: 'q3', fact: null, answer: 'Yes' },
+      { id: 'q4', fact: null, answer: 'Yes' }
+    ])
+    // A model that over-reaches: a gender answer, an option the question lacks, a 400-character text.
+    expect(await run({ FAKE_MAPPER: 'overreach' })).toEqual([
+      { id: 'q1', fact: 'gender' },
+      { id: 'q2', fact: 'needsSponsorship' },
+      { id: 'q3', fact: null },
+      { id: 'q4', fact: null }
+    ])
+    const out = (mappings: unknown[]) => JSON.stringify({ structured_output: { mappings } })
+    const qs: MapQuestion[] = [
+      { id: 'a', question: 'Are you Hispanic or Latino?', kind: 'text', options: [] },
+      { id: 'b', question: 'Do you agree to the terms?', kind: 'radio', options: ['Yes', 'No'] },
+      { id: 'c', question: 'Preferred office', kind: 'select', options: ['London', 'Paris'] }
+    ]
+    expect(
+      parseMappingOutput(
+        out([
+          { id: 'a', factKey: null, answer: 'No' },
+          { id: 'b', factKey: null, answer: 'Yes' },
+          { id: 'c', factKey: null, answer: ' london ' }
+        ]),
+        new Set(['a', 'b', 'c']),
+        qs
+      )
+    ).toEqual([
+      { id: 'a', fact: null },
+      { id: 'b', fact: null },
+      { id: 'c', fact: null, answer: 'London' }
     ])
   })
 })
@@ -295,5 +396,27 @@ describe('answer fields in a page report', () => {
     expect(email.fieldId).toBeUndefined()
     expect(email.fact).toBeUndefined()
     expect(consent.fieldId).toBeUndefined()
+  })
+})
+
+describe('edits the page reports (#136)', () => {
+  it('keeps bounded, non-empty edits with an id, the last per field, and an http(s) URL only', () => {
+    expect(
+      parseEdits({
+        url: 'https://jobs.lever.co/a/b/apply',
+        edits: [
+          { fieldId: 'radio:go', value: ' No ' },
+          { fieldId: 'text:why', value: 'x'.repeat(501) },
+          { fieldId: '', value: 'a' },
+          { fieldId: 'text:a', value: '   ' },
+          { fieldId: 7, value: 'a' },
+          { fieldId: 'radio:go', value: 'Yes' },
+          'junk'
+        ]
+      })
+    ).toEqual({ url: 'https://jobs.lever.co/a/b/apply', edits: [{ fieldId: 'radio:go', value: 'Yes' }] })
+    expect(parseEdits({ url: 'javascript:alert(1)', edits: [{ fieldId: 'a', value: 'b' }] }).url).toBe('')
+    expect(parseEdits(null)).toEqual({ url: '', edits: [] })
+    expect(parseEdits({ edits: Array.from({ length: 300 }, (_, i) => ({ fieldId: `f${i}`, value: 'v' })) }).edits).toHaveLength(200)
   })
 })
