@@ -115,7 +115,8 @@ test('a question answered once in the Apply panel fills itself on the next appli
   await expect(card.getByText('Gender', { exact: true })).toBeVisible()
   await expect(card.getByText('Female')).toHaveCount(0)
   await card.getByRole('button', { name: 'Show Gender' }).click()
-  await expect(card.getByText('Female')).toBeVisible()
+  // Shown, the fact is an editable control (#136), not text.
+  await expect(card.getByLabel('Gender', { exact: true })).toHaveValue('Female')
 
   // Nothing was ever submitted.
   expect(await exists(mock.submissionFile)).toBe(false)
