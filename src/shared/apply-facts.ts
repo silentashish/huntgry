@@ -127,13 +127,25 @@ export function questionKey(label: string, kind: string, options: readonly strin
 const NEVER =
   /\b(i (certify|agree|acknowledge|consent|understand|confirm|attest|accept)|consent|acknowledg\w*|privacy|terms|arbitration|certif\w*|signature|sign)\b/
 
-/** Ordered: the first that matches wins (sponsorship before authorization, Hispanic before race). */
+/**
+ * Ordered: the first that matches wins (sponsorship before visa status before authorization, a relative's
+ * employment before the user's own, Hispanic before race).
+ */
 const RULES: Array<[FactKey, (q: string) => boolean]> = [
   [
     'needsSponsorship',
     (q) =>
       /\bsponsor/.test(q) &&
       !/\bwithout (the )?(need (for|of) |needing |requiring |any )?(visa |employer |employment )?sponsor/.test(q)
+  ],
+  // A status or type, not a yes/no: "What is your work authorization status?" (US citizen / H-1B…), "Visa type".
+  // Before workAuthorized, which keeps "Are you authorized to work…"; after sponsorship.
+  [
+    'visaStatus',
+    (q) =>
+      /\b(visa|immigration|citizenship|authori[sz]ation)( \w+){0,2} (status|type|category)\b/.test(q) ||
+      /\b(status|type|category) of (your )?(current )?(us |u s )?(visa|immigration|citizenship|work authori[sz]ation)\b/.test(q) ||
+      /\b(which|what) (type of )?visa (do|are|will)\b/.test(q)
   ],
   [
     'workAuthorized',
@@ -156,6 +168,39 @@ const RULES: Array<[FactKey, (q: string) => boolean]> = [
     (q) =>
       /\b(salary|compensation|pay|wage) (expectation|requirement|range|expected|desired)/.test(q) ||
       /\b(expected|desired|target) (annual |base )?(salary|compensation|pay)\b/.test(q)
+  ],
+  // A relative before the user's own employment: "Have any of your relatives ever been employed by us?".
+  [
+    'relativeEmployed',
+    (q) =>
+      /\brelated to (any|an|a) (current |existing )?(employee|staff|member of (our )?staff)/.test(q) ||
+      /\brelatives? (\w+ ){0,3}(working|employed|work)\b/.test(q) ||
+      /\bfamily members? (\w+ ){0,3}(working|employed|work)\b/.test(q)
+  ],
+  [
+    'previouslyEmployed',
+    (q) =>
+      // "for / at / by" a named employer ("Have you ever worked for a startup?" or "…with React?" is not this).
+      /\b(previously|formerly|ever) (been )?(worked|employed) (for|at|by) (?!(a|an|any|other)\b)/.test(q) ||
+      /\b(previously|formerly|ever) (been )?(worked|employed) with (us|our|this company|the company)\b/.test(q) ||
+      /\b(former|previous|past) (employee|employment|contractor)\b/.test(q) ||
+      /\bworked (here|for us|at \w+|for \w+|with \w+) (before|previously)\b/.test(q)
+  ],
+  [
+    'howHeard',
+    (q) =>
+      /\bhow (did|do) you (first )?(hear|learn|find out|come to know|discover)\b/.test(q) ||
+      /\breferral source\b|\bsource of referral\b/.test(q) ||
+      // A bare "Source" label only; longer text with "source" in it is something else ("open source").
+      /^(referral |candidate |application )?source$/.test(q)
+  ],
+  ['securityClearance', (q) => /\bsecurity clearance\b|\bactive (\w+ )?clearance\b/.test(q)],
+  ['yearsExperience', (q) => /\b(years|yrs) of (\w+ )?experience\b|\bhow many years\b/.test(q)],
+  [
+    'highestEducation',
+    (q) =>
+      /\bhighest (level of )?(education|degree|qualification)/.test(q) ||
+      /\beducation(al)? level\b|\blevel of education\b/.test(q)
   ],
   ['pronouns', (q) => /\bpronoun/.test(q)],
   ['hispanicLatino', (q) => /\bhispanic\b|\blatin[oax]\b/.test(q)],
@@ -281,22 +326,48 @@ export function displayAnswer(value: string): string {
 }
 
 /**
- * Facts the master profile already states, with no new data: a work
- * authorization of "US citizen", "green card" or "permanent resident" means
- * authorized and no sponsorship. Visas (H-1B, OPT, TN…) are left to the user.
+ * Visa wordings the profile's Work authorization line may use, most specific first: the first match names the
+ * status (`visaStatus`). Each is a currently valid US work status that needs, or will need, sponsorship.
+ */
+const VISAS: Array<[RegExp, string]> = [
+  [/\bh ?1 ?b\b/, 'H-1B'],
+  [/\bstem opt\b|\bopt stem\b/, 'F-1 STEM OPT'],
+  [/\bopt\b/, 'F-1 OPT'],
+  // TN also abbreviates Tennessee ("US citizen, Nashville, TN"): only "TN" alone or as a visa.
+  [/^tn$|\btn (visa|status|holder|nafta|usmca)\b|\b(nafta|usmca) tn\b/, 'TN'],
+  [/\bl ?1 ?[ab]?\b/, 'L-1'],
+  [/\be ?3\b/, 'E-3'],
+  [/\bo ?1 ?[ab]?\b/, 'O-1'],
+  [/\bead\b/, 'EAD']
+]
+
+/**
+ * Facts the master profile already states, with no new data (#71, #136):
+ * - "US citizen" → authorized, no sponsorship, status "US citizen";
+ * - "green card" / "permanent resident" → authorized, no sponsorship, status "Permanent resident";
+ * - a current visa ("H-1B", "F-1 OPT", "STEM OPT", "TN", "L-1", "E-3", "O-1", "EAD") → authorized, needs
+ *   sponsorship, and the visa as the status.
+ * Negated, pending or expired wording, a bare "visa" or "sponsorship", and foreign statuses seed nothing.
+ * The line is not sensitive (it is in the profile already); the seeds are never written to the answers store.
  */
 export function factsFromProfile(workAuthorization: string): Partial<Record<FactKey, string>> {
   const t = normalizeText(workAuthorization)
   if (!t) return {}
-  // Negations, visas and anything pending: no seed ("Not a US citizen", "green card pending").
-  if (/\b(not|non|no|never|no longer|without|former|expired|applying|applied|pending)\b/.test(t)) return {}
-  if (/\b(h ?1 ?b|visa|opt|stem|cpt|tn|e ?3|o ?1|l ?1|sponsor\w*|ead)\b/.test(t)) return {}
+  // Negations and anything pending: no seed ("Not a US citizen", "green card pending", "H-1B expired").
+  if (/\b(not|non|no|never|no longer|without|former|expired|applying|applied|pending|awaiting|process|processing|progress)\b/.test(t)) return {}
+  const visa = VISAS.find(([re]) => re.test(t))
+  if (visa) return { visaStatus: visa[1], workAuthorized: 'yes', needsSponsorship: 'yes' }
+  // Other visa wording (CPT, "on a visa", "needs sponsorship"): too vague to seed.
+  if (/\b(visa|cpt|f ?1|sponsor\w*)\b/.test(t)) return {}
   // Only US status counts (the forms Huntgry sees ask about the US); "Indian citizen" or a Canadian PR says nothing here.
   const us = /\b(us|u s|usa|u s a|united states|american)\b/.test(t)
   const foreign = /\b(canad\w*|uk|british|indian|india|eu|european|australian|mexican|chinese|german|french)\b/.test(t)
   if (foreign) return {}
-  if (/\bgreen card\b|\blawful permanent resident\b|\blpr\b/.test(t) || (us && /\b(citizen|citizenship|national|permanent resident)\b/.test(t))) {
-    return { workAuthorized: 'yes', needsSponsorship: 'no' }
+  if (/\bgreen card\b|\blawful permanent resident\b|\blpr\b/.test(t) || (us && /\bpermanent resident\b/.test(t))) {
+    return { visaStatus: 'Permanent resident', workAuthorized: 'yes', needsSponsorship: 'no' }
+  }
+  if (us && /\b(citizen|citizenship|national)\b/.test(t)) {
+    return { visaStatus: 'US citizen', workAuthorized: 'yes', needsSponsorship: 'no' }
   }
   return {}
 }

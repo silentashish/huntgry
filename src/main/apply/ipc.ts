@@ -21,7 +21,10 @@ import {
   readAnswers,
   rememberAnswer,
   rememberMappings,
-  savedAnswers
+  savedAnswers,
+  setFact,
+  MAX_FACT_CHARS,
+  type Answers
 } from './answers-store'
 import { draftAnswers } from './draft-answers'
 import { mapQuestions } from './map-questions'
@@ -195,11 +198,22 @@ export function registerApplyIpc(): void {
   ipcMain.handle(APPLY_CHANNELS.answer, (_e, id: unknown, fieldId: unknown, value: unknown, remember: unknown) =>
     service.answer(requireSessionId(id), requireText(fieldId, 'field', 200), requireText(value, 'answer', 500), remember === true)
   )
-  ipcMain.handle(APPLY_CHANNELS.answers, async () => savedAnswers(await readAnswers(await workspacePath())))
+  // Every result carries the profile's seeds, so the Profile's Application details can show "From your profile".
+  const listed = async (ws: string, answers: Answers) => savedAnswers(answers, await profileSeeds(ws))
+  ipcMain.handle(APPLY_CHANNELS.answers, async () => {
+    const ws = await workspacePath()
+    return listed(ws, await readAnswers(ws))
+  })
+  ipcMain.handle(APPLY_CHANNELS.setFact, async (_e, fact: unknown, value: unknown) => {
+    if (!isFactKey(fact)) throw new Error('Invalid fact.')
+    if (typeof value !== 'string' || value.length > MAX_FACT_CHARS) throw new Error('Invalid answer.')
+    const ws = await workspacePath()
+    return listed(ws, await setFact(ws, fact, value))
+  })
   ipcMain.handle(APPLY_CHANNELS.forgetAnswer, async (_e, target: unknown) => {
     const t = requireForgetTarget(target)
     const ws = await workspacePath()
-    return savedAnswers('fact' in t ? await forgetFact(ws, t.fact) : await forgetQuestion(ws, t.question))
+    return listed(ws, 'fact' in t ? await forgetFact(ws, t.fact) : await forgetQuestion(ws, t.question))
   })
   ipcMain.handle(APPLY_CHANNELS.pickSetting, () => pickSetting())
   ipcMain.handle(APPLY_CHANNELS.setPickSetting, async (_e, on: unknown) => {
@@ -207,5 +221,8 @@ export function registerApplyIpc(): void {
     await saveSettings(settingsFile(), { pickDropdowns: on })
     return pickSetting()
   })
-  ipcMain.handle(APPLY_CHANNELS.forgetAllAnswers, async () => savedAnswers(await clearAnswers(await workspacePath())))
+  ipcMain.handle(APPLY_CHANNELS.forgetAllAnswers, async () => {
+    const ws = await workspacePath()
+    return listed(ws, await clearAnswers(ws))
+  })
 }

@@ -26,7 +26,12 @@ const VALUES: FillValues = {
   linkedin: 'https://www.linkedin.com/in/ada',
   github: 'https://github.com/ada',
   website: 'https://ada.example',
-  currentCompany: 'Analytical Engines'
+  currentCompany: 'Analytical Engines',
+  addressLine1: '',
+  city: '',
+  state: '',
+  postalCode: '',
+  country: ''
 }
 
 /** Fails the test if anything submits, clicks or presses a key on the page. */

@@ -192,19 +192,60 @@ export function rememberMappings(
   })
 }
 
+/** The questions with the exact options remembered for `fact` dropped (they would contradict a new value). */
+function withoutOptions(questions: Answers['questions'], fact: FactKey): Answers['questions'] {
+  return Object.fromEntries(
+    Object.entries(questions).map(([key, q]) => {
+      if (q.fact !== fact || q.option === undefined) return [key, q]
+      const { option: _forgotten, ...rest } = q
+      return [key, rest]
+    })
+  )
+}
+
 /** Forgets a fact, and the exact options remembered for questions about it (they say the same thing). */
 export function forgetFact(workspace: string, fact: FactKey): Promise<Answers> {
   return update(workspace, (a) => {
     const facts = { ...a.facts }
     delete facts[fact]
-    const questions = Object.fromEntries(
-      Object.entries(a.questions).map(([key, q]) => {
-        if (q.fact !== fact || q.option === undefined) return [key, q]
-        const { option: _forgotten, ...rest } = q
-        return [key, rest]
-      })
-    )
-    return { facts, questions }
+    return { facts, questions: withoutOptions(a.questions, fact) }
+  })
+}
+
+/** Longest fact value accepted from the Profile / Settings editors. */
+export const MAX_FACT_CHARS = 500
+
+/**
+ * A value typed or chosen for `fact` in the Profile's Application details or
+ * Settings (#136), as it is stored: `yes` / `no` / `decline` for yes/no facts,
+ * `decline` or the text for choices, the text for text facts; `''` means
+ * forget. Throws on anything else (a yes/no fact given "maybe", too long).
+ */
+export function factValue(fact: FactKey, value: string): string {
+  if (value.length > MAX_FACT_CHARS) throw new Error('Answer too long.')
+  if (!value.trim()) return ''
+  const canonical = canonicalAnswer(fact, value)
+  if (FACTS[fact].kind === 'yesno' && !['yes', 'no', 'decline'].includes(canonical)) {
+    throw new Error(`${FACTS[fact].label}: answer Yes, No or Prefer not to say.`)
+  }
+  return canonical
+}
+
+/**
+ * Sets one fact directly (#136: Profile → Application details, Settings), the
+ * same memory the Apply panel's "Remember" writes. An empty value forgets it.
+ * A changed value drops the exact options remembered for questions about the
+ * fact, so an old choice cannot win over the new answer.
+ */
+export async function setFact(workspace: string, fact: FactKey, value: string, now = new Date()): Promise<Answers> {
+  const next = factValue(fact, value)
+  if (!next) return forgetFact(workspace, fact)
+  return update(workspace, (a) => {
+    if (a.facts[fact]?.value === next) return a
+    return {
+      facts: { ...a.facts, [fact]: { value: next, updatedAt: now.toISOString() } },
+      questions: withoutOptions(a.questions, fact)
+    }
   })
 }
 
@@ -250,9 +291,15 @@ export function pageAnswers(answers: Answers, seeds: Partial<Record<FactKey, str
   return { facts, questions }
 }
 
-/** For the Settings list (the renderer masks sensitive values until asked). */
-export function savedAnswers(answers: Answers): SavedAnswers {
+/**
+ * For the Settings list and the Profile's Application details (the renderer
+ * masks sensitive values until asked). `seeds` are the facts the master
+ * profile's Work authorization line states (never sensitive), shown as
+ * "From your profile" where nothing is stored.
+ */
+export function savedAnswers(answers: Answers, seeds: Partial<Record<FactKey, string>> = {}): SavedAnswers {
   return {
+    seeds: Object.fromEntries(FACT_KEYS.filter((k) => seeds[k] && !FACTS[k].sensitive).map((k) => [k, seeds[k]!])),
     facts: FACT_KEYS.filter((k) => answers.facts[k]).map((k) => ({
       fact: k,
       label: FACTS[k].label,

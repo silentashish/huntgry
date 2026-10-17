@@ -12,7 +12,8 @@ import {
   rememberAnswer,
   rememberMappings,
   savedAnswers,
-  setAnswersRoot
+  setAnswersRoot,
+  setFact
 } from './answers-store'
 import { questionKey } from '@shared/apply-facts'
 import { parseFillReport } from './validate'
@@ -89,6 +90,45 @@ describe('answers store', () => {
     await clearAnswers(ws)
     await expect(stat(answersFile(ws))).rejects.toThrow()
     expect(await readAnswers(ws)).toEqual({ facts: {}, questions: {} })
+  })
+
+  it('sets a fact directly in its stored form, and forgets it on an empty value (#136)', async () => {
+    await setFact(ws, 'needsSponsorship', 'Yes', new Date('2026-10-17T00:00:00Z'))
+    await setFact(ws, 'yearsExperience', ' 6 ')
+    await setFact(ws, 'gender', 'Prefer not to say')
+    await setFact(ws, 'visaStatus', 'H-1B')
+    let answers = await readAnswers(ws)
+    expect(answers.facts.needsSponsorship).toEqual({ value: 'yes', updatedAt: '2026-10-17T00:00:00.000Z' })
+    expect(answers.facts.yearsExperience?.value).toBe('6')
+    expect(answers.facts.gender?.value).toBe('decline')
+    expect(answers.facts.visaStatus?.value).toBe('H-1B')
+    // Under userData, never in the workspace.
+    expect(answersFile(ws).startsWith(ws)).toBe(false)
+    answers = await setFact(ws, 'yearsExperience', '')
+    expect(answers.facts.yearsExperience).toBeUndefined()
+    // A yes/no fact takes yes, no or decline only; anything too long is refused.
+    await expect(setFact(ws, 'over18', 'maybe')).rejects.toThrow(/Yes, No/)
+    await expect(setFact(ws, 'howHeard', 'x'.repeat(501))).rejects.toThrow(/too long/)
+    expect((await readAnswers(ws)).facts.over18).toBeUndefined()
+  })
+
+  it('drops the exact options remembered for a fact whose value changes (#136)', async () => {
+    await rememberAnswer(ws, { question: 'q1', label: 'Gender', fact: 'gender', value: 'Woman' })
+    // Same value: the remembered option stays.
+    let answers = await setFact(ws, 'gender', 'Woman')
+    expect(answers.questions.q1.option).toBe('Woman')
+    answers = await setFact(ws, 'gender', 'Non-binary')
+    expect(answers.facts.gender?.value).toBe('Non-binary')
+    expect(answers.questions.q1).toMatchObject({ fact: 'gender', confirmed: true })
+    expect(answers.questions.q1.option).toBeUndefined()
+  })
+
+  it('lists the profile seeds next to the stored facts, never sensitive ones (#136)', async () => {
+    const answers = await setFact(ws, 'needsSponsorship', 'no')
+    const listed = savedAnswers(answers, { visaStatus: 'H-1B', needsSponsorship: 'yes', gender: 'Male' })
+    expect(listed.seeds).toEqual({ visaStatus: 'H-1B', needsSponsorship: 'yes' })
+    expect(listed.facts).toEqual([expect.objectContaining({ fact: 'needsSponsorship', value: 'no' })])
+    expect(savedAnswers(answers).seeds).toEqual({})
   })
 
   it('reads a corrupt or hand-edited file as empty or cleaned up', async () => {

@@ -28,7 +28,12 @@ const VALUES: FillValues = {
   linkedin: 'https://www.linkedin.com/in/ada',
   github: 'https://github.com/ada',
   website: 'https://ada.example',
-  currentCompany: 'Analytical Engines'
+  currentCompany: 'Analytical Engines',
+  addressLine1: '',
+  city: '',
+  state: '',
+  postalCode: '',
+  country: ''
 }
 
 const input = (dom: JSDOM, selector: string) => dom.window.document.querySelector(selector) as HTMLInputElement

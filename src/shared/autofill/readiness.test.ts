@@ -30,7 +30,12 @@ const VALUES: FillValues = {
   linkedin: 'https://www.linkedin.com/in/ada',
   github: 'https://github.com/ada',
   website: 'https://ada.example',
-  currentCompany: 'Analytical Engines'
+  currentCompany: 'Analytical Engines',
+  addressLine1: '',
+  city: '',
+  state: '',
+  postalCode: '',
+  country: ''
 }
 
 const byKey = (report: FillReport, key: FieldReport['key']) => report.fields.find((f) => f.key === key)

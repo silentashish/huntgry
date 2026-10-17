@@ -230,6 +230,11 @@ export interface ApplyApi {
   answer(sessionId: string, fieldId: string, value: string, remember: boolean): Promise<ApplySession>
   /** The saved application answers of the current workspace. */
   answers(): Promise<SavedAnswers>
+  /**
+   * Sets one fact (#136: Profile → Application details, Settings), stored under userData like the panel's
+   * "Remember". Yes/no facts take yes / no / decline; an empty value forgets the fact.
+   */
+  setFact(fact: FactKey, value: string): Promise<SavedAnswers>
   /** Forgets one saved fact or question answer; returns what is left. */
   forgetAnswer(target: { fact: FactKey } | { question: string }): Promise<SavedAnswers>
   /** Forgets every saved answer of the current workspace. */
@@ -244,6 +249,11 @@ export interface SavedAnswers {
   facts: Array<{ fact: FactKey; label: string; sensitive: boolean; value: string; updatedAt: string }>
   /** Questions answered directly (no fact) that were remembered. */
   questions: Array<{ question: string; label: string; value: string; updatedAt: string }>
+  /**
+   * Facts the master profile's Work authorization line states (#136: "H-1B" → visa status, authorized,
+   * needs sponsorship). Used when no answer is stored; never stored themselves. Absent from older mains.
+   */
+  seeds?: Partial<Record<FactKey, string>>
 }
 
 export const APPLY_CHANNELS = {
@@ -254,6 +264,7 @@ export const APPLY_CHANNELS = {
   answer: 'apply:answer',
   answers: 'apply:answers:list',
   forgetAnswer: 'apply:answers:forget',
+  setFact: 'apply:answers:set-fact',
   forgetAllAnswers: 'apply:answers:clear',
   pickSetting: 'apply:pick-setting',
   setPickSetting: 'apply:set-pick-setting'

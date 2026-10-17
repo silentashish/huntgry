@@ -25,6 +25,66 @@ describe('matchFact', () => {
     expect(matchFact(question)).toBe(fact)
   })
 
+  it.each([
+    // visaStatus: a status or type, never the plain yes/no authorization question or sponsorship.
+    ['What is your work authorization status?', 'visaStatus'],
+    ['What is your current work authorization status in the US?', 'visaStatus'],
+    ['Work authorization type', 'visaStatus'],
+    ['Visa status', 'visaStatus'],
+    ['Current visa type', 'visaStatus'],
+    ['Immigration status', 'visaStatus'],
+    ['Citizenship status', 'visaStatus'],
+    ['What type of visa do you currently hold?', 'visaStatus'],
+    ['Are you legally authorized to work in the US?', 'workAuthorized'],
+    ['Do you have work authorization in the United States?', 'workAuthorized'],
+    ['Will you require sponsorship to change your visa status?', 'needsSponsorship'],
+    // previouslyEmployed
+    ['Have you previously worked for Acme?', 'previouslyEmployed'],
+    ['Have you ever been employed by this company?', 'previouslyEmployed'],
+    ['Are you a former employee of Acme or its subsidiaries?', 'previouslyEmployed'],
+    ['Have you worked here before?', 'previouslyEmployed'],
+    ['Have you previously worked with us?', 'previouslyEmployed'],
+    ['Previous employee of Acme?', 'previouslyEmployed'],
+    // howHeard
+    ['How did you hear about this position?', 'howHeard'],
+    ['How did you learn about us?', 'howHeard'],
+    ['How did you find out about this job?', 'howHeard'],
+    ['Referral source', 'howHeard'],
+    ['Source', 'howHeard'],
+    ['Source of referral', 'howHeard'],
+    // securityClearance
+    ['Do you hold an active security clearance?', 'securityClearance'],
+    ['Do you have an active clearance?', 'securityClearance'],
+    // yearsExperience
+    ['Years of experience', 'yearsExperience'],
+    ['How many years of professional experience do you have?', 'yearsExperience'],
+    ['Total yrs of experience', 'yearsExperience'],
+    // highestEducation
+    ['What is your highest level of education?', 'highestEducation'],
+    ['Education level', 'highestEducation'],
+    ['Highest degree obtained', 'highestEducation'],
+    ['Level of education completed', 'highestEducation'],
+    // relativeEmployed (before previouslyEmployed)
+    ['Are you related to any current employee of Acme?', 'relativeEmployed'],
+    ['Do you have any relatives working for Acme?', 'relativeEmployed'],
+    ['Do you have relatives currently employed by us?', 'relativeEmployed'],
+    ['Is a family member employed by the company?', 'relativeEmployed'],
+    ['Have any of your relatives ever been employed by Acme?', 'relativeEmployed']
+  ])('%s → %s (#136)', (question, fact) => {
+    expect(matchFact(question)).toBe(fact)
+  })
+
+  it('leaves look-alikes of the new facts alone (#136)', () => {
+    expect(matchFact('Have you ever worked with Kubernetes?')).toBeNull()
+    expect(matchFact('Have you ever worked for a startup?')).toBeNull()
+    expect(matchFact('Describe your open source contributions')).toBeNull()
+    expect(matchFact('What is the status of your current project?')).toBeNull()
+    expect(matchFact('Employment type')).toBeNull()
+    // Sensitive facts keep their rules.
+    expect(matchFact('Veteran Status')).toBe('veteranStatus')
+    expect(matchFact('Disability Status')).toBe('disabilityStatus')
+  })
+
   it('never matches consent, certification or unrelated questions', () => {
     expect(matchFact('I certify that I am authorized to work and that the above is true')).toBeNull()
     expect(matchFact('I acknowledge the Arbitration Agreement (veteran benefits explained)')).toBeNull()
@@ -96,12 +156,15 @@ describe('stored answers', () => {
   })
 
   it('reads authorization from the profile only when it is unambiguous', () => {
-    expect(factsFromProfile('US Citizen')).toEqual({ workAuthorized: 'yes', needsSponsorship: 'no' })
-    expect(factsFromProfile('Green card holder')).toEqual({ workAuthorized: 'yes', needsSponsorship: 'no' })
-    expect(factsFromProfile('H-1B visa (transfer needed)')).toEqual({})
-    expect(factsFromProfile('F-1 OPT')).toEqual({})
-    expect(factsFromProfile('U.S. citizen')).toEqual({ workAuthorized: 'yes', needsSponsorship: 'no' })
-    expect(factsFromProfile('Permanent resident of the United States')).toEqual({ workAuthorized: 'yes', needsSponsorship: 'no' })
+    expect(factsFromProfile('US Citizen')).toEqual({ workAuthorized: 'yes', needsSponsorship: 'no', visaStatus: 'US citizen' })
+    expect(factsFromProfile('Green card holder')).toEqual({ workAuthorized: 'yes', needsSponsorship: 'no', visaStatus: 'Permanent resident' })
+    expect(factsFromProfile('US citizen, Nashville, TN')).toEqual({ workAuthorized: 'yes', needsSponsorship: 'no', visaStatus: 'US citizen' })
+    expect(factsFromProfile('U.S. citizen')).toEqual({ workAuthorized: 'yes', needsSponsorship: 'no', visaStatus: 'US citizen' })
+    expect(factsFromProfile('Permanent resident of the United States')).toEqual({
+      workAuthorized: 'yes',
+      needsSponsorship: 'no',
+      visaStatus: 'Permanent resident'
+    })
     // Negated, foreign or unqualified status says nothing about working in the US.
     expect(factsFromProfile('Not a US citizen')).toEqual({})
     expect(factsFromProfile('Indian citizen')).toEqual({})
@@ -110,6 +173,41 @@ describe('stored answers', () => {
     expect(factsFromProfile('Not a permanent resident')).toEqual({})
     expect(factsFromProfile('Green card pending')).toEqual({})
     expect(factsFromProfile('')).toEqual({})
+  })
+
+  it('stores and resolves the new facts by their kind (#136)', () => {
+    expect(canonicalAnswer('previouslyEmployed', 'No, never')).toBe('no')
+    expect(canonicalAnswer('relativeEmployed', 'Yes')).toBe('yes')
+    expect(canonicalAnswer('securityClearance', 'Prefer not to say')).toBe('decline')
+    expect(canonicalAnswer('yearsExperience', ' 6 ')).toBe('6')
+    expect(canonicalAnswer('visaStatus', 'H-1B')).toBe('H-1B')
+    expect(resolveAnswer('securityClearance', 'no', 'radio', ['Yes', 'No'])).toBe('No')
+    expect(resolveAnswer('previouslyEmployed', 'yes', 'text', [])).toBe('Yes')
+    expect(resolveAnswer('yearsExperience', '6', 'text', [])).toBe('6')
+    expect(resolveAnswer('visaStatus', 'H-1B', 'select', ['US Citizen', 'H-1B', 'F-1 OPT'])).toBe('H-1B')
+    expect(resolveAnswer('highestEducation', "Master's degree", 'select', ["Bachelor's degree", "Master's degree"])).toBe("Master's degree")
+  })
+
+  it('reads a current visa from the profile as its status, authorized and needing sponsorship (#136)', () => {
+    const visa = (visaStatus: string) => ({ visaStatus, workAuthorized: 'yes', needsSponsorship: 'yes' })
+    expect(factsFromProfile('H-1B visa (transfer needed)')).toEqual(visa('H-1B'))
+    expect(factsFromProfile('H1B')).toEqual(visa('H-1B'))
+    expect(factsFromProfile('F-1 OPT')).toEqual(visa('F-1 OPT'))
+    expect(factsFromProfile('OPT, will need H-1B sponsorship')).toEqual(visa('H-1B'))
+    expect(factsFromProfile('F-1 STEM OPT')).toEqual(visa('F-1 STEM OPT'))
+    expect(factsFromProfile('TN visa (Canadian)')).toEqual(visa('TN'))
+    expect(factsFromProfile('TN')).toEqual(visa('TN'))
+    expect(factsFromProfile('L-1B')).toEqual(visa('L-1'))
+    expect(factsFromProfile('E-3 (Australian)')).toEqual(visa('E-3'))
+    expect(factsFromProfile('O-1 visa')).toEqual(visa('O-1'))
+    expect(factsFromProfile('EAD card')).toEqual(visa('EAD'))
+    // Negated, pending, expired or vague: nothing.
+    expect(factsFromProfile('No H-1B')).toEqual({})
+    expect(factsFromProfile('H-1B pending')).toEqual({})
+    expect(factsFromProfile('OPT expired')).toEqual({})
+    expect(factsFromProfile('Green card in process (currently H-1B)')).toEqual({})
+    expect(factsFromProfile('Needs visa sponsorship')).toEqual({})
+    expect(factsFromProfile('F-1 CPT')).toEqual({})
   })
 
   it('keys a question by its text, kind group and options, not by element ids', () => {

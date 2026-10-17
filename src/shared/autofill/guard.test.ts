@@ -90,7 +90,12 @@ const VALUES: FillValues = {
   linkedin: 'https://www.linkedin.com/in/ada',
   github: '',
   website: '',
-  currentCompany: ''
+  currentCompany: '',
+  addressLine1: '',
+  city: '',
+  state: '',
+  postalCode: '',
+  country: ''
 }
 
 describe('Workday buttons Huntgry never presses', () => {
