@@ -59,6 +59,11 @@ describe('matchFact', () => {
     ['Years of experience', 'yearsExperience'],
     ['How many years of professional experience do you have?', 'yearsExperience'],
     ['Total yrs of experience', 'yearsExperience'],
+    ['Total years of experience', 'yearsExperience'],
+    ['Years of relevant work experience', 'yearsExperience'],
+    ['How many years of industry experience do you have?', 'yearsExperience'],
+    ['How many years have you worked?', 'yearsExperience'],
+    ['How many years of experience do you have in the industry?', 'yearsExperience'],
     // highestEducation
     ['What is your highest level of education?', 'highestEducation'],
     ['Education level', 'highestEducation'],
@@ -72,6 +77,18 @@ describe('matchFact', () => {
     ['Have any of your relatives ever been employed by Acme?', 'relativeEmployed']
   ])('%s → %s (#136)', (question, fact) => {
     expect(matchFact(question)).toBe(fact)
+  })
+
+  it('matches only overall experience: a question about a skill stays its own question (#136)', () => {
+    expect(matchFact('How many years of experience do you have with Python?')).toBeNull()
+    expect(matchFact('How many years of experience do you have with Java?')).toBeNull()
+    expect(matchFact('Years of experience in React')).toBeNull()
+    expect(matchFact('Years of experience using Kubernetes')).toBeNull()
+    expect(matchFact('Years of experience of people management')).toBeNull()
+    expect(matchFact('How many years of Python experience do you have?')).toBeNull()
+    expect(matchFact('Years of React experience')).toBeNull()
+    expect(matchFact('How many years have you worked with Go?')).toBeNull()
+    expect(matchFact('How many years?')).toBeNull()
   })
 
   it('leaves look-alikes of the new facts alone (#136)', () => {

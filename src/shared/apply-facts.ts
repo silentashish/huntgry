@@ -195,7 +195,15 @@ const RULES: Array<[FactKey, (q: string) => boolean]> = [
       /^(referral |candidate |application )?source$/.test(q)
   ],
   ['securityClearance', (q) => /\bsecurity clearance\b|\bactive (\w+ )?clearance\b/.test(q)],
-  ['yearsExperience', (q) => /\b(years|yrs) of (\w+ )?experience\b|\bhow many years\b/.test(q)],
+  // Overall experience only. "Years of Python experience" or "…experience with Java" names a subject: it stays its
+  // own question (answered from the profile and remembered by its own key), so one value never fills every skill.
+  [
+    'yearsExperience',
+    (q) =>
+      !EXPERIENCE_SUBJECT.test(q) &&
+      (YEARS_OF_OVERALL_EXPERIENCE.test(q) ||
+        /\bhow many years have you (been )?work(ed|ing)\b/.test(q))
+  ],
   [
     'highestEducation',
     (q) =>
@@ -210,6 +218,17 @@ const RULES: Array<[FactKey, (q: string) => boolean]> = [
   ['gender', (q) => /\b(gender|sex)\b/.test(q)],
   ['currentCity', (q) => /\b(current|which|what) city\b/.test(q)]
 ]
+
+/** "Years of experience", optionally qualified only by words that keep it about overall experience. */
+const YEARS_OF_OVERALL_EXPERIENCE =
+  /\b(years|yrs) of ((professional|work|working|total|relevant|overall|industry|full time|paid) ){0,2}experience\b/
+
+/**
+ * Experience or work about a named subject: "experience with / in / using / of Python", "worked with Java". The
+ * industry, the field or the workforce in general is still overall experience.
+ */
+const EXPERIENCE_SUBJECT =
+  /\b(experience|worked|working)\b (\w+ ){0,4}?(with|in|using|of|on)\b(?! (the |this |a |an |your )?(industry|field|workforce|total|general|overall)\b)/
 
 /**
  * Consent, certification, acknowledgement, arbitration, signature: never
