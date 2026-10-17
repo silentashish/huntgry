@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Alert, Button, Center, Code, Group, List, Menu, SegmentedControl, Spoiler, Stack, Tabs, Text } from '@mantine/core'
 import {
   IconChartDots3,
@@ -12,7 +12,8 @@ import {
 } from '@tabler/icons-react'
 import { isProfileEmpty, type MasterProfile, type ProfileDocument } from '@shared/master-profile'
 import { api, errorText } from '../api'
-import type { ProfileSection, ProfileView } from '../navigation'
+import { NavigationContext, type ProfileSection, type ProfileView } from '../navigation'
+import { ApplicationDetails } from './profile/ApplicationDetails'
 import { ConfirmModal } from './profile/ConfirmModal'
 import { fieldsLabel, profileChanges } from './profile/changes'
 import classes from './profile/editor.module.css'
@@ -88,6 +89,8 @@ export function ProfileEditor({
   const [pendingImport, setPendingImport] = useState<{ profile: MasterProfile; fileName: string; warnings: string[] } | null>(null)
   const [confirmLeave, setConfirmLeave] = useState(false)
   const [tab, setTab] = useState<string | null>(section ?? 'contact')
+  // Optional: the editor also renders outside the app shell (tests, onboarding).
+  const nav = useContext(NavigationContext)
 
   useEffect(() => {
     if (section) setTab(section)
@@ -342,6 +345,7 @@ export function ProfileEditor({
             {sectionTab('education', 'Education', counts.education)}
             {sectionTab('credentials', 'Certifications & publications', counts.credentials)}
             {sectionTab('notes', 'Gaps & notes', gaps, 'warning')}
+            {sectionTab('application', 'Application details')}
           </Tabs.List>
           <Tabs.Panel value="contact">
             <ContactSection profile={draft} onChange={setDraft} />
@@ -363,6 +367,10 @@ export function ProfileEditor({
           </Tabs.Panel>
           <Tabs.Panel value="notes">
             <NotesSection profile={draft} onChange={setDraft} />
+          </Tabs.Panel>
+          {/* Not part of master-profile.md (#136): saved at once under userData, outside the save bar. */}
+          <Tabs.Panel value="application">
+            <ApplicationDetails onOpenSettings={nav ? () => nav.navigate('settings', { section: 'saved-answers' }) : undefined} />
           </Tabs.Panel>
         </Tabs>
       ) : (

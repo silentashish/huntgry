@@ -4,8 +4,12 @@ import { createRoot, type Root } from 'react-dom/client'
 import { MantineProvider } from '@mantine/core'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SavedAnswers } from '@shared/apply-types'
+import { NavigationContext, type Navigation } from '../../navigation'
 
-/** Settings → Saved application answers (#71): sensitive values masked until shown; Forget / Forget all. */
+/**
+ * Settings → Saved application answers (#71): sensitive values masked until shown; facts edited in place
+ * (#136); Forget / Forget all; a link to Profile → Application details.
+ */
 
 const saved: SavedAnswers = {
   facts: [
@@ -18,6 +22,10 @@ const empty: SavedAnswers = { facts: [], questions: [] }
 const apply = {
   answers: vi.fn(async () => saved),
   forgetAnswer: vi.fn(async () => ({ ...saved, facts: saved.facts.slice(0, 1) })),
+  setFact: vi.fn(async (_fact: string, value: string) => ({
+    ...saved,
+    facts: [{ ...saved.facts[0], value }, ...saved.facts.slice(1)]
+  })),
   forgetAllAnswers: vi.fn(async () => empty),
   pickSetting: vi.fn(async () => true),
   setPickSetting: vi.fn(async (on: boolean) => on)
@@ -46,6 +54,9 @@ afterEach(async () => {
   container.remove()
 })
 
+const navigate = vi.fn()
+const nav: Navigation = { location: { page: 'settings', params: undefined }, navigate, setLeaveGuard: () => undefined }
+
 const button = (label: string) => {
   const found = [...container.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.getAttribute('aria-label') === label || b.textContent === label)
   if (!found) throw new Error(`no button "${label}"`)
@@ -58,20 +69,35 @@ describe('SavedAnswersCard', () => {
     await act(async () =>
       root.render(
         <MantineProvider>
-          <SavedAnswersCard />
+          <NavigationContext.Provider value={nav}>
+            <SavedAnswersCard />
+          </NavigationContext.Provider>
         </MantineProvider>
       )
     )
     expect(container.textContent).toContain('Needs visa sponsorship')
-    expect(container.textContent).toContain('No')
+    const sponsorship = container.querySelector<HTMLSelectElement>('select[aria-label="Needs visa sponsorship"]')!
+    expect(sponsorship.value).toBe('no')
     expect(container.textContent).toContain('The mission.')
-    expect(container.textContent).not.toContain('Female')
+    expect(container.querySelector('input[aria-label="Gender"]')).toBeNull()
     await act(async () => button('Show Gender').click())
-    expect(container.textContent).toContain('Female')
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Gender"]')!.value).toBe('Female')
+
+    // A fact is edited in place, through the same store as the Apply panel.
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(sponsorship, 'yes')
+      sponsorship.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(apply.setFact).toHaveBeenCalledWith('needsSponsorship', 'yes')
+    expect(sponsorship.value).toBe('yes')
+
+    // Every one-time answer is set up front in Profile.
+    await act(async () => button('Edit in Profile → Application details').click())
+    expect(navigate).toHaveBeenCalledWith('profile', { view: 'editor', section: 'application' })
 
     await act(async () => button('Forget Gender').click())
     expect(apply.forgetAnswer).toHaveBeenCalledWith({ fact: 'gender' })
-    expect(container.textContent).not.toContain('Female')
+    expect(container.querySelector('input[aria-label="Gender"]')).toBeNull()
 
     // "Pick dropdown answers automatically": on by default, saved when turned off.
     const pick = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((i) =>

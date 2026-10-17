@@ -69,7 +69,16 @@ export type SettingsSection =
   | 'appearance'
 
 /** Tabs of the master profile editor, used to deep-link into a section. */
-export type ProfileSection = 'contact' | 'summary' | 'experience' | 'projects' | 'education' | 'credentials' | 'notes'
+export type ProfileSection =
+  | 'contact'
+  | 'summary'
+  | 'experience'
+  | 'projects'
+  | 'education'
+  | 'credentials'
+  | 'notes'
+  /** The one-time application answers (#136), stored outside master-profile.md. */
+  | 'application'
 
 /** Where the app is: a page and the parameters it was opened with. */
 export type Location = { [P in Page]: { page: P; params: PageParams[P] } }[Page]
