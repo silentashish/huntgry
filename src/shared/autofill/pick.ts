@@ -2,6 +2,7 @@ import { normalizeText } from '../apply-facts'
 import { radioGroup, radioLabel, typeText } from './dom'
 import { waitUntil } from './ready'
 import { asHuntgry } from './user-edits'
+import { ADD_NAME, NAV_AREAS } from './workday-sections'
 
 /**
  * Picking an option in a widget that only takes a click (#71, owner decision
@@ -40,6 +41,15 @@ import { asHuntgry } from './user-edits'
  * a widget of their own: the search text is written with the native setter
  * and an `input` event (dom.ts `typeText`), then the widget's own list is
  * awaited, the matching suggestion pressed like an option and read back.
+ *
+ * Two bounded presses outside a widget's options (#136, Workday My
+ * Experience), each with `refusal`'s checks and inside the safety net:
+ * - `pressAdd`: a section's own Add / Add Another button (`ADD_NAME`), inside
+ *   that section, never in the page's navigation footer, and only while the
+ *   page stays on its step;
+ * - `pressToggle`: exactly two kinds of check box, unchecked ones only: Work
+ *   Experience's "I currently work here" and Self Identify's disability
+ *   status boxes. Never a consent, terms or any other check box.
  */
 
 export type PickWidget =
@@ -302,13 +312,13 @@ const NEVER_ACTIVATED = new Set(['submit', 'image', 'reset', 'button', 'file', '
  * ancestor the events bubble through (a click inside a button activates the
  * button, a click on a label activates its control), and labels' controls.
  */
-export function refusal(target: Element, widget: PickWidget, listboxes: readonly Element[] = []): string | null {
+export function refusal(target: Element, widget: PickWidget, listboxes: readonly Element[] = [], toggle?: Element): string | null {
   if (!target.isConnected) return 'something no longer on the page'
   const within = (node: Element) => widget.scope.contains(node) || listboxes.some((box) => box.contains(node))
   if (!within(target)) return 'outside the field’s widget'
   let inWidget = true
   for (let el: Element | null = target; el && tag(el) !== 'body'; el = el.parentElement) {
-    const why = inWidget ? elementRefusal(el, el === target, widget, within) : enclosingRefusal(el, within)
+    const why = inWidget ? elementRefusal(el, el === target, widget, within, toggle) : enclosingRefusal(el, within)
     if (why) return why
     if (el === widget.scope || listboxes.includes(el)) inWidget = false
   }
@@ -316,14 +326,15 @@ export function refusal(target: Element, widget: PickWidget, listboxes: readonly
 }
 
 /** An element on the path inside the widget (the target, its option, button or label wrappers). */
-function elementRefusal(el: Element, isTarget: boolean, widget: PickWidget, within: (node: Element) => boolean): string | null {
+function elementRefusal(el: Element, isTarget: boolean, widget: PickWidget, within: (node: Element) => boolean, toggle?: Element): string | null {
   const t = tag(el)
   if (t === 'a' && el.hasAttribute('href')) return 'a link'
   if ((el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true') return 'something disabled'
   const type = (el.getAttribute('type') ?? '').toLowerCase()
   if (type === 'submit' || type === 'image' || type === 'reset') return 'a submit control'
   if (t === 'button' && (el as HTMLButtonElement).type === 'submit' && (el as HTMLButtonElement).form) return 'a button that would submit the form'
-  if (t === 'input' && NEVER_ACTIVATED.has((el as HTMLInputElement).type)) return 'a checkbox or button input'
+  // `toggle`: the one check box `pressToggle` allowed (its own checks ran first); never any other.
+  if (t === 'input' && NEVER_ACTIVATED.has((el as HTMLInputElement).type) && !(el === toggle && isTarget)) return 'a checkbox or button input'
   if (t === 'label') {
     const why = labelRefusal(el as HTMLLabelElement, within)
     if (why) return why
@@ -372,7 +383,8 @@ function press(
   target: HTMLElement,
   widget: PickWidget,
   listboxes: () => readonly Element[] = () => [],
-  abort: () => string | null = () => null
+  abort: () => string | null = () => null,
+  { extra = () => null, toggle }: { extra?: () => string | null; toggle?: Element } = {}
 ): void {
   const view = target.ownerDocument.defaultView
   if (!view) throw new Error('The page has no window.')
@@ -391,7 +403,7 @@ function press(
       // The safety net's latch (a blocked event, a page or step change) stops the press before any further event.
       const stopped = abort()
       if (stopped) throw new Error(`Huntgry stopped: ${stopped}.`)
-      const refused = refusal(target, widget, listboxes())
+      const refused = refusal(target, widget, listboxes(), toggle) ?? extra()
       if (refused) throw new Error(`Huntgry does not press ${refused}.`)
       target.dispatchEvent(make())
     }
@@ -429,6 +441,13 @@ export function pickedValue(widget: PickWidget): string {
 
 const same = (a: string, b: string) => normalizeText(a) === normalizeText(b)
 
+/** The pills of a Workday multiselect prompt (#136: Skills), as they name their choice. */
+export function pillsOf(widget: PickWidget): string[] {
+  return Array.from(widget.scope.querySelectorAll('[data-automation-id="selectedItem"]')).map((pill) =>
+    (pill.getAttribute('data-automation-label') ?? pill.getAttribute('title') ?? text(pill)).trim()
+  )
+}
+
 /** Closes a menu left open without a key: the control loses focus (react-select and Workday close on blur). */
 function closeMenu(widget: PickWidget): void {
   const doc = widget.scope.ownerDocument
@@ -445,6 +464,13 @@ export interface PickOptions {
   pageState?: () => string
   /** Typeaheads: the text to search for (the city, the country…). */
   search?: string
+  /**
+   * A multiselect typeahead (#136: Workday's Skills): other pills do not count as an answer; the pick is done once
+   * a pill shows the chosen suggestion.
+   */
+  multi?: boolean
+  /** How long a Workday search box waits for suggestions before its Enter (default 600 ms). */
+  enterAfterMs?: number
 }
 
 /** Events a press could turn into an action elsewhere: blocked outside the widget while a pick runs. */
@@ -478,7 +504,8 @@ const defaultPageState = (doc: Document) => () =>
 async function withSafetyNet(
   widget: PickWidget,
   pageState: () => string,
-  run: (abort: () => string | null) => Promise<PickResult>
+  run: (abort: () => string | null) => Promise<PickResult>,
+  ownControls?: readonly Element[]
 ): Promise<PickResult> {
   const doc = widget.scope.ownerDocument
   const view = doc.defaultView
@@ -492,7 +519,8 @@ async function withSafetyNet(
   }
   // Controls the pick itself may change: the radios of the group being answered, Ashby's yes/no mirror checkbox.
   const own = new Set<Element>(
-    widget.type === 'radios' ? widget.options : widget.type === 'buttons' ? Array.from(widget.scope.querySelectorAll('input[type="checkbox"]')) : []
+    ownControls ??
+      (widget.type === 'radios' ? widget.options : widget.type === 'buttons' ? Array.from(widget.scope.querySelectorAll('input[type="checkbox"]')) : [])
   )
   // Every other checkbox and radio of the page, inside the widget or not, is snapshotted and put back if it changes.
   const toggles = Array.from(doc.querySelectorAll<HTMLInputElement>('input[type="checkbox"], input[type="radio"]')).filter((c) => !own.has(c))
@@ -673,13 +701,15 @@ const ENTER_AFTER_MS = 600
 async function typeaheadInside(
   widget: Extract<PickWidget, { type: 'typeahead' }>,
   choose: (options: string[]) => string | null,
-  { timeoutMs = 1500, touched = () => false, search = '' }: PickOptions,
+  { timeoutMs = 1500, touched = () => false, search = '', multi = false, enterAfterMs = ENTER_AFTER_MS }: PickOptions,
   abort: () => string | null = () => null
 ): Promise<PickResult> {
   const doc = widget.scope.ownerDocument
   const input = widget.input
   const keep = (): PickResult => ({ status: 'kept', value: pickedValue(widget) })
-  const current = pickedValue(widget)
+  // A multiselect's other pills are other answers, not this one.
+  const current = multi ? '' : pickedValue(widget)
+  const shows = (choice: string) => (multi ? pillsOf(widget).some((p) => same(p, choice)) : same(pickedValue(widget), choice))
   let typed = false
   /** Takes back the search text Huntgry typed (never text the person typed meanwhile). */
   const untype = () => {
@@ -706,11 +736,12 @@ async function typeaheadInside(
     const look = () => {
       options = typeaheadOptions(typeaheadLists(widget))
       texts = options.map(optionText)
-      chosen = choose(texts)
-      return chosen !== null
+      // No suggestions yet is no answer (a remembered answer's chooser accepts any text when it sees no options).
+      chosen = texts.length ? choose(texts) : null
+      return chosen !== null && texts.includes(chosen)
     }
     const workday = isWorkdaySearchBox(input)
-    let found = await waitUntil(doc, look, workday ? Math.min(ENTER_AFTER_MS, timeoutMs) : timeoutMs)
+    let found = await waitUntil(doc, look, workday ? Math.min(enterAfterMs, timeoutMs) : timeoutMs)
     if (!found && workday && !abort() && !touched()) {
       workdaySearchEnter(input)
       found = await waitUntil(doc, look, timeoutMs)
@@ -735,12 +766,99 @@ async function typeaheadInside(
     }
     const pickText: string = chosen
     press(options[texts.indexOf(pickText)], widget, () => typeaheadLists(widget), abort)
-    await waitUntil(doc, () => same(pickedValue(widget), pickText), timeoutMs)
-    if (same(pickedValue(widget), pickText)) return { status: 'filled', value: pickText }
+    await waitUntil(doc, () => shows(pickText), timeoutMs)
+    if (shows(pickText)) return { status: 'filled', value: pickText }
     untype()
     return { status: 'failed', reason: 'The site did not take the pick.' }
   } catch (err) {
     untype()
     return { status: 'failed', reason: err instanceof Error ? err.message : String(err) }
   }
+}
+
+export interface PressOptions {
+  /** The page and step the press happens on; a change stops it (safety net). */
+  pageState: () => string
+  /** How long the page may take to show the result. */
+  timeoutMs?: number
+}
+
+/** Why `button` must not be pressed as `section`'s Add button, or null when it may be (#136). */
+export function addRefusal(button: Element, section: Element): string | null {
+  if (!button.isConnected) return 'something no longer on the page'
+  if (button === section || !section.contains(button)) return 'a button outside its section'
+  if (button.closest(NAV_AREAS)) return 'a button of the page’s navigation'
+  if (tag(button) !== 'button' && button.getAttribute('role') !== 'button') return 'something that is not a button'
+  const label = (button.getAttribute('aria-label') ?? '').trim()
+  const shown = text(button)
+  if (!label && !shown) return 'an unnamed button'
+  if ((label && !ADD_NAME.test(label)) || (shown && !ADD_NAME.test(shown))) return 'a button that is not named Add'
+  if (/delete|remove/i.test(button.getAttribute('data-automation-id') ?? '')) return 'a delete button'
+  return null
+}
+
+/**
+ * Presses a section's Add / Add Another button (#136, Workday My Experience) and waits until `grew()` says a new
+ * block rendered. Refused (`addRefusal`, checked again before every event, and `refusal`): anything not named like
+ * an Add button, outside the section, in the page's navigation footer, a link, a submit control. The press runs in
+ * the safety net (a submit, a click outside the section or a step change stops it); nothing is ever pressed in a
+ * block (its Delete button included).
+ */
+export function pressAdd(button: HTMLElement, section: Element, grew: () => boolean, { pageState, timeoutMs = 1500 }: PressOptions): Promise<PickResult> {
+  const why = addRefusal(button, section)
+  if (why) return Promise.resolve({ status: 'failed', reason: `Huntgry does not press ${why}.` })
+  const widget: PickWidget = { type: 'buttons', scope: section, options: [button] }
+  return withSafetyNet(
+    widget,
+    pageState,
+    async (abort) => {
+      press(button, widget, () => [], abort, { extra: () => addRefusal(button, section) })
+      await waitUntil(section.ownerDocument, grew, timeoutMs)
+      return grew() ? { status: 'filled', value: 'added' } : { status: 'failed', reason: 'The site did not add a block.' }
+    },
+    []
+  )
+}
+
+/** The only check boxes Huntgry ever ticks (#136): "I currently work here", and Self Identify's disability boxes. */
+const TOGGLES = '[data-automation-id="formField-currentlyWorkHere"], [data-automation-id="formField-disabilityStatus"]'
+
+/** The allowed field a check box belongs to, or null. */
+function toggleField(input: Element): Element | null {
+  return input.closest(TOGGLES) ?? (/--currentlyWorkHere$/.test(input.id) ? input.parentElement : null)
+}
+
+/** Why `input` must not be ticked, or null when it may be (#136). */
+export function toggleRefusal(input: Element): string | null {
+  if (!input.isConnected) return 'something no longer on the page'
+  if (tag(input) !== 'input' || (input as HTMLInputElement).type !== 'checkbox') return 'something that is not a check box'
+  if (!toggleField(input)) return 'a check box other than “I currently work here” or a disability status'
+  if ((input as HTMLInputElement).checked) return 'a check box that is already ticked'
+  if ((input as HTMLInputElement).disabled) return 'something disabled'
+  if (input.closest(NAV_AREAS) || input.closest('form')) return 'a check box in a form or the page’s navigation'
+  const label = `${radioLabel(input as HTMLInputElement)} ${input.getAttribute('aria-label') ?? ''}`
+  if (CONSENT_OPTION.test(label) || FLOW_WORDS.test(label)) return 'a check box worded like consent'
+  return null
+}
+
+/**
+ * Ticks one allowed check box (#136): "I currently work here" for a current job, or the disability status box the
+ * stored fact names. Only an unchecked one, only those (`toggleRefusal`, checked again before every event); the
+ * press runs in the safety net, which puts back any other check box that changes.
+ */
+export function pressToggle(input: HTMLInputElement, { pageState, timeoutMs = 1000 }: PressOptions): Promise<PickResult> {
+  const why = toggleRefusal(input)
+  if (why) return Promise.resolve({ status: 'failed', reason: `Huntgry does not press ${why}.` })
+  const scope = toggleField(input) ?? input
+  const widget: PickWidget = { type: 'buttons', scope, options: [input] }
+  return withSafetyNet(
+    widget,
+    pageState,
+    async (abort) => {
+      press(input, widget, () => [], abort, { toggle: input, extra: () => (input.checked ? null : toggleRefusal(input)) })
+      await waitUntil(input.ownerDocument, () => input.checked, timeoutMs)
+      return input.checked ? { status: 'filled', value: 'ticked' } : { status: 'failed', reason: 'The site did not tick it.' }
+    },
+    [input]
+  )
 }

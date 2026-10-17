@@ -1,6 +1,6 @@
 import { ipcRenderer } from 'electron'
 import type { PageAnswers } from '@shared/apply-facts'
-import type { FillValues } from '@shared/apply-types'
+import type { FillProfile, FillValues } from '@shared/apply-types'
 import { AUTOFILL_CHANNELS } from '@shared/autofill-channels'
 import { detectConfirmation, pageStep } from '@shared/autofill/engine'
 import { PageSession, watchForForm } from '@shared/autofill/session'
@@ -25,6 +25,8 @@ import { PageSession, watchForForm } from '@shared/autofill/session'
 interface Request {
   requestId: string
   values?: FillValues
+  /** The master profile's repeatable sections (#136: experience, education, skills, websites). */
+  profile?: FillProfile
   /** Remembered application answers (#71), checked like everything else main sends. */
   answers?: PageAnswers
   /** Pick remembered answers in click-only widgets (the Settings switch). */
@@ -121,6 +123,14 @@ function answersOf(input: unknown): PageAnswers | undefined {
   return { facts, questions, aiAnswers: (input as Partial<PageAnswers>).aiAnswers === true }
 }
 
+/** Main's profile sections, or none when the shape is off (a bad message must not break a fill). */
+function profileOf(input: unknown): FillProfile | undefined {
+  if (typeof input !== 'object' || input === null) return undefined
+  const { experience, education, skills, websites } = input as Partial<FillProfile>
+  if (![experience, education, skills, websites].every(Array.isArray)) return undefined
+  return input as FillProfile
+}
+
 function reply(requestId: string, run: () => Promise<unknown>): void {
   run().then(
     (result) => ipcRenderer.send(AUTOFILL_CHANNELS.result, { requestId, ok: true, result }),
@@ -144,7 +154,7 @@ ipcRenderer.on(AUTOFILL_CHANNELS.detect, (_e, req: Request) => {
 ipcRenderer.on(AUTOFILL_CHANNELS.fill, (_e, req: Request) => {
   reply(req.requestId, async () => {
     if (!req.values) throw new Error('No values to fill.')
-    return page.fill(req.values, req.text, answersOf(req.answers), req.pick === true)
+    return page.fill(req.values, req.text, answersOf(req.answers), req.pick === true, profileOf(req.profile))
   })
 })
 

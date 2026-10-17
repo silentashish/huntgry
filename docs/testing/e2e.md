@@ -255,6 +255,17 @@ tab). `e2e/tests/apply-generated.spec.ts` covers Tailor → Apply on Greenhouse 
 Dashboard and drawer entry points, the redirect + late embed, and both link cases; `clickLinkInTab` is how the test (never the
 app) presses a site's own link, and `expectInTab` polls an expression in a tab.
 
+**The mock Workday** (`/workday/`, `scripts/mock-ats/workday.mjs`) is a client-rendered flow at one URL:
+posting → choice → sign-in wall → My Information → My Experience → Application Questions → Voluntary
+Disclosures → Self Identify → Review (its Submit is disabled). Since #136 My Experience's Add / Add Another
+buttons append Work Experience, Education and Websites blocks (`workExperience-N--jobTitle`, month / year
+spinbuttons, an "I currently work here" box that hides the end date, a school prompt and a degree dropdown),
+the Skills prompt searches ~30 skills on Enter and adds a pill per pick, and on Autofill with Resume the
+parser pre-creates one wrong Work Experience block ("Acme Corp", "Engineer", 02/2021).
+`window.huntgryFooterPresses` counts presses of the footer (Save and Continue, Back), so
+`apply-workday.spec.ts` proves every one was the test's own. Saved answers are seeded by writing
+`<userData>/apply-answers/<sha256(workspace)[0..32]>/answers.json` before Apply (`seedAnswers`).
+
 **How the app is pointed at it.** The harness already sets `HUNTGRY_ALLOW_LOCAL_URLS=1`, which
 the in-app browser session and (since #49) the hidden posting loader honour for loopback
 addresses only. Posting URLs inside the `mocks` workspace are placeholders

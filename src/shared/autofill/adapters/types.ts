@@ -55,6 +55,27 @@ export interface Adapter {
    * never matched to contact values or uploads.
    */
   answerRoots?(doc: Document): Element[]
+  /**
+   * Selectors of controls (or their containers) that are never planned,
+   * reported or touched, whatever they ask (#136: Workday's Self Identify
+   * signature block, terms and agreements).
+   */
+  excluded?: readonly string[]
+  /**
+   * Whether the current step is answer-only (#136: Workday's Application
+   * Questions, Voluntary Disclosures, Self Identify): its controls are only
+   * answered from facts, remembered answers and AI answers; no contact
+   * value, no upload, no profile dropdown.
+   */
+  answerOnly?(doc: Document): boolean
+  /**
+   * Containers of the profile's repeatable sections and other controls that
+   * `sections.ts` fills (#136: Workday's Work Experience, Education,
+   * Websites, Skills, date questions, disability check boxes). The engine
+   * leaves them out of its own plan; `fillSections` fills them from the
+   * profile after the synchronous fill.
+   */
+  sectionRoots?(doc: Document): Element[]
 
   /**
    * Readiness: whether the form is rendered and the page's framework has

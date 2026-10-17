@@ -70,6 +70,11 @@ Choices that were the owner's to make (the owner was asleep). In each case the s
 3. **Only My Information and the resume steps are filled.** Application Questions, Voluntary Disclosures, Self
    Identify and Review are `other` and never filled, even where a field looks like a contact field. They hold legal
    and EEO answers and the final Submit.
+   **Reversed by the owner in #136:** every step under the progress bar but Review is now filled. Application
+   Questions, Voluntary Disclosures and Self Identify are answer-only (saved facts, remembered and AI answers;
+   never a contact value or an upload); the Self Identify signature block and the terms check boxes are never
+   touched, and Review stays the user's. My Experience also gets the profile's work experience, education,
+   websites and skills (`src/shared/autofill/sections.ts`).
 4. **Dropdowns stay the user's.** That covers country, state, phone device type, the country phone code picker and
    "How did you hear about us". Workday's dropdowns are buttons with listboxes. Choosing an option means clicking
    it, which Huntgry never does.

@@ -230,6 +230,8 @@ function ReportRow({ field: f, sessionId, filling }: { field: FieldReport; sessi
           {f.reason}
         </p>
       )}
+      {/* A value Huntgry wrote over the site's own guess (#136: "Replaced the site's parsed value."). */}
+      {f.outcome === 'filled' && f.reason && f.suggestedBy !== 'draft' && !isAiAnswer(f) && <p className={classes.rowText}>{f.reason}</p>}
       {note && (
         <p className={classes.rowText} data-lines="3">
           {note}

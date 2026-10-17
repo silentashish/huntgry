@@ -5,10 +5,11 @@ import { join } from 'node:path'
 import { JSDOM } from 'jsdom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { factsFromProfile, type PageAnswers } from '@shared/apply-facts'
-import type { ApplySession, FillReport, FillValues } from '@shared/apply-types'
+import type { ApplySession, FillProfile, FillReport, FillValues } from '@shared/apply-types'
 import { AUTOFILL_CHANNELS, UPLOAD_ATTR } from '@shared/autofill-channels'
-import { detectConfirmation, fillPage, pickAnswers, scanPage, uploadStateOf, verifyFill, type UploadKey } from '@shared/autofill/engine'
+import { detectConfirmation, fillPage, fillSections, pickAnswers, scanPage, uploadStateOf, verifyFill, type UploadKey } from '@shared/autofill/engine'
 import { editsOf } from '@shared/autofill/session'
+import { workdayWidgets } from '../../../scripts/mock-ats/workday.mjs'
 import { watchUserEdits } from '@shared/autofill/user-edits'
 import { updateReview, type RecordedReview } from '../review/authority'
 import { contentRevisionOf } from '../review/service'
@@ -66,6 +67,8 @@ class FakeTab implements ApplyPage {
   answersSeen: Array<PageAnswers | undefined> = []
   /** The pick switch each fill request carried (#71). */
   picksSeen: Array<boolean | undefined> = []
+  /** The profile sections each fill request carried (#136). */
+  profilesSeen: Array<FillProfile | undefined> = []
   /** When set, fill replies wait here until `releaseFills()` (a slow page). */
   heldFills: Array<() => void> | null = null
   /** When set, detect replies (scans of the document that got the request) wait here until `releaseDetects()`. */
@@ -85,8 +88,18 @@ class FakeTab implements ApplyPage {
     for (const reply of held) reply()
   }
 
+  /** Runs the mock Workday's dropdown, prompt and section widgets (#136) in every document of this tab. */
+  widgets = false
+
   constructor(html: string, url: string) {
     this.dom = new JSDOM(html, { url })
+  }
+
+  private make(html: string, url: string): JSDOM {
+    if (!this.widgets) return new JSDOM(html, { url })
+    const dom = new JSDOM(html, { url, runScripts: 'outside-only' })
+    dom.window.eval(`(${workdayWidgets.toString()})()`)
+    return dom
   }
 
   load(html: string, url: string) {
@@ -96,7 +109,7 @@ class FakeTab implements ApplyPage {
 
   /** A main-frame navigation commits: the new document is active, its load has not finished yet. */
   commit(html: string, url: string) {
-    this.dom = new JSDOM(html, { url })
+    this.dom = this.make(html, url)
     for (const l of this.navigations) l(url)
   }
 
@@ -105,11 +118,13 @@ class FakeTab implements ApplyPage {
   }
 
   /** The preload's fill: fill, then the verify pass (without its delays). A marker-only pass keeps the text report. */
-  private async fill(values: FillValues, text?: boolean, answers?: PageAnswers, pick?: boolean): Promise<FillReport> {
+  private async fill(values: FillValues, text?: boolean, answers?: PageAnswers, pick?: boolean, profile?: FillProfile): Promise<FillReport> {
     const doc = this.dom.window.document
     this.answersSeen.push(answers)
     this.picksSeen.push(pick)
-    const filled = fillPage(doc, values, { text, answers, pick })
+    this.profilesSeen.push(profile)
+    const filled = fillPage(doc, values, { text, answers, pick, profile })
+    await fillSections(filled)
     await pickAnswers(filled)
     const report = await verifyFill(doc, values, filled, { settleMs: 0 })
     if (text !== false) this.lastReport = report
@@ -127,13 +142,13 @@ class FakeTab implements ApplyPage {
 
   /** An in-page navigation (pushState): the DOM changes, main hears `did-navigate-in-page`, no step report yet. */
   navigateInPage(html: string, url = this.dom.window.location.href) {
-    this.dom = new JSDOM(html, { url })
+    this.dom = this.make(html, url)
     for (const l of this.loads) l(false)
   }
 
   /** A single-page app moving to another step in place (same URL), as the preload's step watcher reports it. */
   step(html: string) {
-    this.dom = new JSDOM(html, { url: this.dom.window.location.href })
+    this.dom = this.make(html, this.dom.window.location.href)
     this.reply(AUTOFILL_CHANNELS.step, { url: this.dom.window.location.href })
   }
 
@@ -153,9 +168,10 @@ class FakeTab implements ApplyPage {
 
   send(channel: string, payload: unknown): void {
     this.sent.push(channel)
-    const { requestId, values, text, key, fileName, timeoutMs, answers, pick } = payload as {
+    const { requestId, values, text, key, fileName, timeoutMs, answers, pick, profile } = payload as {
       requestId: string
       values?: FillValues
+      profile?: FillProfile
       answers?: PageAnswers
       pick?: boolean
       text?: boolean
@@ -166,7 +182,7 @@ class FakeTab implements ApplyPage {
     const doc = this.dom.window.document
     if (channel === AUTOFILL_CHANNELS.fill && this.heldFills) {
       // The page did the fill already; only its answer is late.
-      const result = this.fill(values as FillValues, text, answers, pick)
+      const result = this.fill(values as FillValues, text, answers, pick, profile)
       this.heldFills.push(() => void result.then((r) => this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result: r })))
       return
     }
@@ -183,7 +199,7 @@ class FakeTab implements ApplyPage {
       await Promise.resolve()
       let result: unknown
       if (channel === AUTOFILL_CHANNELS.detect) result = scanPage(doc)
-      else if (channel === AUTOFILL_CHANNELS.fill) result = await this.fill(values as FillValues, text, answers, pick)
+      else if (channel === AUTOFILL_CHANNELS.fill) result = await this.fill(values as FillValues, text, answers, pick, profile)
       else if (channel === AUTOFILL_CHANNELS.uploadState)
         result =
           this.uploadAnswer === 'engine'
@@ -1021,11 +1037,19 @@ describe('ApplyService on Workday', () => {
     await new Promise((r) => setTimeout(r, 50))
     expect(tab.sent.filter((c) => c === AUTOFILL_CHANNELS.fill)).toHaveLength(fills)
 
-    // Application Questions is the user's.
+    // Application Questions is answerable (#136): only questions, never a contact value or an upload.
     tab.step(fixture('workday-application-questions.html'))
+    await vi.waitFor(() => expect(service.current()!.step?.title).toBe('Application Questions'))
+    await until(service, 'filled')
+    expect(service.current()!.step).toEqual({ kind: 'form', title: 'Application Questions' })
+    expect(service.current()!.report!.fields.every((f) => f.key === null)).toBe(true)
+    expect(dbg.log.filter((l) => l === 'DOM.setFileInputFiles')).toHaveLength(1)
+
+    // Review is the user's: nothing filled.
+    tab.step(fixture('workday-review.html'))
     await until(service, 'waiting')
-    expect(service.current()).toMatchObject({ report: null, step: { kind: 'other', title: 'Application Questions' } })
-    expect(service.current()!.message).toMatch(/Nothing for Huntgry on this step \("Application Questions"\)/)
+    expect(service.current()).toMatchObject({ report: null, step: { kind: 'other', title: 'Review' } })
+    expect(service.current()!.message).toMatch(/Nothing for Huntgry on this step \("Review"\)/)
   })
 
   it('scans a reported step again when its detect gets no answer', async () => {
@@ -1873,5 +1897,83 @@ describe('application answers (#71)', () => {
       expect(checked(tab)).toBe('n')
       expect(line(service, LABEL)).toMatchObject({ outcome: 'filled', value: 'No' })
     })
+  })
+
+  describe('Workday answer-only steps (#136)', () => {
+    const JOB = 'https://acme.wd1.myworkdayjobs.com/en-US/AcmeCareers/job/Remote-USA/Software-Engineer_JR-1001'
+    const WD = 'software-engineer/acme/wd-2'
+    const PROFILE: FillProfile = {
+      experience: [{ company: 'Acme Corp', role: 'Senior Backend Engineer', location: 'Remote', start: { month: 1, year: 2022 }, end: null, current: true, description: 'Billing.' }],
+      education: [],
+      skills: ['Go'],
+      websites: []
+    }
+
+    it('fills My Experience from the profile, then Application Questions (facts and the model answer), Voluntary Disclosures and Self Identify; never Review', async () => {
+      const map: AnswersDeps['map'] = async (_w, _id, questions) =>
+        questions.map((q) => (/why do you want/i.test(q.question) ? { id: q.id, fact: null, answer: 'Fake model answer' } : { id: q.id, fact: null }))
+      const { deps } = answers({ needsSponsorship: 'no', gender: 'decline', veteranStatus: 'no', raceEthnicity: 'decline', disabilityStatus: 'decline' }, map)
+      await application({ 'job-description.md': `Engineer\n${JOB}\n`, 'resume.pdf': '%PDF' }, WD)
+      const tab = new FakeTab('', `${JOB}/apply/applyManually`)
+      tab.widgets = true
+      tab.uploadAnswer = 'attached'
+      const { service } = setup(tab, undefined, {
+        answers: deps,
+        profile: async () => PROFILE,
+        pickWidgets: async () => true,
+        aiAnswers: async () => true,
+        requestTimeoutMs: 500,
+        workdayFillTimeoutMs: 20_000
+      })
+      await service.start(WD)
+      tab.load(fixture('workday-signin.html'), `${JOB}/apply/applyManually`)
+      await vi.waitFor(() => expect(service.current()!.step?.kind).toBe('account-wall'))
+      const doc = () => tab.dom.window.document
+      const text = (selector: string) => doc().querySelector(selector)?.textContent
+      const wait = { timeout: 15_000, interval: 20 }
+
+      // My Experience: a block added and filled from the profile, the skill picked.
+      tab.step(fixture('workday-my-experience.html'))
+      await vi.waitFor(() => expect(service.current()!.step?.title).toBe('My Experience'))
+      await vi.waitFor(() => expect(service.current()?.status).toBe('filled'), wait)
+      expect(tab.profilesSeen.at(-1)).toEqual(PROFILE)
+      expect((doc().querySelector('#workExperience-1--jobTitle') as HTMLInputElement).value).toBe('Senior Backend Engineer')
+      expect(service.current()!.report!.fields.find((f) => f.label === 'Work experience 1 · Job title')).toMatchObject({ outcome: 'filled' })
+      expect(service.current()!.report!.fields.find((f) => f.label.startsWith('Skills:'))).toMatchObject({ label: 'Skills: 1 added', outcome: 'filled' })
+
+      // Application Questions: the sponsorship fact picked; the model's answer written after its call.
+      tab.step(fixture('workday-application-questions.html'))
+      await vi.waitFor(() => expect(service.current()!.step?.title).toBe('Application Questions'))
+      await vi.waitFor(() => expect(service.current()?.status).toBe('filled'), wait)
+      expect(text('#primaryQuestionnaire--sponsorship')).toBe('No')
+      await vi.waitFor(
+        () => expect((doc().querySelector('#primaryQuestionnaire--motivation') as HTMLTextAreaElement).value).toBe('Fake model answer'),
+        wait
+      )
+      const motivation = service.current()!.report!.fields.find((f) => f.label === 'Why do you want to work at Acme?')
+      expect(motivation).toMatchObject({ outcome: 'filled', suggestedBy: 'model' })
+
+      // Voluntary Disclosures: picked from the stored facts; the terms box untouched.
+      tab.step(fixture('workday-voluntary-disclosures.html'))
+      await vi.waitFor(() => expect(service.current()!.step?.title).toBe('Voluntary Disclosures'))
+      await vi.waitFor(() => expect(service.current()?.status).toBe('filled'), wait)
+      expect(text('#personalInfoUS--gender')).toBe('I do not wish to self-identify')
+      expect(text('#personalInfoUS--veteranStatus')).toBe('I am not a protected veteran')
+      expect((doc().querySelector('#termsAndConditions--acceptTermsAndAgreements') as HTMLInputElement).checked).toBe(false)
+
+      // Self Identify: the disability fact picked; the signature (name, date) left empty.
+      tab.step(fixture('workday-self-identify.html'))
+      await vi.waitFor(() => expect(service.current()!.step?.title).toBe('Self Identify'))
+      await vi.waitFor(() => expect(service.current()?.status).toBe('filled'), wait)
+      expect((doc().querySelector('#selfIdentifiedDisabilityData--disabilityStatus-2') as HTMLInputElement).checked).toBe(true)
+      expect((doc().querySelector('#selfIdentifiedDisabilityData--name') as HTMLInputElement).value).toBe('')
+
+      // Review: the user's.
+      const fills = tab.sent.filter((c) => c === AUTOFILL_CHANNELS.fill).length
+      tab.step(fixture('workday-review.html'))
+      await until(service, 'waiting')
+      expect(service.current()).toMatchObject({ report: null, step: { kind: 'other', title: 'Review' } })
+      expect(tab.sent.filter((c) => c === AUTOFILL_CHANNELS.fill)).toHaveLength(fills)
+    }, 60_000)
   })
 })

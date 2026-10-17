@@ -62,7 +62,11 @@ describe('Workday: step classifier', () => {
     ['workday-my-information-legacy.html', 'form', 'My Information'],
     ['workday-autofill-resume.html', 'form', 'Autofill with Resume'],
     ['workday-my-experience.html', 'form', 'My Experience'],
-    ['workday-application-questions.html', 'other', 'Application Questions']
+    // #136: every progress-bar step but Review is answerable.
+    ['workday-application-questions.html', 'form', 'Application Questions'],
+    ['workday-voluntary-disclosures.html', 'form', 'Voluntary Disclosures'],
+    ['workday-self-identify.html', 'form', 'Self Identify'],
+    ['workday-review.html', 'other', 'Review']
   ]
   for (const [name, step, title] of cases) {
     it(`${name} is ${step} (${title})`, () => {
@@ -111,7 +115,7 @@ describe('Workday: the account wall is never filled', () => {
   }
 
   it('the posting, the choice and other steps are left alone too', () => {
-    for (const name of ['workday-posting.html', 'workday-apply-choice.html', 'workday-application-questions.html']) {
+    for (const name of ['workday-posting.html', 'workday-apply-choice.html', 'workday-review.html']) {
       const dom = page(name)
       const before = snapshot(dom)
       const report = fillPage(dom.window.document, VALUES)
@@ -329,5 +333,47 @@ describe('Workday: a step re-render after the fill (#63 verify-after-fill)', () 
     expect(city.value).toBe('')
     expect(byKey(report, 'city')[0]).toMatchObject({ outcome: 'rejected' })
     expect(byKey(report, 'firstName')[0]).toMatchObject({ outcome: 'filled' })
+  })
+})
+
+describe('Workday: answerable steps and sections (#136)', () => {
+  it('My Information and My Experience take contact values; the other steps are answer-only', () => {
+    const answerOnly = (name: string) => workday.answerOnly?.(page(name).window.document)
+    expect(answerOnly('workday-my-information.html')).toBe(false)
+    expect(answerOnly('workday-my-experience.html')).toBe(false)
+    expect(answerOnly('workday-autofill-resume.html')).toBe(false)
+    expect(answerOnly('workday-application-questions.html')).toBe(true)
+    expect(answerOnly('workday-voluntary-disclosures.html')).toBe(true)
+    expect(answerOnly('workday-self-identify.html')).toBe(true)
+  })
+
+  it('an answer-only step never gets a contact value or an upload mark, even where a field looks like one', () => {
+    const dom = page('workday-self-identify.html')
+    const report = fillPage(dom.window.document, VALUES)
+    // Name looks like the full name: it is the signature, never touched, never reported.
+    expect(input(dom, '#selfIdentifiedDisabilityData--name').value).toBe('')
+    expect(report.fields.map((f) => f.label)).toEqual(['Disability Status'])
+    expect(report.fields.every((f) => f.key === null)).toBe(true)
+    expect(dom.window.document.querySelector(`[${UPLOAD_ATTR}]`)).toBeNull()
+  })
+
+  it('Voluntary Disclosures: the terms check box is left out; the EEO dropdowns are questions', () => {
+    const dom = page('workday-voluntary-disclosures.html')
+    const report = fillPage(dom.window.document, VALUES)
+    expect(report.fields.map((f) => [f.label, f.kind])).toEqual([
+      ['Gender', 'combobox'],
+      ['Ethnicity', 'combobox'],
+      ['Veteran Status', 'combobox']
+    ])
+    expect(input(dom, '#termsAndConditions--acceptTermsAndAgreements').checked).toBe(false)
+    expect(scanPage(dom.window.document).formFound).toBe(true)
+  })
+
+  it('My Experience: the sections and the skills prompt are left to sections.ts, never planned as questions', () => {
+    const dom = page('workday-my-experience.html')
+    const roots = workday.sectionRoots?.(dom.window.document) ?? []
+    expect(roots.map((r) => r.getAttribute('data-automation-id'))).toEqual(['workExperienceSection', 'educationSection', 'websiteSection', 'formField-skills'])
+    const report = fillPage(dom.window.document, VALUES)
+    expect(report.fields.map((f) => f.key ?? f.label)).toEqual(['resume', 'linkedin'])
   })
 })
