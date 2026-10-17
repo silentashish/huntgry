@@ -26,6 +26,10 @@ const CONTACT_FIELDS: Array<FieldSpec<ContactInfo>> = [
   { key: 'phone', label: 'Phone', placeholder: '(555) 010-0100', cols: 4 },
   { key: 'location', label: 'Location', placeholder: 'City, ST', cols: 4 },
   { key: 'workAuthorization', label: 'Work authorization', placeholder: 'e.g. US citizen, needs sponsorship' },
+  // Postal address for application forms (#136); City and State come from Location.
+  { key: 'address', label: 'Address', placeholder: '123 Main St, Apt 4' },
+  { key: 'postalCode', label: 'Postal code', placeholder: '97201', cols: 3 },
+  { key: 'country', label: 'Country', placeholder: 'United States', cols: 3 },
   { key: 'linkedin', label: 'LinkedIn', placeholder: 'https://www.linkedin.com/in/…' },
   { key: 'github', label: 'GitHub', placeholder: 'https://github.com/…' },
   { key: 'website', label: 'Website', placeholder: 'https://…' }
