@@ -193,13 +193,7 @@ describe('fill values', () => {
       linkedin: 'https://linkedin.com/in/ada',
       github: 'https://github.com/ada',
       website: 'https://ada.example',
-      currentCompany: '',
-      // Address parts (#136) are derived by the engine work package; empty until then.
-      addressLine1: '',
-      city: '',
-      state: '',
-      postalCode: '',
-      country: ''
+      currentCompany: ''
     })
   })
 })
