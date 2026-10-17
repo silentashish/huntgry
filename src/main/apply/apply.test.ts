@@ -40,12 +40,7 @@ const VALUES: FillValues = {
   linkedin: 'https://www.linkedin.com/in/ada',
   github: '',
   website: '',
-  currentCompany: '',
-  addressLine1: '',
-  city: '',
-  state: '',
-  postalCode: '',
-  country: ''
+  currentCompany: ''
 }
 
 /**
