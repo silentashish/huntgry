@@ -320,6 +320,14 @@ describe('TailorQueue', () => {
     expect(again.added).toBe(0)
   })
 
+  it('refuses new jobs once shut down instead of queuing ones that would never start (#134)', async () => {
+    jobs.set('url:a', job('url:a'))
+    await queue.sync()
+    await queue.shutdown()
+    await expect(queue.enqueue({ jobIds: ['url:a'], options })).rejects.toThrow(/quitting/)
+    expect(queue.state().items).toEqual([])
+  })
+
   it('persists the queue and reloads it paused, with interrupted jobs failed and retryable', async () => {
     for (const id of ['url:a', 'url:b', 'url:c']) jobs.set(id, job(id))
     await queue.enqueue({ jobIds: ['url:a'], options })

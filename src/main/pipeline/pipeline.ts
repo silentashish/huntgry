@@ -351,6 +351,8 @@ export class Pipeline {
    * is refused while the first is between them.
    */
   async start(input: Parameters<Pipeline['plan']>[0], expected?: string): Promise<PipelineState> {
+    // After shutdown nothing would supervise it, and the queue would never start its jobs (#134).
+    if (this.stopped) throw new Error('Huntgry is quitting; a pipeline can no longer be started.')
     if (this.starting) throw new Error('A pipeline is already starting.')
     this.starting = true
     try {

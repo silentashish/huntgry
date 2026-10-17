@@ -105,12 +105,17 @@ app.whenReady().then(() => {
 })
 
 // Never leave a `claude` child running after the app is gone. Electron does not
-// wait for async listeners, so hold the first quit until the runs are stopped
-// and saved, then quit again (the guard lets that second quit through).
+// wait for async listeners, so hold the quit until the runs are stopped and
+// saved, then quit again (the guard lets that second quit through).
+// `will-quit`, not `before-quit`: it comes once every window has closed, so the
+// quit can no longer be cancelled. A window can still refuse to close after
+// `before-quit` ("Keep Editing" on unsaved profile edits), and a service stopped
+// there stayed stopped in an app that kept running: an unattended pipeline then
+// queued its jobs and never started one (#134). Closing the window has already
+// closed its tabs, and with them any apply session's page.
 let runsStopped = false
-app.on('before-quit', (event) => {
+app.on('will-quit', (event) => {
   stopApplicationsWatcher()
-  // Before the tabs close, so no apply session or debugger outlives them.
   stopApply()
   destroyBrowser()
   if (runsStopped) return
