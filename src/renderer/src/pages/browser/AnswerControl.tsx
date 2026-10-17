@@ -2,27 +2,31 @@ import { useState } from 'react'
 import { Button, Checkbox, Group, NativeSelect, Textarea } from '@mantine/core'
 import type { FieldReport } from '@shared/apply-types'
 import { api, errorText } from '../../api'
-import { answerChoices, isSensitive } from './apply-report'
+import { answerChoices, isAiAnswer, isSensitive } from './apply-report'
 import classes from './browser.module.css'
 
 /**
  * Answers one question of the page from the Apply panel (#71), the "answer
  * once" box of the design: one of the page's own options (a native select,
  * so nothing pops over the page view) or typed text, with "Remember" on by
- * default. Main checks the answer against the field and fills it in the page;
+ * default. An AI answer (#136) gets the same box as "Correct", pre-filled with
+ * what Huntgry wrote; the correction replaces it in the page and in memory. Main checks the answer against the field and fills it in the page;
  * a widget that only takes a click is picked when the Settings switch allows
  * it, otherwise suggested there.
  */
 export function AnswerControl({ sessionId, field, disabled }: { sessionId: string; field: FieldReport; disabled: boolean }) {
   const choices = answerChoices(field)
-  const initial = field.suggestion && (choices.length === 0 || choices.includes(field.suggestion)) ? field.suggestion : ''
+  // An AI answer (#136) is corrected from what Huntgry wrote; a suggestion starts from the suggestion.
+  const ai = isAiAnswer(field)
+  const start = ai ? field.value : field.suggestion
+  const initial = start && (choices.length === 0 || choices.includes(start)) ? start : ''
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState(initial)
   const [remember, setRemember] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const name = field.label || 'this question'
-  const verb = field.suggestedBy === 'model' ? 'Confirm answer' : 'Answer'
+  const verb = ai ? 'Correct' : field.suggestedBy === 'model' ? 'Confirm answer' : 'Answer'
 
   if (!open) {
     return (
@@ -32,7 +36,7 @@ export function AnswerControl({ sessionId, field, disabled }: { sessionId: strin
         variant="default"
         disabled={disabled}
         onClick={() => setOpen(true)}
-        aria-label={`Answer ${name}`}
+        aria-label={`${ai ? 'Correct' : 'Answer'} ${name}`}
       >
         {verb}
       </Button>

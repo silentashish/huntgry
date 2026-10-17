@@ -41,9 +41,10 @@ async function filesBelow(dir: string): Promise<string[]> {
 test('a question answered once in the Apply panel fills itself on the next application', async ({ app, mock }) => {
   const agents = fakeAgents(app)
   const oneShots = async () => (await agents.invocations()).filter((i) => i.mode === 'oneshot')
-  const model = (i: { args?: string[] }) => i.args![i.args!.indexOf('--model') + 1]
-  const mappingCalls = async () => (await oneShots()).filter((i) => model(i) === 'haiku')
-  const draftCalls = async () => (await oneShots()).filter((i) => model(i) === 'sonnet')
+  // Both calls run Sonnet since #136; they are told apart by their JSON schema (mappings vs. drafted answers).
+  const schema = (i: { args?: string[] }) => i.args![i.args!.indexOf('--json-schema') + 1] ?? ''
+  const mappingCalls = async () => (await oneShots()).filter((i) => schema(i).includes('"mappings"'))
+  const draftCalls = async () => (await oneShots()).filter((i) => !schema(i).includes('"mappings"'))
 
   const browser = await applyFromDashboard(app.window, 'Lever Mock', `${mock.origin}/lever/`)
   await expectTabLoaded(app.electronApp, '/lever/', 'Acme - Software Engineer')
@@ -52,7 +53,7 @@ test('a question answered once in the Apply panel fills itself on the next appli
   await expect(gender).toContainText('Answer it once below; Huntgry remembers it.')
   expect(await genderInTab(app.electronApp, '/lever/')).toBe('')
 
-  // The questions nothing knows go to the model once: Haiku, no tools; the catalog's own (Gender) are not sent.
+  // The questions nothing knows go to the model once: no tools; the catalog's own (Gender) are not sent.
   await expect.poll(async () => (await mappingCalls()).length).toBe(1)
   const [call] = await mappingCalls()
   expect(call.agent).toBe('claude')
@@ -114,7 +115,8 @@ test('a question answered once in the Apply panel fills itself on the next appli
   await expect(card.getByText('Gender', { exact: true })).toBeVisible()
   await expect(card.getByText('Female')).toHaveCount(0)
   await card.getByRole('button', { name: 'Show Gender' }).click()
-  await expect(card.getByText('Female')).toBeVisible()
+  // Shown, the fact is an editable control (#136), not text.
+  await expect(card.getByLabel('Gender', { exact: true })).toHaveValue('Female')
 
   // Nothing was ever submitted.
   expect(await exists(mock.submissionFile)).toBe(false)

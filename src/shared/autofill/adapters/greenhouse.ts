@@ -30,8 +30,10 @@ export const greenhouse: Adapter = {
     doc.getElementById('application_confirmation') !== null ||
     /\/confirmation\/?$/.test(url.pathname) ||
     (doc.querySelector('#application-form, #application_form') === null && SUBMITTED.test(headingText(doc))),
-  // "Location (City)" is a react-select that only takes one of its suggestions (captured 2026-10-03).
+  // "Location (City)" is a react-select that only takes one of its suggestions (captured 2026-10-03): typed and
+  // picked from the profile's location (#136), a choice for the user when the profile has none.
   choices: ['#candidate-location'],
+  valueChoices: [['#candidate-location', 'location']],
   // On `change` the board uploads the file to S3 and replaces the <input> with a progress bar, then the file name
   // (captured 2026-10-03). Only that widget counts: an <input> that merely holds the file (the handler never ran,
   // e.g. before hydration) is not attached. The widget is found by its label id too, in case a re-render replaced it.

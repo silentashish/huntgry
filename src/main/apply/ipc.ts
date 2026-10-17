@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { factsFromProfile, isFactKey, type FactKey } from '@shared/apply-facts'
 import { APPLY_CHANNELS } from '@shared/apply-types'
-import { fillValuesFrom } from '@shared/apply-values'
+import { fillProfileFrom, fillValuesFrom } from '@shared/apply-values'
 import { browserManager, onPopupTab } from '../browser/manager'
 import { localUrlsAllowed } from '../cli/dev-urls'
 import { requireCurrentWorkspace, settingsFile } from '../current-workspace'
@@ -12,7 +12,8 @@ import { emit } from '../events'
 import { currentProfilePath } from '../profile/ipc'
 import { readProfile } from '../profile/store'
 import { inspectWorkspace } from '../workspace/inspect'
-import { resolveApplicationFile } from '../applications/safe-path'
+import { resolveApplicationFile, resolveApplicationFolder } from '../applications/safe-path'
+import { readApplication } from '../applications/scan'
 import {
   clearAnswers,
   forgetFact,
@@ -21,10 +22,13 @@ import {
   readAnswers,
   rememberAnswer,
   rememberMappings,
-  savedAnswers
+  savedAnswers,
+  setFact,
+  MAX_FACT_CHARS,
+  type Answers
 } from './answers-store'
 import { draftAnswers } from './draft-answers'
-import { mapQuestions } from './map-questions'
+import { mapQuestions, type MapContext } from './map-questions'
 import { availableMapper } from './mapper'
 import { ApplyService, type AnswersDeps, type ApplyPage } from './service'
 
@@ -93,7 +97,8 @@ async function profileSeeds(ws: string): Promise<Partial<Record<FactKey, string>
 }
 
 /**
- * Remembered answers live under userData (answers-store.ts); the model gets question text only. The service passes
+ * Remembered answers live under userData (answers-store.ts); the model gets the question text and the application's
+ * context (company, role, job description, master profile), never a stored answer. The service passes
  * the workspace its session started in, so a workspace switch mid-session cannot mix two people's answers.
  */
 const answers: AnswersDeps = {
@@ -108,10 +113,10 @@ const answers: AnswersDeps = {
   rememberMappings: async (ws, mappings) => {
     await rememberMappings(ws, mappings)
   },
-  map: async (ws, questions) => {
+  map: async (ws, applicationId, questions) => {
     const cli = await availableMapper(ws)
     if (!cli) throw new Error('No model available to map questions.')
-    return mapQuestions(questions, cli)
+    return mapQuestions(questions, cli, await mapContext(ws, applicationId))
   },
   draft: async (ws, applicationId, questions) => {
     const read = (file: string) =>
@@ -128,6 +133,17 @@ const answers: AnswersDeps = {
   }
 }
 
+/** What the answering call knows about the application (#136); a part that cannot be read is empty. */
+async function mapContext(ws: string, applicationId: string): Promise<MapContext> {
+  const record = await resolveApplicationFolder(ws, applicationId)
+    .then((folder) => readApplication(ws, folder))
+    .catch(() => null)
+  const jobDescription = await resolveApplicationFile(ws, applicationId, 'job-description.md')
+    .then((p) => readFile(p, 'utf8'))
+    .catch(() => '')
+  return { company: record?.company ?? '', role: record?.role ?? '', jobDescription, profile: await masterProfileText(ws) }
+}
+
 /** The workspace's master profile as written, or '' when it cannot be read. */
 async function masterProfileText(ws: string): Promise<string> {
   try {
@@ -141,11 +157,16 @@ async function masterProfileText(ws: string): Promise<string> {
 /** "Pick dropdown answers automatically" (Settings): on unless the user turned it off. */
 const pickSetting = async () => (await loadSettings(settingsFile())).pickDropdowns !== false
 
+/** "Use AI to answer unknown questions" (Settings, #136): on unless the user turned it off. */
+const aiAnswersSetting = async () => (await loadSettings(settingsFile())).aiAnswers !== false
+
 const service = new ApplyService({
   workspace: workspacePath,
   values: async () => fillValuesFrom((await readProfile(await currentProfilePath())).profile),
+  profile: async () => fillProfileFrom((await readProfile(await currentProfilePath())).profile),
   answers,
   pickWidgets: pickSetting,
+  aiAnswers: aiAnswersSetting,
   openTab: (url) => browserManager().openTab(url),
   navigate: (tabId, url) => browserManager().navigate(tabId, url),
   page: (tabId) => pageOf(browserManager().getWebContents(tabId)),
@@ -195,11 +216,22 @@ export function registerApplyIpc(): void {
   ipcMain.handle(APPLY_CHANNELS.answer, (_e, id: unknown, fieldId: unknown, value: unknown, remember: unknown) =>
     service.answer(requireSessionId(id), requireText(fieldId, 'field', 200), requireText(value, 'answer', 500), remember === true)
   )
-  ipcMain.handle(APPLY_CHANNELS.answers, async () => savedAnswers(await readAnswers(await workspacePath())))
+  // Every result carries the profile's seeds, so the Profile's Application details can show "From your profile".
+  const listed = async (ws: string, answers: Answers) => savedAnswers(answers, await profileSeeds(ws))
+  ipcMain.handle(APPLY_CHANNELS.answers, async () => {
+    const ws = await workspacePath()
+    return listed(ws, await readAnswers(ws))
+  })
+  ipcMain.handle(APPLY_CHANNELS.setFact, async (_e, fact: unknown, value: unknown) => {
+    if (!isFactKey(fact)) throw new Error('Invalid fact.')
+    if (typeof value !== 'string' || value.length > MAX_FACT_CHARS) throw new Error('Invalid answer.')
+    const ws = await workspacePath()
+    return listed(ws, await setFact(ws, fact, value))
+  })
   ipcMain.handle(APPLY_CHANNELS.forgetAnswer, async (_e, target: unknown) => {
     const t = requireForgetTarget(target)
     const ws = await workspacePath()
-    return savedAnswers('fact' in t ? await forgetFact(ws, t.fact) : await forgetQuestion(ws, t.question))
+    return listed(ws, 'fact' in t ? await forgetFact(ws, t.fact) : await forgetQuestion(ws, t.question))
   })
   ipcMain.handle(APPLY_CHANNELS.pickSetting, () => pickSetting())
   ipcMain.handle(APPLY_CHANNELS.setPickSetting, async (_e, on: unknown) => {
@@ -207,5 +239,14 @@ export function registerApplyIpc(): void {
     await saveSettings(settingsFile(), { pickDropdowns: on })
     return pickSetting()
   })
-  ipcMain.handle(APPLY_CHANNELS.forgetAllAnswers, async () => savedAnswers(await clearAnswers(await workspacePath())))
+  ipcMain.handle(APPLY_CHANNELS.aiAnswersSetting, () => aiAnswersSetting())
+  ipcMain.handle(APPLY_CHANNELS.setAiAnswersSetting, async (_e, on: unknown) => {
+    if (typeof on !== 'boolean') throw new Error('Invalid setting.')
+    await saveSettings(settingsFile(), { aiAnswers: on })
+    return aiAnswersSetting()
+  })
+  ipcMain.handle(APPLY_CHANNELS.forgetAllAnswers, async () => {
+    const ws = await workspacePath()
+    return listed(ws, await clearAnswers(ws))
+  })
 }

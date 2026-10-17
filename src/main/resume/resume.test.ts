@@ -76,6 +76,9 @@ describe('resume import', () => {
       github: 'https://github.com/janedoe',
       website: 'https://janedoe.dev',
       workAuthorization: '',
+      address: '',
+      postalCode: '',
+      country: '',
       other: []
     })
     expect(profile.summary).toBe('Backend Engineer with 6+ years building payment systems. Calm on call.')

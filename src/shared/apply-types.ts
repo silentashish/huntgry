@@ -48,6 +48,11 @@ export type FieldKey =
   | 'email'
   | 'phone'
   | 'location'
+  | 'addressLine1'
+  | 'city'
+  | 'state'
+  | 'postalCode'
+  | 'country'
   | 'linkedin'
   | 'github'
   | 'website'
@@ -58,6 +63,47 @@ export type FieldKey =
 /** Text values, all from the master profile's contact block (empty string = not known). */
 export type FillValues = Record<Exclude<FieldKey, 'resume' | 'coverLetter'>, string>
 
+/** A month and year from the master profile ("Jan 2022" → 1 / 2022). */
+export interface MonthYear {
+  month: number
+  year: number
+}
+
+/** One work-experience entry as the page fills it (#136, Workday My Experience). */
+export interface FillExperience {
+  company: string
+  role: string
+  location: string
+  start: MonthYear | null
+  /** Null while `current`, or when the profile gives no end date. */
+  end: MonthYear | null
+  current: boolean
+  /** The highlights, one per line (at most 2000 characters). */
+  description: string
+}
+
+export interface FillEducation {
+  school: string
+  degree: string
+  field: string
+  gpa: string
+  start: MonthYear | null
+  end: MonthYear | null
+}
+
+/**
+ * The master profile's repeatable sections (#136), sent with every fill next to the contact values: work
+ * experience, education, skills (flattened, deduplicated, at most 40) and websites (GitHub first).
+ */
+export interface FillProfile {
+  experience: FillExperience[]
+  education: FillEducation[]
+  skills: string[]
+  websites: string[]
+}
+
+export const EMPTY_FILL_PROFILE: FillProfile = { experience: [], education: [], skills: [], websites: [] }
+
 export const FIELD_LABEL: Record<FieldKey, string> = {
   firstName: 'First name',
   lastName: 'Last name',
@@ -65,6 +111,11 @@ export const FIELD_LABEL: Record<FieldKey, string> = {
   email: 'Email',
   phone: 'Phone',
   location: 'Location',
+  addressLine1: 'Address',
+  city: 'City',
+  state: 'State',
+  postalCode: 'Postal code',
+  country: 'Country',
   linkedin: 'LinkedIn',
   github: 'GitHub',
   website: 'Website',
@@ -116,6 +167,8 @@ export interface FieldReport {
    * not write: a widget that only takes a click (`saved`), or a model's
    * mapping the user has not confirmed yet (`model`). `draft` marks a line
    * Huntgry typed an AI draft into (#82), from the resume and job description.
+   * A `filled` line with `model` is an AI answer Huntgry wrote from the master
+   * profile (#136), for the user to check or correct.
    */
   fieldId?: string
   question?: string
@@ -220,6 +273,11 @@ export interface ApplyApi {
   answer(sessionId: string, fieldId: string, value: string, remember: boolean): Promise<ApplySession>
   /** The saved application answers of the current workspace. */
   answers(): Promise<SavedAnswers>
+  /**
+   * Sets one fact (#136: Profile → Application details, Settings), stored under userData like the panel's
+   * "Remember". Yes/no facts take yes / no / decline; an empty value forgets the fact.
+   */
+  setFact(fact: FactKey, value: string): Promise<SavedAnswers>
   /** Forgets one saved fact or question answer; returns what is left. */
   forgetAnswer(target: { fact: FactKey } | { question: string }): Promise<SavedAnswers>
   /** Forgets every saved answer of the current workspace. */
@@ -227,6 +285,9 @@ export interface ApplyApi {
   /** Settings: "Pick dropdown answers automatically" (on by default). */
   pickSetting(): Promise<boolean>
   setPickSetting(on: boolean): Promise<boolean>
+  /** Settings: "Use AI to answer unknown questions" (#136, on by default). */
+  aiAnswersSetting(): Promise<boolean>
+  setAiAnswersSetting(on: boolean): Promise<boolean>
 }
 
 /** The saved application answers, as Settings lists them. */
@@ -234,6 +295,11 @@ export interface SavedAnswers {
   facts: Array<{ fact: FactKey; label: string; sensitive: boolean; value: string; updatedAt: string }>
   /** Questions answered directly (no fact) that were remembered. */
   questions: Array<{ question: string; label: string; value: string; updatedAt: string }>
+  /**
+   * Facts the master profile's Work authorization line states (#136: "H-1B" → visa status, authorized,
+   * needs sponsorship). Used when no answer is stored; never stored themselves. Absent from older mains.
+   */
+  seeds?: Partial<Record<FactKey, string>>
 }
 
 export const APPLY_CHANNELS = {
@@ -244,9 +310,12 @@ export const APPLY_CHANNELS = {
   answer: 'apply:answer',
   answers: 'apply:answers:list',
   forgetAnswer: 'apply:answers:forget',
+  setFact: 'apply:answers:set-fact',
   forgetAllAnswers: 'apply:answers:clear',
   pickSetting: 'apply:pick-setting',
-  setPickSetting: 'apply:set-pick-setting'
+  setPickSetting: 'apply:set-pick-setting',
+  aiAnswersSetting: 'apply:ai-answers-setting',
+  setAiAnswersSetting: 'apply:set-ai-answers-setting'
 } as const
 
 export interface ApplyEvents {

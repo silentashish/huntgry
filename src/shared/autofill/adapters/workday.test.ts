@@ -7,6 +7,7 @@ import { UPLOAD_ATTR } from '../../autofill-channels'
 import { fillPage, pageStep, scanPage, uploadStateOf } from '../engine'
 import { PageSession } from '../session'
 import { adapterFor, workday } from './index'
+import { testValues, US_ADDRESS } from '../fixtures/values'
 
 /**
  * The Workday adapter on markup from the 2026-10-03 captures (posting,
@@ -18,18 +19,7 @@ const fixture = (name: string) => readFileSync(join(__dirname, '../fixtures', na
 const JOB = 'https://acme.wd1.myworkdayjobs.com/en-US/AcmeCareers/job/Remote-USA/Software-Engineer_JR-1001'
 const page = (name: string, url = `${JOB}/apply/applyManually`) => new JSDOM(fixture(name), { url })
 
-const VALUES: FillValues = {
-  firstName: 'Ada',
-  lastName: 'Lovelace',
-  fullName: 'Ada Lovelace',
-  email: 'ada@example.com',
-  phone: '+1 555 123 4567',
-  location: 'London',
-  linkedin: 'https://www.linkedin.com/in/ada',
-  github: 'https://github.com/ada',
-  website: 'https://ada.example',
-  currentCompany: 'Analytical Engines'
-}
+const VALUES: FillValues = testValues(US_ADDRESS)
 
 const input = (dom: JSDOM, selector: string) => dom.window.document.querySelector(selector) as HTMLInputElement
 const byKey = (report: FillReport, key: FieldReport['key']) => report.fields.filter((f) => f.key === key)
@@ -72,7 +62,11 @@ describe('Workday: step classifier', () => {
     ['workday-my-information-legacy.html', 'form', 'My Information'],
     ['workday-autofill-resume.html', 'form', 'Autofill with Resume'],
     ['workday-my-experience.html', 'form', 'My Experience'],
-    ['workday-application-questions.html', 'other', 'Application Questions']
+    // #136: every progress-bar step but Review is answerable.
+    ['workday-application-questions.html', 'form', 'Application Questions'],
+    ['workday-voluntary-disclosures.html', 'form', 'Voluntary Disclosures'],
+    ['workday-self-identify.html', 'form', 'Self Identify'],
+    ['workday-review.html', 'other', 'Review']
   ]
   for (const [name, step, title] of cases) {
     it(`${name} is ${step} (${title})`, () => {
@@ -121,7 +115,7 @@ describe('Workday: the account wall is never filled', () => {
   }
 
   it('the posting, the choice and other steps are left alone too', () => {
-    for (const name of ['workday-posting.html', 'workday-apply-choice.html', 'workday-application-questions.html']) {
+    for (const name of ['workday-posting.html', 'workday-apply-choice.html', 'workday-review.html']) {
       const dom = page(name)
       const before = snapshot(dom)
       const report = fillPage(dom.window.document, VALUES)
@@ -140,7 +134,9 @@ describe('Workday: My Information', () => {
         lastName: '#name--legalName--lastName',
         email: '#emailAddress--emailAddress',
         phone: '#phoneNumber--phoneNumber',
-        location: '#address--city'
+        addressLine1: '#address--addressLine1',
+        city: '#address--city',
+        postalCode: '#address--postalCode'
       }
     ],
     [
@@ -150,13 +146,15 @@ describe('Workday: My Information', () => {
         lastName: '[data-automation-id="legalNameSection_lastName"]',
         email: '[data-automation-id="email"]',
         phone: '[data-automation-id="phone-number"]',
-        location: '[data-automation-id="addressSection_city"]'
+        addressLine1: '[data-automation-id="addressSection_addressLine1"]',
+        city: '[data-automation-id="addressSection_city"]',
+        postalCode: '[data-automation-id="addressSection_postalCode"]'
       }
     ]
   ]
 
   for (const [name, selectors] of variants) {
-    it(`${name}: fills first/last name, email, phone and city by data-automation-id and reads them back`, () => {
+    it(`${name}: fills name, email, phone, address line, city and postal code by data-automation-id and reads them back`, () => {
       const dom = page(name)
       const report = fillPage(dom.window.document, VALUES)
       expect(report.step).toBe('form')
@@ -168,31 +166,43 @@ describe('Workday: My Information', () => {
         expect(input(dom, selector).value, key).toBe(VALUES[key as keyof FillValues])
       }
       expect(report.fields.find((f) => f.key === 'firstName')).toMatchObject({ label: 'First Name', required: true })
+      // Workday has no single location field: the whole "Portland, OR" never lands anywhere (#136).
+      expect(byKey(report, 'location')).toEqual([])
+      expect(Array.from(dom.window.document.querySelectorAll('input')).some((i) => i.value === VALUES.location)).toBe(false)
     })
 
-    it(`${name}: leaves dropdowns, the phone code picker, the extension and the honeypot alone`, () => {
+    it(`${name}: maps the profile dropdowns, presses nothing without picking, and leaves the extension and the honeypot alone`, () => {
       const dom = page(name)
       const report = fillPage(dom.window.document, VALUES)
-      const labels = report.fields.map((f) => f.label)
-      // Workday's dropdowns are buttons with a listbox: reported as choices (#71: answered only from remembered
-      // answers, by pick.ts), and without any they are left exactly as they were.
+      const line = (label: string) => report.fields.find((f) => f.label === label)
       const before = Array.from(dom.window.document.querySelectorAll('button[aria-haspopup="listbox"]')).map((b) => b.textContent)
-      const dropdowns = ['How Did You Hear About Us?', 'Country', 'Phone Device Type', ...(name.includes('legacy') ? [] : ['State'])]
-      for (const dropdown of dropdowns) {
-        expect(labels).toContain(dropdown)
-        expect(report.fields.find((f) => f.label === dropdown)).toMatchObject({ kind: 'combobox', outcome: 'skipped-unsupported' })
-      }
+      // A dropdown the profile does not cover stays a choice (#71: answered only from remembered answers).
+      expect(line('How Did You Hear About Us?')).toMatchObject({ kind: 'combobox', key: null, outcome: 'skipped-unsupported' })
+      // Country already shows the profile's country (USA = United States): filled without a press.
+      expect(line('Country')).toMatchObject({ kind: 'combobox', key: 'country', outcome: 'filled', value: 'United States of America' })
+      // State and the phone defaults take a click: without the pick switch they are left to the user, with the value.
+      expect(line('State')).toMatchObject({ key: 'state', outcome: 'skipped-unsupported', reason: expect.stringContaining('"Oregon"') })
+      expect(line('Phone Device Type')).toMatchObject({ key: null, outcome: 'skipped-unsupported', reason: expect.stringContaining('"Mobile"') })
+      expect(line('Country Phone Code')).toMatchObject({ outcome: 'skipped-unsupported', reason: expect.stringContaining('"United States"') })
       expect(Array.from(dom.window.document.querySelectorAll('button[aria-haspopup="listbox"]')).map((b) => b.textContent)).toEqual(before)
-      expect(report.fields.find((f) => f.label === 'Country Phone Code')).toMatchObject({
-        kind: 'combobox',
-        outcome: 'skipped-unsupported'
-      })
       expect(input(dom, '[data-automation-id="beecatcher"]').value).toBe('')
       expect(input(dom, '[data-automation-id="beecatcher"]').getAttribute('style')).toBeNull()
       expect(report.fields.some((f) => /beecatcher/i.test(f.label))).toBe(false)
       expect(byKey(report, 'phone')).toHaveLength(1)
       const extension = input(dom, '#phoneNumber--extension')
       if (extension) expect(extension.value).toBe('')
+    })
+
+    it(`${name}: the adapter knows every address and phone control (and never address line 2)`, () => {
+      const dom = page(name)
+      const doc = dom.window.document
+      const valueChoices = new Map<Element, string>()
+      for (const [selector, key] of workday.valueChoices ?? []) for (const el of Array.from(doc.querySelectorAll(selector))) valueChoices.set(el, key)
+      expect([...new Set(valueChoices.values())].sort()).toEqual(['country', 'phoneCountryCode', 'phoneType', 'state'])
+      const known = new Set(workday.known.filter(([selector]) => doc.querySelector(selector)).map(([, key]) => key))
+      for (const key of ['addressLine1', 'city', 'postalCode']) expect(known.has(key as FieldReport['key'] & string), key).toBe(true)
+      expect(known.has('location')).toBe(false)
+      expect(workday.known.some(([selector]) => /addressLine2/.test(selector))).toBe(false)
     })
   }
 
@@ -275,9 +285,9 @@ describe('Workday: resume steps', () => {
     const email = doc.querySelector('[data-automation-id="formField-email"]')!
     const html = email.outerHTML
     email.remove()
-    expect(pageStep(doc).stepFields).toBe('firstName,lastName,location,phone')
+    expect(pageStep(doc).stepFields).toBe('addressLine1,city,country,firstName,lastName,phone,postalCode,state')
     doc.querySelector('[data-automation-id="formField-phoneType"]')!.insertAdjacentHTML('beforebegin', html)
-    expect(pageStep(doc).stepFields).toBe('email,firstName,lastName,location,phone')
+    expect(pageStep(doc).stepFields).toBe('addressLine1,city,country,email,firstName,lastName,phone,postalCode,state')
     // Single-page adapters report none.
     expect(scanPage(page('greenhouse-form.html', 'https://job-boards.greenhouse.io/acme/jobs/1').window.document).stepFields).toBeNull()
   })
@@ -321,7 +331,49 @@ describe('Workday: a step re-render after the fill (#63 verify-after-fill)', () 
     }, 5)
     const report = await filling
     expect(city.value).toBe('')
-    expect(byKey(report, 'location')[0]).toMatchObject({ outcome: 'rejected' })
+    expect(byKey(report, 'city')[0]).toMatchObject({ outcome: 'rejected' })
     expect(byKey(report, 'firstName')[0]).toMatchObject({ outcome: 'filled' })
+  })
+})
+
+describe('Workday: answerable steps and sections (#136)', () => {
+  it('My Information and My Experience take contact values; the other steps are answer-only', () => {
+    const answerOnly = (name: string) => workday.answerOnly?.(page(name).window.document)
+    expect(answerOnly('workday-my-information.html')).toBe(false)
+    expect(answerOnly('workday-my-experience.html')).toBe(false)
+    expect(answerOnly('workday-autofill-resume.html')).toBe(false)
+    expect(answerOnly('workday-application-questions.html')).toBe(true)
+    expect(answerOnly('workday-voluntary-disclosures.html')).toBe(true)
+    expect(answerOnly('workday-self-identify.html')).toBe(true)
+  })
+
+  it('an answer-only step never gets a contact value or an upload mark, even where a field looks like one', () => {
+    const dom = page('workday-self-identify.html')
+    const report = fillPage(dom.window.document, VALUES)
+    // Name looks like the full name: it is the signature, never touched, never reported.
+    expect(input(dom, '#selfIdentifiedDisabilityData--name').value).toBe('')
+    expect(report.fields.map((f) => f.label)).toEqual(['Disability Status'])
+    expect(report.fields.every((f) => f.key === null)).toBe(true)
+    expect(dom.window.document.querySelector(`[${UPLOAD_ATTR}]`)).toBeNull()
+  })
+
+  it('Voluntary Disclosures: the terms check box is left out; the EEO dropdowns are questions', () => {
+    const dom = page('workday-voluntary-disclosures.html')
+    const report = fillPage(dom.window.document, VALUES)
+    expect(report.fields.map((f) => [f.label, f.kind])).toEqual([
+      ['Gender', 'combobox'],
+      ['Ethnicity', 'combobox'],
+      ['Veteran Status', 'combobox']
+    ])
+    expect(input(dom, '#termsAndConditions--acceptTermsAndAgreements').checked).toBe(false)
+    expect(scanPage(dom.window.document).formFound).toBe(true)
+  })
+
+  it('My Experience: the sections and the skills prompt are left to sections.ts, never planned as questions', () => {
+    const dom = page('workday-my-experience.html')
+    const roots = workday.sectionRoots?.(dom.window.document) ?? []
+    expect(roots.map((r) => r.getAttribute('data-automation-id'))).toEqual(['workExperienceSection', 'educationSection', 'websiteSection', 'formField-skills'])
+    const report = fillPage(dom.window.document, VALUES)
+    expect(report.fields.map((f) => f.key ?? f.label)).toEqual(['resume', 'linkedin'])
   })
 })

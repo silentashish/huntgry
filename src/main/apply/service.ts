@@ -6,13 +6,16 @@ import {
   type ApplyAts,
   type ApplySession,
   type FieldReport,
+  type FillProfile,
   type FillReport,
   type FillValues,
+  EMPTY_FILL_PROFILE,
   type PageScan,
   type UploadState
 } from '@shared/apply-types'
 import { embedPageFor } from '@shared/apply-embeds'
-import { NO_ANSWERS, resolveAnswer, type FactKey, type PageAnswers } from '@shared/apply-facts'
+import { FACTS, isConsentQuestion, NO_ANSWERS, resolveAnswer, type FactKey, type PageAnswers } from '@shared/apply-facts'
+import { aiAnswerReason, isDemographicQuestion } from '@shared/ai-answers'
 import { applyUrlFor, isTrustedApplyPage } from '@shared/apply-url'
 import { AUTOFILL_CHANNELS, UPLOAD_ATTR } from '@shared/autofill-channels'
 import { reviewBlocker } from '@shared/review-types'
@@ -21,9 +24,9 @@ import { readApplication } from '../applications/scan'
 import { approvalDrift } from '../review/service'
 import { isBlockedPage } from '../jobs/blocked'
 import type { Draft, DraftQuestion } from './draft-answers'
-import type { Mapping, MapQuestion } from './map-questions'
+import { isCompanySpecificQuestion, type Mapping, type MapQuestion } from './map-questions'
 import { uploadFile, type Cdp } from './upload'
-import { parseFillReport, parsePageScan, parseUploadState } from './validate'
+import { parseEdits, parseFillReport, parsePageScan, parseUploadState, type PageEdit } from './validate'
 
 /**
  * Auto-apply (#24, #63): one session at a time. Opens the application's apply
@@ -52,7 +55,9 @@ export interface ApplyPage {
 
 /**
  * Application answers (#71): the memory under userData and the model that
- * maps unknown questions. Values never go to the model, only labels/options.
+ * maps unknown questions and, since #136, answers them from the master
+ * profile. Stored values never go to the model, only labels/options and the
+ * application's context.
  * Every call names the workspace the session started in: switching
  * workspaces mid-session must never move one person's answers into
  * another's memory, nor show them on the other's application.
@@ -62,10 +67,17 @@ export interface AnswersDeps {
   load(workspace: string): Promise<PageAnswers>
   /** The user's answer, to remember: the fact for a question that asks one, else the answer itself. */
   remember(workspace: string, answer: { question: string; label: string; fact: FactKey | null; value: string }): Promise<void>
-  /** A model's mappings, stored unconfirmed. */
-  rememberMappings(workspace: string, mappings: Array<{ question: string; label: string; fact: FactKey | null }>): Promise<void>
-  /** One model call for the questions nothing knows yet; rejects when no model is available or it fails. */
-  map(workspace: string, questions: MapQuestion[]): Promise<Mapping[]>
+  /** A model's mappings and probable answers (#136), stored unconfirmed. */
+  rememberMappings(
+    workspace: string,
+    mappings: Array<{ question: string; label: string; fact: FactKey | null; value?: string | null }>
+  ): Promise<void>
+  /**
+   * One model call for the questions nothing knows yet, with the application's context (company, role, job
+   * description, master profile; built by the caller from `applicationId`); rejects when no model is available or
+   * it fails.
+   */
+  map(workspace: string, applicationId: string, questions: MapQuestion[]): Promise<Mapping[]>
   /**
    * Drafts for open-ended questions (#82) from the application's tailored resume and job description, in one
    * call; rejects when no model is available or it fails. Without it, those questions stay with the user.
@@ -77,6 +89,11 @@ export interface ApplyDeps {
   workspace(): Promise<string>
   /** Values from the current master profile. */
   values(): Promise<FillValues>
+  /**
+   * The master profile's repeatable sections (#136: work experience, education, skills, websites), sent with every
+   * fill for the adapters that fill them (Workday My Experience). Without it those sections are left alone.
+   */
+  profile?(): Promise<FillProfile>
   /** Remembered application answers (#71); without them only contact fields are filled. */
   answers?: AnswersDeps
   /**
@@ -84,6 +101,12 @@ export interface ApplyDeps {
    * turning it off applies to the next fill. Without it, or off, click-only widgets only get suggestions.
    */
   pickWidgets?(): Promise<boolean>
+  /**
+   * The Settings switch "Use AI to answer unknown questions" (#136), read before every fill. On (or without it):
+   * the model is asked once per page and its answers are written as "AI answers; check them". Off: no model call
+   * at all (no mapping, no drafts); answers a model gave earlier are only suggested.
+   */
+  aiAnswers?(): Promise<boolean>
   openTab(url: string): Promise<string>
   navigate(tabId: string, url: string): Promise<unknown>
   page(tabId: string): ApplyPage
@@ -96,6 +119,11 @@ export interface ApplyDeps {
   /** Delays for re-detecting a page whose form renders late; injectable for tests. */
   retryDelaysMs?: number[]
   requestTimeoutMs?: number
+  /**
+   * How long main waits for a Workday fill (#136). Default 60 s: My Experience adds blocks and picks skills inside
+   * the page (bounded there to 40 s), on top of the readiness wait, the other picks (8 s) and the verify pass.
+   */
+  workdayFillTimeoutMs?: number
   /** How long the site's widget may take to show an attached file. */
   uploadConfirmMs?: number
 }
@@ -106,12 +134,24 @@ interface Context {
   tabId: string
   page: ApplyPage
   values: FillValues
+  /** The profile's repeatable sections (#136), read at start like `values`. */
+  profile: FillProfile
   /** Remembered answers, loaded at start and after the user teaches one (#71). */
   answers: PageAnswers
   /** Pick trusted answers in click-only widgets (the Settings switch as of the last fill). */
   pick: boolean
+  /** Use AI answers (the Settings switch as of the last fill, #136). */
+  ai: boolean
   /** Answers the user gave in the panel without Remember: this session only, by question key. */
   once: Record<string, string>
+  /** An AI answer in the page the user's correction may replace (#136), by question key. */
+  replace: Record<string, string>
+  /**
+   * Model answers that depend on this company, role or job description (#136: not `reusable`, or a draft-like
+   * question), by question key: written into this application's page as AI answers, never stored, so the next
+   * application asks the model again.
+   */
+  aiOnce: Record<string, { fact: FactKey | null; value: string }>
   /** The workspace the session started in; every answer read and write goes there (#71). */
   workspace: string
   /** Question keys already sent to the model this session (never sent twice). */
@@ -177,6 +217,12 @@ const MAX_MAPPED = 40
 const MAX_DRAFTED = 10
 /** The preload waits for the page to settle (up to ~6 s) before it answers a detect. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
+/**
+ * A Workday fill (#136) may add My Experience blocks and pick skills in the page: the preload bounds that phase to
+ * 40 s and the other picks to 8 s, plus its readiness wait (3 s) and verify pass (~1.3 s). Main waits a little longer
+ * than that sum, and no more: a page that never answers still ends in "Filling failed".
+ */
+const WORKDAY_FILL_TIMEOUT_MS = 60_000
 const DEFAULT_UPLOAD_CONFIRM_MS = 10_000
 const MAX_EMBED_FOLLOWS = 3
 const DRAFTED = 'AI draft from your resume and this job description. Read and edit it in the page before you submit.'
@@ -225,6 +271,7 @@ export class ApplyService {
     })
     const coverPath = await resolveApplicationFile(workspace, applicationId, 'cover.pdf').catch(() => null)
     const values = await this.deps.values()
+    const profile = (await this.deps.profile?.().catch(() => null)) ?? EMPTY_FILL_PROFILE
     const answers = (await this.deps.answers?.load(workspace).catch(() => null)) ?? NO_ANSWERS
     const applyUrl = applyUrlFor(record.jobUrl)
 
@@ -236,9 +283,13 @@ export class ApplyService {
       tabId,
       page: this.deps.page(tabId),
       values,
+      profile,
       answers,
       once: {},
+      replace: {},
+      aiOnce: {},
       pick: false,
+      ai: true,
       workspace,
       asked: new Set(),
       mappedSteps: new Set(),
@@ -301,6 +352,10 @@ export class ApplyService {
       // navigation. The detect only invalidates running work when the page really differs from what it last saw.
       page.onMessage(AUTOFILL_CHANNELS.step, () => {
         if (this.ctx === ctx) void this.detect(ctx, null, 0)
+      }),
+      // The person answered or corrected questions in the page (#136): sent as the page is left or changes step.
+      page.onMessage(AUTOFILL_CHANNELS.edits, (payload) => {
+        if (this.ctx === ctx) void this.learnEdits(ctx, parseEdits(payload)).catch(() => undefined)
       }),
       page.onMessage(AUTOFILL_CHANNELS.formAppeared, () => {
         // A form or an embedded form rendered after the detect found none (late iframe, client-rendered form).
@@ -544,10 +599,11 @@ export class ApplyService {
     const current = () => this.ctx === ctx && ctx.loadSeq === seq && ctx.confirmedSeq !== seq
     this.update({ status: 'filling', message: null })
     try {
+      await this.collectEdits(ctx)
       await this.refreshPick(ctx)
       if (!current()) return
       // The preload waits for the page to settle, fills, then checks a moment later that the values held.
-      let report = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, this.fillPayload(ctx)))
+      let report = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, this.fillPayload(ctx), this.fillTimeout()))
       if (!current()) return
       if (report.step && report.step !== 'form') {
         // Fill form pressed on a step that is the user's (a sign-in wall…): the page was left untouched.
@@ -574,12 +630,12 @@ export class ApplyService {
         if (verified && report.uploadOrder === 'text-first') report = withTextFrom(report, parseFillReport(verified))
       }
       if (report.uploadOrder === 'files-first') {
-        const text = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { ...this.fillPayload(ctx), text: true }))
+        const text = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { ...this.fillPayload(ctx), text: true }, this.fillTimeout()))
         if (!current()) return
         report = withFilesFrom(text, report)
       }
       this.markHandled(ctx, report)
-      report = this.withDrafts(ctx, report)
+      report = this.withAi(ctx, this.withDrafts(ctx, report))
       this.update({ status: 'filled', ats: report.ats, report, message: summary(report.fields) })
       void this.learn(ctx, report, seq)
       if (ctx.recheck) {
@@ -601,16 +657,76 @@ export class ApplyService {
     }
   }
 
-  /** What a fill sends the page: the profile values and the answers (this session's own on top). */
-  private fillPayload(ctx: Context): { values: FillValues; answers: PageAnswers; pick: boolean } {
-    const questions = { ...ctx.answers.questions }
-    for (const [question, value] of Object.entries(ctx.once)) questions[question] = { ...questions[question], value, confirmed: true }
-    return { values: ctx.values, answers: { facts: ctx.answers.facts, questions }, pick: ctx.pick }
+  /** How long a fill request may take: longer on Workday (#136, see `WORKDAY_FILL_TIMEOUT_MS`), else the default. */
+  private fillTimeout(): number | undefined {
+    return this.session?.ats === 'workday' ? (this.deps.workdayFillTimeoutMs ?? WORKDAY_FILL_TIMEOUT_MS) : undefined
   }
 
-  /** Reads the Settings switch for the coming fill (off when it cannot be read). */
+  /** What a fill sends the page: the profile values and sections, and the answers (this session's own on top). */
+  private fillPayload(ctx: Context): { values: FillValues; profile: FillProfile; answers: PageAnswers; pick: boolean } {
+    const questions = { ...ctx.answers.questions }
+    // This application's own AI answers, unconfirmed (so they are written and marked as AI answers), unless the
+    // memory has something better for the question.
+    for (const [question, { fact, value }] of Object.entries(ctx.aiOnce)) {
+      const known = questions[question]
+      if (!known || (!known.confirmed && !known.value)) questions[question] = { fact, value, confirmed: false }
+    }
+    for (const [question, value] of Object.entries(ctx.once)) {
+      const replace = ctx.replace[question]
+      questions[question] = { ...questions[question], value, confirmed: true, ...(replace ? { replace } : {}) }
+    }
+    return { values: ctx.values, profile: ctx.profile, answers: { facts: ctx.answers.facts, questions, aiAnswers: ctx.ai }, pick: ctx.pick }
+  }
+
+  /** Reads the Settings switches for the coming fill: picking (off when it cannot be read), AI answers (#136, on). */
   private async refreshPick(ctx: Context): Promise<void> {
-    ctx.pick = (await this.deps.pickWidgets?.().catch(() => false)) ?? false
+    const [pick, ai] = await Promise.all([
+      this.deps.pickWidgets?.().catch(() => false),
+      this.deps.aiAnswers ? this.deps.aiAnswers().catch(() => true) : true
+    ])
+    ctx.pick = pick ?? false
+    ctx.ai = ai
+  }
+
+  /**
+   * Asks the page for the questions the person changed since the last fill (#136) and remembers them, so a
+   * correction made a moment ago is stored before the page is filled again. A page that does not answer changes
+   * nothing.
+   */
+  private async collectEdits(ctx: Context): Promise<void> {
+    if (!this.deps.answers || !this.session?.report?.fields.some((f) => f.question)) return
+    const reply = await this.request(ctx, AUTOFILL_CHANNELS.edits, {}, 2000).catch(() => null)
+    if (reply !== null && this.ctx === ctx) await this.learnEdits(ctx, parseEdits(reply)).catch(() => undefined)
+  }
+
+  /**
+   * Questions the person answered or corrected in the page (#136), remembered as their own confirmed answers. Each
+   * edit must name a question of the current report, for the same page; not a consent question, not an AI draft
+   * (#82: drafts are this application's only), a select or radio answer one of the reported options. The same
+   * value is not stored twice.
+   */
+  private async learnEdits(ctx: Context, { url, edits }: { url: string; edits: PageEdit[] }): Promise<void> {
+    const answers = this.deps.answers
+    const report = this.session?.report
+    if (!answers || !report || !url || url !== report.url) return
+    const learned: Array<{ question: string; label: string; fact: FactKey | null; value: string }> = []
+    for (const edit of edits) {
+      const field = report.fields.find((f) => f.fieldId === edit.fieldId && f.question)
+      if (!field?.question || isConsentQuestion(field.label) || ctx.drafts.has(field.question)) continue
+      const value = edit.value.trim()
+      if (!value || value.length > 500) continue
+      if ((field.kind === 'select' || field.kind === 'radio') && !(field.options ?? []).includes(value)) continue
+      if (ctx.once[field.question] === value) continue
+      ctx.once[field.question] = value
+      // A question whose AI answer depended on this company: the person's version holds for this application only.
+      if (ctx.aiOnce[field.question]) continue
+      learned.push({ question: field.question, label: field.label, fact: field.fact ?? null, value })
+    }
+    if (learned.length === 0) return
+    // Stored in the session's own workspace, even if the user switched workspaces meanwhile.
+    for (const answer of learned) await answers.remember(ctx.workspace, answer).catch(() => undefined)
+    const loaded = await answers.load(ctx.workspace).catch(() => null)
+    if (loaded && this.ctx === ctx) ctx.answers = loaded
   }
 
   /**
@@ -621,11 +737,20 @@ export class ApplyService {
    * missing CLI, a timeout or a bad reply leaves the fields as they are.
    */
   private async learn(ctx: Context, report: FillReport, seq: number): Promise<void> {
-    await this.mapUnknown(ctx, report)
+    // "Use AI to answer unknown questions" off (#136): no model call at all.
+    if (!ctx.ai) return
+    await this.mapUnknown(ctx, report, seq)
     await this.draft(ctx, report, seq)
   }
 
-  private async mapUnknown(ctx: Context, report: FillReport): Promise<void> {
+  /**
+   * The model's call (#71, #136): each unknown question's fact and probable answer, stored unconfirmed when the
+   * answer is reusable (the same on any employer's form); an answer that depends on this company, role or job
+   * description is kept for this application only (`aiOnce`), so the next application asks again. When an
+   * answer came back for the page that is still loaded, the page is filled again: the answers are written and the
+   * panel shows them as "AI answers; check them". Otherwise the lines get the suggestions.
+   */
+  private async mapUnknown(ctx: Context, report: FillReport, seq: number): Promise<void> {
     const answers = this.deps.answers
     if (!answers) return
     const unknown = new Map<string, FieldReport>()
@@ -646,6 +771,7 @@ export class ApplyService {
     try {
       mappings = await answers.map(
         ctx.workspace,
+        ctx.applicationId,
         [...byId].map(([id, f]) => ({ id, question: f.label, kind: f.kind, options: f.options ?? [] }))
       )
     } catch {
@@ -654,11 +780,28 @@ export class ApplyService {
     if (this.ctx !== ctx) return
     const learned = mappings
       .filter((m) => byId.has(m.id))
-      .map((m) => ({ question: byId.get(m.id)!.question!, label: byId.get(m.id)!.label, fact: m.fact }))
+      .map((m) => {
+        const f = byId.get(m.id)!
+        // A sensitive fact or a demographic question never takes a model's answer (the parse drops it too).
+        const eeo = (m.fact && FACTS[m.fact].sensitive) || isDemographicQuestion(f.label, f.options ?? [])
+        const value = eeo ? null : (m.answer?.slice(0, 300) ?? null)
+        // Reusable only when the model says so and the question is not about this employer (deterministic backstop).
+        const reusable = m.reusable === true && !isCompanySpecificQuestion(f.label)
+        return { question: f.question!, label: f.label, fact: m.fact, value, reusable }
+      })
     if (learned.length === 0) return
+    // An answer that depends on this company is used on this application only (written, marked, never stored).
+    for (const l of learned) if (l.value && !l.reusable) ctx.aiOnce[l.question] = { fact: l.fact, value: l.value }
+    // Stored: the fact mapping, and the value only when it is reusable. A company-specific answer with no fact
+    // stores nothing, so the next application asks the model again.
+    const stored = learned
+      .filter((l) => !l.value || l.reusable || l.fact)
+      .map(({ question, label, fact, value, reusable }) => ({ question, label, fact, value: reusable ? value : null }))
     // Stored in the session's own workspace, even if the user switched workspaces meanwhile.
-    await answers.rememberMappings(ctx.workspace, learned).catch(() => undefined)
-    for (const l of learned) ctx.answers.questions[l.question] ??= { fact: l.fact, confirmed: false }
+    if (stored.length) await answers.rememberMappings(ctx.workspace, stored).catch(() => undefined)
+    for (const l of stored) {
+      ctx.answers.questions[l.question] ??= { fact: l.fact, confirmed: false, ...(l.value ? { value: l.value } : {}) }
+    }
     const current = this.session?.report
     if (this.ctx !== ctx || !current || current.url !== report.url) return
     const facts = new Map(learned.filter((l) => l.fact).map((l) => [l.question, l.fact as FactKey]))
@@ -672,6 +815,25 @@ export class ApplyService {
         : { ...f, fact, reason: 'Answer it once below; Huntgry remembers it.' }
     })
     this.update({ report: { ...current, fields } })
+    // Something can be written now: a model answer, or a mapping to a stored, non-sensitive fact.
+    const writable = learned.some((l) => l.value || (l.fact && !FACTS[l.fact].sensitive && ctx.answers.facts[l.fact]))
+    if (!writable || !ctx.ai || ctx.fillingSeq !== null || ctx.loadSeq !== seq || ctx.confirmedSeq === seq) return
+    await this.refill(ctx).catch(() => undefined)
+  }
+
+  /**
+   * Report lines Huntgry filled from a model's entry (#136) say so: "AI answer from your profile; check it." The
+   * page marks what it typed or selected; a picked answer (pick.ts clears the mark) is marked here.
+   */
+  private withAi(ctx: Context, report: FillReport): FillReport {
+    if (!ctx.ai) return report
+    const fields = report.fields.map((f) => {
+      const entry = f.question ? (ctx.answers.questions[f.question] ?? ctx.aiOnce[f.question]) : undefined
+      if (!entry || ('confirmed' in entry && entry.confirmed) || f.outcome !== 'filled' || f.suggestedBy === 'draft' || ctx.once[f.question!] !== undefined) return f
+      const fact = entry.fact && ctx.answers.facts[entry.fact] ? entry.fact : null
+      return { ...f, suggestedBy: 'model' as const, reason: aiAnswerReason(fact) }
+    })
+    return { ...report, fields }
   }
 
   /**
@@ -692,7 +854,7 @@ export class ApplyService {
       if (f.kind !== 'text' && f.kind !== 'textarea') continue
       if (ctx.once[f.question] || ctx.drafts.has(f.question)) continue
       // Only questions the model already said ask for no personal fact; a remembered answer is filled, not drafted.
-      const known = ctx.answers.questions[f.question]
+      const known = ctx.answers.questions[f.question] ?? (ctx.aiOnce[f.question] ? { ...ctx.aiOnce[f.question], confirmed: false } : undefined)
       if (!known || known.fact || known.confirmed) continue
       if (!open.has(f.question)) open.set(f.question, f)
     }
@@ -763,6 +925,8 @@ export class ApplyService {
     if (this.ctx !== ctx) throw new Error('This apply session has ended. Press Apply again.')
     // This page takes the exact option the user picked (a saved fact may match several of its options).
     ctx.once[field.question] = answer
+    // A correction of an AI answer (#136) replaces what Huntgry wrote, never what the person typed since.
+    if (field.outcome === 'filled' && field.suggestedBy === 'model' && field.value) ctx.replace[field.question] = field.value
     await this.refill(ctx)
     return this.session as ApplySession
   }
@@ -778,11 +942,12 @@ export class ApplyService {
     // form it was made for: never for the confirmation page, never over "Submitted" (#119).
     const current = () => this.ctx === ctx && ctx.loadSeq === seq && ctx.confirmedSeq !== seq
     try {
+      await this.collectEdits(ctx)
       await this.refreshPick(ctx)
-      const text = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { ...this.fillPayload(ctx), text: true }))
+      const text = parseFillReport(await this.request(ctx, AUTOFILL_CHANNELS.fill, { ...this.fillPayload(ctx), text: true }, this.fillTimeout()))
       if (!current() || (text.step && text.step !== 'form')) return
       const previous = this.session?.report
-      const report = this.withDrafts(ctx, previous && previous.url === text.url ? withFilesFrom(text, previous) : text)
+      const report = this.withAi(ctx, this.withDrafts(ctx, previous && previous.url === text.url ? withFilesFrom(text, previous) : text))
       this.update({ status: 'filled', report, message: summary(report.fields) })
     } finally {
       if (ctx.fillingSeq === seq) ctx.fillingSeq = null

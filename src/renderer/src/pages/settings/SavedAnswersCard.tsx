@@ -1,23 +1,28 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ActionIcon, Alert, Button, Group, Stack, Switch, Table, Text, Tooltip } from '@mantine/core'
+import { ActionIcon, Alert, Anchor, Button, Group, Stack, Switch, Table, Text, Tooltip } from '@mantine/core'
 import { IconEye, IconTrash } from '@tabler/icons-react'
-import { displayAnswer } from '@shared/apply-facts'
+import type { FactKey } from '@shared/apply-facts'
 import type { SavedAnswers } from '@shared/apply-types'
 import { api, errorText } from '../../api'
+import { FactControl } from '../../components/profile/ApplicationDetails'
+import { useNavigation } from '../../navigation'
 import { SettingsCard, TableFrame } from './SettingsCard'
 import classes from './settings.module.css'
 
 /**
  * The application answers autofill remembers (#71): facts (sensitive ones
- * masked until shown) and questions answered directly. Forget one or all;
- * they are removed from disk.
+ * masked until shown) and questions answered directly. A fact is edited in
+ * place (#136, the same control as Profile → Application details, where every
+ * fact can be set up front); forget one or all, and they are removed from disk.
  */
 export function SavedAnswersCard() {
+  const { navigate } = useNavigation()
   const [data, setData] = useState<SavedAnswers | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [shown, setShown] = useState<Set<string>>(new Set())
   const [confirmAll, setConfirmAll] = useState(false)
   const [pick, setPick] = useState<boolean | null>(null)
+  const [ai, setAi] = useState<boolean | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -30,12 +35,22 @@ export function SavedAnswersCard() {
   useEffect(() => {
     void load()
     api.apply.pickSetting().then(setPick, (err: unknown) => setError(errorText(err)))
+    api.apply.aiAnswersSetting().then(setAi, (err: unknown) => setError(errorText(err)))
   }, [load])
 
   async function togglePick(on: boolean) {
     setError(null)
     try {
       setPick(await api.apply.setPickSetting(on))
+    } catch (err) {
+      setError(errorText(err))
+    }
+  }
+
+  async function toggleAi(on: boolean) {
+    setError(null)
+    try {
+      setAi(await api.apply.setAiAnswersSetting(on))
     } catch (err) {
       setError(errorText(err))
     }
@@ -49,6 +64,10 @@ export function SavedAnswersCard() {
       setError(errorText(err))
     }
   }
+
+  const saveFact = useCallback(async (fact: FactKey, value: string) => {
+    setData(await api.apply.setFact(fact, value))
+  }, [])
 
   const facts = data?.facts ?? []
   const questions = data?.questions ?? []
@@ -64,7 +83,7 @@ export function SavedAnswersCard() {
   return (
     <SettingsCard
       title="Saved application answers"
-      description="Answers you told Apply to remember (authorization, notice period, EEO…). They fill the same questions on later applications. Stored with the app's data on this computer, outside the workspace; agents and AI models never see them."
+      description="Answers you told Apply to remember or set in Profile → Application details (authorization, notice period, EEO…). They fill the same questions on later applications. Stored with the app's data on this computer, outside the workspace; agents and AI models never see them."
       actions={
         count === 0 ? null : confirmAll ? (
           <Group gap="xs" wrap="nowrap">
@@ -89,7 +108,7 @@ export function SavedAnswersCard() {
       }
     >
       <Stack>
-        <div className={classes.toggleStrip}>
+        <Stack gap="sm" className={classes.toggleStrip}>
           <Switch
             label="Pick dropdown answers automatically"
             description="Choose saved answers in dropdowns and Yes/No buttons (Greenhouse, Ashby, Workday) for you. Only answers you confirmed; never Submit, Next or a consent box. Off: they are only suggested in the Apply panel."
@@ -97,7 +116,14 @@ export function SavedAnswersCard() {
             disabled={pick === null}
             onChange={(e) => void togglePick(e.currentTarget.checked)}
           />
-        </div>
+          <Switch
+            label="Use AI to answer unknown questions"
+            description="Once per page, the AI model reads your master profile, the job description and the questions Huntgry does not know yet, and fills in probable answers for you to check (marked “AI answers — check these” in the Apply panel). Never EEO, consent or your saved answers. Off: no AI call; nothing is guessed."
+            checked={ai ?? true}
+            disabled={ai === null}
+            onChange={(e) => void toggleAi(e.currentTarget.checked)}
+          />
+        </Stack>
         {error && (
           <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
             {error}
@@ -105,9 +131,15 @@ export function SavedAnswersCard() {
         )}
         {data && count === 0 && (
           <Text size="sm" c="dimmed">
-            None yet. Answer a question in the Apply panel with &quot;Remember&quot; ticked.
+            None yet. Answer a question in the Apply panel with &quot;Remember&quot; ticked, or set them up front in Profile.
           </Text>
         )}
+        <Text size="sm" c="dimmed">
+          Visa status, sponsorship, notice period, EEO and the other one-time answers:{' '}
+          <Anchor component="button" type="button" size="sm" onClick={() => navigate('profile', { view: 'editor', section: 'application' })}>
+            Edit in Profile → Application details
+          </Anchor>
+        </Text>
         {count > 0 && (
           <TableFrame>
             <Table layout="fixed" horizontalSpacing="md" verticalSpacing={12} aria-label="Saved application answers">
@@ -145,7 +177,7 @@ export function SavedAnswersCard() {
                             </Tooltip>
                           </Group>
                         ) : (
-                          <Text size="sm">{displayAnswer(f.value)}</Text>
+                          <FactControl fact={f.fact} value={f.value} label={f.label} labelHidden onSave={saveFact} />
                         )}
                       </Table.Td>
                       <Table.Td>{forget(f.label, () => api.apply.forgetAnswer({ fact: f.fact }))}</Table.Td>

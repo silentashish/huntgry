@@ -20,6 +20,9 @@ function sampleProfile(): MasterProfile {
       github: 'https://github.com/janedoe',
       website: 'https://janedoe.dev',
       workAuthorization: 'US citizen',
+      address: '742 Evergreen Terrace, Apt 4',
+      postalCode: '62704',
+      country: 'United States',
       other: [{ label: 'Portfolio', value: 'https://dribbble.com/janedoe' }]
     },
     summary: 'Backend engineer with 6 years of experience.\n\nLoves boring technology.',
@@ -122,6 +125,51 @@ describe('master profile format', () => {
     const { profile, warnings } = parseMasterProfile(md)
     expect(warnings).toEqual([])
     expect(isProfileEmpty(profile)).toBe(true)
+  })
+
+  it('writes the address lines after Work authorization, only when set (#136)', () => {
+    const md = serializeMasterProfile(sampleProfile())
+    expect(md).toContain(
+      '- Work authorization: US citizen\n- Address: 742 Evergreen Terrace, Apt 4\n- Postal code: 62704\n- Country: United States\n- Portfolio:'
+    )
+    const empty = serializeMasterProfile(emptyProfile())
+    expect(empty).not.toMatch(/- (Address|Postal code|Country):/)
+  })
+
+  it('reads the address lines under their aliases (#136)', () => {
+    const md = [
+      '# Master Profile',
+      '',
+      '## Contact',
+      '',
+      '- Name: Jane Doe',
+      '- Location: Springfield, IL',
+      '- Street address: 742 Evergreen Terrace',
+      '- ZIP code: 62704',
+      '- Country: United States',
+      ''
+    ].join('\n')
+    const { profile, warnings } = parseMasterProfile(md)
+    expect(warnings).toEqual([])
+    expect(profile.contact).toMatchObject({
+      location: 'Springfield, IL',
+      address: '742 Evergreen Terrace',
+      postalCode: '62704',
+      country: 'United States'
+    })
+    expect(profile.contact.other).toEqual([])
+    for (const [line, key, value] of [
+      ['- Address: 1 Main St', 'address', '1 Main St'],
+      ['- Zip: 10001', 'postalCode', '10001'],
+      ['- Postcode: SW1A 1AA', 'postalCode', 'SW1A 1AA'],
+      ['- Postal code: 97201', 'postalCode', '97201']
+    ] as const) {
+      const { profile: p } = parseMasterProfile(`## Contact\n\n${line}\n`)
+      expect(p.contact[key]).toBe(value)
+    }
+    // Round trip keeps them.
+    const back = parseMasterProfile(serializeMasterProfile(profile)).profile
+    expect(back.contact).toEqual(profile.contact)
   })
 
   it('credits the skill source and ships no real personal data', () => {

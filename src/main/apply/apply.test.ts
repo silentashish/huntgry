@@ -5,9 +5,12 @@ import { join } from 'node:path'
 import { JSDOM } from 'jsdom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { factsFromProfile, type PageAnswers } from '@shared/apply-facts'
-import type { ApplySession, FillReport, FillValues } from '@shared/apply-types'
+import type { ApplySession, FillProfile, FillReport, FillValues } from '@shared/apply-types'
 import { AUTOFILL_CHANNELS, UPLOAD_ATTR } from '@shared/autofill-channels'
-import { detectConfirmation, fillPage, pickAnswers, scanPage, uploadStateOf, verifyFill, type UploadKey } from '@shared/autofill/engine'
+import { detectConfirmation, fillPage, fillSections, pickAnswers, scanPage, uploadStateOf, verifyFill, type UploadKey } from '@shared/autofill/engine'
+import { editsOf } from '@shared/autofill/session'
+import { workdayWidgets } from '../../../scripts/mock-ats/workday.mjs'
+import { watchUserEdits } from '@shared/autofill/user-edits'
 import { updateReview, type RecordedReview } from '../review/authority'
 import { contentRevisionOf } from '../review/service'
 import { refusalFor } from '../browser/url'
@@ -27,7 +30,14 @@ const VALUES: FillValues = {
   fullName: 'Ada Lovelace',
   email: 'ada@example.com',
   phone: '+1 555 123 4567',
-  location: 'London',
+  // No location: the location typeaheads (#136) would wait for suggestions the static fixtures never show, longer
+  // than this harness's 500 ms request timeout (they are tested in src/shared/autofill/address.test.ts).
+  location: '',
+  addressLine1: '',
+  city: '',
+  state: '',
+  postalCode: '',
+  country: '',
   linkedin: 'https://www.linkedin.com/in/ada',
   github: '',
   website: '',
@@ -57,6 +67,8 @@ class FakeTab implements ApplyPage {
   answersSeen: Array<PageAnswers | undefined> = []
   /** The pick switch each fill request carried (#71). */
   picksSeen: Array<boolean | undefined> = []
+  /** The profile sections each fill request carried (#136). */
+  profilesSeen: Array<FillProfile | undefined> = []
   /** When set, fill replies wait here until `releaseFills()` (a slow page). */
   heldFills: Array<() => void> | null = null
   /** When set, detect replies (scans of the document that got the request) wait here until `releaseDetects()`. */
@@ -76,8 +88,18 @@ class FakeTab implements ApplyPage {
     for (const reply of held) reply()
   }
 
+  /** Runs the mock Workday's dropdown, prompt and section widgets (#136) in every document of this tab. */
+  widgets = false
+
   constructor(html: string, url: string) {
     this.dom = new JSDOM(html, { url })
+  }
+
+  private make(html: string, url: string): JSDOM {
+    if (!this.widgets) return new JSDOM(html, { url })
+    const dom = new JSDOM(html, { url, runScripts: 'outside-only' })
+    dom.window.eval(`(${workdayWidgets.toString()})()`)
+    return dom
   }
 
   load(html: string, url: string) {
@@ -87,7 +109,7 @@ class FakeTab implements ApplyPage {
 
   /** A main-frame navigation commits: the new document is active, its load has not finished yet. */
   commit(html: string, url: string) {
-    this.dom = new JSDOM(html, { url })
+    this.dom = this.make(html, url)
     for (const l of this.navigations) l(url)
   }
 
@@ -96,11 +118,13 @@ class FakeTab implements ApplyPage {
   }
 
   /** The preload's fill: fill, then the verify pass (without its delays). A marker-only pass keeps the text report. */
-  private async fill(values: FillValues, text?: boolean, answers?: PageAnswers, pick?: boolean): Promise<FillReport> {
+  private async fill(values: FillValues, text?: boolean, answers?: PageAnswers, pick?: boolean, profile?: FillProfile): Promise<FillReport> {
     const doc = this.dom.window.document
     this.answersSeen.push(answers)
     this.picksSeen.push(pick)
-    const filled = fillPage(doc, values, { text, answers, pick })
+    this.profilesSeen.push(profile)
+    const filled = fillPage(doc, values, { text, answers, pick, profile })
+    await fillSections(filled)
     await pickAnswers(filled)
     const report = await verifyFill(doc, values, filled, { settleMs: 0 })
     if (text !== false) this.lastReport = report
@@ -118,13 +142,13 @@ class FakeTab implements ApplyPage {
 
   /** An in-page navigation (pushState): the DOM changes, main hears `did-navigate-in-page`, no step report yet. */
   navigateInPage(html: string, url = this.dom.window.location.href) {
-    this.dom = new JSDOM(html, { url })
+    this.dom = this.make(html, url)
     for (const l of this.loads) l(false)
   }
 
   /** A single-page app moving to another step in place (same URL), as the preload's step watcher reports it. */
   step(html: string) {
-    this.dom = new JSDOM(html, { url: this.dom.window.location.href })
+    this.dom = this.make(html, this.dom.window.location.href)
     this.reply(AUTOFILL_CHANNELS.step, { url: this.dom.window.location.href })
   }
 
@@ -144,9 +168,10 @@ class FakeTab implements ApplyPage {
 
   send(channel: string, payload: unknown): void {
     this.sent.push(channel)
-    const { requestId, values, text, key, fileName, timeoutMs, answers, pick } = payload as {
+    const { requestId, values, text, key, fileName, timeoutMs, answers, pick, profile } = payload as {
       requestId: string
       values?: FillValues
+      profile?: FillProfile
       answers?: PageAnswers
       pick?: boolean
       text?: boolean
@@ -157,7 +182,7 @@ class FakeTab implements ApplyPage {
     const doc = this.dom.window.document
     if (channel === AUTOFILL_CHANNELS.fill && this.heldFills) {
       // The page did the fill already; only its answer is late.
-      const result = this.fill(values as FillValues, text, answers, pick)
+      const result = this.fill(values as FillValues, text, answers, pick, profile)
       this.heldFills.push(() => void result.then((r) => this.reply(AUTOFILL_CHANNELS.result, { requestId, ok: true, result: r })))
       return
     }
@@ -174,12 +199,13 @@ class FakeTab implements ApplyPage {
       await Promise.resolve()
       let result: unknown
       if (channel === AUTOFILL_CHANNELS.detect) result = scanPage(doc)
-      else if (channel === AUTOFILL_CHANNELS.fill) result = await this.fill(values as FillValues, text, answers, pick)
+      else if (channel === AUTOFILL_CHANNELS.fill) result = await this.fill(values as FillValues, text, answers, pick, profile)
       else if (channel === AUTOFILL_CHANNELS.uploadState)
         result =
           this.uploadAnswer === 'engine'
             ? await this.engineUploadState(key ?? 'resume', fileName ?? '', timeoutMs ?? 1000)
             : this.uploadAnswer
+      else if (channel === AUTOFILL_CHANNELS.edits) result = { url: this.lastReport?.url ?? null, edits: editsOf(this.lastReport) }
       else if (channel === AUTOFILL_CHANNELS.afterUpload)
         result = this.lastReport && (await verifyFill(doc, values as FillValues, this.lastReport, { settleMs: 0 }))
       else return
@@ -1011,11 +1037,19 @@ describe('ApplyService on Workday', () => {
     await new Promise((r) => setTimeout(r, 50))
     expect(tab.sent.filter((c) => c === AUTOFILL_CHANNELS.fill)).toHaveLength(fills)
 
-    // Application Questions is the user's.
+    // Application Questions is answerable (#136): only questions, never a contact value or an upload.
     tab.step(fixture('workday-application-questions.html'))
+    await vi.waitFor(() => expect(service.current()!.step?.title).toBe('Application Questions'))
+    await until(service, 'filled')
+    expect(service.current()!.step).toEqual({ kind: 'form', title: 'Application Questions' })
+    expect(service.current()!.report!.fields.every((f) => f.key === null)).toBe(true)
+    expect(dbg.log.filter((l) => l === 'DOM.setFileInputFiles')).toHaveLength(1)
+
+    // Review is the user's: nothing filled.
+    tab.step(fixture('workday-review.html'))
     await until(service, 'waiting')
-    expect(service.current()).toMatchObject({ report: null, step: { kind: 'other', title: 'Application Questions' } })
-    expect(service.current()!.message).toMatch(/Nothing for Huntgry on this step \("Application Questions"\)/)
+    expect(service.current()).toMatchObject({ report: null, step: { kind: 'other', title: 'Review' } })
+    expect(service.current()!.message).toMatch(/Nothing for Huntgry on this step \("Review"\)/)
   })
 
   it('scans a reported step again when its detect gets no answer', async () => {
@@ -1366,7 +1400,7 @@ describe('application answers (#71)', () => {
       rememberMappings: async (workspace, m) => void (await rememberMappings(workspace, m)),
       map:
         map ??
-        (async (_workspace, questions) => {
+        (async (_workspace, _applicationId, questions) => {
           calls.push(questions)
           return questions.map((q) => ({ id: q.id, fact: /identify|gender/i.test(q.question) ? ('gender' as const) : null }))
         })
@@ -1458,7 +1492,7 @@ describe('application answers (#71)', () => {
     let current = ws
     let releaseMap: () => void = () => undefined
     const mapped = new Promise<void>((r) => (releaseMap = r))
-    const { deps } = answers({}, async (_workspace, questions) => {
+    const { deps } = answers({}, async (_workspace, _id, questions) => {
       await mapped
       return questions.map((q) => ({ id: q.id, fact: /identify/i.test(q.question) ? ('gender' as const) : null }))
     })
@@ -1641,7 +1675,7 @@ describe('application answers (#71)', () => {
     const page = (extra: string) =>
       `<form><label>Email <input name="email" type="email"></label>${extra}<input type="file" name="resume"><button type="submit">Send</button></form>`
     const sizes: number[] = []
-    const { deps } = answers({}, async (_w, questions) => {
+    const { deps } = answers({}, async (_w, _id, questions) => {
       sizes.push(questions.length)
       throw new Error('quota')
     })
@@ -1699,5 +1733,294 @@ describe('application answers (#71)', () => {
     expect(service.current()!.status).toBe('filled')
     expect(line(service, 'How do you identify?')).toMatchObject({ outcome: 'skipped-unsupported' })
     expect(line(service, 'How do you identify?').fact).toBeUndefined()
+  })
+
+  describe('probable answers from the profile (#136)', () => {
+    /** A page with a screening question nothing knows ("experience with Go"), a free-text one and an EEO one. */
+    const GO = (n = 1) =>
+      `<form><label>Email <input name="email" type="email"></label>
+       <fieldset><legend>Do you have experience with Go?</legend>
+       <label><input type="radio" name="go${n}" value="y"> Yes</label><label><input type="radio" name="go${n}" value="n"> No</label></fieldset>
+       <p><label for="hy${n}">How do you identify?</label><select id="hy${n}" name="hy${n}"><option value="">Select</option><option>Man</option><option>Woman</option></select></p>
+       <input type="file" name="resume"><button type="submit">Send</button></form>`
+    const LABEL = 'Do you have experience with Go?'
+    const checked = (tab: FakeTab) =>
+      Array.from(tab.dom.window.document.querySelectorAll<HTMLInputElement>('input[type="radio"]')).find((r) => r.checked)?.value
+    /** A model like the real one: Yes to "experience with" from the profile; it over-reaches on the EEO question. */
+    function model() {
+      const calls: Array<{ applicationId: string; questions: MapQuestion[] }> = []
+      const map: AnswersDeps['map'] = async (_w, applicationId, questions) => {
+        calls.push({ applicationId, questions })
+        return questions.map((q) =>
+          /experience with/i.test(q.question)
+            ? { id: q.id, fact: null, answer: 'Yes', reusable: true }
+            : /identify/i.test(q.question)
+              ? { id: q.id, fact: 'gender' as const, answer: 'Woman' }
+              : { id: q.id, fact: null }
+        )
+      }
+      return { map, calls }
+    }
+
+    it('writes the model answer after the call, marks it as an AI answer, and the next application fills it with no call', async () => {
+      const { map, calls } = model()
+      const { deps } = answers({}, map)
+      const first = await open(deps, GO(1))
+      await vi.waitFor(() =>
+        expect(line(first.service, LABEL)).toMatchObject({ outcome: 'filled', value: 'Yes', suggestedBy: 'model', reason: 'AI answer from your profile; check it.' })
+      )
+      expect(checked(first.tab)).toBe('y')
+      expect(calls).toHaveLength(1)
+      expect(calls[0].applicationId).toBe(ID)
+      // The EEO question with no stored answer still asks once: the model's guess is neither written nor kept.
+      expect(line(first.service, 'How do you identify?')).toMatchObject({ fact: 'gender', reason: 'Answer it once below; Huntgry remembers it.' })
+      expect(line(first.service, 'How do you identify?').suggestion).toBeUndefined()
+      expect((first.tab.dom.window.document.querySelector('select') as HTMLSelectElement).value).toBe('')
+      const stored = await readAnswers(ws)
+      expect(Object.values(stored.questions)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ label: LABEL, value: 'Yes', source: 'model', confirmed: false }),
+          expect.not.objectContaining({ value: 'Woman' })
+        ])
+      )
+
+      const second = await open(deps, GO(2), 'software-engineer/acme/lv-2')
+      expect(line(second.service, LABEL)).toMatchObject({ outcome: 'filled', value: 'Yes', suggestedBy: 'model' })
+      expect(checked(second.tab)).toBe('y')
+      await new Promise((r) => setTimeout(r, 20))
+      expect(calls).toHaveLength(1)
+    })
+
+    it('keeps a company-specific answer for this application only: written and marked, never stored, asked again next time', async () => {
+      const WHY = (n = 1) =>
+        `<form><label>Email <input name="email" type="email"></label>
+         <p><label for="why${n}">Why are you interested in this role?</label><textarea id="why${n}" name="why${n}"></textarea></p>
+         <p><label for="fit${n}">What would you bring to the team?</label><input id="fit${n}" name="fit${n}"></p>
+         <input type="file" name="resume"><button type="submit">Send</button></form>`
+      const calls: MapQuestion[][] = []
+      // The model says the "fit" answer is reusable, but it is not; "why" is caught by main's backstop either way.
+      const { deps } = answers({}, async (_w, _id, questions) => {
+        calls.push(questions)
+        return questions.map((q) =>
+          /interested/i.test(q.question)
+            ? { id: q.id, fact: null, answer: 'Acme builds the rockets I want to work on.', reusable: true }
+            : { id: q.id, fact: null, answer: 'Go services for Acme billing.', reusable: false }
+        )
+      })
+      const first = await open(deps, WHY(1))
+      const why = 'Why are you interested in this role?'
+      const fit = 'What would you bring to the team?'
+      await vi.waitFor(() => {
+        expect(line(first.service, why)).toMatchObject({ outcome: 'filled', suggestedBy: 'model', reason: 'AI answer from your profile; check it.' })
+        expect(line(first.service, fit)).toMatchObject({ outcome: 'filled', suggestedBy: 'model' })
+      })
+      expect((first.tab.dom.window.document.getElementById('why1') as HTMLTextAreaElement).value).toBe('Acme builds the rockets I want to work on.')
+      expect((first.tab.dom.window.document.getElementById('fit1') as HTMLInputElement).value).toBe('Go services for Acme billing.')
+      // Nothing about either question is in the memory.
+      await new Promise((r) => setTimeout(r, 20))
+      const labels = Object.values((await readAnswers(ws)).questions).map((q) => q.label)
+      expect(labels).not.toContain(why)
+      expect(labels).not.toContain(fit)
+
+      // Another employer's form: its first fill carries no answer for them, and the model is asked again.
+      const second = await open(deps, WHY(2), 'software-engineer/acme/lv-2')
+      const sent = Object.values(second.tab.answersSeen[0]!.questions).map((q) => q.value)
+      expect(sent).not.toContain('Acme builds the rockets I want to work on.')
+      expect(sent).not.toContain('Go services for Acme billing.')
+      await vi.waitFor(() => expect(calls).toHaveLength(2))
+      expect(calls[1].map((q) => q.question)).toEqual([why, fit])
+    })
+
+    it("a correction in the panel replaces the AI answer in the page and in memory, as the user's", async () => {
+      const { map, calls } = model()
+      const { deps } = answers({}, map)
+      const first = await open(deps, GO(1))
+      await vi.waitFor(() => expect(line(first.service, LABEL)).toMatchObject({ outcome: 'filled', suggestedBy: 'model' }))
+      const field = line(first.service, LABEL)
+      await first.service.answer(first.service.current()!.id, field.fieldId!, 'No', true)
+      expect(checked(first.tab)).toBe('n')
+      expect(line(first.service, LABEL)).toMatchObject({ outcome: 'filled', value: 'No' })
+      expect(line(first.service, LABEL).suggestedBy).toBeUndefined()
+      expect((await readAnswers(ws)).questions[field.question!]).toMatchObject({ value: 'No', source: 'user', confirmed: true })
+
+      const second = await open(deps, GO(2), 'software-engineer/acme/lv-2')
+      expect(line(second.service, LABEL)).toMatchObject({ outcome: 'filled', value: 'No' })
+      expect(line(second.service, LABEL).suggestedBy).toBeUndefined()
+      expect(checked(second.tab)).toBe('n')
+      await new Promise((r) => setTimeout(r, 20))
+      expect(calls).toHaveLength(1)
+    })
+
+    it("writes the user's own stored fact into a question the model mapped to it, saying so", async () => {
+      const { deps } = answers({}, async (_w, _id, questions) =>
+        questions.map((q) => ({ id: q.id, fact: /iniziare/i.test(q.question) ? ('noticePeriod' as const) : null, answer: 'Subito' }))
+      )
+      await rememberAnswer(ws, { question: 'n', label: 'Notice period', fact: 'noticePeriod', value: '2 weeks' })
+      const page = `<form><label>Email <input name="email" type="email"></label><p><label for="q">Quando puoi iniziare?</label><input id="q" name="q"></p>
+        <input type="file" name="resume"><button type="submit">Send</button></form>`
+      const { tab, service } = await open(deps, page)
+      await vi.waitFor(() =>
+        expect(line(service, 'Quando puoi iniziare?')).toMatchObject({
+          outcome: 'filled',
+          value: '2 weeks',
+          suggestedBy: 'model',
+          reason: 'AI matched this question to notice period; check it.'
+        })
+      )
+      expect((tab.dom.window.document.getElementById('q') as HTMLInputElement).value).toBe('2 weeks')
+    })
+
+    it('makes no model call at all with "Use AI to answer unknown questions" off', async () => {
+      const { map, calls } = model()
+      const { deps } = answers({}, map)
+      const drafted: string[] = []
+      deps.draft = async (_w, _id, questions) => (drafted.push(...questions.map((q) => q.question)), [])
+      const { tab, service } = await open(deps, GO(1), ID, { aiAnswers: async () => false })
+      await new Promise((r) => setTimeout(r, 30))
+      expect(calls).toHaveLength(0)
+      expect(drafted).toHaveLength(0)
+      expect(tab.answersSeen.at(-1)?.aiAnswers).toBe(false)
+      expect(line(service, LABEL).outcome).not.toBe('filled')
+      expect(checked(tab)).toBeUndefined()
+    })
+
+    it('with the switch off, a model answer stored earlier is only suggested', async () => {
+      const { map } = model()
+      const { deps } = answers({}, map)
+      const first = await open(deps, GO(1))
+      await vi.waitFor(() => expect(line(first.service, LABEL)).toMatchObject({ outcome: 'filled', suggestedBy: 'model' }))
+      const second = await open(deps, GO(2), 'software-engineer/acme/lv-2', { aiAnswers: async () => false })
+      expect(line(second.service, LABEL)).toMatchObject({ suggestion: 'Yes', suggestedBy: 'model' })
+      expect(checked(second.tab)).toBeUndefined()
+    })
+
+    it('remembers a correction made in the page (sent as the page is left) and fills it on the next application', async () => {
+      const { map, calls } = model()
+      const { deps } = answers({}, map)
+      const first = await open(deps, GO(1))
+      await vi.waitFor(() => expect(line(first.service, LABEL)).toMatchObject({ outcome: 'filled', suggestedBy: 'model' }))
+      const doc = first.tab.dom.window.document
+      watchUserEdits(doc, { isUserEvent: () => true })
+      const no = doc.querySelector<HTMLInputElement>('input[value="n"]')!
+      no.checked = true
+      no.dispatchEvent(new first.tab.dom.window.Event('change', { bubbles: true }))
+      // The preload's pagehide report.
+      first.tab.reply(AUTOFILL_CHANNELS.edits, { url: first.tab.lastReport!.url, edits: editsOf(first.tab.lastReport) })
+      const question = line(first.service, LABEL).question!
+      await vi.waitFor(async () => expect((await readAnswers(ws)).questions[question]).toMatchObject({ value: 'No', source: 'user', confirmed: true }))
+
+      const second = await open(deps, GO(2), 'software-engineer/acme/lv-2')
+      expect(line(second.service, LABEL)).toMatchObject({ outcome: 'filled', value: 'No' })
+      expect(checked(second.tab)).toBe('n')
+      expect(calls).toHaveLength(1)
+    })
+
+    it('asks the page for its edits before filling it again, and ignores edits for another page or a value not offered', async () => {
+      const { map } = model()
+      const { deps } = answers({}, map)
+      const { tab, service } = await open(deps, GO(1))
+      await vi.waitFor(() => expect(line(service, LABEL)).toMatchObject({ outcome: 'filled', suggestedBy: 'model' }))
+      const field = line(service, LABEL)
+      // Another page's report, and an answer the question does not offer, change nothing.
+      tab.reply(AUTOFILL_CHANNELS.edits, { url: 'https://evil.example/apply', edits: [{ fieldId: field.fieldId, value: 'No' }] })
+      tab.reply(AUTOFILL_CHANNELS.edits, { url: tab.lastReport!.url, edits: [{ fieldId: field.fieldId, value: 'Maybe' }] })
+      await new Promise((r) => setTimeout(r, 20))
+      expect((await readAnswers(ws)).questions[field.question!]).toMatchObject({ source: 'model' })
+      // The person changes the answer, then presses Fill again: the edit is stored first and stays in the page.
+      const doc = tab.dom.window.document
+      watchUserEdits(doc, { isUserEvent: () => true })
+      const no = doc.querySelector<HTMLInputElement>('input[value="n"]')!
+      no.checked = true
+      no.dispatchEvent(new tab.dom.window.Event('change', { bubbles: true }))
+      await service.fill(service.current()!.id)
+      expect((await readAnswers(ws)).questions[field.question!]).toMatchObject({ value: 'No', source: 'user', confirmed: true })
+      expect(checked(tab)).toBe('n')
+      expect(line(service, LABEL)).toMatchObject({ outcome: 'filled', value: 'No' })
+    })
+  })
+
+  describe('Workday answer-only steps (#136)', () => {
+    const JOB = 'https://acme.wd1.myworkdayjobs.com/en-US/AcmeCareers/job/Remote-USA/Software-Engineer_JR-1001'
+    const WD = 'software-engineer/acme/wd-2'
+    const PROFILE: FillProfile = {
+      experience: [{ company: 'Acme Corp', role: 'Senior Backend Engineer', location: 'Remote', start: { month: 1, year: 2022 }, end: null, current: true, description: 'Billing.' }],
+      education: [],
+      skills: ['Go'],
+      websites: []
+    }
+
+    it('fills My Experience from the profile, then Application Questions (facts and the model answer), Voluntary Disclosures and Self Identify; never Review', async () => {
+      const map: AnswersDeps['map'] = async (_w, _id, questions) =>
+        questions.map((q) => (/why do you want/i.test(q.question) ? { id: q.id, fact: null, answer: 'Fake model answer' } : { id: q.id, fact: null }))
+      const { deps } = answers({ needsSponsorship: 'no', gender: 'decline', veteranStatus: 'no', raceEthnicity: 'decline', disabilityStatus: 'decline' }, map)
+      await application({ 'job-description.md': `Engineer\n${JOB}\n`, 'resume.pdf': '%PDF' }, WD)
+      const tab = new FakeTab('', `${JOB}/apply/applyManually`)
+      tab.widgets = true
+      tab.uploadAnswer = 'attached'
+      const { service } = setup(tab, undefined, {
+        answers: deps,
+        profile: async () => PROFILE,
+        pickWidgets: async () => true,
+        aiAnswers: async () => true,
+        requestTimeoutMs: 500,
+        workdayFillTimeoutMs: 20_000
+      })
+      await service.start(WD)
+      tab.load(fixture('workday-signin.html'), `${JOB}/apply/applyManually`)
+      await vi.waitFor(() => expect(service.current()!.step?.kind).toBe('account-wall'))
+      const doc = () => tab.dom.window.document
+      const text = (selector: string) => doc().querySelector(selector)?.textContent
+      const wait = { timeout: 15_000, interval: 20 }
+
+      // My Experience: a block added and filled from the profile, the skill picked.
+      tab.step(fixture('workday-my-experience.html'))
+      await vi.waitFor(() => expect(service.current()!.step?.title).toBe('My Experience'))
+      await vi.waitFor(() => expect(service.current()?.status).toBe('filled'), wait)
+      expect(tab.profilesSeen.at(-1)).toEqual(PROFILE)
+      expect((doc().querySelector('#workExperience-1--jobTitle') as HTMLInputElement).value).toBe('Senior Backend Engineer')
+      expect(service.current()!.report!.fields.find((f) => f.label === 'Work experience 1 · Job title')).toMatchObject({ outcome: 'filled' })
+      expect(service.current()!.report!.fields.find((f) => f.label.startsWith('Skills:'))).toMatchObject({ label: 'Skills: 1 added', outcome: 'filled' })
+
+      // Application Questions: the sponsorship fact picked; the model's answer written after its call.
+      tab.step(fixture('workday-application-questions.html'))
+      await vi.waitFor(() => expect(service.current()!.step?.title).toBe('Application Questions'))
+      await vi.waitFor(() => expect(service.current()?.status).toBe('filled'), wait)
+      expect(text('#primaryQuestionnaire--sponsorship')).toBe('No')
+      await vi.waitFor(
+        () => expect((doc().querySelector('#primaryQuestionnaire--motivation') as HTMLTextAreaElement).value).toBe('Fake model answer'),
+        wait
+      )
+      // The page holds the answer before the refill's report reaches the session: wait for the report too.
+      await vi.waitFor(
+        () =>
+          expect(service.current()!.report!.fields.find((f) => f.label === 'Why do you want to work at Acme?')).toMatchObject({
+            outcome: 'filled',
+            suggestedBy: 'model'
+          }),
+        wait
+      )
+
+      // Voluntary Disclosures: picked from the stored facts; the terms box untouched.
+      tab.step(fixture('workday-voluntary-disclosures.html'))
+      await vi.waitFor(() => expect(service.current()!.step?.title).toBe('Voluntary Disclosures'))
+      await vi.waitFor(() => expect(service.current()?.status).toBe('filled'), wait)
+      expect(text('#personalInfoUS--gender')).toBe('I do not wish to self-identify')
+      expect(text('#personalInfoUS--veteranStatus')).toBe('I am not a protected veteran')
+      expect((doc().querySelector('#termsAndConditions--acceptTermsAndAgreements') as HTMLInputElement).checked).toBe(false)
+
+      // Self Identify: the disability fact picked; the signature (name, date) left empty.
+      tab.step(fixture('workday-self-identify.html'))
+      await vi.waitFor(() => expect(service.current()!.step?.title).toBe('Self Identify'))
+      await vi.waitFor(() => expect(service.current()?.status).toBe('filled'), wait)
+      expect((doc().querySelector('#selfIdentifiedDisabilityData--disabilityStatus-2') as HTMLInputElement).checked).toBe(true)
+      expect((doc().querySelector('#selfIdentifiedDisabilityData--name') as HTMLInputElement).value).toBe('')
+
+      // Review: the user's.
+      const fills = tab.sent.filter((c) => c === AUTOFILL_CHANNELS.fill).length
+      tab.step(fixture('workday-review.html'))
+      await until(service, 'waiting')
+      expect(service.current()).toMatchObject({ report: null, step: { kind: 'other', title: 'Review' } })
+      expect(tab.sent.filter((c) => c === AUTOFILL_CHANNELS.fill)).toHaveLength(fills)
+    }, 60_000)
   })
 })

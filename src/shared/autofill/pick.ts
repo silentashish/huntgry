@@ -1,7 +1,8 @@
 import { normalizeText } from '../apply-facts'
-import { radioGroup, radioLabel } from './dom'
+import { radioGroup, radioLabel, typeText } from './dom'
 import { waitUntil } from './ready'
 import { asHuntgry } from './user-edits'
+import { ADD_NAME, NAV_AREAS } from './workday-sections'
 
 /**
  * Picking an option in a widget that only takes a click (#71, owner decision
@@ -31,11 +32,29 @@ import { asHuntgry } from './user-edits'
  *   and stops picking when the page changes step.
  * Only pointer and mouse events are sent (pointerdown, mousedown, pointerup,
  * mouseup, click); never a key, so nothing can press Enter in a form. The
- * value is read back afterwards; a pick that did not stick is reported.
+ * one exception is `workdaySearchEnter` (#136): Workday's multiselect prompts
+ * search only on Enter, so an Enter keydown / keyup goes to a Workday search
+ * box, never anything else (see there). The value is read back afterwards; a
+ * pick that did not stick is reported.
+ *
+ * Typeaheads (#136: Greenhouse's and Lever's location, Workday's prompts) are
+ * a widget of their own: the search text is written with the native setter
+ * and an `input` event (dom.ts `typeText`), then the widget's own list is
+ * awaited, the matching suggestion pressed like an option and read back.
+ *
+ * Two bounded presses outside a widget's options (#136, Workday My
+ * Experience), each with `refusal`'s checks and inside the safety net:
+ * - `pressAdd`: a section's own Add / Add Another button (`ADD_NAME`), inside
+ *   that section, never in the page's navigation footer, and only while the
+ *   page stays on its step;
+ * - `pressToggle`: exactly two kinds of check box, unchecked ones only: Work
+ *   Experience's "I currently work here" and Self Identify's disability
+ *   status boxes. Never a consent, terms or any other check box.
  */
 
 export type PickWidget =
   | { type: 'listbox'; scope: Element; opener: HTMLElement }
+  | { type: 'typeahead'; scope: Element; input: HTMLInputElement }
   | { type: 'buttons'; scope: Element; options: HTMLElement[] }
   | { type: 'radios'; scope: Element; options: HTMLInputElement[] }
 
@@ -103,6 +122,72 @@ export function widgetOf(el: Element): PickWidget | null {
   return null
 }
 
+/** Workday's multiselect prompt search box (Country Phone Code, Skills, School): it searches on Enter. */
+export function isWorkdaySearchBox(el: Element): boolean {
+  return (
+    tag(el) === 'input' &&
+    el.getAttribute('data-automation-id') === 'searchBox' &&
+    el.closest('[data-automation-id="multiSelectContainer"]') !== null &&
+    el.closest('form') === null
+  )
+}
+
+/**
+ * The typeahead `input` belongs to (#136): a search box whose suggestions the
+ * site renders as you type, and which drops free text (Greenhouse's
+ * react-select location, Lever's location, Workday's multiselect prompts).
+ * Null for anything that is not a text input.
+ */
+export function typeaheadOf(el: Element): PickWidget | null {
+  if (tag(el) !== 'input') return null
+  const input = el as HTMLInputElement
+  if (!['', 'text', 'search'].includes((input.getAttribute('type') ?? '').toLowerCase())) return null
+  const scope =
+    el.closest('[data-automation-id^="formField-"]') ??
+    el.closest('[class*="select__container"], [class*="SelectContainer"]') ??
+    ownScope(el)
+  return { type: 'typeahead', scope, input }
+}
+
+/**
+ * Lists in the document before Huntgry opened a widget (snapshot taken right
+ * before the press, or before typing into a typeahead). A list that appears
+ * afterwards may be the widget's own even when nothing names it; see
+ * `freshList`.
+ */
+const OPENED = new WeakMap<PickWidget, ReadonlySet<Element>>()
+
+/** Lists a typeahead's suggestions come in: ARIA listboxes, Workday's prompt list, Lever's location results. */
+const TYPEAHEAD_LISTS = '[role="listbox"], [data-automation-id="activeListContainer"], .dropdown-results'
+/** Suggestions in those lists. */
+const TYPEAHEAD_OPTIONS =
+  '[role="option"], [class*="__option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"], .dropdown-location'
+
+/**
+ * The one list that appeared in the document after the widget was opened
+ * (`OPENED`), when exactly one did and no other control claims it (its
+ * `aria-labelledby` or another control's `aria-controls` / `aria-owns` names
+ * someone else). Several new lists, or one tied to another control, are
+ * never used.
+ */
+function freshList(widget: PickWidget, selector: string, opener: Element): Element | null {
+  const before = OPENED.get(widget)
+  if (!before) return null
+  const doc = widget.scope.ownerDocument
+  const fresh = Array.from(doc.querySelectorAll(selector)).filter((box) => !before.has(box) && !Array.from(before).some((old) => old.contains(box)))
+  // A list inside another new list is part of it, not a second one.
+  const top = fresh.filter((box) => !fresh.some((other) => other !== box && other.contains(box)))
+  if (top.length !== 1) return null
+  const box = top[0]
+  if (box.id) {
+    const claimed = Array.from(doc.querySelectorAll('[aria-controls], [aria-owns]')).some(
+      (el) => el !== opener && (idsOf(el, 'aria-controls').includes(box.id) || idsOf(el, 'aria-owns').includes(box.id))
+    )
+    if (claimed) return null
+  }
+  return box
+}
+
 /**
  * Listboxes that demonstrably belong to the widget's control: named by its `aria-controls` / `aria-owns`, inside the
  * widget, or naming the control in their `aria-labelledby`. A listbox with no such tie is never used, however it
@@ -123,7 +208,43 @@ export function ownListboxes(widget: Extract<PickWidget, { type: 'listbox' }>): 
     for (const box of Array.from(doc.querySelectorAll('[role="listbox"]')))
       if (idsOf(box, 'aria-labelledby').includes(widget.opener.id)) candidates.add(box)
   }
-  return [...candidates].filter((box) => isOwnListbox(box, widget))
+  // Workday dropdown buttons (#136): some tenants render the popup without `aria-controls`. For a dropdown BUTTON
+  // only, the single listbox that appeared after Huntgry pressed it (snapshot in `pickInside`), tied to no other
+  // control, is its popup. Comboboxes (react-select) keep the strict tie: their menus always name the input. The
+  // reference Workday fillers rely on `aria-controls` → `ul#id` at the end of body, which the tie above covers.
+  if (candidates.size === 0 && tag(widget.opener) === 'button') {
+    const box = freshList(widget, '[role="listbox"]', widget.opener)
+    if (box) candidates.add(box)
+  }
+  return [...candidates].filter((box) => isOwnListbox(box, widget.opener, widget.scope))
+}
+
+/**
+ * The lists a typeahead's suggestions are in: named by its input's
+ * `aria-controls` / `aria-owns`, inside the widget, or (Workday renders its
+ * prompt list in a popup at the end of the page) the single list that
+ * appeared after Huntgry typed, tied to no other control.
+ */
+export function typeaheadLists(widget: Extract<PickWidget, { type: 'typeahead' }>): Element[] {
+  const doc = widget.input.ownerDocument
+  const candidates = new Set<Element>()
+  for (const id of [...idsOf(widget.input, 'aria-controls'), ...idsOf(widget.input, 'aria-owns')]) {
+    const box = doc.getElementById(id)
+    if (box) candidates.add(box)
+  }
+  for (const box of Array.from(widget.scope.querySelectorAll(`${TYPEAHEAD_LISTS}, [class*="__menu"]`))) candidates.add(box)
+  if (candidates.size === 0) {
+    const box = freshList(widget, TYPEAHEAD_LISTS, widget.input)
+    if (box) candidates.add(box)
+  }
+  return [...candidates].filter((box) => isOwnListbox(box, widget.input, widget.scope, TYPEAHEAD_LISTS))
+}
+
+/** The lists the widget's options may be pressed in (none for button and radio groups). */
+function listsOf(widget: PickWidget): Element[] {
+  if (widget.type === 'listbox') return ownListboxes(widget)
+  if (widget.type === 'typeahead') return typeaheadLists(widget)
+  return []
 }
 
 const idsOf = (el: Element, attr: string) => (el.getAttribute(attr) ?? '').split(/\s+/).filter(Boolean)
@@ -137,17 +258,17 @@ const OTHER_OPENERS = '[role="combobox"], [aria-haspopup="listbox"], select'
  * name another control as its owner, and holds no other field's opener or
  * list: a broad region (a panel with other fields) is never a listbox.
  */
-function isOwnListbox(box: Element, widget: Extract<PickWidget, { type: 'listbox' }>): boolean {
-  const isList = box.getAttribute('role') === 'listbox' || (widget.scope.contains(box) && /__menu\b/.test(box.className))
+function isOwnListbox(box: Element, opener: Element, scope: Element, lists = '[role="listbox"]'): boolean {
+  const isList = box.matches(lists) || (scope.contains(box) && /__menu\b/.test(box.className))
   if (!isList) return false
   const doc = box.ownerDocument
   const owners = idsOf(box, 'aria-labelledby')
     .map((id) => doc.getElementById(id))
     .filter((el): el is HTMLElement => el !== null && el.matches(OTHER_OPENERS))
-  if (owners.some((el) => el !== widget.opener)) return false
-  if (Array.from(box.querySelectorAll(OTHER_OPENERS)).some((el) => el !== widget.opener)) return false
+  if (owners.some((el) => el !== opener)) return false
+  if (Array.from(box.querySelectorAll(OTHER_OPENERS)).some((el) => el !== opener)) return false
   // A list inside the list (another widget's) is not ours either.
-  if (box.querySelector('[role="listbox"]')) return false
+  if (box.querySelector(lists)) return false
   return true
 }
 
@@ -165,6 +286,22 @@ function listboxOptions(boxes: Element[]): HTMLElement[] {
   return out
 }
 
+/** A typeahead's suggestions in its own lists (the innermost element when Workday nests them), usable ones only. */
+function typeaheadOptions(lists: Element[]): HTMLElement[] {
+  const out: HTMLElement[] = []
+  for (const box of lists) {
+    const found = Array.from(box.querySelectorAll<HTMLElement>(TYPEAHEAD_OPTIONS))
+    for (const o of found) {
+      if (found.some((inner) => inner !== o && o.contains(inner))) continue
+      if (!out.includes(o) && o.getAttribute('aria-disabled') !== 'true') out.push(o)
+    }
+  }
+  return out
+}
+
+/** A suggestion's text: Workday names it in `data-automation-label`. */
+const optionText = (o: Element) => (o.getAttribute('data-automation-label') ?? text(o)).replace(/\s+/g, ' ').trim()
+
 /** Input types whose activation submits, resets, uploads or ticks: never pressed, nor a label pointing at one. */
 const NEVER_ACTIVATED = new Set(['submit', 'image', 'reset', 'button', 'file', 'checkbox'])
 
@@ -175,13 +312,13 @@ const NEVER_ACTIVATED = new Set(['submit', 'image', 'reset', 'button', 'file', '
  * ancestor the events bubble through (a click inside a button activates the
  * button, a click on a label activates its control), and labels' controls.
  */
-export function refusal(target: Element, widget: PickWidget, listboxes: readonly Element[] = []): string | null {
+export function refusal(target: Element, widget: PickWidget, listboxes: readonly Element[] = [], toggle?: Element): string | null {
   if (!target.isConnected) return 'something no longer on the page'
   const within = (node: Element) => widget.scope.contains(node) || listboxes.some((box) => box.contains(node))
   if (!within(target)) return 'outside the field’s widget'
   let inWidget = true
   for (let el: Element | null = target; el && tag(el) !== 'body'; el = el.parentElement) {
-    const why = inWidget ? elementRefusal(el, el === target, widget, within) : enclosingRefusal(el, within)
+    const why = inWidget ? elementRefusal(el, el === target, widget, within, toggle) : enclosingRefusal(el, within)
     if (why) return why
     if (el === widget.scope || listboxes.includes(el)) inWidget = false
   }
@@ -189,21 +326,22 @@ export function refusal(target: Element, widget: PickWidget, listboxes: readonly
 }
 
 /** An element on the path inside the widget (the target, its option, button or label wrappers). */
-function elementRefusal(el: Element, isTarget: boolean, widget: PickWidget, within: (node: Element) => boolean): string | null {
+function elementRefusal(el: Element, isTarget: boolean, widget: PickWidget, within: (node: Element) => boolean, toggle?: Element): string | null {
   const t = tag(el)
   if (t === 'a' && el.hasAttribute('href')) return 'a link'
   if ((el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true') return 'something disabled'
   const type = (el.getAttribute('type') ?? '').toLowerCase()
   if (type === 'submit' || type === 'image' || type === 'reset') return 'a submit control'
   if (t === 'button' && (el as HTMLButtonElement).type === 'submit' && (el as HTMLButtonElement).form) return 'a button that would submit the form'
-  if (t === 'input' && NEVER_ACTIVATED.has((el as HTMLInputElement).type)) return 'a checkbox or button input'
+  // `toggle`: the one check box `pressToggle` allowed (its own checks ran first); never any other.
+  if (t === 'input' && NEVER_ACTIVATED.has((el as HTMLInputElement).type) && !(el === toggle && isTarget)) return 'a checkbox or button input'
   if (t === 'label') {
     const why = labelRefusal(el as HTMLLabelElement, within)
     if (why) return why
   }
   // What a person reads as this element's name. A combobox input is named by its question (which may say
   // "continue"), so the opener counts only its shown text; everything else its label, title, value and text.
-  const opener = widget.type === 'listbox' && el === widget.opener
+  const opener = (widget.type === 'listbox' && el === widget.opener) || (widget.type === 'typeahead' && el === widget.input)
   const named = isTarget || t === 'button' || t === 'label' || ['button', 'option', 'menuitem', 'link'].includes(el.getAttribute('role') ?? '')
   const labelledBy = idsOf(el, 'aria-labelledby')
     .map((id) => el.ownerDocument.getElementById(id)?.textContent ?? '')
@@ -245,7 +383,8 @@ function press(
   target: HTMLElement,
   widget: PickWidget,
   listboxes: () => readonly Element[] = () => [],
-  abort: () => string | null = () => null
+  abort: () => string | null = () => null,
+  { extra = () => null, toggle }: { extra?: () => string | null; toggle?: Element } = {}
 ): void {
   const view = target.ownerDocument.defaultView
   if (!view) throw new Error('The page has no window.')
@@ -264,7 +403,7 @@ function press(
       // The safety net's latch (a blocked event, a page or step change) stops the press before any further event.
       const stopped = abort()
       if (stopped) throw new Error(`Huntgry stopped: ${stopped}.`)
-      const refused = refusal(target, widget, listboxes())
+      const refused = refusal(target, widget, listboxes(), toggle) ?? extra()
       if (refused) throw new Error(`Huntgry does not press ${refused}.`)
       target.dispatchEvent(make())
     }
@@ -281,6 +420,14 @@ export function pickedValue(widget: PickWidget): string {
     const pressed = widget.options.find((b) => b.getAttribute('aria-pressed') === 'true' || /\b(active|selected)\b/i.test(b.className))
     return pressed ? text(pressed) : ''
   }
+  if (widget.type === 'typeahead') {
+    // Workday shows a prompt's choice as a pill; react-select as its single value; Lever in the input itself.
+    const pill = widget.scope.querySelector('[data-automation-id="selectedItem"]')
+    if (pill) return (pill.getAttribute('data-automation-label') ?? pill.getAttribute('title') ?? text(pill)).trim()
+    const chosen = widget.scope.querySelector('[class*="single-value"], [class*="singleValue"]')
+    if (chosen) return text(chosen)
+    return widget.input.value.trim()
+  }
   const single = widget.scope.querySelector('[class*="single-value"], [class*="singleValue"]')
   if (single) return text(single)
   // Text typed into the combobox (a search in progress) is the user's: it counts as an answer to keep.
@@ -293,6 +440,13 @@ export function pickedValue(widget: PickWidget): string {
 }
 
 const same = (a: string, b: string) => normalizeText(a) === normalizeText(b)
+
+/** The pills of a Workday multiselect prompt (#136: Skills), as they name their choice. */
+export function pillsOf(widget: PickWidget): string[] {
+  return Array.from(widget.scope.querySelectorAll('[data-automation-id="selectedItem"]')).map((pill) =>
+    (pill.getAttribute('data-automation-label') ?? pill.getAttribute('title') ?? text(pill)).trim()
+  )
+}
 
 /** Closes a menu left open without a key: the control loses focus (react-select and Workday close on blur). */
 function closeMenu(widget: PickWidget): void {
@@ -308,6 +462,21 @@ export interface PickOptions {
   touched?: () => boolean
   /** The page and step the pick happens on (default: URL and first heading); a change stops picking. */
   pageState?: () => string
+  /** Typeaheads: the text to search for (the city, the country…). */
+  search?: string
+  /**
+   * A multiselect typeahead (#136: Workday's Skills): other pills do not count as an answer; the pick is done once
+   * a pill shows the chosen suggestion.
+   */
+  multi?: boolean
+  /** How long a Workday search box waits for suggestions before its Enter (default 600 ms). */
+  enterAfterMs?: number
+  /**
+   * The AI answer Huntgry itself picked in this widget, which the user's confirmed answer corrects (#136). A
+   * radio / button group or listbox that shows exactly this, untouched (`touched`), is picked again with the
+   * correction; one showing anything else is kept. Typeaheads always keep their choice.
+   */
+  replace?: string
 }
 
 /** Events a press could turn into an action elsewhere: blocked outside the widget while a pick runs. */
@@ -341,7 +510,8 @@ const defaultPageState = (doc: Document) => () =>
 async function withSafetyNet(
   widget: PickWidget,
   pageState: () => string,
-  run: (abort: () => string | null) => Promise<PickResult>
+  run: (abort: () => string | null) => Promise<PickResult>,
+  ownControls?: readonly Element[]
 ): Promise<PickResult> {
   const doc = widget.scope.ownerDocument
   const view = doc.defaultView
@@ -351,11 +521,12 @@ async function withSafetyNet(
     const el = node.nodeType === 1 ? (node as Element) : node.parentElement
     if (!el) return false
     if (widget.scope.contains(el)) return true
-    return widget.type === 'listbox' && ownListboxes(widget).some((box) => box.contains(el))
+    return listsOf(widget).some((box) => box.contains(el))
   }
   // Controls the pick itself may change: the radios of the group being answered, Ashby's yes/no mirror checkbox.
   const own = new Set<Element>(
-    widget.type === 'radios' ? widget.options : widget.type === 'buttons' ? Array.from(widget.scope.querySelectorAll('input[type="checkbox"]')) : []
+    ownControls ??
+      (widget.type === 'radios' ? widget.options : widget.type === 'buttons' ? Array.from(widget.scope.querySelectorAll('input[type="checkbox"]')) : [])
   )
   // Every other checkbox and radio of the page, inside the widget or not, is snapshotted and put back if it changes.
   const toggles = Array.from(doc.querySelectorAll<HTMLInputElement>('input[type="checkbox"], input[type="radio"]')).filter((c) => !own.has(c))
@@ -416,19 +587,21 @@ async function withSafetyNet(
 
 export function pick(widget: PickWidget, choose: (options: string[]) => string | null, options: PickOptions = {}): Promise<PickResult> {
   return withSafetyNet(widget, options.pageState ?? defaultPageState(widget.scope.ownerDocument), (abort) =>
-    pickInside(widget, choose, options, abort)
+    widget.type === 'typeahead' ? typeaheadInside(widget, choose, options, abort) : pickInside(widget, choose, options, abort)
   )
 }
 
 async function pickInside(
   widget: PickWidget,
   choose: (options: string[]) => string | null,
-  { timeoutMs = 1500, touched = () => false }: PickOptions,
+  { timeoutMs = 1500, touched = () => false, replace }: PickOptions,
   abort: () => string | null = () => null
 ): Promise<PickResult> {
   const doc = widget.scope.ownerDocument
   const current = pickedValue(widget)
   const keep = (): PickResult => ({ status: 'kept', value: pickedValue(widget) })
+  /** The widget still shows exactly the AI answer Huntgry picked, and the person has not touched it (#136). */
+  const replaceable = (shown: string) => replace !== undefined && shown !== '' && same(shown, replace) && !touched()
   try {
     if (widget.type === 'radios' || widget.type === 'buttons') {
       const options: HTMLElement[] = widget.options
@@ -436,7 +609,8 @@ async function pickInside(
       if (texts.some((t) => CONSENT_OPTION.test(t))) return { status: 'failed', reason: 'Its options read like consent.' }
       const chosen = choose(texts)
       if (!chosen) return { status: 'failed', reason: 'None of the options fits your saved answer.' }
-      if (current) return same(current, chosen) ? { status: 'filled', value: current } : { status: 'kept', value: current }
+      if (current && same(current, chosen)) return { status: 'filled', value: current }
+      if (current && !replaceable(current)) return { status: 'kept', value: current }
       if (touched()) return keep()
       press(options[texts.indexOf(chosen)], widget, () => [], abort)
       await waitUntil(doc, () => same(pickedValue(widget), chosen), timeoutMs)
@@ -445,9 +619,12 @@ async function pickInside(
     // A listbox: what is chosen shows in the control; the options exist only once it is open.
     if (current) {
       const chosen = choose([current])
-      return chosen ? { status: 'filled', value: current } : { status: 'kept', value: current }
+      if (chosen) return { status: 'filled', value: current }
+      if (!replaceable(current)) return { status: 'kept', value: current }
     }
     if (touched()) return keep()
+    if (widget.type !== 'listbox') return { status: 'failed', reason: 'Not a list widget.' }
+    OPENED.set(widget, new Set(Array.from(doc.querySelectorAll('[role="listbox"]'))))
     press(widget.opener, widget, () => [], abort)
     let boxes: Element[] = []
     await waitUntil(
@@ -464,8 +641,9 @@ async function pickInside(
       closeMenu(widget)
       return { status: 'failed', reason: `Huntgry stopped: ${stopped}.` }
     }
-    // The person may have typed or chosen while the menu rendered.
-    if (touched() || pickedValue(widget)) {
+    // The person may have typed or chosen while the menu rendered (an AI answer being corrected must still show).
+    const shown = pickedValue(widget)
+    if (touched() || (shown && !(current && same(shown, current) && replaceable(shown)))) {
       closeMenu(widget)
       return keep()
     }
@@ -492,4 +670,206 @@ async function pickInside(
     closeMenu(widget)
     return { status: 'failed', reason: err instanceof Error ? err.message : String(err) }
   }
+}
+
+/**
+ * The ONLY keyboard event Huntgry sends (#136, the Workday exception, guarded
+ * by guard.test.ts: this is the single KeyboardEvent constructor in the
+ * codebase). Workday's multiselect prompts (Country Phone Code, Skills,
+ * School) search only when Enter is pressed in their search box. Sent only:
+ * - to an `input[data-automation-id="searchBox"]` inside a
+ *   `[data-automation-id="multiSelectContainer"]` with no `<form>` ancestor
+ *   (checked again here, whatever the caller thought);
+ * - from `typeaheadInside`, inside the safety net (submit events cancelled,
+ *   clicks outside the widget cancelled), after Huntgry typed the search text
+ *   and no suggestion appeared within about 600 ms.
+ * Synthetic key events are untrusted and have no default action: the browser
+ * never submits a form or activates a button because of them; only the
+ * page's own key listeners see them.
+ */
+function workdaySearchEnter(input: HTMLInputElement): void {
+  if (!isWorkdaySearchBox(input) || input.form !== null || input.closest('form') !== null) {
+    throw new Error('Huntgry sends Enter only to a Workday search box.')
+  }
+  const view = input.ownerDocument.defaultView
+  if (!view) throw new Error('The page has no window.')
+  asHuntgry(() => {
+    for (const type of ['keydown', 'keyup']) {
+      input.dispatchEvent(new view.KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }))
+    }
+  })
+}
+
+/** How long a typeahead waits for suggestions before a Workday search box gets its Enter. */
+const ENTER_AFTER_MS = 600
+
+/**
+ * Picks in a typeahead (#136): presses the search box (like a person's click
+ * into it), types `search`, waits for the widget's own suggestions, presses
+ * the one `choose` names and reads it back. Text Huntgry typed but could not
+ * turn into a choice is cleared again; the field then goes to the user.
+ */
+async function typeaheadInside(
+  widget: Extract<PickWidget, { type: 'typeahead' }>,
+  choose: (options: string[]) => string | null,
+  { timeoutMs = 1500, touched = () => false, search = '', multi = false, enterAfterMs = ENTER_AFTER_MS }: PickOptions,
+  abort: () => string | null = () => null
+): Promise<PickResult> {
+  const doc = widget.scope.ownerDocument
+  const input = widget.input
+  const keep = (): PickResult => ({ status: 'kept', value: pickedValue(widget) })
+  // A multiselect's other pills are other answers, not this one.
+  const current = multi ? '' : pickedValue(widget)
+  const shows = (choice: string) => (multi ? pillsOf(widget).some((p) => same(p, choice)) : same(pickedValue(widget), choice))
+  let typed = false
+  /** Takes back the search text Huntgry typed (never text the person typed meanwhile). */
+  const untype = () => {
+    if (typed && input.isConnected && input.value === search && !touched()) typeText(input, '')
+    closeMenu(widget)
+  }
+  try {
+    if (current) {
+      const chosen = choose([current])
+      return chosen ? { status: 'filled', value: current } : { status: 'kept', value: current }
+    }
+    if (touched()) return keep()
+    if (!search.trim()) return { status: 'failed', reason: 'Nothing to search for.' }
+    OPENED.set(widget, new Set(Array.from(doc.querySelectorAll(TYPEAHEAD_LISTS))))
+    press(input, widget, () => [], abort)
+    const stoppedEarly = abort()
+    if (stoppedEarly) return { status: 'failed', reason: `Huntgry stopped: ${stoppedEarly}.` }
+    input.focus?.()
+    typeText(input, search)
+    typed = true
+    let options: HTMLElement[] = []
+    let texts: string[] = []
+    let chosen: string | null = null
+    const look = () => {
+      options = typeaheadOptions(typeaheadLists(widget))
+      texts = options.map(optionText)
+      // No suggestions yet is no answer (a remembered answer's chooser accepts any text when it sees no options).
+      chosen = texts.length ? choose(texts) : null
+      return chosen !== null && texts.includes(chosen)
+    }
+    const workday = isWorkdaySearchBox(input)
+    let found = await waitUntil(doc, look, workday ? Math.min(enterAfterMs, timeoutMs) : timeoutMs)
+    if (!found && workday && !abort() && !touched()) {
+      workdaySearchEnter(input)
+      found = await waitUntil(doc, look, timeoutMs)
+    }
+    const stopped = abort()
+    if (stopped) {
+      untype()
+      return { status: 'failed', reason: `Huntgry stopped: ${stopped}.` }
+    }
+    // The person may have typed or chosen while the suggestions loaded.
+    if (touched()) {
+      closeMenu(widget)
+      return keep()
+    }
+    if (texts.some((t) => CONSENT_OPTION.test(t))) {
+      untype()
+      return { status: 'failed', reason: 'Its options read like consent.' }
+    }
+    if (!found || chosen === null) {
+      untype()
+      return { status: 'failed', reason: texts.length ? 'None of the suggestions fits your profile.' : 'No suggestions appeared.' }
+    }
+    const pickText: string = chosen
+    press(options[texts.indexOf(pickText)], widget, () => typeaheadLists(widget), abort)
+    await waitUntil(doc, () => shows(pickText), timeoutMs)
+    if (shows(pickText)) return { status: 'filled', value: pickText }
+    untype()
+    return { status: 'failed', reason: 'The site did not take the pick.' }
+  } catch (err) {
+    untype()
+    return { status: 'failed', reason: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+export interface PressOptions {
+  /** The page and step the press happens on; a change stops it (safety net). */
+  pageState: () => string
+  /** How long the page may take to show the result. */
+  timeoutMs?: number
+}
+
+/** Why `button` must not be pressed as `section`'s Add button, or null when it may be (#136). */
+export function addRefusal(button: Element, section: Element): string | null {
+  if (!button.isConnected) return 'something no longer on the page'
+  if (button === section || !section.contains(button)) return 'a button outside its section'
+  if (button.closest(NAV_AREAS)) return 'a button of the page’s navigation'
+  if (tag(button) !== 'button' && button.getAttribute('role') !== 'button') return 'something that is not a button'
+  const label = (button.getAttribute('aria-label') ?? '').trim()
+  const shown = text(button)
+  if (!label && !shown) return 'an unnamed button'
+  if ((label && !ADD_NAME.test(label)) || (shown && !ADD_NAME.test(shown))) return 'a button that is not named Add'
+  if (/delete|remove/i.test(button.getAttribute('data-automation-id') ?? '')) return 'a delete button'
+  return null
+}
+
+/**
+ * Presses a section's Add / Add Another button (#136, Workday My Experience) and waits until `grew()` says a new
+ * block rendered. Refused (`addRefusal`, checked again before every event, and `refusal`): anything not named like
+ * an Add button, outside the section, in the page's navigation footer, a link, a submit control. The press runs in
+ * the safety net (a submit, a click outside the section or a step change stops it); nothing is ever pressed in a
+ * block (its Delete button included).
+ */
+export function pressAdd(button: HTMLElement, section: Element, grew: () => boolean, { pageState, timeoutMs = 1500 }: PressOptions): Promise<PickResult> {
+  const why = addRefusal(button, section)
+  if (why) return Promise.resolve({ status: 'failed', reason: `Huntgry does not press ${why}.` })
+  const widget: PickWidget = { type: 'buttons', scope: section, options: [button] }
+  return withSafetyNet(
+    widget,
+    pageState,
+    async (abort) => {
+      press(button, widget, () => [], abort, { extra: () => addRefusal(button, section) })
+      await waitUntil(section.ownerDocument, grew, timeoutMs)
+      return grew() ? { status: 'filled', value: 'added' } : { status: 'failed', reason: 'The site did not add a block.' }
+    },
+    []
+  )
+}
+
+/** The only check boxes Huntgry ever ticks (#136): "I currently work here", and Self Identify's disability boxes. */
+const TOGGLES = '[data-automation-id="formField-currentlyWorkHere"], [data-automation-id="formField-disabilityStatus"]'
+
+/** The allowed field a check box belongs to, or null. */
+function toggleField(input: Element): Element | null {
+  return input.closest(TOGGLES) ?? (/--currentlyWorkHere$/.test(input.id) ? input.parentElement : null)
+}
+
+/** Why `input` must not be ticked, or null when it may be (#136). */
+export function toggleRefusal(input: Element): string | null {
+  if (!input.isConnected) return 'something no longer on the page'
+  if (tag(input) !== 'input' || (input as HTMLInputElement).type !== 'checkbox') return 'something that is not a check box'
+  if (!toggleField(input)) return 'a check box other than “I currently work here” or a disability status'
+  if ((input as HTMLInputElement).checked) return 'a check box that is already ticked'
+  if ((input as HTMLInputElement).disabled) return 'something disabled'
+  if (input.closest(NAV_AREAS) || input.closest('form')) return 'a check box in a form or the page’s navigation'
+  const label = `${radioLabel(input as HTMLInputElement)} ${input.getAttribute('aria-label') ?? ''}`
+  if (CONSENT_OPTION.test(label) || FLOW_WORDS.test(label)) return 'a check box worded like consent'
+  return null
+}
+
+/**
+ * Ticks one allowed check box (#136): "I currently work here" for a current job, or the disability status box the
+ * stored fact names. Only an unchecked one, only those (`toggleRefusal`, checked again before every event); the
+ * press runs in the safety net, which puts back any other check box that changes.
+ */
+export function pressToggle(input: HTMLInputElement, { pageState, timeoutMs = 1000 }: PressOptions): Promise<PickResult> {
+  const why = toggleRefusal(input)
+  if (why) return Promise.resolve({ status: 'failed', reason: `Huntgry does not press ${why}.` })
+  const scope = toggleField(input) ?? input
+  const widget: PickWidget = { type: 'buttons', scope, options: [input] }
+  return withSafetyNet(
+    widget,
+    pageState,
+    async (abort) => {
+      press(input, widget, () => [], abort, { toggle: input, extra: () => (input.checked ? null : toggleRefusal(input)) })
+      await waitUntil(input.ownerDocument, () => input.checked, timeoutMs)
+      return input.checked ? { status: 'filled', value: 'ticked' } : { status: 'failed', reason: 'The site did not tick it.' }
+    },
+    [input]
+  )
 }

@@ -37,7 +37,7 @@ export const OUTCOME_META: Record<FillOutcome, PillMeta> = {
 
 const DONE: ReadonlySet<FillOutcome> = new Set<FillOutcome>(['filled', 'uploaded', 'kept'])
 
-export type ReportGroupTitle = 'Needs you' | 'Filled' | 'Your choice'
+export type ReportGroupTitle = 'Needs you' | 'AI answers — check these' | 'Filled' | 'Your choice'
 
 export interface ReportGroup {
   title: ReportGroupTitle
@@ -47,6 +47,7 @@ export interface ReportGroup {
 /** The tone of a group's count pill: what waits for the user is warning, what is done is trail. */
 export const GROUP_TONE: Record<ReportGroupTitle, UiTone> = {
   'Needs you': 'warning',
+  'AI answers — check these': 'review',
   Filled: 'trail',
   'Your choice': 'neutral'
 }
@@ -57,24 +58,33 @@ export const GROUP_TONE: Record<ReportGroupTitle, UiTone> = {
  */
 const learnable = (f: FieldReport) => f.outcome === 'skipped-unsupported' && (f.fact !== undefined || f.suggestion !== undefined)
 
-/** The badge of a report line: its outcome's, "AI draft" for a drafted answer (#82), or "Answer once" for a choice Huntgry can learn. */
+/** An answer Huntgry wrote from the master profile with the AI model (#136), for the user to check. */
+export const isAiAnswer = (f: FieldReport) => f.suggestedBy === 'model' && f.outcome === 'filled'
+
+/**
+ * The badge of a report line: its outcome's, "AI draft" for a drafted answer (#82), "AI answer" for an answer the
+ * model gave (#136), or "Answer once" for a choice Huntgry can learn.
+ */
 export function badgeOf(f: FieldReport): PillMeta {
   if (f.suggestedBy === 'draft' && f.outcome === 'filled') return { label: 'AI draft', tone: 'review' }
+  if (isAiAnswer(f)) return { label: 'AI answer', tone: 'review' }
   return learnable(f) ? { label: 'Answer once', tone: 'warning' } : OUTCOME_META[f.outcome]
 }
 
-/** "Needs you" (required first), "Filled", "Your choice"; empty groups are left out. */
+/** "Needs you" (required first), "AI answers — check these" (#136), "Filled", "Your choice"; empty groups are left out. */
 export function groupReport(report: FillReport | null): ReportGroup[] {
   if (!report) return []
   const needs = report.fields
     .filter((f) => !DONE.has(f.outcome) && (f.outcome !== 'skipped-unsupported' || learnable(f)))
     .sort((a, b) => Number(b.required) - Number(a.required))
-  const done = report.fields.filter((f) => DONE.has(f.outcome))
+  const ai = report.fields.filter(isAiAnswer)
+  const done = report.fields.filter((f) => DONE.has(f.outcome) && !isAiAnswer(f))
   const choices = report.fields
     .filter((f) => f.outcome === 'skipped-unsupported' && !learnable(f))
     .sort((a, b) => Number(b.required) - Number(a.required))
   const groups: ReportGroup[] = [
     { title: 'Needs you', fields: needs },
+    { title: 'AI answers — check these', fields: ai },
     { title: 'Filled', fields: done },
     { title: 'Your choice', fields: choices }
   ]
@@ -97,9 +107,13 @@ export function stepLabel(step: ApplySession['step']): string | null {
   return step.title && step.title !== kind ? `Step: ${kind} (${step.title})` : `Step: ${kind}`
 }
 
-/** Whether the panel offers to answer this line (#71): a question the page reported with an id, not yet answered. */
+/**
+ * Whether the panel offers to answer this line (#71): a question the page reported with an id, not yet answered, or
+ * an AI answer to correct (#136).
+ */
 export function canAnswer(field: FieldReport): boolean {
   if (!field.fieldId || !field.question) return false
+  if (isAiAnswer(field)) return true
   return field.outcome !== 'filled' && field.outcome !== 'kept'
 }
 
@@ -114,8 +128,8 @@ export function answerChoices(field: FieldReport): string[] {
 export function suggestionNote(field: FieldReport): string | null {
   if (!field.suggestion) return null
   if (field.suggestedBy === 'model') {
-    const fact = field.fact ? FACTS[field.fact].label.toLowerCase() : 'a saved answer'
-    return `Suggested: "${field.suggestion}" (AI matched this question to ${fact}; confirm it once).`
+    if (!field.fact) return `Suggested: "${field.suggestion}" (AI answer from your profile; confirm it once).`
+    return `Suggested: "${field.suggestion}" (AI matched this question to ${FACTS[field.fact].label.toLowerCase()}; confirm it once).`
   }
   return `From your saved answers: "${field.suggestion}". Pick it in the page.`
 }

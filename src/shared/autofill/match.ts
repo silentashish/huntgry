@@ -25,12 +25,21 @@ const AUTOCOMPLETE: Record<string, TextKey> = {
   tel: 'phone',
   'tel-national': 'phone',
   organization: 'currentCompany',
-  'address-level2': 'location'
+  'address-line1': 'addressLine1',
+  'street-address': 'addressLine1',
+  'address-level2': 'city',
+  'address-level1': 'state',
+  'postal-code': 'postalCode',
+  country: 'country',
+  'country-name': 'country'
 }
+
+/** Autocomplete tokens of address parts Huntgry never fills (line 2, …). */
+const AUTOCOMPLETE_NEVER = new Set(['address-line2', 'address-line3', 'address-level3', 'address-level4'])
 
 /** Labels or names about someone or something else than the applicant now. */
 const NEGATIVE =
-  /\b(previous|former|past|prior|reference|referee|emergency|referr\w*|refer|hear|heard|recruiter|manager|school|university|college|salary|parent|spouse|guardian|confirm|verify|repeat|re-?enter|preferred|nick ?name|middle)\b/
+  /\b(previous|former|past|prior|reference|referee|emergency|referr\w*|refer|hear|heard|recruiter|manager|school|university|college|salary|parent|spouse|guardian|confirm|verify|repeat|re-?enter|preferred|nick ?name|middle|citizenship|nationality|birth|billing|shipping|mailing|permanent)\b/
 
 /** Words of an identifier: `first_name`, `firstName`, `applicant[first-name]` → `first name`. */
 export function identifierWords(value: string): string {
@@ -40,6 +49,9 @@ export function identifierWords(value: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
 }
+
+/** Never a profile value: a second address line, a phone's country code. */
+const NEVER = /\b(address ?(line ?)?2|address ?two|apt|apartment|suite|unit|country ?code|phone ?code|dial(ing)? ?code|calling ?code)\b/
 
 /** Ordered: the first rule that matches wins, so "first name" is tested before "name". */
 const NAME_RULES: Array<[RegExp, TextKey]> = [
@@ -51,12 +63,18 @@ const NAME_RULES: Array<[RegExp, TextKey]> = [
   [/\blinked ?in\b/, 'linkedin'],
   [/\bgit ?hub\b/, 'github'],
   [/\b(website|web ?site|portfolio|homepage|personal ?site|personal url|blog)\b/, 'website'],
-  [/\b(location|city|where are you (based|located))\b/, 'location'],
+  // A field asking for the whole place ("City and state", "Current location (city, state)") takes the location line.
+  [/\b(location|where are you (based|located)|city (and|or|\/)? ?state|city state|city province)\b/, 'location'],
+  [/\b(street|address ?(line ?)?1?|address ?one|addr ?1?)\b/, 'addressLine1'],
+  [/\b(city|town)\b/, 'city'],
+  [/\b(country|united states)\b/, 'country'],
+  [/\b(state|province|region)\b/, 'state'],
+  [/\b(zip|zip ?code|postal|postal ?code|post ?code|postcode)\b/, 'postalCode'],
   [/\b(current ?company|current ?employer|company|employer|organi[sz]ation|org)\b/, 'currentCompany']
 ]
 
 function byRules(words: string): TextKey | null {
-  if (!words || NEGATIVE.test(words)) return null
+  if (!words || NEGATIVE.test(words) || NEVER.test(words)) return null
   for (const [re, key] of NAME_RULES) if (re.test(words)) return key
   return null
 }
@@ -71,8 +89,9 @@ export function matchTextField(el: FormControl): Match | null {
   const label = identifierWords(labelOf(el))
   const ids = identifierWords(`${el.getAttribute('name') ?? ''} ${el.id}`.trim())
   const placeholder = identifierWords(el.getAttribute('placeholder') ?? '')
-  if ([label, ids, placeholder].some((words) => NEGATIVE.test(words))) return null
-  const auto = (el.getAttribute('autocomplete') ?? '').toLowerCase().trim().split(/\s+/).pop() ?? ''
+  if ([label, ids, placeholder].some((words) => NEGATIVE.test(words) || NEVER.test(words))) return null
+  const auto = autocompleteOf(el)
+  if (AUTOCOMPLETE_NEVER.has(auto)) return null
   if (AUTOCOMPLETE[auto]) return { key: AUTOCOMPLETE[auto], score: 3 }
   const idKey = byRules(ids)
   if (idKey) return { key: idKey, score: 2 }
@@ -80,6 +99,34 @@ export function matchTextField(el: FormControl): Match | null {
   const labelKey = label.length <= 80 ? byRules(label) : null
   if (labelKey) return { key: labelKey, score: 1 }
   return null
+}
+
+const autocompleteOf = (el: Element) => (el.getAttribute('autocomplete') ?? '').toLowerCase().trim().split(/\s+/).pop() ?? ''
+
+/** Keys a dropdown (select, combobox, Workday listbox button) is filled with from the profile. */
+const CHOICE_KEYS: ReadonlySet<TextKey> = new Set(['country', 'state', 'city'])
+
+/**
+ * The profile value a dropdown asks for (#136): only a country, a state or a
+ * city, and only when its autocomplete token, its name / id or a short label
+ * says exactly that ("Country", "State / Province"). A question ("Are you
+ * authorized to work in the United States?") is never one.
+ */
+export function matchChoiceField(el: FormControl): (Match & { key: TextKey }) | null {
+  const control = el
+  const label = identifierWords(labelOf(control))
+  const ids = identifierWords(`${el.getAttribute('name') ?? ''} ${el.id}`.trim())
+  if ([label, ids].some((words) => NEGATIVE.test(words) || NEVER.test(words))) return null
+  const auto = autocompleteOf(el)
+  if (AUTOCOMPLETE_NEVER.has(auto)) return null
+  const fromAuto = AUTOCOMPLETE[auto]
+  if (fromAuto) return CHOICE_KEYS.has(fromAuto) ? { key: fromAuto, score: 3 } : null
+  const idKey = byRules(ids)
+  if (idKey && CHOICE_KEYS.has(idKey)) return { key: idKey, score: 2 }
+  // Short labels only, and never a question.
+  if (label.length > 30 || /\?/.test(labelOf(control))) return null
+  const labelKey = byRules(label)
+  return labelKey && CHOICE_KEYS.has(labelKey) ? { key: labelKey, score: 1 } : null
 }
 
 /**

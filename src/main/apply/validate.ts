@@ -16,6 +16,11 @@ const KEYS: readonly FieldKey[] = [
   'email',
   'phone',
   'location',
+  'addressLine1',
+  'city',
+  'state',
+  'postalCode',
+  'country',
   'linkedin',
   'github',
   'website',
@@ -141,4 +146,29 @@ export function parseFillReport(input: unknown): FillReport {
 /** The page's answer about its upload widget; anything unexpected counts as not attached. */
 export function parseUploadState(input: unknown): UploadState {
   return input === 'attached' || input === 'pending' ? input : 'missing'
+}
+
+/** One question the person changed in the page (#136). */
+export interface PageEdit {
+  fieldId: string
+  value: string
+}
+
+/**
+ * The page's report of the questions the person changed (#136): `{ url, edits: [{ fieldId, value }] }`, untrusted
+ * like every reply. At most 200 edits, bounded ids, non-empty values of at most 500 characters (longer ones are
+ * dropped, never cut: a cut answer is not what the person wrote); the last value per field wins. Main still checks
+ * each one against the field it reported.
+ */
+export function parseEdits(input: unknown): { url: string; edits: PageEdit[] } {
+  const o = typeof input === 'object' && input !== null && !Array.isArray(input) ? (input as Record<string, unknown>) : {}
+  const out = new Map<string, string>()
+  for (const e of Array.isArray(o.edits) ? o.edits.slice(0, 200) : []) {
+    if (typeof e !== 'object' || e === null) continue
+    const { fieldId, value } = e as Record<string, unknown>
+    if (typeof fieldId !== 'string' || !fieldId || fieldId.length > 200 || typeof value !== 'string') continue
+    const text = value.trim()
+    if (text && text.length <= 500) out.set(fieldId, text)
+  }
+  return { url: httpUrl(o.url), edits: [...out].map(([fieldId, value]) => ({ fieldId, value })) }
 }

@@ -24,8 +24,25 @@
  *   "alex.rivera@parsed.example"; phone and city stay empty). A My
  *   Information opened after the parse shows them pre-filled.
  *
- * Nothing is submitted: the flow ends at Application Questions. `?tenant=legacy`
- * on the posting URL switches My Information to the older tenants' markup.
+ * My Information's dropdowns work like Workday's (#136, `workdayWidgets`):
+ * a dropdown button renders its options as `<ul role="listbox">` at the end
+ * of the page (the id its `aria-controls` names) on click, and choosing one
+ * sets the button's text; Country Phone Code on newer tenants is a
+ * multiselect prompt whose search box searches only on Enter and shows the
+ * choice as a pill.
+ *
+ * My Experience (#136): the Work Experience, Education and Websites sections'
+ * Add / Add Another buttons append a block (`workExperience-N--jobTitle`…,
+ * month / year spinbuttons that keep typed digits, an "I currently work here"
+ * check box that hides the end date, a school prompt and a degree dropdown);
+ * the Skills prompt searches ~30 skills on Enter and adds a pill per pick. On
+ * Autofill with Resume the parser also pre-creates one Work Experience block
+ * with wrong values ("Acme Corp", "Engineer", 02/2021).
+ *
+ * Nothing is submitted: after My Experience come Application Questions,
+ * Voluntary Disclosures, Self Identify and Review, whose Submit is disabled.
+ * `?tenant=legacy` on the posting URL switches My Information to the older
+ * tenants' markup.
  * Plain ESM without `import.meta` (see server.mjs).
  */
 
@@ -41,11 +58,269 @@ const VIEWS = new Set([
   'my-information-legacy',
   'autofill-resume',
   'my-experience',
-  'application-questions'
+  'application-questions',
+  'voluntary-disclosures',
+  'self-identify',
+  'review'
 ])
 
 const SHELL = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Workday</title></head>
-<body><div id="app"></div><script src="/workday/_app.js"></script></body></html>`
+<body><div id="app"></div><script src="/workday/_widgets.js"></script><script src="/workday/_app.js"></script></body></html>`
+
+/**
+ * Workday's dropdown and prompt widgets (#136), on whatever view is shown
+ * (delegated listeners). Runs in the browser and in jsdom tests
+ * (`window.eval(`(${workdayWidgets})()`)`); serialised with `toString()`, so
+ * it uses nothing from this module.
+ * - A dropdown button (`aria-haspopup="listbox"`) inside a known field
+ *   (State, Country, Phone Device Type, How Did You Hear, the older tenants'
+ *   Country Phone Code) renders `<ul role="listbox" id=<aria-controls>>` with
+ *   `<li role="option" data-automation-label>` options at the end of body on
+ *   click; clicking an option sets the button's text and `aria-label` and
+ *   removes the list; a click anywhere else closes it.
+ * - A prompt (`multiSelectContainer` with `searchBox`) searches only on Enter:
+ *   it renders `activeListContainer` (role=listbox) with `promptOption`
+ *   options that contain the typed text (or "No Items."), at the end of body;
+ *   clicking one replaces the field's `selectedItem` pill (Skills: adds one)
+ *   and clears the box.
+ * - My Experience's sections (#136): Add / Add Another appends a block a
+ *   moment later (`window.huntgryWorkdayAddBlock(kind, values)` does the same
+ *   for the mock app's resume parser).
+ */
+export function workdayWidgets() {
+  if (window.huntgryWorkdayWidgets) return
+  window.huntgryWorkdayWidgets = true
+  const STATES = 'Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming'.split('|')
+  const PHONE_CODES = ['United States of America (+1)', 'Canada (+1)', 'India (+91)', 'United Kingdom (+44)']
+  const OPTIONS = {
+    state: STATES,
+    country: ['United States of America', 'Canada', 'India', 'United Kingdom', 'Germany', 'Nepal'],
+    phoneType: ['Mobile', 'Home', 'Work'],
+    phoneCode: PHONE_CODES,
+    source: ['Job board', 'LinkedIn', 'Referral', 'Company website'],
+    degree: ['High School Diploma', "Associate's Degree", "Bachelor's Degree", "Master's Degree", 'MBA', 'Doctorate (PhD)'],
+    sponsorship: ['Yes', 'No'],
+    gender: ['Male', 'Female', 'Non-binary', 'I do not wish to self-identify'],
+    ethnicity: [
+      'American Indian or Alaska Native',
+      'Asian',
+      'Black or African American',
+      'Hispanic or Latino',
+      'Native Hawaiian or Other Pacific Islander',
+      'White',
+      'Two or More Races',
+      'I do not wish to self-identify'
+    ],
+    veteran: [
+      'I am not a protected veteran',
+      'I identify as one or more of the classifications of protected veteran',
+      'I do not wish to self-identify'
+    ]
+  }
+  const PROMPTS = {
+    phoneCode: PHONE_CODES,
+    source: OPTIONS.source,
+    skills: 'Go|Golang|Python|TypeScript|JavaScript|SQL|NoSQL|MySQL|PostgreSQL|AWS|AWS Lambda|Amazon Web Services (AWS)|Terraform|Docker|Docker Compose|Kubernetes|React|Node.js|Java|C++|Rust|Redis|Django|GraphQL|REST APIs|Linux|Git|CI/CD|Microservices|Google Cloud Platform'.split('|'),
+    school: ['State University', 'State University of New York', 'Portland State University', 'Springfield College', 'Other'],
+    fieldOfStudy: ['Computer Science', 'Computer Engineering', 'Information Technology', 'Mathematics', 'Electrical Engineering']
+  }
+  const fieldOf = (el) => el.closest('[data-automation-id^="formField-"]')?.getAttribute('data-automation-id') ?? ''
+  const kindOf = (button) => {
+    const field = fieldOf(button)
+    if (/countryRegion/.test(field)) return 'state'
+    if (/country-?phone-?code/i.test(field)) return 'phoneCode'
+    if (/phone-device-type|phoneType/.test(field)) return 'phoneType'
+    if (/countryDropdown|formField-country$/.test(field)) return 'country'
+    if (/source/i.test(field)) return 'source'
+    if (/degree/i.test(field)) return 'degree'
+    if (/sponsor/i.test(field)) return 'sponsorship'
+    if (/gender/i.test(field)) return 'gender'
+    if (/ethnicity/i.test(field)) return 'ethnicity'
+    if (/veteran/i.test(field)) return 'veteran'
+    return null
+  }
+  const promptKind = (input) => {
+    const field = fieldOf(input)
+    if (/skills/i.test(field)) return 'skills'
+    if (/school/i.test(field)) return 'school'
+    if (/fieldOfStudy/i.test(field)) return 'fieldOfStudy'
+    if (/source/i.test(field)) return 'source'
+    return 'phoneCode'
+  }
+  const labelOf = (el) => {
+    const id = el.id
+    const label = id ? document.querySelector(`label[for="${id}"]`) : null
+    return (label?.firstChild?.textContent ?? '').trim()
+  }
+  let open = null
+  const close = () => {
+    if (!open) return
+    open.list.remove()
+    open.owner.setAttribute('aria-expanded', 'false')
+    open = null
+  }
+  const option = (text, prompt) => {
+    const el = document.createElement(prompt ? 'div' : 'li')
+    el.setAttribute('role', 'option')
+    el.setAttribute('data-automation-label', text)
+    el.setAttribute('data-mock-workday', prompt ? 'prompt' : 'dropdown')
+    if (prompt) el.setAttribute('data-automation-id', 'promptOption')
+    el.textContent = text
+    return el
+  }
+  function openDropdown(button) {
+    const list = document.createElement('ul')
+    list.setAttribute('role', 'listbox')
+    if (button.getAttribute('aria-controls')) list.id = button.getAttribute('aria-controls')
+    list.setAttribute('aria-label', labelOf(button))
+    for (const text of OPTIONS[kindOf(button)]) list.append(option(text, false))
+    document.body.append(list)
+    button.setAttribute('aria-expanded', 'true')
+    open = { list, owner: button }
+  }
+  function openPrompt(input) {
+    const query = input.value.trim().toLowerCase()
+    const list = document.createElement('div')
+    list.setAttribute('data-automation-id', 'activeListContainer')
+    list.setAttribute('role', 'listbox')
+    const found = PROMPTS[promptKind(input)].filter((text) => query && text.toLowerCase().includes(query))
+    if (found.length === 0) list.innerHTML = '<p data-automation-id="noItems">No Items.</p>'
+    for (const text of found) list.append(option(text, true))
+    document.body.append(list)
+    input.setAttribute('aria-expanded', 'true')
+    open = { list, owner: input }
+  }
+  document.addEventListener('click', (e) => {
+    const target = e.target
+    if (!(target instanceof Element)) return
+    const chosen = target.closest('[data-mock-workday]')
+    if (chosen && open && open.list.contains(chosen)) {
+      const text = chosen.getAttribute('data-automation-label')
+      const owner = open.owner
+      close()
+      if (owner.tagName === 'BUTTON') {
+        owner.textContent = text
+        owner.setAttribute('aria-label', `${labelOf(owner)} ${text} Required`)
+      } else {
+        const pills = owner.closest('[data-automation-id="multiSelectContainer"]').querySelector('[data-automation-id="selectedItemList"]')
+        const pill = document.createElement('div')
+        pill.setAttribute('data-automation-id', 'selectedItem')
+        pill.setAttribute('data-automation-label', text)
+        pill.setAttribute('title', text)
+        pill.innerHTML = '<p></p><span data-automation-id="DELETE_charm" aria-hidden="true">x</span>'
+        pill.firstChild.textContent = text
+        // Skills is a multiselect: each pick adds a pill; the other prompts hold one choice.
+        if (promptKind(owner) === 'skills') pills.append(pill)
+        else pills.replaceChildren(pill)
+        owner.value = ''
+      }
+      return
+    }
+    const add = target.closest('button[data-automation-id="Add"]')
+    if (add) {
+      const section = add.closest('[data-automation-id$="Section"]')
+      const kind = SECTIONS[section?.getAttribute('data-automation-id')]
+      if (kind) setTimeout(() => addBlock(kind), 80)
+      return
+    }
+    const button = target.closest('button[aria-haspopup="listbox"]')
+    if (button && kindOf(button)) {
+      const again = open?.owner === button
+      close()
+      if (!again) openDropdown(button)
+      return
+    }
+    if (open && !open.list.contains(target)) close()
+  })
+  // Spinbuttons keep the digits typed (month 2, year 4); "I currently work here" hides the end date.
+  document.addEventListener('input', (e) => {
+    const input = e.target
+    if (!(input instanceof Element) || input.getAttribute('role') !== 'spinbutton') return
+    const max = input.getAttribute('aria-label') === 'Year' ? 4 : 2
+    const digits = input.value.replace(/\D/g, '').slice(0, max)
+    if (digits !== input.value) input.value = digits
+    input.setAttribute('aria-valuenow', digits)
+  })
+  document.addEventListener('change', (e) => {
+    const box = e.target
+    if (!(box instanceof Element) || !box.closest('[data-automation-id="formField-currentlyWorkHere"]')) return
+    const end = box.closest('[id^="workExperience-"][role="group"]')?.querySelector('[data-automation-id="formField-endDate"]')
+    if (end) end.hidden = box.checked
+  })
+
+  /** My Experience's sections (#136): Add appends a block like Workday's. */
+  const SECTIONS = { workExperienceSection: 'experience', educationSection: 'education', websiteSection: 'website' }
+  const PREFIX = { experience: 'workExperience', education: 'education', website: 'website' }
+  const TITLES = { experience: 'Work Experience', education: 'Education', website: 'Websites' }
+  const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+  const label = (id, text, required) => `<label for="${id}">${text}${required ? '<abbr title="required">*</abbr>' : ''}</label>`
+  const textField = (block, name, text, value, required, area) => {
+    const id = `${block}--${name}`
+    const control = area ? `<textarea id="${id}">${esc(value)}</textarea>` : `<input type="text" id="${id}" value="${esc(value)}">`
+    return `<div data-automation-id="formField-${name}">${label(id, text, required)}<div>${control}</div></div>`
+  }
+  const dateField = (block, name, text, parts, values = {}) => {
+    const id = `${block}--${name}`
+    const inputs = parts
+      .map((p) => `<input type="text" role="spinbutton" aria-label="${p}" id="${id}-dateSection${p}-input" data-automation-id="dateSection${p}-input" value="${esc(values[p])}">`)
+      .join('')
+    return `<div data-automation-id="formField-${name}"><fieldset><legend><label id="${id}-label">${text}</label></legend><div role="group" id="${id}" data-automation-id="dateInputWrapper" aria-labelledby="${id}-label">${inputs}</div></fieldset></div>`
+  }
+  const promptField = (block, name, text) => {
+    const id = `${block}--${name}`
+    return `<div data-automation-id="formField-${name}">${label(id, text)}<div data-automation-id="multiSelectContainer"><div data-automation-id="selectedItemList"></div><input type="text" id="${id}" data-automation-id="searchBox" placeholder="Search" autocomplete="off" value=""></div></div>`
+  }
+  function addBlock(kind, values = {}) {
+    const section = document.querySelector(`[data-automation-id="${Object.keys(SECTIONS).find((k) => SECTIONS[k] === kind)}"]`)
+    if (!section) return
+    const blocks = section.querySelector(`[data-automation-id$="-blocks"]`) ?? section
+    const n = blocks.querySelectorAll(':scope > [role="group"]').length + 1
+    const id = `${PREFIX[kind]}-${n}`
+    let body = ''
+    if (kind === 'experience') {
+      body =
+        textField(id, 'jobTitle', 'Job Title', values.jobTitle, true) +
+        textField(id, 'companyName', 'Company', values.company, true) +
+        textField(id, 'location', 'Location', values.location) +
+        `<div data-automation-id="formField-currentlyWorkHere"><input type="checkbox" id="${id}--currentlyWorkHere"><label for="${id}--currentlyWorkHere">I currently work here</label></div>` +
+        dateField(id, 'startDate', 'From', ['Month', 'Year'], values.start) +
+        dateField(id, 'endDate', 'To', ['Month', 'Year'], values.end) +
+        textField(id, 'roleDescription', 'Role Description', values.description, false, true)
+    } else if (kind === 'education') {
+      body =
+        promptField(id, 'school', 'School or University') +
+        `<div data-automation-id="formField-degree">${label(`${id}--degree`, 'Degree')}<div><button type="button" id="${id}--degree" aria-haspopup="listbox" aria-controls="${id}--degree-listbox" aria-label="Degree Select One">Select One</button></div></div>` +
+        promptField(id, 'fieldOfStudy', 'Field of Study') +
+        textField(id, 'gpa', 'Overall Result (GPA)') +
+        dateField(id, 'firstYearAttended', 'From', ['Year']) +
+        dateField(id, 'lastYearAttended', 'To (Actual or Expected)', ['Year'])
+    } else {
+      body = textField(id, 'url', 'URL', values.url, true)
+    }
+    const block = document.createElement('div')
+    block.id = id
+    block.setAttribute('role', 'group')
+    block.setAttribute('aria-labelledby', `${id}-heading`)
+    block.innerHTML = `<h4 id="${id}-heading">${TITLES[kind]} ${n}</h4>${body}<button type="button" data-automation-id="panel-set-delete-button" aria-label="Delete ${TITLES[kind]} ${n}">Delete</button>`
+    blocks.append(block)
+    const add = section.querySelector(':scope > button[data-automation-id="Add"]')
+    if (add) {
+      add.textContent = 'Add Another'
+      add.setAttribute('aria-label', `Add Another ${TITLES[kind]}`)
+    }
+  }
+  window.huntgryWorkdayAddBlock = addBlock
+
+  // A prompt searches on Enter only (typing alone shows nothing).
+  document.addEventListener('keydown', (e) => {
+    const input = e.target
+    if (e.key !== 'Enter' || !(input instanceof Element) || input.getAttribute('data-automation-id') !== 'searchBox') return
+    if (!input.closest('[data-automation-id="multiSelectContainer"]')) return
+    e.preventDefault()
+    close()
+    openPrompt(input)
+  })
+}
 
 /** The page's own script. Runs in the browser; serialised with `toString()`. */
 function workdayApp() {
@@ -67,8 +342,17 @@ function workdayApp() {
   ]
   const base = location.pathname.replace(/\/apply(\/.*)?$/, '').replace(/\/$/, '')
   const FLOWS = {
-    applyManually: ['signin', 'my-information', 'my-experience', 'application-questions'],
-    autofillWithResume: ['signin', 'autofill-resume', 'my-information', 'my-experience', 'application-questions']
+    applyManually: ['signin', 'my-information', 'my-experience', 'application-questions', 'voluntary-disclosures', 'self-identify', 'review'],
+    autofillWithResume: [
+      'signin',
+      'autofill-resume',
+      'my-information',
+      'my-experience',
+      'application-questions',
+      'voluntary-disclosures',
+      'self-identify',
+      'review'
+    ]
   }
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   const aid = (el) => el?.closest?.('[data-automation-id]')?.getAttribute('data-automation-id') ?? null
@@ -100,6 +384,11 @@ function workdayApp() {
     app.innerHTML = html
     app.dataset.view = name
     parseState()
+    // Workday's parser also guessed a job from the resume (#136), with wrong details: one block on My Experience.
+    const until = Number(store.get('parseUntil') ?? 0)
+    if (name === 'my-experience' && until && Date.now() >= until) {
+      window.huntgryWorkdayAddBlock?.('experience', { jobTitle: 'Engineer', company: 'Acme Corp', start: { Month: '02', Year: '2021' } })
+    }
   }
 
   /** The parser's values land on My Information (overwriting), once the parse is over. */
@@ -160,8 +449,13 @@ function workdayApp() {
     } else if (id === 'backToJobPosting') {
       go(base)
     } else if (id === 'bottom-navigation-next-button') {
+      // Counted for the e2e test (#136): only the test, as the user, ever presses the footer.
+      window.huntgryFooterPresses = (window.huntgryFooterPresses ?? 0) + 1
+      // Review's Submit is disabled: nothing is ever submitted.
+      if (e.target.closest('button')?.disabled) return
       advance(1)
     } else if (id === 'pageFooterBackButton') {
+      window.huntgryFooterPresses = (window.huntgryFooterPresses ?? 0) + 1
       advance(-1)
     }
   })
@@ -237,9 +531,9 @@ export function createWorkdayMock({ read, record, log }) {
       const url = new URL(req.url ?? '/', 'http://localhost')
       if (url.pathname !== '/workday' && !url.pathname.startsWith('/workday/')) return false
       const rest = url.pathname.slice('/workday/'.length)
-      if (rest === '_app.js') {
+      if (rest === '_app.js' || rest === '_widgets.js') {
         res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' })
-        res.end(`(${workdayApp.toString()})()\n`)
+        res.end(`(${(rest === '_app.js' ? workdayApp : workdayWidgets).toString()})()\n`)
       } else if (rest.startsWith('_view/')) {
         const name = rest.slice('_view/'.length)
         if (VIEWS.has(name)) json(res, 200, viewOf(name))

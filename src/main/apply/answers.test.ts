@@ -12,12 +12,13 @@ import {
   rememberAnswer,
   rememberMappings,
   savedAnswers,
-  setAnswersRoot
+  setAnswersRoot,
+  setFact
 } from './answers-store'
 import { questionKey } from '@shared/apply-facts'
-import { parseFillReport } from './validate'
+import { parseEdits, parseFillReport } from './validate'
 import { agyDraftArgs, claudeDraftArgs, draftAnswers, draftPrompt, parseDraftOutput } from './draft-answers'
-import { agyMappingArgs, claudeMappingArgs, mapQuestions, parseMappingOutput, type MapQuestion } from './map-questions'
+import { agyMappingArgs, claudeMappingArgs, isCompanySpecificQuestion, mappingPrompt, mapQuestions, parseMappingOutput, type MapContext, type MapQuestion } from './map-questions'
 
 let root: string
 let ws: string
@@ -67,6 +68,31 @@ describe('answers store', () => {
     expect(page.facts).toEqual({ gender: 'Female' })
   })
 
+  it("stores a model's probable answers unconfirmed, sends them to the page, never one for a sensitive fact (#136)", async () => {
+    await rememberMappings(ws, [
+      { question: 'q-go', label: 'Experience with Go?', fact: null, value: 'Yes' },
+      { question: 'q-g', label: 'Your gender', fact: 'gender', value: 'Woman' },
+      { question: 'q-yrs', label: 'Years of experience?', fact: 'yearsExperience', value: '7' }
+    ])
+    const stored = await readAnswers(ws)
+    expect(stored.questions['q-go']).toMatchObject({ value: 'Yes', source: 'model', confirmed: false })
+    expect(stored.questions['q-g'].value).toBeUndefined()
+    const page = pageAnswers(stored)
+    expect(page.questions['q-go']).toEqual({ fact: null, confirmed: false, value: 'Yes' })
+    expect(page.questions['q-yrs']).toEqual({ fact: 'yearsExperience', confirmed: false, value: '7' })
+    expect(page.questions['q-g']).toEqual({ fact: 'gender', confirmed: false })
+    // Model answers are not "saved answers" in Settings until the user gives or corrects them.
+    expect(savedAnswers(stored).questions).toEqual([])
+    // The user's correction replaces the model's entry.
+    await rememberAnswer(ws, { question: 'q-go', label: 'Experience with Go?', fact: null, value: 'No' })
+    expect((await readAnswers(ws)).questions['q-go']).toMatchObject({ value: 'No', source: 'user', confirmed: true })
+    // A hand-edited file cannot slip a model answer in for a sensitive fact.
+    const raw = JSON.parse(await readFile(answersFile(ws), 'utf8'))
+    raw.questions['q-g'].value = 'Woman'
+    await writeFile(answersFile(ws), JSON.stringify(raw))
+    expect((await readAnswers(ws)).questions['q-g'].value).toBeUndefined()
+  })
+
   it('puts stored facts over the profile seeds', async () => {
     expect(pageAnswers(await readAnswers(ws), { workAuthorized: 'yes', needsSponsorship: 'no' }).facts).toEqual({
       workAuthorized: 'yes',
@@ -89,6 +115,45 @@ describe('answers store', () => {
     await clearAnswers(ws)
     await expect(stat(answersFile(ws))).rejects.toThrow()
     expect(await readAnswers(ws)).toEqual({ facts: {}, questions: {} })
+  })
+
+  it('sets a fact directly in its stored form, and forgets it on an empty value (#136)', async () => {
+    await setFact(ws, 'needsSponsorship', 'Yes', new Date('2026-10-17T00:00:00Z'))
+    await setFact(ws, 'yearsExperience', ' 6 ')
+    await setFact(ws, 'gender', 'Prefer not to say')
+    await setFact(ws, 'visaStatus', 'H-1B')
+    let answers = await readAnswers(ws)
+    expect(answers.facts.needsSponsorship).toEqual({ value: 'yes', updatedAt: '2026-10-17T00:00:00.000Z' })
+    expect(answers.facts.yearsExperience?.value).toBe('6')
+    expect(answers.facts.gender?.value).toBe('decline')
+    expect(answers.facts.visaStatus?.value).toBe('H-1B')
+    // Under userData, never in the workspace.
+    expect(answersFile(ws).startsWith(ws)).toBe(false)
+    answers = await setFact(ws, 'yearsExperience', '')
+    expect(answers.facts.yearsExperience).toBeUndefined()
+    // A yes/no fact takes yes, no or decline only; anything too long is refused.
+    await expect(setFact(ws, 'over18', 'maybe')).rejects.toThrow(/Yes, No/)
+    await expect(setFact(ws, 'howHeard', 'x'.repeat(501))).rejects.toThrow(/too long/)
+    expect((await readAnswers(ws)).facts.over18).toBeUndefined()
+  })
+
+  it('drops the exact options remembered for a fact whose value changes (#136)', async () => {
+    await rememberAnswer(ws, { question: 'q1', label: 'Gender', fact: 'gender', value: 'Woman' })
+    // Same value: the remembered option stays.
+    let answers = await setFact(ws, 'gender', 'Woman')
+    expect(answers.questions.q1.option).toBe('Woman')
+    answers = await setFact(ws, 'gender', 'Non-binary')
+    expect(answers.facts.gender?.value).toBe('Non-binary')
+    expect(answers.questions.q1).toMatchObject({ fact: 'gender', confirmed: true })
+    expect(answers.questions.q1.option).toBeUndefined()
+  })
+
+  it('lists the profile seeds next to the stored facts, never sensitive ones (#136)', async () => {
+    const answers = await setFact(ws, 'needsSponsorship', 'no')
+    const listed = savedAnswers(answers, { visaStatus: 'H-1B', needsSponsorship: 'yes', gender: 'Male' })
+    expect(listed.seeds).toEqual({ visaStatus: 'H-1B', needsSponsorship: 'yes' })
+    expect(listed.facts).toEqual([expect.objectContaining({ fact: 'needsSponsorship', value: 'no' })])
+    expect(savedAnswers(answers).seeds).toEqual({})
   })
 
   it('reads a corrupt or hand-edited file as empty or cleaned up', async () => {
@@ -125,9 +190,9 @@ describe('question mapping call', () => {
     return { result, calls: async () => (await readFile(log, 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; stdin: string }) }
   }
 
-  it('runs Haiku once, tool-less, with no settings, MCP servers or saved session', async () => {
+  it('runs Sonnet once, tool-less, with no settings, MCP servers or saved session', async () => {
     const args = claudeMappingArgs()
-    expect(args[args.indexOf('--model') + 1]).toBe('haiku')
+    expect(args[args.indexOf('--model') + 1]).toBe('sonnet')
     expect(args[args.indexOf('--tools') + 1]).toBe('')
     expect(args[args.indexOf('--setting-sources') + 1]).toBe('')
     expect(args).toContain('--strict-mcp-config')
@@ -139,7 +204,7 @@ describe('question mapping call', () => {
     expect(await result).toEqual([
       { id: 'q1', fact: 'gender' },
       { id: 'q2', fact: 'needsSponsorship' },
-      { id: 'q3', fact: null }
+      { id: 'q3', fact: null, answer: 'Fake answer about this company', reusable: false }
     ])
     const made = await calls()
     expect(made).toHaveLength(1)
@@ -153,7 +218,7 @@ describe('question mapping call', () => {
     expect(args[args.indexOf('--model') + 1]).toBe('gemini-3.8-flash-low')
     expect(args).toContain('--sandbox')
     expect(args).toContain('--disable-slash-commands')
-    expect(args.at(-1)).toMatch(/^--print=You classify questions[\s\S]*Questions: \[\]$/)
+    expect(args.at(-1)).toMatch(/^--print=You fill in questions[\s\S]*Questions: \[\]$/)
     const { result, calls } = await run({}, 'antigravity')
     expect((await result).map((m) => m.fact)).toEqual(['gender', 'needsSponsorship', null])
     expect((await calls())[0].stdin).toBe('')
@@ -161,7 +226,7 @@ describe('question mapping call', () => {
 
   it('drops unknown ids and fact keys, and fails on malformed output, errors and timeouts', async () => {
     expect(await (await run({ FAKE_MAPPER: 'unknown' })).result).toEqual([
-      { id: 'q3', fact: null },
+      { id: 'q3', fact: null, answer: 'Fake answer about this company', reusable: false },
       { id: 'q2', fact: 'needsSponsorship' },
       { id: 'q1', fact: 'gender' }
     ])
@@ -172,6 +237,109 @@ describe('question mapping call', () => {
     await expect(mapQuestions(QUESTIONS, { agent: 'claude', command: join(root, 'no-such-cli'), env: process.env })).rejects.toThrow()
     expect(parseMappingOutput(JSON.stringify({ result: { structured_output: { mappings: [{ id: 'a', factKey: 'over18' }] } } }), new Set(['a']))).toEqual([
       { id: 'a', fact: 'over18' }
+    ])
+  })
+})
+
+describe('probable answers from the profile (#136)', () => {
+  const script = join(__dirname, 'fixtures/fake-mapper.mjs')
+  const QUESTIONS: MapQuestion[] = [
+    { id: 'q1', question: 'What is your gender identity?', kind: 'select', options: ['Man', 'Woman'] },
+    { id: 'q2', question: 'Do you need an employer to sponsor you?', kind: 'radio', options: ['Yes', 'No'] },
+    { id: 'q3', question: 'Do you have experience with Go?', kind: 'radio', options: ['Yes', 'No'] },
+    { id: 'q4', question: 'Describe your experience with Kubernetes', kind: 'textarea', options: [] }
+  ]
+  const CONTEXT: MapContext = {
+    company: 'Acme Rockets',
+    role: 'Backend Engineer',
+    jobDescription: 'Acme builds rockets. We use Go. ' + 'j'.repeat(9000),
+    profile: '# Ada Lovelace\n## Experience\n- Engineer at Initech (2019–2024): Go, Kubernetes\n' + 'p'.repeat(17000)
+  }
+  const run = (env: Record<string, string> = {}) =>
+    mapQuestions(QUESTIONS, { agent: 'claude', command: process.execPath, args: [script], env: { ...process.env, FAKE_MAPPER_LOG: join(root, 'calls.jsonl'), ...env }, timeoutMs: 3000 }, CONTEXT)
+
+  it('gives the model the company, role, bounded job description and profile, the questions last, and no stored value', async () => {
+    await rememberAnswer(ws, { question: 'x', label: 'Gender', fact: 'gender', value: 'Female' })
+    const prompt = mappingPrompt(QUESTIONS, CONTEXT)
+    expect(prompt).toContain('Company: Acme Rockets')
+    expect(prompt).toContain('Role: Backend Engineer')
+    expect(prompt).toContain('Acme builds rockets')
+    expect(prompt).toContain('Engineer at Initech')
+    expect(prompt).not.toContain('j'.repeat(8001))
+    expect(prompt).not.toContain('p'.repeat(16001))
+    expect(prompt.lastIndexOf('Questions:')).toBeGreaterThan(prompt.indexOf('Engineer at Initech'))
+    await run()
+    const made = (await readFile(join(root, 'calls.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; stdin: string })
+    expect(made[0].stdin).toContain('Engineer at Initech')
+    expect(made[0].stdin).not.toMatch(/Female/)
+    // The rules: EEO, consent and unsupported questions get no answer; options are answered with one of them.
+    const system = made[0].args[made[0].args.indexOf('--system-prompt') + 1]
+    expect(system).toMatch(/gender, raceEthnicity/)
+    expect(system).toMatch(/exactly the text of one option/)
+    expect(system).toMatch(/untrusted/)
+    expect(system).toMatch(/reusable: true when the answer would be the same on any employer's form/)
+    expect(made[0].args[made[0].args.indexOf('--json-schema') + 1]).toContain('"reusable"')
+  })
+
+  it('treats motivation, "why us", "describe" and cover-letter questions as company-specific, whatever the model says', () => {
+    for (const q of [
+      'Why do you want to work at Acme?',
+      'Why are you interested in this role?',
+      'Why us?',
+      'Why this company?',
+      'What interests you about this position?',
+      'Tell us about a project you are proud of',
+      'Describe your experience with Kubernetes',
+      'What motivates you to apply?',
+      'Cover letter'
+    ]) {
+      expect(isCompanySpecificQuestion(q), q).toBe(true)
+    }
+    for (const q of ['Do you have experience with Go?', 'How many years of experience do you have with Python?', 'Do you hold a degree in computer science?']) {
+      expect(isCompanySpecificQuestion(q), q).toBe(false)
+    }
+    const out = JSON.stringify({ structured_output: { mappings: [{ id: 'a', factKey: null, answer: 'Yes' }] } })
+    // A reply without the flag is not reusable.
+    expect(parseMappingOutput(out, new Set(['a']), [{ id: 'a', question: 'Go?', kind: 'text', options: [] }])).toEqual([
+      { id: 'a', fact: null, answer: 'Yes', reusable: false }
+    ])
+  })
+
+  it('keeps answers that are bounded, among the options, and never for a sensitive fact or an EEO question', async () => {
+    expect(await run()).toEqual([
+      { id: 'q1', fact: 'gender' },
+      { id: 'q2', fact: 'needsSponsorship' },
+      { id: 'q3', fact: null, answer: 'Yes', reusable: true },
+      // The model calls it reusable; main still refuses it for a "describe" question (isCompanySpecificQuestion).
+      { id: 'q4', fact: null, answer: 'Yes', reusable: true }
+    ])
+    // A model that over-reaches: a gender answer, an option the question lacks, a 400-character text.
+    expect(await run({ FAKE_MAPPER: 'overreach' })).toEqual([
+      { id: 'q1', fact: 'gender' },
+      { id: 'q2', fact: 'needsSponsorship' },
+      { id: 'q3', fact: null },
+      { id: 'q4', fact: null }
+    ])
+    const out = (mappings: unknown[]) => JSON.stringify({ structured_output: { mappings } })
+    const qs: MapQuestion[] = [
+      { id: 'a', question: 'Are you Hispanic or Latino?', kind: 'text', options: [] },
+      { id: 'b', question: 'Do you agree to the terms?', kind: 'radio', options: ['Yes', 'No'] },
+      { id: 'c', question: 'Preferred office', kind: 'select', options: ['London', 'Paris'] }
+    ]
+    expect(
+      parseMappingOutput(
+        out([
+          { id: 'a', factKey: null, answer: 'No' },
+          { id: 'b', factKey: null, answer: 'Yes' },
+          { id: 'c', factKey: null, answer: ' london ' }
+        ]),
+        new Set(['a', 'b', 'c']),
+        qs
+      )
+    ).toEqual([
+      { id: 'a', fact: null },
+      { id: 'b', fact: null },
+      { id: 'c', fact: null, answer: 'London', reusable: false }
     ])
   })
 })
@@ -255,5 +423,27 @@ describe('answer fields in a page report', () => {
     expect(email.fieldId).toBeUndefined()
     expect(email.fact).toBeUndefined()
     expect(consent.fieldId).toBeUndefined()
+  })
+})
+
+describe('edits the page reports (#136)', () => {
+  it('keeps bounded, non-empty edits with an id, the last per field, and an http(s) URL only', () => {
+    expect(
+      parseEdits({
+        url: 'https://jobs.lever.co/a/b/apply',
+        edits: [
+          { fieldId: 'radio:go', value: ' No ' },
+          { fieldId: 'text:why', value: 'x'.repeat(501) },
+          { fieldId: '', value: 'a' },
+          { fieldId: 'text:a', value: '   ' },
+          { fieldId: 7, value: 'a' },
+          { fieldId: 'radio:go', value: 'Yes' },
+          'junk'
+        ]
+      })
+    ).toEqual({ url: 'https://jobs.lever.co/a/b/apply', edits: [{ fieldId: 'radio:go', value: 'Yes' }] })
+    expect(parseEdits({ url: 'javascript:alert(1)', edits: [{ fieldId: 'a', value: 'b' }] }).url).toBe('')
+    expect(parseEdits(null)).toEqual({ url: '', edits: [] })
+    expect(parseEdits({ edits: Array.from({ length: 300 }, (_, i) => ({ fieldId: `f${i}`, value: 'v' })) }).edits).toHaveLength(200)
   })
 })

@@ -1,7 +1,9 @@
 import type { AdapterStep, FieldKey, UploadState } from '../../apply-types'
+import type { ChoiceKey } from '../../geo'
 import { atsForHost } from '../../apply-url'
 import { headingText, SUBMITTED } from './text'
 import type { Adapter, UploadProbe } from './types'
+import { NEVER_TOUCHED, sectionRoots } from '../workday-sections'
 
 /**
  * Workday (`<tenant>.wd<N>.myworkdayjobs.com`, `*.myworkdaysite.com`): a
@@ -11,8 +13,14 @@ import type { Adapter, UploadProbe } from './types'
  * the URL often stays the same, so the step comes from the active progress
  * step's title.
  *
- * Only the My Information and resume steps are `form`; everything else is
- * the user's (the panel says which button to press). The account wall is
+ * Every step under the progress bar is `form` except Review (#136, owner
+ * decision reversing #65's decision 3). My Information and the resume steps
+ * get contact values and uploads; My Experience also gets the profile's
+ * repeatable sections (`sectionRoots`, filled by sections.ts); every other
+ * step (Application Questions, Voluntary Disclosures, Self Identify) is
+ * answer-only: facts, remembered answers and AI answers, never a contact
+ * value or an upload. The Self Identify signature block and the terms check
+ * boxes are never touched (`excluded`); Review is the user's. The account wall is
  * never filled: not the email, never a password, never the `beecatcher`
  * honeypot. Huntgry never presses Apply, Next, Sign In or Create Account.
  *
@@ -45,6 +53,9 @@ const MY_INFORMATION = any(
 )
 const RESUME = any('file-upload-input-ref', 'file-upload-drop-zone', 'file-upload-successful')
 const FORM_TITLES = /my information|my experience|resume|cv\b/i
+/** The last step, with the site's Submit: never filled (#136). */
+const REVIEW = any('applyFlowReviewPage')
+const REVIEW_TITLE = /^review\b/i
 
 /** The uploaded-file list Workday shows once it has the file (and, on Autofill with Resume, has parsed it). */
 const UPLOADED = any('file-upload-successful', 'file-upload-item')
@@ -69,8 +80,20 @@ function step(doc: Document): AdapterStep {
   if (doc.querySelector(aid('adventureButton')) && !doc.querySelector(aid('progressBar'))) return 'posting'
   if (doc.querySelector(MY_INFORMATION) || doc.querySelector(RESUME)) return 'form'
   const title = activeStepTitle(doc)
-  if (title && FORM_TITLES.test(title)) return 'form'
+  if (doc.querySelector(REVIEW) || (title && REVIEW_TITLE.test(title))) return 'other'
+  // Every other step under the progress bar is answerable (#136): Application Questions, Voluntary Disclosures…
+  if (title) return 'form'
   return 'other'
+}
+
+/**
+ * A form step that is not My Information or a resume step (#136): Application Questions, Voluntary Disclosures,
+ * Self Identify, or any step Huntgry does not know. Only answered from memory.
+ */
+function answerOnly(doc: Document): boolean {
+  if (doc.querySelector(MY_INFORMATION) || doc.querySelector(RESUME)) return false
+  const title = activeStepTitle(doc)
+  return !(title && FORM_TITLES.test(title))
 }
 
 function stepTitle(doc: Document): string | null {
@@ -99,15 +122,51 @@ const KNOWN: ReadonlyArray<readonly [string, FieldKey]> = [
   [`${aid('formField-phone-number')} input`, 'phone'],
   [`${aid('formField-phoneNumber')} input`, 'phone'],
   ['input[id="phoneNumber--phoneNumber"]', 'phone'],
-  [`input${aid('addressSection_city')}`, 'location'],
-  [`${aid('formField-addressSection_city')} input`, 'location'],
-  [`${aid('formField-city')} input`, 'location'],
-  ['input[id="address--city"]', 'location'],
+  // Address (#136): line 1, city and postal code are typed; line 2 never. Workday has no single "location" field.
+  [`input${aid('addressSection_addressLine1')}`, 'addressLine1'],
+  [`${aid('formField-addressSection_addressLine1')} input`, 'addressLine1'],
+  [`${aid('formField-addressLine1')} input`, 'addressLine1'],
+  ['input[id="address--addressLine1"]', 'addressLine1'],
+  [`input${aid('addressSection_city')}`, 'city'],
+  [`${aid('formField-addressSection_city')} input`, 'city'],
+  [`${aid('formField-city')} input`, 'city'],
+  ['input[id="address--city"]', 'city'],
+  [`input${aid('addressSection_postalCode')}`, 'postalCode'],
+  [`${aid('formField-addressSection_postalCode')} input`, 'postalCode'],
+  [`${aid('formField-postalCode')} input`, 'postalCode'],
+  ['input[id="address--postalCode"]', 'postalCode'],
   [`input${aid('linkedinQuestion')}`, 'linkedin'],
   [`${aid('formField-linkedinQuestion')} input`, 'linkedin'],
   [`input${aid('websiteQuestion')}`, 'website'],
   [`${aid('formField-websiteQuestion')} input`, 'website'],
   [`input[type="file"]${aid('file-upload-input-ref')}`, 'resume']
+]
+
+/**
+ * My Information's dropdowns filled from the profile (#136): State (the
+ * address's `countryRegion`), Country, Phone Device Type (Mobile) and Country
+ * Phone Code (the profile country's code). Dropdowns are buttons with a
+ * listbox (picked by pick.ts); Country Phone Code is a multiselect prompt
+ * (a search box, typed and picked) on newer tenants and a dropdown on older.
+ */
+const VALUE_CHOICES: ReadonlyArray<readonly [string, ChoiceKey]> = [
+  [`button${aid('addressSection_countryRegion')}`, 'state'],
+  [`${aid('formField-addressSection_countryRegion')} button`, 'state'],
+  [`${aid('formField-countryRegion')} button`, 'state'],
+  ['button[id="address--countryRegion"]', 'state'],
+  [`button${aid('countryDropdown')}`, 'country'],
+  [`${aid('formField-countryDropdown')} button`, 'country'],
+  [`${aid('formField-country')} button`, 'country'],
+  ['button[id="country--country"]', 'country'],
+  [`button${aid('phone-device-type')}`, 'phoneType'],
+  [`${aid('formField-phone-device-type')} button`, 'phoneType'],
+  [`${aid('formField-phoneType')} button`, 'phoneType'],
+  ['button[id="phoneNumber--phoneType"]', 'phoneType'],
+  [`${aid('country-phone-code')}`, 'phoneCountryCode'],
+  [`${aid('formField-countryPhoneCode')} button`, 'phoneCountryCode'],
+  [`${aid('formField-countryPhoneCode')} input${aid('searchBox')}`, 'phoneCountryCode'],
+  [`${aid('formField-country-phone-code')} input${aid('searchBox')}`, 'phoneCountryCode'],
+  ['[id="phoneNumber--countryPhoneCode"]', 'phoneCountryCode']
 ]
 
 /** Whether `item` names exactly `name`: an element whose own text is the file name (not `old-resume.pdf`). */
@@ -139,8 +198,13 @@ export const workday: Adapter = {
   matches: (url, doc) => atsForHost(url.hostname) === 'workday' || doc.querySelector(MARKERS) !== null,
   formRoot: (doc) => doc.querySelector(aid('applyFlowPage')) ?? doc.querySelector('main') ?? doc.body,
   known: KNOWN,
-  // A React app: its radios ("previously worked here") and checkboxes only take a click (#71: suggested, never set).
-  clickOnly: ['input[type="radio"]', 'input[type="checkbox"]'],
+  valueChoices: VALUE_CHOICES,
+  // A React app: its radios ("previously worked here") and checkboxes only take a click (#71: suggested, never set);
+  // its prompt search boxes ("How did you hear about us") take a typed search and a picked suggestion (#136).
+  clickOnly: ['input[type="radio"]', 'input[type="checkbox"]', `input${aid('searchBox')}`],
+  excluded: NEVER_TOUCHED,
+  answerOnly,
+  sectionRoots,
   isConfirmation: (_url, doc) =>
     !doc.querySelector(ACTIVE_STEP) && !doc.querySelector(RESUME) && SUBMITTED.test(headingText(doc)),
   ready: (doc) => doc.querySelector(MARKERS) !== null && doc.querySelector(BUSY) === null,

@@ -1,4 +1,5 @@
 import type { AdapterStep, ApplyAts, FieldKey, UploadState } from '../../apply-types'
+import type { ChoiceKey } from '../../geo'
 
 /**
  * The adapter contract: per-ATS knowledge the autofill engine uses. Every
@@ -31,6 +32,16 @@ export interface Adapter {
    */
   choices?: readonly string[]
   /**
+   * Selector → profile value for dropdowns and typeaheads (#136): a native
+   * select, a listbox button, a combobox or a suggestion input filled from
+   * the profile (country, state, location…) or a phone default (`phoneType`:
+   * Mobile; `phoneCountryCode`: the profile country's code). Tried before
+   * `choices`; with no value in the profile the control is a choice again.
+   * Click-only widgets are picked by pick.ts (listboxes) or typed and picked
+   * (text inputs, Workday search boxes, location comboboxes).
+   */
+  valueChoices?: ReadonlyArray<readonly [string, ChoiceKey]>
+  /**
    * Selectors of native controls (radios, checkboxes, selects) whose
    * framework only takes a person's click: setting them and firing `change`
    * may look answered while the site's state stays empty (React radios).
@@ -44,6 +55,27 @@ export interface Adapter {
    * never matched to contact values or uploads.
    */
   answerRoots?(doc: Document): Element[]
+  /**
+   * Selectors of controls (or their containers) that are never planned,
+   * reported or touched, whatever they ask (#136: Workday's Self Identify
+   * signature block, terms and agreements).
+   */
+  excluded?: readonly string[]
+  /**
+   * Whether the current step is answer-only (#136: Workday's Application
+   * Questions, Voluntary Disclosures, Self Identify): its controls are only
+   * answered from facts, remembered answers and AI answers; no contact
+   * value, no upload, no profile dropdown.
+   */
+  answerOnly?(doc: Document): boolean
+  /**
+   * Containers of the profile's repeatable sections and other controls that
+   * `sections.ts` fills (#136: Workday's Work Experience, Education,
+   * Websites, Skills, date questions, disability check boxes). The engine
+   * leaves them out of its own plan; `fillSections` fills them from the
+   * profile after the synchronous fill.
+   */
+  sectionRoots?(doc: Document): Element[]
 
   /**
    * Readiness: whether the form is rendered and the page's framework has

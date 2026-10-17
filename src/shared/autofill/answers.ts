@@ -1,4 +1,5 @@
-import { isConsentQuestion, matchFact, questionKey, resolveAnswer, type FactKey, type PageAnswers } from '../apply-facts'
+import { FACTS, isConsentQuestion, matchFact, questionKey, resolveAnswer, type FactKey, type PageAnswers } from '../apply-facts'
+import { aiAnswerReason, isDemographicQuestion } from '../ai-answers'
 import type { FieldKind, FieldReport } from '../apply-types'
 import {
   checkRadio,
@@ -11,7 +12,7 @@ import {
   setSelectValue,
   type FormControl
 } from './dom'
-import { widgetOf } from './pick'
+import { isWorkdaySearchBox, widgetOf } from './pick'
 import { editedByUser } from './user-edits'
 
 /**
@@ -48,6 +49,16 @@ export interface PickRequest {
   line: FieldReport
   fact: FactKey | null
   value: string
+  /** Which option is the answer (default: the remembered answer resolved against the options). */
+  choose?: (options: string[]) => string | null
+  /** A typeahead (#136): the text to search for; the widget is then typed into, not opened. */
+  search?: string
+  /**
+   * The AI answer Huntgry picked here that this confirmed answer corrects (#136, `QuestionAnswer.replace`): pick.ts
+   * may re-open the widget and choose the correction while it still shows exactly this and the person has not
+   * touched it. Set only when the person had not edited the control at queue time.
+   */
+  replace?: string
 }
 
 export type WriteStrategy = 'text' | 'select' | 'radio' | 'click-only' | 'never'
@@ -66,19 +77,46 @@ export interface Lookup {
   fact?: FactKey
   value?: string
   confirmed: boolean
+  /**
+   * An unconfirmed (model) entry's value (#136): `fact` the user's own stored fact the model mapped the question
+   * to, `answer` the model's probable answer from the profile.
+   */
+  ai?: 'fact' | 'answer'
+  /** A confirmed answer's AI answer it may overwrite (see `QuestionAnswer.replace`). */
+  replace?: string
 }
 
 export function lookup(answers: PageAnswers, question: string, label: string): Lookup {
   const q = answers.questions[question]
   if (q) {
     const fact = q.fact ?? undefined
+    if (!q.confirmed) {
+      // A model's entry: the user's own stored fact wins over the model's answer; a sensitive fact never takes one.
+      const stored = fact ? answers.facts[fact] : undefined
+      if (stored) return { fact, value: stored, confirmed: false, ai: 'fact' }
+      const value = fact && FACTS[fact].sensitive ? undefined : q.value
+      return value ? { fact, value, confirmed: false, ai: 'answer' } : { fact, confirmed: false }
+    }
     // The exact option the user confirmed for this very question wins over the fact (which may fit several options).
-    return { fact, value: q.value ?? q.option ?? (fact ? answers.facts[fact] : undefined), confirmed: q.confirmed }
+    const value = q.value ?? q.option ?? (fact ? answers.facts[fact] : undefined)
+    return { fact, value, confirmed: q.confirmed, ...(q.replace ? { replace: q.replace } : {}) }
   }
   const fact = matchFact(label)
   // A catalog match is trusted like a confirmation: the fact's value is the user's own.
   return fact ? { fact, value: answers.facts[fact], confirmed: true } : { confirmed: false }
 }
+
+/** The control behind a reported question line (#136: the page reports the user's corrections to main). */
+export interface QuestionControl {
+  el: FormControl
+  root: ParentNode
+  clickOnly: boolean
+}
+
+const CONTROLS = new WeakMap<FieldReport, QuestionControl>()
+
+/** The control `line` was reported for by `answerField`, if any. */
+export const controlOf = (line: FieldReport): QuestionControl | undefined => CONTROLS.get(line)
 
 /** Kinds a question can be answered for at all (files are uploads; `other` is dates, numbers…). */
 export const answerable = (kind: FieldKind) => kind !== 'file' && kind !== 'other'
@@ -116,6 +154,16 @@ export function yesNoGroup(el: FormControl): string[] | null {
   return widget?.type === 'buttons' ? widget.options.map((b) => (b.textContent ?? '').trim()).filter(Boolean) : null
 }
 
+/**
+ * Whether a model's entry may be written (#136): the Settings switch is on, and neither the fact nor the question is
+ * demographic (EEO answers come only from the user's own confirmed answers or a catalog match).
+ */
+function aiWritable(found: Lookup, answers: PageAnswers, label: string, options: readonly string[]): boolean {
+  if (found.confirmed || !found.ai || answers.aiAnswers !== true) return false
+  if (found.fact && FACTS[found.fact].sensitive) return false
+  return !isDemographicQuestion(label, options)
+}
+
 export function answerField(
   el: FormControl,
   line: FieldReport,
@@ -138,6 +186,7 @@ export function answerField(
   if (options.some(isConsentQuestion)) return false
   line.question = questionKey(line.label, kind, options)
   if (options.length) line.options = options
+  CONTROLS.set(line, { el, root, clickOnly: strategy === 'click-only' })
   const found = lookup(answers, line.question, line.label)
   if (found.fact) line.fact = found.fact
   if (!found.value) {
@@ -149,7 +198,8 @@ export function answerField(
     line.reason = "Your saved answer is not one of this question's options; pick it yourself."
     return false
   }
-  if (!found.confirmed) {
+  const ai = aiWritable(found, answers, line.label, options)
+  if (!found.confirmed && !ai) {
     line.suggestion = answer
     line.suggestedBy = 'model'
     line.reason = 'Suggested from your saved answers; confirm it below.'
@@ -158,7 +208,7 @@ export function answerField(
   if (strategy === 'click-only') {
     // Shown as a suggestion; with the `pick` policy, pick.ts then tries to choose it and replaces this line.
     line.suggestion = answer
-    line.suggestedBy = 'saved'
+    line.suggestedBy = ai ? 'model' : 'saved'
     line.reason = `This picker takes a click: choose "${answer.slice(0, 80)}" yourself.`
     if (policy !== 'pick') return false
     // A control the person touched, or a combobox they are typing into, is theirs (checked again before the press).
@@ -169,18 +219,31 @@ export function answerField(
       line.reason = 'You changed it; left as is.'
       return false
     }
-    picks.push({ el, root, line, fact: found.fact ?? null, value: found.value })
+    // A Workday prompt ("How did you hear about us", #136) is searched for the answer and its suggestion picked.
+    const search = isWorkdaySearchBox(el) ? { search: answer } : {}
+    // The user's correction of an AI answer Huntgry picked here (#136): pick.ts replaces it only while the widget
+    // still shows exactly that answer and the person has not touched it.
+    const replace = found.replace !== undefined ? { replace: found.replace } : {}
+    picks.push({ el, root, line, fact: found.fact ?? null, value: found.value, ...search, ...replace })
     return false
+  }
+  // An AI answer that went in says so in the panel (#136); main marks picked ones the same way.
+  const done = () => {
+    line.outcome = 'filled'
+    line.reason = ai ? aiAnswerReason(found.ai === 'fact' ? found.fact : null) : undefined
+    if (ai) line.suggestedBy = 'model'
+    highlight(el, 'done')
   }
   const shown = chosenOf(el, root)
   if (shown === answer) {
-    line.outcome = 'filled'
     line.value = answer
-    line.reason = undefined
-    highlight(el, 'done')
+    done()
     return false
   }
-  if (!isEmpty(el, kind, root) || editedInGroup(el, kind, root)) {
+  const edited = editedInGroup(el, kind, root)
+  // The user's correction of an AI answer (#136) replaces it while the page still shows exactly what Huntgry wrote.
+  const correcting = found.replace !== undefined && shown === found.replace && !edited
+  if (!correcting && (!isEmpty(el, kind, root) || edited)) {
     line.outcome = 'kept'
     line.value = shown.slice(0, 200)
     line.reason = 'Already answered; left as is.'
@@ -189,9 +252,7 @@ export function answerField(
   const ok = writeAnswer(el, strategy, root, answer)
   line.value = answer
   if (ok) {
-    line.outcome = 'filled'
-    line.reason = undefined
-    highlight(el, 'done')
+    done()
   } else {
     line.outcome = 'rejected'
     line.reason = 'The site did not take the saved answer; answer it yourself.'

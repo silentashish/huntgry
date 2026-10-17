@@ -1,6 +1,6 @@
-import { access, readFile, stat, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { ElectronApplication, Page, TestInfo } from '@playwright/test'
 import { WORKDAY_POSTING } from '../../scripts/mock-ats/workday.mjs'
 import { withFakeAgents } from '../fixtures/fake-agent'
@@ -18,7 +18,10 @@ import { TailorPage } from '../pages/tailor'
  * in the page here (Apply, the "how to apply" choice, Sign In, Create
  * Account, Next) is the test acting as the user, through `press` /
  * `signIn` (executeJavaScript in the tab). Nothing is submitted: the mock
- * flow ends at Application Questions.
+ * flow ends at Review, whose Submit is disabled. Since #136 My Experience is
+ * filled from the profile (blocks added with the section's Add button,
+ * skills picked) and Application Questions, Voluntary Disclosures and Self
+ * Identify are answered from the saved answers.
  */
 test.use({ workspace: 'mocks', prepare: withFakeAgents() })
 
@@ -27,7 +30,8 @@ const PROFILE = {
   last: 'Rivera',
   email: 'alex.rivera@example.com',
   phone: '(555) 010-0199',
-  city: 'Portland, OR',
+  // The profile's location is "Portland, OR"; Workday's City gets the city only (#136).
+  city: 'Portland',
   linkedin: 'https://www.linkedin.com/in/alex-rivera-example/'
 }
 const TAB = '/workday/'
@@ -76,6 +80,23 @@ async function signIn(electronApp: ElectronApplication, button: 'signInSubmitBut
   await press(electronApp, button)
 }
 
+/** The facts the user saved earlier (Settings > Saved application answers), as main's answers store keeps them. */
+async function seedAnswers(userData: string, workspace: string, facts: Record<string, string>): Promise<void> {
+  const dir = join(userData, 'apply-answers', createHash('sha256').update(resolve(workspace)).digest('hex').slice(0, 32))
+  await mkdir(dir, { recursive: true })
+  const updatedAt = new Date().toISOString()
+  const stored = Object.fromEntries(Object.entries(facts).map(([key, value]) => [key, { value, updatedAt }]))
+  await writeFile(join(dir, 'answers.json'), JSON.stringify({ facts: stored, questions: {} }), { mode: 0o600 })
+}
+
+const text = (electronApp: ElectronApplication, selector: string) =>
+  evaluateInTab<string | null>(electronApp, TAB, `document.querySelector(${JSON.stringify(selector)})?.textContent ?? null`)
+const checked = (electronApp: ElectronApplication, selector: string) =>
+  evaluateInTab<boolean | null>(electronApp, TAB, `document.querySelector(${JSON.stringify(selector)})?.checked ?? null`)
+/** How often the page's footer (Save and Continue, Back) was pressed: only ever by the test, as the user. */
+const footerPresses = (electronApp: ElectronApplication) => evaluateInTab<number>(electronApp, TAB, 'window.huntgryFooterPresses ?? 0')
+const SKILLS = ['Go', 'Python', 'TypeScript', 'SQL', 'AWS', 'Terraform', 'Docker', 'PostgreSQL']
+
 /** What Workday's resume widget lists (`file-upload-successful`), or null while it has nothing. */
 const uploadedList = (electronApp: ElectronApplication) =>
   evaluateInTab<string | null>(electronApp, TAB, `document.querySelector('${aid('file-upload-successful')}')?.textContent.trim() ?? null`)
@@ -109,12 +130,20 @@ async function screenshots(app: { electronApp: ElectronApplication; window: Page
 }
 
 test.describe('apply on Workday', () => {
-  test('a generated resume: Tailor run → Apply → posting, choice, sign-in wall (nothing filled) → My Information filled → resume attached', async ({
+  test('a generated resume: Tailor run → Apply → posting, choice, sign-in wall (nothing filled) → My Information filled → My Experience from the profile, resume attached → answer-only steps → Review untouched', async ({
     app,
     mock
   }, testInfo) => {
     const posting = `${mock.origin}${WORKDAY_POSTING}`
     const folder = 'software-engineer/acme/jr-1001'
+    // Facts the user saved earlier: sponsorship and the EEO answers (#136 answers them on the answer-only steps).
+    await seedAnswers(app.sandbox.userData, app.workspace!, {
+      needsSponsorship: 'no',
+      gender: 'decline',
+      raceEthnicity: 'decline',
+      veteranStatus: 'no',
+      disabilityStatus: 'decline'
+    })
 
     // Tailor a resume for the Workday posting with the scripted agent, then press the run's Apply.
     await new Shell(app.window).goTo('tailor')
@@ -181,7 +210,8 @@ test.describe('apply on Workday', () => {
     for (const shown of [PROFILE.first, PROFILE.last, PROFILE.email, PROFILE.phone, PROFILE.city]) {
       await expect(app.window.getByText(shown, { exact: true }).locator('..')).toContainText('Filled')
     }
-    await expect(app.window.getByText(/^Country Phone Code/).locator('..')).toContainText('Your choice')
+    // Country Phone Code is a prompt picked from the profile's country (#136: "Portland, OR" is in the United States).
+    await expect(app.window.getByText(/^Country Phone Code/).locator('..')).toContainText('Filled')
     await screenshots(app, testInfo, 'workday-my-information', '#name--legalName--firstName')
 
     // The user presses Save and Continue: My Experience (same URL). resume.pdf goes to the drop zone and counts
@@ -197,16 +227,76 @@ test.describe('apply on Workday', () => {
     expect(await value(app.electronApp, aid('linkedinQuestion'))).toBe(PROFILE.linkedin)
     await screenshots(app, testInfo, 'workday-resume', aid('file-upload-successful'))
 
-    // Application Questions is the user's; Huntgry says so and fills nothing.
+    // #136: the profile's two jobs in blocks Huntgry added with the section's Add button; the current one ticked.
+    expect(await value(app.electronApp, '#workExperience-1--jobTitle')).toBe('Senior Backend Engineer')
+    expect(await value(app.electronApp, '#workExperience-1--companyName')).toBe('Acme Corp')
+    expect(await checked(app.electronApp, '#workExperience-1--currentlyWorkHere')).toBe(true)
+    expect(await value(app.electronApp, '#workExperience-1--startDate-dateSectionMonth-input')).toBe('01')
+    expect(await value(app.electronApp, '#workExperience-1--startDate-dateSectionYear-input')).toBe('2022')
+    expect(await value(app.electronApp, '#workExperience-1--endDate-dateSectionYear-input')).toBe('')
+    expect(await value(app.electronApp, '#workExperience-2--jobTitle')).toBe('Software Engineer')
+    expect(await value(app.electronApp, '#workExperience-2--companyName')).toBe('Globex Corporation')
+    expect(await checked(app.electronApp, '#workExperience-2--currentlyWorkHere')).toBe(false)
+    expect(await value(app.electronApp, '#workExperience-2--startDate-dateSectionMonth-input')).toBe('06')
+    expect(await value(app.electronApp, '#workExperience-2--startDate-dateSectionYear-input')).toBe('2018')
+    expect(await value(app.electronApp, '#workExperience-2--endDate-dateSectionMonth-input')).toBe('12')
+    expect(await value(app.electronApp, '#workExperience-2--endDate-dateSectionYear-input')).toBe('2021')
+    expect(await value(app.electronApp, '#workExperience-1--roleDescription')).toContain('Rebuilt the billing API')
+    // Education: the school picked in Workday's prompt, the degree by synonym (Bachelor of Science).
+    expect(await text(app.electronApp, '#education-1--degree')).toBe("Bachelor's Degree")
+    expect(await value(app.electronApp, '#website-1--url')).toBe('https://github.com/alex-rivera-example')
+    // Skills: each one picked as a pill.
+    const pills = await evaluateInTab<string[]>(
+      app.electronApp,
+      TAB,
+      `Array.from(document.querySelectorAll('[data-automation-id="formField-skills"] [data-automation-id="selectedItem"]')).map((p) => p.getAttribute('data-automation-label'))`
+    )
+    expect(pills).toEqual(expect.arrayContaining(SKILLS))
+    await expect(app.window.getByText('Work experience 1 · Job title', { exact: true }).locator('..')).toContainText('Filled')
+    await expect(app.window.getByText(/^Skills: 8 added/)).toBeVisible()
+    await screenshots(app, testInfo, 'workday-my-experience', '#workExperience-1--jobTitle')
+
+    // Application Questions (answer-only since #136): the saved sponsorship answer picked; nothing else from the contact.
     await press(app.electronApp, 'bottom-navigation-next-button')
-    await expect(app.window.getByText('Step: Other step (Application Questions)', { exact: true })).toBeVisible()
+    await expect(app.window.getByText('Step: Application Questions', { exact: true })).toBeVisible()
+    await panel.expectStatus('Filled: review and submit')
+    await expect.poll(() => text(app.electronApp, '#primaryQuestionnaire--sponsorship')).toBe('No')
+    await expect(
+      app.window.getByText('Will you now or in the future require sponsorship for employment visa status? *', { exact: true }).locator('..')
+    ).toContainText('Filled')
+    await screenshots(app, testInfo, 'workday-application-questions', '#primaryQuestionnaire--sponsorship')
+
+    // Voluntary Disclosures: picked from the saved facts; the terms check box untouched.
+    await press(app.electronApp, 'bottom-navigation-next-button')
+    await expect(app.window.getByText('Step: Voluntary Disclosures', { exact: true })).toBeVisible()
+    await panel.expectStatus('Filled: review and submit')
+    await expect.poll(() => text(app.electronApp, '#personalInfoUS--gender')).toBe('I do not wish to self-identify')
+    expect(await text(app.electronApp, '#personalInfoUS--veteranStatus')).toBe('I am not a protected veteran')
+    expect(await text(app.electronApp, '#personalInfoUS--ethnicity')).toBe('I do not wish to self-identify')
+    expect(await checked(app.electronApp, '#termsAndConditions--acceptTermsAndAgreements')).toBe(false)
+    await screenshots(app, testInfo, 'workday-voluntary-disclosures', '#personalInfoUS--gender')
+
+    // Self Identify: the disability answer picked; the signature (name, date) left for the user.
+    await press(app.electronApp, 'bottom-navigation-next-button')
+    await expect(app.window.getByText('Step: Self Identify', { exact: true })).toBeVisible()
+    await panel.expectStatus('Filled: review and submit')
+    await expect.poll(() => checked(app.electronApp, '#selfIdentifiedDisabilityData--disabilityStatus-2')).toBe(true)
+    expect(await value(app.electronApp, '#selfIdentifiedDisabilityData--name')).toBe('')
+    for (const part of ['Month', 'Day', 'Year']) {
+      expect(await value(app.electronApp, `#selfIdentifiedDisabilityData--dateSignedOn-dateSection${part}-input`)).toBe('')
+    }
+    await screenshots(app, testInfo, 'workday-self-identify', '#selfIdentifiedDisabilityData--disabilityStatus-2')
+
+    // Review is the user's; Huntgry says so and fills nothing. Every footer press was the test's own.
+    await press(app.electronApp, 'bottom-navigation-next-button')
+    await expect(app.window.getByText('Step: Other step (Review)', { exact: true })).toBeVisible()
     await panel.expectStatus('Your turn in the page')
-    expect(await value(app.electronApp, 'textarea')).toBe('')
+    expect(await footerPresses(app.electronApp)).toBe(5)
     expect(await uploads(mock.uploadsFile)).toHaveLength(1)
     expect(await exists(mock.submissionFile)).toBe(false)
   })
 
-  test('Autofill with Resume on an older tenant: create-account wall untouched, resume attached after the parse, then My Information', async ({
+  test("Autofill with Resume on an older tenant: create-account wall untouched, resume attached after the parse, then My Information, then My Experience with the parser's guesses replaced", async ({
     app,
     mock
   }) => {
@@ -262,7 +352,22 @@ test.describe('apply on Workday', () => {
     await expect(app.window.getByText('alex.rivera@parsed.example', { exact: true }).locator('..')).toContainText('Kept yours')
     await expect(app.window.getByText(PROFILE.phone, { exact: true }).locator('..')).toContainText('Filled')
     expect(await value(app.electronApp, aid('beecatcher'))).toBe('')
-    expect(await uploads(mock.uploadsFile)).toHaveLength(1)
+
+    // My Experience (#136): Workday's parser guessed one job ("Acme Corp", "Engineer", 02/2021). Huntgry matches it
+    // to the profile's Acme Corp by company and replaces the guesses; Globex gets a block of its own.
+    await press(app.electronApp, 'bottom-navigation-next-button')
+    await expect(app.window.getByText('Step: My Experience', { exact: true })).toBeVisible()
+    await panel.expectStatus('Filled: review and submit')
+    expect(await value(app.electronApp, '#workExperience-1--companyName')).toBe('Acme Corp')
+    expect(await value(app.electronApp, '#workExperience-1--jobTitle')).toBe('Senior Backend Engineer')
+    expect(await value(app.electronApp, '#workExperience-1--startDate-dateSectionMonth-input')).toBe('01')
+    expect(await value(app.electronApp, '#workExperience-1--startDate-dateSectionYear-input')).toBe('2022')
+    expect(await checked(app.electronApp, '#workExperience-1--currentlyWorkHere')).toBe(true)
+    expect(await value(app.electronApp, '#workExperience-2--companyName')).toBe('Globex Corporation')
+    await expect(panel.field('Work experience 1 · Job title')).toContainText("Replaced the site's parsed value.")
+    expect(await footerPresses(app.electronApp)).toBe(2)
+    // My Experience shows its own drop zone: resume.pdf goes there too.
+    expect(await uploads(mock.uploadsFile)).toHaveLength(2)
     expect(await exists(mock.submissionFile)).toBe(false)
   })
 })

@@ -78,8 +78,12 @@ export function serializeMasterProfile(p: MasterProfile): string {
     field('GitHub', p.contact.github),
     field('Website', p.contact.website),
     field('Work authorization', p.contact.workAuthorization),
+    // Postal address parts (#136): optional, written only when set, so profiles without them stay unchanged.
+    opt('Address', p.contact.address ?? ''),
+    opt('Postal code', p.contact.postalCode ?? ''),
+    opt('Country', p.contact.country ?? ''),
     ...p.contact.other.filter((o) => o.label.trim()).map((o) => field(o.label, o.value))
-  ])
+  ].filter((line): line is string => line !== null))
 
   section(out, 'Summary', p.summary.trim() ? [p.summary.trim()] : [])
 
@@ -261,7 +265,14 @@ const FIELD_ALIASES: Record<EntryKind | 'contact', Record<string, string>> = {
     'personal website': 'website',
     homepage: 'website',
     'work authorization': 'workAuthorization',
-    'work authorisation': 'workAuthorization'
+    'work authorisation': 'workAuthorization',
+    address: 'address',
+    'street address': 'address',
+    'postal code': 'postalCode',
+    zip: 'postalCode',
+    'zip code': 'postalCode',
+    postcode: 'postalCode',
+    country: 'country'
   },
   experience: {
     company: 'company',

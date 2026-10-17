@@ -25,7 +25,12 @@ export const lever: Adapter = {
     doc.querySelector('[data-qa="msg-submit-success"]') !== null ||
     (doc.querySelector('#application-form') === null && SUBMITTED.test(headingText(doc))),
   // "Current location" is an autocomplete that clears free text unless a suggestion is picked (live 2026-10-03).
+  // Typed and the matching suggestion picked from the profile's location (#136); without one, the user's.
   choices: ['#location-input', 'input[name="location"]'],
+  valueChoices: [
+    ['#location-input', 'location'],
+    ['input[name="location"]', 'location']
+  ],
   // On `change` Lever posts the file to /parseResume ("Analyzing resume..."), shows the file name in `.filename`,
   // then "Success!" or "Couldn't auto-read resume." and fills empty contact fields from the parse.
   // Only the widget counts (the file name in `.filename`), never the <input> holding a file: CDP sets that even when

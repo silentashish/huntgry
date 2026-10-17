@@ -20,6 +20,13 @@ export const FACT_KEYS = [
   'earliestStart',
   'salaryExpectation',
   'currentCity',
+  'visaStatus',
+  'previouslyEmployed',
+  'howHeard',
+  'securityClearance',
+  'yearsExperience',
+  'highestEducation',
+  'relativeEmployed',
   'pronouns',
   'gender',
   'raceEthnicity',
@@ -47,6 +54,13 @@ export const FACTS: Record<FactKey, FactInfo> = {
   earliestStart: { label: 'Earliest start date', sensitive: false, kind: 'text' },
   salaryExpectation: { label: 'Salary expectation', sensitive: false, kind: 'text' },
   currentCity: { label: 'Current city', sensitive: false, kind: 'text' },
+  visaStatus: { label: 'Work authorization status / visa type', sensitive: false, kind: 'text' },
+  previouslyEmployed: { label: 'Previously worked for this employer', sensitive: false, kind: 'yesno' },
+  howHeard: { label: 'How did you hear about us', sensitive: false, kind: 'text' },
+  securityClearance: { label: 'Security clearance', sensitive: false, kind: 'yesno' },
+  yearsExperience: { label: 'Years of experience', sensitive: false, kind: 'text' },
+  highestEducation: { label: 'Highest education', sensitive: false, kind: 'text' },
+  relativeEmployed: { label: 'Related to an employee', sensitive: false, kind: 'yesno' },
   pronouns: { label: 'Pronouns', sensitive: true, kind: 'choice' },
   gender: { label: 'Gender', sensitive: true, kind: 'choice' },
   raceEthnicity: { label: 'Race / ethnicity', sensitive: true, kind: 'choice' },
@@ -113,13 +127,25 @@ export function questionKey(label: string, kind: string, options: readonly strin
 const NEVER =
   /\b(i (certify|agree|acknowledge|consent|understand|confirm|attest|accept)|consent|acknowledg\w*|privacy|terms|arbitration|certif\w*|signature|sign)\b/
 
-/** Ordered: the first that matches wins (sponsorship before authorization, Hispanic before race). */
+/**
+ * Ordered: the first that matches wins (sponsorship before visa status before authorization, a relative's
+ * employment before the user's own, Hispanic before race).
+ */
 const RULES: Array<[FactKey, (q: string) => boolean]> = [
   [
     'needsSponsorship',
     (q) =>
       /\bsponsor/.test(q) &&
       !/\bwithout (the )?(need (for|of) |needing |requiring |any )?(visa |employer |employment )?sponsor/.test(q)
+  ],
+  // A status or type, not a yes/no: "What is your work authorization status?" (US citizen / H-1B…), "Visa type".
+  // Before workAuthorized, which keeps "Are you authorized to work…"; after sponsorship.
+  [
+    'visaStatus',
+    (q) =>
+      /\b(visa|immigration|citizenship|authori[sz]ation)( \w+){0,2} (status|type|category)\b/.test(q) ||
+      /\b(status|type|category) of (your )?(current )?(us |u s )?(visa|immigration|citizenship|work authori[sz]ation)\b/.test(q) ||
+      /\b(which|what) (type of )?visa (do|are|will)\b/.test(q)
   ],
   [
     'workAuthorized',
@@ -143,6 +169,47 @@ const RULES: Array<[FactKey, (q: string) => boolean]> = [
       /\b(salary|compensation|pay|wage) (expectation|requirement|range|expected|desired)/.test(q) ||
       /\b(expected|desired|target) (annual |base )?(salary|compensation|pay)\b/.test(q)
   ],
+  // A relative before the user's own employment: "Have any of your relatives ever been employed by us?".
+  [
+    'relativeEmployed',
+    (q) =>
+      /\brelated to (any|an|a) (current |existing )?(employee|staff|member of (our )?staff)/.test(q) ||
+      /\brelatives? (\w+ ){0,3}(working|employed|work)\b/.test(q) ||
+      /\bfamily members? (\w+ ){0,3}(working|employed|work)\b/.test(q)
+  ],
+  [
+    'previouslyEmployed',
+    (q) =>
+      // "for / at / by" a named employer ("Have you ever worked for a startup?" or "…with React?" is not this).
+      /\b(previously|formerly|ever) (been )?(worked|employed) (for|at|by) (?!(a|an|any|other)\b)/.test(q) ||
+      /\b(previously|formerly|ever) (been )?(worked|employed) with (us|our|this company|the company)\b/.test(q) ||
+      /\b(former|previous|past) (employee|employment|contractor)\b/.test(q) ||
+      /\bworked (here|for us|at \w+|for \w+|with \w+) (before|previously)\b/.test(q)
+  ],
+  [
+    'howHeard',
+    (q) =>
+      /\bhow (did|do) you (first )?(hear|learn|find out|come to know|discover)\b/.test(q) ||
+      /\breferral source\b|\bsource of referral\b/.test(q) ||
+      // A bare "Source" label only; longer text with "source" in it is something else ("open source").
+      /^(referral |candidate |application )?source$/.test(q)
+  ],
+  ['securityClearance', (q) => /\bsecurity clearance\b|\bactive (\w+ )?clearance\b/.test(q)],
+  // Overall experience only. "Years of Python experience" or "…experience with Java" names a subject: it stays its
+  // own question (answered from the profile and remembered by its own key), so one value never fills every skill.
+  [
+    'yearsExperience',
+    (q) =>
+      !EXPERIENCE_SUBJECT.test(q) &&
+      (YEARS_OF_OVERALL_EXPERIENCE.test(q) ||
+        /\bhow many years have you (been )?work(ed|ing)\b/.test(q))
+  ],
+  [
+    'highestEducation',
+    (q) =>
+      /\bhighest (level of )?(education|degree|qualification)/.test(q) ||
+      /\beducation(al)? level\b|\blevel of education\b/.test(q)
+  ],
   ['pronouns', (q) => /\bpronoun/.test(q)],
   ['hispanicLatino', (q) => /\bhispanic\b|\blatin[oax]\b/.test(q)],
   ['raceEthnicity', (q) => /\brace\b|\bethnicit/.test(q)],
@@ -151,6 +218,17 @@ const RULES: Array<[FactKey, (q: string) => boolean]> = [
   ['gender', (q) => /\b(gender|sex)\b/.test(q)],
   ['currentCity', (q) => /\b(current|which|what) city\b/.test(q)]
 ]
+
+/** "Years of experience", optionally qualified only by words that keep it about overall experience. */
+const YEARS_OF_OVERALL_EXPERIENCE =
+  /\b(years|yrs) of ((professional|work|working|total|relevant|overall|industry|full time|paid) ){0,2}experience\b/
+
+/**
+ * Experience or work about a named subject: "experience with / in / using / of Python", "worked with Java". The
+ * industry, the field or the workforce in general is still overall experience.
+ */
+const EXPERIENCE_SUBJECT =
+  /\b(experience|worked|working)\b (\w+ ){0,4}?(with|in|using|of|on)\b(?! (the |this |a |an |your )?(industry|field|workforce|total|general|overall)\b)/
 
 /**
  * Consent, certification, acknowledgement, arbitration, signature: never
@@ -267,22 +345,52 @@ export function displayAnswer(value: string): string {
 }
 
 /**
- * Facts the master profile already states, with no new data: a work
- * authorization of "US citizen", "green card" or "permanent resident" means
- * authorized and no sponsorship. Visas (H-1B, OPT, TN…) are left to the user.
+ * Visa wordings the profile's Work authorization line may use, most specific first: the first match names the
+ * status (`visaStatus`). Each is a currently valid US work status; all but EAD need, or will need, sponsorship.
+ */
+const VISAS: Array<[RegExp, string]> = [
+  [/\bh ?1 ?b\b/, 'H-1B'],
+  [/\bstem opt\b|\bopt stem\b/, 'F-1 STEM OPT'],
+  [/\bopt\b/, 'F-1 OPT'],
+  // TN also abbreviates Tennessee ("US citizen, Nashville, TN"): only "TN" alone or as a visa.
+  [/^tn$|\btn (visa|status|holder|nafta|usmca)\b|\b(nafta|usmca) tn\b/, 'TN'],
+  [/\bl ?1 ?[ab]?\b/, 'L-1'],
+  [/\be ?3\b/, 'E-3'],
+  [/\bo ?1 ?[ab]?\b/, 'O-1'],
+  [/\bead\b/, 'EAD']
+]
+
+/**
+ * Facts the master profile already states, with no new data (#71, #136):
+ * - "US citizen" → authorized, no sponsorship, status "US citizen";
+ * - "green card" / "permanent resident" → authorized, no sponsorship, status "Permanent resident";
+ * - a current visa ("H-1B", "F-1 OPT", "STEM OPT", "TN", "L-1", "E-3", "O-1") → authorized, needs sponsorship,
+ *   and the visa as the status;
+ * - "EAD" → authorized and status "EAD" only: an EAD may rest on a spouse's status, asylum or another basis that
+ *   needs no sponsorship, so sponsorship stays unset.
+ * Negated, pending or expired wording, a bare "visa" or "sponsorship", and foreign statuses seed nothing.
+ * The line is not sensitive (it is in the profile already); the seeds are never written to the answers store.
  */
 export function factsFromProfile(workAuthorization: string): Partial<Record<FactKey, string>> {
   const t = normalizeText(workAuthorization)
   if (!t) return {}
-  // Negations, visas and anything pending: no seed ("Not a US citizen", "green card pending").
-  if (/\b(not|non|no|never|no longer|without|former|expired|applying|applied|pending)\b/.test(t)) return {}
-  if (/\b(h ?1 ?b|visa|opt|stem|cpt|tn|e ?3|o ?1|l ?1|sponsor\w*|ead)\b/.test(t)) return {}
+  // Negations and anything pending: no seed ("Not a US citizen", "green card pending", "H-1B expired").
+  if (/\b(not|non|no|never|no longer|without|former|expired|applying|applied|pending|awaiting|process|processing|progress)\b/.test(t)) return {}
+  const visa = VISAS.find(([re]) => re.test(t))
+  // An EAD may rest on a spouse's status, asylum or another basis that needs no sponsorship: authorized only.
+  if (visa?.[1] === 'EAD') return { visaStatus: 'EAD', workAuthorized: 'yes' }
+  if (visa) return { visaStatus: visa[1], workAuthorized: 'yes', needsSponsorship: 'yes' }
+  // Other visa wording (CPT, "on a visa", "needs sponsorship"): too vague to seed.
+  if (/\b(visa|cpt|f ?1|sponsor\w*)\b/.test(t)) return {}
   // Only US status counts (the forms Huntgry sees ask about the US); "Indian citizen" or a Canadian PR says nothing here.
   const us = /\b(us|u s|usa|u s a|united states|american)\b/.test(t)
   const foreign = /\b(canad\w*|uk|british|indian|india|eu|european|australian|mexican|chinese|german|french)\b/.test(t)
   if (foreign) return {}
-  if (/\bgreen card\b|\blawful permanent resident\b|\blpr\b/.test(t) || (us && /\b(citizen|citizenship|national|permanent resident)\b/.test(t))) {
-    return { workAuthorized: 'yes', needsSponsorship: 'no' }
+  if (/\bgreen card\b|\blawful permanent resident\b|\blpr\b/.test(t) || (us && /\bpermanent resident\b/.test(t))) {
+    return { visaStatus: 'Permanent resident', workAuthorized: 'yes', needsSponsorship: 'no' }
+  }
+  if (us && /\b(citizen|citizenship|national)\b/.test(t)) {
+    return { visaStatus: 'US citizen', workAuthorized: 'yes', needsSponsorship: 'no' }
   }
   return {}
 }
@@ -292,17 +400,31 @@ export interface PageAnswers {
   facts: Partial<Record<FactKey, string>>
   /** By `questionKey`. */
   questions: Record<string, QuestionAnswer>
+  /**
+   * Settings "Use AI to answer unknown questions" (#136), sent by main with each fill: a model's answers (and its
+   * mappings to a stored, non-sensitive fact) are written into the page as "AI answers; check them". Off or absent:
+   * they are only suggested.
+   */
+  aiAnswers?: boolean
 }
 
 export interface QuestionAnswer {
   /** The fact the question asks for (null: none; the answer is `value`). */
   fact?: FactKey | null
-  /** A direct answer to this question (no fact), e.g. one given in the panel. */
+  /**
+   * A direct answer to this question, e.g. one given in the panel; on an unconfirmed entry, a model's probable
+   * answer from the profile (#136).
+   */
   value?: string
   /** The exact option the user confirmed for this question (and these options); wins over the fact's value. */
   option?: string
   /** The user confirmed the mapping (or gave the answer). A model's mapping alone only suggests. */
   confirmed: boolean
+  /**
+   * The AI answer Huntgry wrote into this question (#136) that this confirmed answer corrects: the page replaces it
+   * while the control still shows exactly that and the person has not edited it.
+   */
+  replace?: string
 }
 
 export const NO_ANSWERS: PageAnswers = { facts: {}, questions: {} }

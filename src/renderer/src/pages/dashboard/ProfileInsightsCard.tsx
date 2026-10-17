@@ -18,7 +18,8 @@ const SECTION_LABEL: Record<ProfileSection, string> = {
   projects: 'Projects',
   education: 'Education',
   credentials: 'Certifications',
-  notes: 'Gaps & notes'
+  notes: 'Gaps & notes',
+  application: 'Application details'
 }
 
 const TOP = 5
