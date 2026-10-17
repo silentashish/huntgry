@@ -53,6 +53,12 @@ export interface PickRequest {
   choose?: (options: string[]) => string | null
   /** A typeahead (#136): the text to search for; the widget is then typed into, not opened. */
   search?: string
+  /**
+   * The AI answer Huntgry picked here that this confirmed answer corrects (#136, `QuestionAnswer.replace`): pick.ts
+   * may re-open the widget and choose the correction while it still shows exactly this and the person has not
+   * touched it. Set only when the person had not edited the control at queue time.
+   */
+  replace?: string
 }
 
 export type WriteStrategy = 'text' | 'select' | 'radio' | 'click-only' | 'never'
@@ -215,7 +221,10 @@ export function answerField(
     }
     // A Workday prompt ("How did you hear about us", #136) is searched for the answer and its suggestion picked.
     const search = isWorkdaySearchBox(el) ? { search: answer } : {}
-    picks.push({ el, root, line, fact: found.fact ?? null, value: found.value, ...search })
+    // The user's correction of an AI answer Huntgry picked here (#136): pick.ts replaces it only while the widget
+    // still shows exactly that answer and the person has not touched it.
+    const replace = found.replace !== undefined ? { replace: found.replace } : {}
+    picks.push({ el, root, line, fact: found.fact ?? null, value: found.value, ...search, ...replace })
     return false
   }
   // An AI answer that went in says so in the panel (#136); main marks picked ones the same way.

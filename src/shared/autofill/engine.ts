@@ -874,7 +874,8 @@ export async function pickAnswers(report: FillReport, picks: readonly PickReques
       timeoutMs: Math.min(1500, Math.max(100, Math.floor(left / (typeahead ? 3 : 2)))),
       touched: () => editedInGroup(req.el, kindOf(req.el), req.root),
       pageState,
-      search: req.search
+      search: req.search,
+      replace: req.replace
     })
     if (result.status === 'filled') {
       line.outcome = 'filled'

@@ -471,6 +471,12 @@ export interface PickOptions {
   multi?: boolean
   /** How long a Workday search box waits for suggestions before its Enter (default 600 ms). */
   enterAfterMs?: number
+  /**
+   * The AI answer Huntgry itself picked in this widget, which the user's confirmed answer corrects (#136). A
+   * radio / button group or listbox that shows exactly this, untouched (`touched`), is picked again with the
+   * correction; one showing anything else is kept. Typeaheads always keep their choice.
+   */
+  replace?: string
 }
 
 /** Events a press could turn into an action elsewhere: blocked outside the widget while a pick runs. */
@@ -588,12 +594,14 @@ export function pick(widget: PickWidget, choose: (options: string[]) => string |
 async function pickInside(
   widget: PickWidget,
   choose: (options: string[]) => string | null,
-  { timeoutMs = 1500, touched = () => false }: PickOptions,
+  { timeoutMs = 1500, touched = () => false, replace }: PickOptions,
   abort: () => string | null = () => null
 ): Promise<PickResult> {
   const doc = widget.scope.ownerDocument
   const current = pickedValue(widget)
   const keep = (): PickResult => ({ status: 'kept', value: pickedValue(widget) })
+  /** The widget still shows exactly the AI answer Huntgry picked, and the person has not touched it (#136). */
+  const replaceable = (shown: string) => replace !== undefined && shown !== '' && same(shown, replace) && !touched()
   try {
     if (widget.type === 'radios' || widget.type === 'buttons') {
       const options: HTMLElement[] = widget.options
@@ -601,7 +609,8 @@ async function pickInside(
       if (texts.some((t) => CONSENT_OPTION.test(t))) return { status: 'failed', reason: 'Its options read like consent.' }
       const chosen = choose(texts)
       if (!chosen) return { status: 'failed', reason: 'None of the options fits your saved answer.' }
-      if (current) return same(current, chosen) ? { status: 'filled', value: current } : { status: 'kept', value: current }
+      if (current && same(current, chosen)) return { status: 'filled', value: current }
+      if (current && !replaceable(current)) return { status: 'kept', value: current }
       if (touched()) return keep()
       press(options[texts.indexOf(chosen)], widget, () => [], abort)
       await waitUntil(doc, () => same(pickedValue(widget), chosen), timeoutMs)
@@ -610,7 +619,8 @@ async function pickInside(
     // A listbox: what is chosen shows in the control; the options exist only once it is open.
     if (current) {
       const chosen = choose([current])
-      return chosen ? { status: 'filled', value: current } : { status: 'kept', value: current }
+      if (chosen) return { status: 'filled', value: current }
+      if (!replaceable(current)) return { status: 'kept', value: current }
     }
     if (touched()) return keep()
     if (widget.type !== 'listbox') return { status: 'failed', reason: 'Not a list widget.' }
@@ -631,8 +641,9 @@ async function pickInside(
       closeMenu(widget)
       return { status: 'failed', reason: `Huntgry stopped: ${stopped}.` }
     }
-    // The person may have typed or chosen while the menu rendered.
-    if (touched() || pickedValue(widget)) {
+    // The person may have typed or chosen while the menu rendered (an AI answer being corrected must still show).
+    const shown = pickedValue(widget)
+    if (touched() || (shown && !(current && same(shown, current) && replaceable(shown)))) {
       closeMenu(widget)
       return keep()
     }

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { JSDOM } from 'jsdom'
 import { describe, expect, it, vi } from 'vitest'
+import type { PageAnswers } from '../apply-facts'
 import type { FieldReport, FillReport } from '../apply-types'
 import { workdayWidgets } from '../../../scripts/mock-ats/workday.mjs'
 import { fillPage, pendingPicks, pickAnswers, verifyFill } from './engine'
@@ -265,6 +266,63 @@ describe('Workday My Information: address and phone dropdowns (#136)', () => {
     expect(field(report, 'State')).toMatchObject({ outcome: 'skipped-unsupported', reason: expect.stringContaining('"Oregon"') })
     expect(value(dom, '#phoneNumber--countryPhoneCode')).toBe('')
     expect(w.keys).toEqual([])
+  })
+})
+
+describe('correcting an AI answer picked in a click-only widget (#136)', () => {
+  const QUESTION = 'Will you now or in the future require sponsorship for employment visa status?'
+  function workday(): JSDOM {
+    const dom = new JSDOM(fixture('workday-application-questions.html'), { url: WORKDAY, runScripts: 'outside-only' })
+    dom.window.eval(`(${workdayWidgets.toString()})()`)
+    return dom
+  }
+  const shown = (dom: JSDOM) => dom.window.document.querySelector('#primaryQuestionnaire--sponsorship')!.textContent
+  async function fill(dom: JSDOM, answers: PageAnswers): Promise<FillReport> {
+    const report = fillPage(dom.window.document, VALUES, { pick: true, answers })
+    if (pendingPicks(report).length) await pickAnswers(report)
+    return report
+  }
+  /** The first fill picks the model's "Yes"; returns the question key. */
+  async function aiPicked(dom: JSDOM): Promise<string> {
+    const key = field(fillPage(workday().window.document, VALUES, { pick: false }), QUESTION).question!
+    const report = await fill(dom, { facts: {}, questions: { [key]: { fact: null, value: 'Yes', confirmed: false } }, aiAnswers: true })
+    expect(field(report, QUESTION)).toMatchObject({ outcome: 'filled', value: 'Yes' })
+    expect(shown(dom)).toBe('Yes')
+    return key
+  }
+  const corrected = (key: string, value: string): PageAnswers => ({
+    facts: {},
+    questions: { [key]: { fact: null, value, confirmed: true, replace: 'Yes' } },
+    aiAnswers: true
+  })
+
+  it('re-opens the Workday dropdown and picks the correction while it still shows the AI answer', async () => {
+    const dom = workday()
+    const key = await aiPicked(dom)
+    const report = await fill(dom, corrected(key, 'No'))
+    expect(shown(dom)).toBe('No')
+    expect(field(report, QUESTION)).toMatchObject({ outcome: 'filled', value: 'No' })
+    expect(field(report, QUESTION).suggestedBy).toBeUndefined()
+  })
+
+  it('keeps a dropdown the person changed since, and one with no replace permission', async () => {
+    const dom = workday()
+    const key = await aiPicked(dom)
+    // The person picks "No" in the page; a correction sent with the old AI answer as `replace` must not undo it.
+    const doc = dom.window.document
+    ;(doc.querySelector('#primaryQuestionnaire--sponsorship') as HTMLElement).click()
+    ;(Array.from(doc.querySelectorAll('[role="option"]')).find((o) => o.textContent === 'No') as HTMLElement).click()
+    expect(shown(dom)).toBe('No')
+    const stale = await fill(dom, { facts: {}, questions: { [key]: { fact: null, value: 'Yes', confirmed: true, replace: 'Yes' } }, aiAnswers: true })
+    expect(shown(dom)).toBe('No')
+    expect(field(stale, QUESTION)).toMatchObject({ outcome: 'kept', value: 'No' })
+
+    // Without `replace`, a confirmed answer never overwrites what the dropdown shows.
+    const other = workday()
+    const otherKey = await aiPicked(other)
+    const kept = await fill(other, { facts: {}, questions: { [otherKey]: { fact: null, value: 'No', confirmed: true } }, aiAnswers: true })
+    expect(shown(other)).toBe('Yes')
+    expect(field(kept, QUESTION)).toMatchObject({ outcome: 'kept', value: 'Yes' })
   })
 })
 
