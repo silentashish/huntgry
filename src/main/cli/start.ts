@@ -140,8 +140,10 @@ async function applyClaudeAccount(dir: string | null, fromDialog: boolean): Prom
   const current = await claudeConfigDirChoice()
   if (dir !== null && !fromDialog && dir !== current && !(await findClaudeConfigDirs(homedir(), [process.env.CLAUDE_CONFIG_DIR])).includes(dir))
     throw new Error(`${dir} is not a Claude config folder Huntgry found.`)
-  // The default folder is the same as no choice (CLAUDE_CONFIG_DIR unset), unless the app's own environment names another one.
-  const next = dir === defaultClaudeConfigDir() && !process.env.CLAUDE_CONFIG_DIR ? null : dir
+  // `null` is the default folder. It is the same as no choice (CLAUDE_CONFIG_DIR unset), unless the app's own
+  // environment names another folder: then it is saved, so it wins over the inherited one.
+  const wanted = dir ?? defaultClaudeConfigDir()
+  const next = wanted === defaultClaudeConfigDir() && !process.env.CLAUDE_CONFIG_DIR ? null : wanted
   await saveSettings(settingsFile(), { claudeConfigDir: next ?? undefined })
   setClaudeConfigChoice(next)
 }

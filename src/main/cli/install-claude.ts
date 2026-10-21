@@ -2,6 +2,7 @@ import { execFile, spawn } from 'node:child_process'
 import { realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CLAUDE_COMMANDS, type ClaudeAuth, type ClaudeInstallKind, type InstallResult } from '@shared/runner-types'
+import { claudeConfigDirFor } from './env'
 import { readCapped } from './install-skill'
 
 /**
@@ -97,13 +98,17 @@ export async function exclusive<T extends InstallResult>(
   }
 }
 
-/** Child env without the variables that make `claude` think it runs nested in another session. */
+/** Child env without the variables that make `claude` think it runs nested in another session, with the chosen account. */
 function installerEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(base)) {
     if (k === 'CLAUDECODE' || k.startsWith('CLAUDE_CODE_') || k === 'ELECTRON_RUN_AS_NODE') continue
     env[k] = v
   }
+  // The chosen Claude account, like every other `claude` child.
+  const configDir = claudeConfigDirFor(base)
+  if (configDir) env.CLAUDE_CONFIG_DIR = configDir
+  else delete env.CLAUDE_CONFIG_DIR
   env.PATH = [base.PATH, '/usr/bin:/bin:/usr/sbin:/sbin'].filter(Boolean).join(':')
   return env
 }

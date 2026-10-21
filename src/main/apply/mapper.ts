@@ -1,4 +1,4 @@
-import { buildChildEnv, findCli, loginShellPath } from '../cli/env'
+import { buildChildEnv, claudeConfigDirChoice, findCli, loginShellPath } from '../cli/env'
 import { requireSignedIn } from '../cli/install-claude'
 import { defaultAgent, venvDir } from '../cli/start'
 import { claudeVersion, supportsPermissionPrompts } from '../cli/version'
@@ -11,7 +11,8 @@ import type { MapperCli } from './map-questions'
  * Null when neither is available (the questions then simply stay with the user).
  */
 export async function availableMapper(workspace: string): Promise<MapperCli | null> {
-  const [agent, loginPath] = await Promise.all([defaultAgent(), loginShellPath()])
+  // Also waits for the saved Claude account, which `buildChildEnv` reads.
+  const [agent, loginPath] = await Promise.all([defaultAgent(), loginShellPath(), claudeConfigDirChoice()])
   const env = buildChildEnv({ base: process.env, workspace, venvDir: venvDir(), texBin: null, loginPath })
   const claude = async (): Promise<MapperCli | null> => {
     const command = await findCli('claude')

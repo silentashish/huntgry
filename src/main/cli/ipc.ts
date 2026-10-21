@@ -139,6 +139,7 @@ export function registerRunnerIpc(): void {
     try {
       if (dir === null) await setClaudeAccount(null)
       else if (typeof dir === 'string') await setClaudeAccount(dir)
+      else if (dir !== undefined) throw new Error('Expected a folder path, null or nothing.')
       else {
         const win = BrowserWindow.fromWebContents(e.sender)
         const options = { title: 'Choose the Claude config folder (account)', properties: ['openDirectory' as const, 'showHiddenFiles' as const] }
