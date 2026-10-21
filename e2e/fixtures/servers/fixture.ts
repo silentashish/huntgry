@@ -45,9 +45,12 @@ export const test = base.extend<{ mock: MockServer }, { mockServer: MockServer }
   // The same server, per test: the request log is cleared and the last submission removed.
   mock: async ({ mockServer }, use) => {
     mockServer.requests.length = 0
+    mockServer.jobright.status = 200
     await rm(mockServer.submissionFile, { force: true })
     await rm(mockServer.uploadsFile, { force: true })
     await use(mockServer)
   },
-  prepareWorkspace: async ({ mockServer }, use) => use((path) => rewriteMockUrls(path, mockServer.origin))
+  prepareWorkspace: async ({ mockServer }, use) => use((path) => rewriteMockUrls(path, mockServer.origin)),
+  // Explore (#142) reads its Jobright list from the mock server instead of GitHub.
+  launchEnv: async ({ mockServer }, use) => use({ HUNTGRY_EXPLORE_SOURCE_URL: `${mockServer.origin}/jobright/README.md` })
 })

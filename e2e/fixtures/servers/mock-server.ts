@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { jobrightPostingPage, jobrightReadme } from '../../../scripts/mock-ats/jobright.mjs'
 import { createMockAts, sendHtml, type MockAts } from '../../../scripts/mock-ats/server.mjs'
 import { EMPLOYER_POSTINGS, postingPage } from './pages'
 
@@ -12,6 +13,7 @@ import { EMPLOYER_POSTINGS, postingPage } from './pages'
  * - `/bot-wall`            a 403 "Just a moment…" human check
  * - `/page/one`, `/page/two`, `/hang`  plain pages for the browser's history and Stop
  * - `/redirect/lever`      302 to the Lever form on the *other* loopback origin (a second 127.0.0.1 port)
+ * - `/jobright/README.md`  a Jobright new-grad list dated relative to today (#142), `/jobs/info/:id` its posting pages
  * - `/greenhouse/`, `/lever/`, `/generic/`, `/generic-cover/` + `…/submit` + the thanks pages: the mock ATS
  *   (`scripts/mock-ats/server.mjs`, the same code as `node scripts/mock-ats.mjs`), with Greenhouse's hydration and
  *   S3 upload widget, Lever's résumé parser, `/greenhouse/redirect-company` → `altOrigin/company/careers` with a
@@ -34,6 +36,8 @@ export interface MockServer {
   uploadsFile: string
   /** Every request path the server answered, in order. */
   requests: string[]
+  /** The mock Jobright list (#142): `status` other than 200 makes `/jobright/README.md` fail with it. */
+  jobright: { status: number }
   close(): Promise<void>
 }
 
@@ -62,6 +66,7 @@ export async function startMockServer(submissionFile: string): Promise<MockServe
   const hanging = new Set<ServerResponse>()
   let origin = ''
   let altOrigin = ''
+  const jobright = { status: 200 }
   const ats: MockAts = createMockAts({
     fixturesDir: FIXTURES_DIR,
     submissionFile,
@@ -78,6 +83,15 @@ export async function startMockServer(submissionFile: string): Promise<MockServe
       return html ? sendHtml(res, 200, html) : sendHtml(res, 404, 'Not found')
     }
     if (url.pathname === '/bot-wall') return sendHtml(res, 403, BOT_WALL)
+    if (url.pathname === '/jobright/README.md') {
+      if (jobright.status !== 200) return sendHtml(res, jobright.status, 'Unavailable')
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+      return void res.end(jobrightReadme(origin))
+    }
+    if (url.pathname.startsWith('/jobs/info/')) {
+      const posting = jobrightPostingPage(url.pathname.slice('/jobs/info/'.length))
+      return posting ? sendHtml(res, posting.status, posting.html) : sendHtml(res, 404, 'Not found')
+    }
     if (url.pathname === '/page/one') {
       return sendHtml(res, 200, page('Mock page one', '<h1>Page one</h1><p><a href="/page/two" id="next">Go to page two</a></p>'))
     }
@@ -126,6 +140,7 @@ export async function startMockServer(submissionFile: string): Promise<MockServe
     submissionFile,
     uploadsFile: ats.uploadsFile,
     requests,
+    jobright,
     close: async () => {
       for (const res of hanging) res.destroy()
       for (const s of [server, altServer]) {
