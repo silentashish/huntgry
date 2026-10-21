@@ -148,9 +148,10 @@ export async function findClaude(): Promise<string | null> {
  * app's own environment pins a binary (e.g. `HUNTGRY_CLAUDE_PATH`).
  */
 export async function findCli(name: string): Promise<string | null> {
+  // Also under a pin: callers build the child's env (the chosen Claude account) right after.
+  await cliChoicesLoaded
   const pinned = cliPin(name)
   if (pinned) return (await isExecutable(pinned)) ? pinned : null
-  await cliChoicesLoaded
   const chosen = cliChoices[name]
   if (chosen && (await isExecutable(chosen))) return chosen
   return findInDirs(name, await cliSearchDirs())
