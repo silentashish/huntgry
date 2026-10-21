@@ -17,7 +17,7 @@ import { listRuns, OUTPUT_FILES, readEvents, readRun, requireRunId } from './run
 import { replyThroughQueue } from '../queue/ipc'
 import { WorkspaceChangedError } from '../workspace/changed'
 import { fetchSyncedPrices } from './price-sync'
-import { contextForRun, defaultAgent, loadCliChoices, manager, setCliPath, setDefaultAgent, startTailorRun, venvDir } from './start'
+import { contextForRun, defaultAgent, loadCliChoices, manager, setClaudeAccount, setCliPath, setDefaultAgent, startTailorRun, venvDir } from './start'
 import { clearSyncedPrices, loadPrices, pricingState, syncPrices, removePrice, requireUsageFilter, resetPrices, setPrice, usageSummary, withMetrics, withPrices } from './usage'
 
 /** Which skill release Huntgry installed (see `install-skill.ts`). */
@@ -130,6 +130,25 @@ export function registerRunnerIpc(): void {
         return { ok: true, path: picked.filePaths[0] }
       }
       return { ok: true, path: typeof path === 'string' ? path : undefined }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle(RUNNER_CHANNELS.setClaudeAccount, async (e, dir: unknown) => {
+    try {
+      if (dir === null) await setClaudeAccount(null)
+      else if (typeof dir === 'string') await setClaudeAccount(dir)
+      else if (dir !== undefined) throw new Error('Expected a folder path, null or nothing.')
+      else {
+        const win = BrowserWindow.fromWebContents(e.sender)
+        const options = { title: 'Choose the Claude config folder (account)', properties: ['openDirectory' as const, 'showHiddenFiles' as const] }
+        const picked = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+        if (picked.canceled || !picked.filePaths[0]) return { ok: false }
+        await setClaudeAccount(picked.filePaths[0], true)
+        return { ok: true, path: picked.filePaths[0] }
+      }
+      return { ok: true, path: typeof dir === 'string' ? dir : undefined }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }

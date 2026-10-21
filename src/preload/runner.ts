@@ -6,6 +6,7 @@ export const runner: RunnerApi = {
   setDefaultAgent: (agent) => ipcRenderer.invoke(RUNNER_CHANNELS.setDefaultAgent, agent),
   linkSkill: (agent) => ipcRenderer.invoke(RUNNER_CHANNELS.linkSkill, agent),
   setCliPath: (agent, path) => ipcRenderer.invoke(RUNNER_CHANNELS.setCliPath, agent, path),
+  setClaudeAccount: (configDir) => ipcRenderer.invoke(RUNNER_CHANNELS.setClaudeAccount, configDir),
   installPythonDeps: () => ipcRenderer.invoke(RUNNER_CHANNELS.installPythonDeps),
   installClaude: () => ipcRenderer.invoke(RUNNER_CHANNELS.installClaude),
   updateClaude: () => ipcRenderer.invoke(RUNNER_CHANNELS.updateClaude),

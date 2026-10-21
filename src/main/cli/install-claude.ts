@@ -2,6 +2,7 @@ import { execFile, spawn } from 'node:child_process'
 import { realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CLAUDE_COMMANDS, type ClaudeAuth, type ClaudeInstallKind, type InstallResult } from '@shared/runner-types'
+import { claudeConfigDirChoice, claudeConfigDirFor } from './env'
 import { readCapped } from './install-skill'
 
 /**
@@ -45,7 +46,8 @@ export function parseAuthStatus(code: number, out: string): ClaudeAuth | null {
           loggedIn: j.loggedIn,
           email: str(j.email),
           authMethod: str(j.authMethod),
-          subscriptionType: str(j.subscriptionType)
+          subscriptionType: str(j.subscriptionType),
+          orgName: str(j.orgName)
         }
       }
     } catch {
@@ -96,13 +98,17 @@ export async function exclusive<T extends InstallResult>(
   }
 }
 
-/** Child env without the variables that make `claude` think it runs nested in another session. */
+/** Child env without the variables that make `claude` think it runs nested in another session, with the chosen account. */
 function installerEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(base)) {
     if (k === 'CLAUDECODE' || k.startsWith('CLAUDE_CODE_') || k === 'ELECTRON_RUN_AS_NODE') continue
     env[k] = v
   }
+  // The chosen Claude account, like every other `claude` child.
+  const configDir = claudeConfigDirFor(base)
+  if (configDir) env.CLAUDE_CONFIG_DIR = configDir
+  else delete env.CLAUDE_CONFIG_DIR
   env.PATH = [base.PATH, '/usr/bin:/bin:/usr/sbin:/sbin'].filter(Boolean).join(':')
   return env
 }
@@ -187,6 +193,7 @@ export function installClaude(
     const path = join(opts.scratchDir, 'claude-install.sh')
     await writeFile(path, script, { mode: 0o600 })
     try {
+      await claudeConfigDirChoice()
       const code = await stream('/bin/bash', [path, 'latest'], installerEnv(process.env), log)
       if (code !== 0) return { ok: false, error: `The Claude Code installer failed (exit ${code}); see the log.` }
       log(`Done. Next: sign in once in a terminal with "${CLAUDE_COMMANDS.login}", then Check again.`)
@@ -210,6 +217,8 @@ export function updateClaude(
   // A native install lands in ~/.local/bin, which is looked up first, so it shadows an unknown older copy.
   if (opts.kind === 'other') return installClaude(log, { scratchDir: opts.scratchDir })
   return exclusive(log, async () => {
+    // The saved account, which `installerEnv` reads, must be loaded first.
+    await claudeConfigDirChoice()
     const code = await stream(opts.claudePath, ['update'], installerEnv(process.env), log)
     if (code !== 0) return { ok: false, error: `claude update failed (exit ${code}); see the log.` }
     log('Done.')

@@ -16,6 +16,8 @@ export interface AppSettings {
   defaultAgent?: string
   /** Settings → Agents (#79): the CLI copy to run, by executable name (`claude`, `codex`, `agy`); unset = the first one found. */
   cliPaths?: Record<string, string>
+  /** Settings → Agents: the Claude account to run with, as its config folder (`CLAUDE_CONFIG_DIR`); unset = the default. */
+  claudeConfigDir?: string
   /**
    * Remote control (ADR-0001): the session is off unless enabled; the two toggles default to details off, transcripts on;
    * the command TTLs (seconds) default to 2 h for costly commands and 24 h for the rest (read through `remote/settings.ts`).

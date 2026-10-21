@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
-import { access, opendir, readdir, realpath } from 'node:fs/promises'
+import { access, opendir, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import type { PreflightItem } from '@shared/runner-types'
@@ -148,9 +148,10 @@ export async function findClaude(): Promise<string | null> {
  * app's own environment pins a binary (e.g. `HUNTGRY_CLAUDE_PATH`).
  */
 export async function findCli(name: string): Promise<string | null> {
+  // Also under a pin: callers build the child's env (the chosen Claude account) right after.
+  await cliChoicesLoaded
   const pinned = cliPin(name)
   if (pinned) return (await isExecutable(pinned)) ? pinned : null
-  await cliChoicesLoaded
   const chosen = cliChoices[name]
   if (chosen && (await isExecutable(chosen))) return chosen
   return findInDirs(name, await cliSearchDirs())
@@ -170,11 +171,21 @@ export function setCliChoices(choices: Record<string, string> | undefined): void
 }
 
 /** Startup: every `findCli` waits for the saved choices, so nothing early runs the wrong copy. A failed load means no choices. */
-export function loadingCliChoices(load: Promise<Record<string, string> | undefined>): Promise<void> {
-  cliChoicesLoaded = load.then(setCliChoices, (err) => {
-    console.error('Loading the chosen CLIs failed:', err)
-    setCliChoices({})
-  })
+export function loadingCliChoices(
+  load: Promise<Record<string, string> | undefined>,
+  claudeConfigDir: Promise<string | undefined> = Promise.resolve(undefined)
+): Promise<void> {
+  cliChoicesLoaded = Promise.all([load, claudeConfigDir]).then(
+    ([choices, dir]) => {
+      setCliChoices(choices)
+      setClaudeConfigChoice(dir)
+    },
+    (err) => {
+      console.error('Loading the chosen CLIs failed:', err)
+      setCliChoices({})
+      setClaudeConfigChoice(null)
+    }
+  )
   return cliChoicesLoaded
 }
 
@@ -182,6 +193,73 @@ export function loadingCliChoices(load: Promise<Record<string, string> | undefin
 export async function cliChoice(name: string): Promise<string | null> {
   await cliChoicesLoaded
   return cliChoices[name] ?? null
+}
+
+/**
+ * The Claude account runs use (Settings → Agents): the `CLAUDE_CONFIG_DIR` the
+ * `claude` child gets. One binary can hold several accounts, each signed in under
+ * its own config folder (`~/.claude`, `~/.claude-personal`, …); `null` = whatever
+ * the app's own environment says (usually `~/.claude`). Loaded with the CLI choices.
+ */
+let claudeConfigChoice: string | null = null
+
+export function setClaudeConfigChoice(dir: string | null | undefined): void {
+  claudeConfigChoice = dir || null
+}
+
+/** The chosen Claude config folder, if any (whether or not it still exists). */
+export async function claudeConfigDirChoice(): Promise<string | null> {
+  await cliChoicesLoaded
+  return claudeConfigChoice
+}
+
+/**
+ * Claude's own default config folder. Setting `CLAUDE_CONFIG_DIR` to it is not
+ * the same as leaving it unset (Claude then reads `<dir>/.claude.json` and another
+ * keychain entry, and looks signed out), so choosing it unsets the variable.
+ */
+export function defaultClaudeConfigDir(home = homedir()): string {
+  return join(home, '.claude')
+}
+
+/** `CLAUDE_CONFIG_DIR` for the child: the choice, else `base`'s; `undefined` = unset (the default folder). */
+export function claudeConfigDirFor(base: NodeJS.ProcessEnv, choice = claudeConfigChoice, home = homedir()): string | undefined {
+  const dir = choice ?? base.CLAUDE_CONFIG_DIR
+  return dir && dir !== defaultClaudeConfigDir(home) ? dir : undefined
+}
+
+/**
+ * Config folders that look like a Claude account: `~/.claude`, every `~/.claude-*`
+ * or `~/.claude_*` folder holding a `.claude.json`, plus `extra` (the choice, the
+ * app's `CLAUDE_CONFIG_DIR`). Real folders only once, in that order.
+ */
+export async function findClaudeConfigDirs(home = homedir(), extra: (string | null | undefined)[] = []): Promise<string[]> {
+  const isDir = (p: string) => stat(p).then((s) => s.isDirectory(), () => false)
+  const found = [defaultClaudeConfigDir(home)]
+  let names: string[] = []
+  try {
+    names = (await readdir(home)).filter((n) => /^\.claude[-_].+/.test(n)).sort()
+  } catch {
+    // unreadable home: only the default
+  }
+  for (const name of names) {
+    const dir = join(home, name)
+    if ((await isDir(dir)) && (await isFile(join(dir, '.claude.json')))) found.push(dir)
+  }
+  for (const dir of extra) if (dir && (await isDir(dir))) found.push(dir)
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const dir of found) {
+    const real = await realpath(dir).catch(() => dir)
+    if (seen.has(real)) continue
+    seen.add(real)
+    out.push(dir)
+  }
+  return out
+}
+
+async function isFile(path: string): Promise<boolean> {
+  return stat(path).then((s) => s.isFile(), () => false)
 }
 
 /** Every executable `name` in `dirs`, in search order, without copies reached twice through the same real file. */
@@ -222,9 +300,10 @@ export async function findTexBin(): Promise<string | null> {
   return null
 }
 
-/** Folders searched for an installed skill (personal skills, plugin and synced skill caches). */
-export function skillSearchRoots(home = homedir()): string[] {
-  return [join(home, '.claude/skills'), join(home, '.claude/plugins')]
+/** Folders searched for an installed skill (personal skills, plugin and synced skill caches): the chosen account's first. */
+export function skillSearchRoots(home = homedir(), configDir = claudeConfigDirFor({}, claudeConfigChoice, home)): string[] {
+  const roots = [join(home, '.claude/skills'), join(home, '.claude/plugins')]
+  return configDir ? [join(configDir, 'skills'), join(configDir, 'plugins'), ...roots] : roots
 }
 
 const MAX_SKILL_SEARCH_DEPTH = 5
@@ -235,7 +314,11 @@ const MAX_SKILL_SEARCH_ENTRIES = 4000
  * symlink loops). Several copies can exist (personal + synced); the shallowest
  * wins, which is the personal `~/.claude/skills/resume-tailor` when present.
  */
-export async function findSkillDir(roots = skillSearchRoots()): Promise<string | null> {
+export async function findSkillDir(roots?: string[]): Promise<string | null> {
+  if (!roots) {
+    await cliChoicesLoaded
+    roots = skillSearchRoots()
+  }
   let visited = 0
   let queue = roots.map((dir) => ({ dir, depth: 0 }))
   while (queue.length > 0) {
@@ -270,7 +353,8 @@ export async function findSkillDir(roots = skillSearchRoots()): Promise<string |
  * Environment of the `claude` child: the venv's `python3` first, then TeX and
  * the usual CLI folders, `CV_HOME` pointing at the workspace. Variables that
  * would make the child think it runs nested inside another Claude Code session
- * are removed. In isolated mode (`HUNTGRY_E2E=1` in `base`) the machine-wide
+ * are removed, and `CLAUDE_CONFIG_DIR` names the chosen Claude account
+ * (`claudeConfigDir`, default: the choice in Settings). In isolated mode (`HUNTGRY_E2E=1` in `base`) the machine-wide
  * folders and the login-shell PATH stay out, like in `cliSearchDirs`.
  */
 export function buildChildEnv(opts: {
@@ -280,6 +364,8 @@ export function buildChildEnv(opts: {
   texBin: string | null
   loginPath: string
   home?: string
+  /** `null` = no choice; default: the Settings choice. */
+  claudeConfigDir?: string | null
 }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(opts.base)) {
@@ -295,6 +381,9 @@ export function buildChildEnv(opts: {
     opts.base.PATH,
     '/usr/bin:/bin:/usr/sbin:/sbin'
   )
+  const configDir = claudeConfigDirFor(opts.base, opts.claudeConfigDir === undefined ? claudeConfigChoice : opts.claudeConfigDir, opts.home)
+  if (configDir) env.CLAUDE_CONFIG_DIR = configDir
+  else delete env.CLAUDE_CONFIG_DIR
   env.CV_HOME = opts.workspace
   env.VIRTUAL_ENV = opts.venvDir
   return env
