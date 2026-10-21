@@ -45,7 +45,8 @@ export function parseAuthStatus(code: number, out: string): ClaudeAuth | null {
           loggedIn: j.loggedIn,
           email: str(j.email),
           authMethod: str(j.authMethod),
-          subscriptionType: str(j.subscriptionType)
+          subscriptionType: str(j.subscriptionType),
+          orgName: str(j.orgName)
         }
       }
     } catch {

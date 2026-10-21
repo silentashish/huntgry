@@ -10,6 +10,7 @@ import {
   DEFAULT_AGENT,
   type AgentId,
   type AgentStatus,
+  type ClaudeAccount,
   type ClaudeAuth,
   type PreflightItem,
   type RunnerEnvironment
@@ -18,10 +19,14 @@ import { adapterFor } from './agents'
 import { skillStatus } from './agents/skills'
 import {
   buildChildEnv,
+  claudeConfigDirChoice,
+  claudeConfigDirFor,
   cliChoice,
   cliPin,
   composePath,
+  defaultClaudeConfigDir,
   findClaude,
+  findClaudeConfigDirs,
   findCli,
   findCliCandidates,
   findInDirs,
@@ -169,12 +174,25 @@ export async function checkEnvironment(opts: {
 
   let claudeVersion: string | null = null
   let claudeAuth: ClaudeAuth | null = null
+  const configChoice = await claudeConfigDirChoice()
+  const configDir = claudeConfigDirFor(process.env, configChoice, home) ?? defaultClaudeConfigDir(home)
+  let claudeAccounts: ClaudeAccount[] = []
   if (claudePath) {
-    ;[claudeVersion, claudeAuth] = await Promise.all([
+    const dirs = await findClaudeConfigDirs(home, [configChoice, process.env.CLAUDE_CONFIG_DIR])
+    ;[claudeVersion, claudeAccounts] = await Promise.all([
       // Refresh the cache the runs use: this is what "Check again" is for (e.g. after an update).
       readClaudeVersion(claudePath, env, { refresh: true }),
-      claudeAuthStatus(claudePath, env)
+      // Who is signed in under each folder, so the user can tell a work account from a personal one.
+      Promise.all(
+        dirs.map(async (dir): Promise<ClaudeAccount> => ({
+          configDir: dir,
+          isDefault: dir === defaultClaudeConfigDir(home),
+          auth: await claudeAuthStatus(claudePath, { ...env, ...accountEnv(dir, home) })
+        }))
+      )
     ])
+    const inUse = claudeAccounts.find((a) => a.configDir === configDir)
+    claudeAuth = inUse ? inUse.auth : await claudeAuthStatus(claudePath, env)
   }
   const claudeVersionOk = versionAtLeast(claudeVersion, CLAUDE_VERSION_RECOMMENDED)
   const installKind = claudePath ? await claudeInstallKind(claudePath) : null
@@ -237,6 +255,9 @@ export async function checkEnvironment(opts: {
     recommendedClaudeVersion: CLAUDE_VERSION_RECOMMENDED,
     claudeInstallKind: installKind,
     claudeAuth,
+    claudeConfigDir: configDir,
+    claudeConfigChoice: configChoice,
+    claudeAccounts,
     skillInstall: record && skillDir && record.path === skillDir ? { tag: record.tag, installedAt: record.installedAt } : null,
     skillDir,
     venvDir: opts.venvDir,
@@ -251,6 +272,11 @@ export async function checkEnvironment(opts: {
     agents,
     sharedProblems: shared
   }
+}
+
+/** `CLAUDE_CONFIG_DIR` for the account in `dir`: unset for the default folder (see `defaultClaudeConfigDir`). */
+function accountEnv(dir: string, home: string): NodeJS.ProcessEnv {
+  return { CLAUDE_CONFIG_DIR: dir === defaultClaudeConfigDir(home) ? undefined : dir }
 }
 
 /** The copies the search finds, plus a chosen one outside the searched folders (picked in a dialog). */

@@ -153,6 +153,16 @@ export interface ClaudeAuth {
   email?: string
   authMethod?: string
   subscriptionType?: string
+  /** The organization the account belongs to (tells a work account from a personal one). */
+  orgName?: string
+}
+
+/** One Claude account: a config folder `claude` can run with (`CLAUDE_CONFIG_DIR`), and who is signed in there. */
+export interface ClaudeAccount {
+  configDir: string
+  /** Claude's default folder (`~/.claude`): chosen by leaving `CLAUDE_CONFIG_DIR` unset. */
+  isDefault: boolean
+  auth: ClaudeAuth | null
 }
 
 /** Terminal commands the Settings page shows next to its buttons. */
@@ -171,8 +181,14 @@ export interface RunnerEnvironment {
   claudeVersionOk: boolean
   recommendedClaudeVersion: string
   claudeInstallKind: ClaudeInstallKind | null
-  /** `null` when `claude auth status` could not tell (not found, too old, failed). */
+  /** `null` when `claude auth status` could not tell (not found, too old, failed). Of the account in use. */
   claudeAuth: ClaudeAuth | null
+  /** The Claude config folder runs use (the account), whether chosen or the default. */
+  claudeConfigDir: string
+  /** The folder chosen in Settings, or `null` for the default. Differs from `claudeConfigDir` when it is gone. */
+  claudeConfigChoice: string | null
+  /** Every account found (config folders), with who is signed in to each. */
+  claudeAccounts: ClaudeAccount[]
   /** The skill copy Huntgry installed from GitHub, when that is the one in use. */
   skillInstall: { tag: string; installedAt: string } | null
   /** Folder holding the installed resume-tailor `SKILL.md`, or `null`. */
@@ -340,6 +356,11 @@ export interface RunnerApi {
    * in a dialog (`ok: false` with no error when cancelled). `null` removes the choice: the first copy found.
    */
   setCliPath(agent: AgentId, path?: string | null): Promise<InstallResult & { path?: string }>
+  /**
+   * Runs Claude with the account in `configDir` (one of `claudeAccounts`), or, without it, a folder
+   * picked in a dialog (`ok: false` with no error when cancelled). `null` removes the choice: the default.
+   */
+  setClaudeAccount(configDir?: string | null): Promise<InstallResult & { path?: string }>
   /** (Re)create the Python venv and install the skill's modules; progress arrives as `runner:install-log`. */
   installPythonDeps(): Promise<InstallResult>
   /** Run the official Claude Code installer (`claude.ai/install.sh`); progress on `runner:install-log`. */
@@ -386,6 +407,7 @@ export const RUNNER_CHANNELS = {
   setDefaultAgent: 'runner:set-default-agent',
   linkSkill: 'runner:link-skill',
   setCliPath: 'runner:set-cli-path',
+  setClaudeAccount: 'runner:set-claude-account',
   installPythonDeps: 'runner:install-python-deps',
   installClaude: 'runner:install-claude',
   updateClaude: 'runner:update-claude',

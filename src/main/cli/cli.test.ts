@@ -18,18 +18,23 @@ import {
 } from './command'
 import {
   buildChildEnv,
+  claudeConfigDirChoice,
+  claudeConfigDirFor,
   cliChoice,
   cliSearchDirs,
   composePath,
   E2E_ENV,
   findAllInDirs,
+  findClaudeConfigDirs,
   findCli,
   findSkillDir,
   isolatedDiscovery,
   loadingCliChoices,
   loginShellPath,
   parsePreflight,
+  setClaudeConfigChoice,
   setCliChoices,
+  skillSearchRoots,
   setPackagedBuild
 } from './env'
 import { fetchPostingText, htmlToText, type Fetcher } from './posting'
@@ -227,6 +232,52 @@ describe('choosing among several copies of an agent CLI (#79)', () => {
     process.env['HUNTGRY_HUNTGRY-FAKE-CLI_PATH'] = pinned
     setCliChoices({ 'huntgry-fake-cli': chosen })
     expect(await findCli('huntgry-fake-cli')).toBe(pinned)
+  })
+})
+
+describe('Claude account (config folder)', () => {
+  const base = { PATH: '/usr/bin' }
+  const opts = { workspace: '/ws', venvDir: '/venv', texBin: null, loginPath: '', home: '/Users/x' }
+  afterEach(() => setClaudeConfigChoice(null))
+
+  it('gives the child the chosen folder, and unsets the variable for the default ~/.claude', () => {
+    expect(buildChildEnv({ base, ...opts, claudeConfigDir: '/Users/x/.claude-personal' }).CLAUDE_CONFIG_DIR).toBe('/Users/x/.claude-personal')
+    // Setting it to ~/.claude would read another .claude.json and keychain entry: signed out.
+    const dflt = buildChildEnv({ base: { ...base, CLAUDE_CONFIG_DIR: '/Users/x/.claude-work' }, ...opts, claudeConfigDir: '/Users/x/.claude' })
+    expect('CLAUDE_CONFIG_DIR' in dflt).toBe(false)
+  })
+
+  it('keeps the app environment folder without a choice, and the Settings choice by default', () => {
+    expect(buildChildEnv({ base: { ...base, CLAUDE_CONFIG_DIR: '/e' }, ...opts, claudeConfigDir: null }).CLAUDE_CONFIG_DIR).toBe('/e')
+    expect('CLAUDE_CONFIG_DIR' in buildChildEnv({ base, ...opts, claudeConfigDir: null })).toBe(false)
+    setClaudeConfigChoice('/Users/x/.claude-personal')
+    expect(buildChildEnv({ base, ...opts }).CLAUDE_CONFIG_DIR).toBe('/Users/x/.claude-personal')
+    expect(claudeConfigDirFor({ CLAUDE_CONFIG_DIR: '/e' }, '/c', '/Users/x')).toBe('/c')
+  })
+
+  it('finds ~/.claude and every ~/.claude-* folder holding a .claude.json, once per real folder', async () => {
+    await mkdir(join(tmp, '.claude'))
+    await mkdir(join(tmp, '.claude-personal'))
+    await writeFile(join(tmp, '.claude-personal/.claude.json'), '{}')
+    await mkdir(join(tmp, '.claude-empty'))
+    await writeFile(join(tmp, '.claude.json'), '{}')
+    await symlink(join(tmp, '.claude-personal'), join(tmp, '.claude_alias'))
+    await mkdir(join(tmp, 'elsewhere'))
+    expect(await findClaudeConfigDirs(tmp, [join(tmp, 'elsewhere'), join(tmp, 'missing'), null])).toEqual([
+      join(tmp, '.claude'),
+      join(tmp, '.claude-personal'),
+      join(tmp, 'elsewhere')
+    ])
+  })
+
+  it('loads the saved account with the CLI choices, and searches its skills first', async () => {
+    await loadingCliChoices(Promise.resolve({}), Promise.resolve('/Users/x/.claude-personal'))
+    expect(await claudeConfigDirChoice()).toBe('/Users/x/.claude-personal')
+    expect(skillSearchRoots('/Users/x', '/Users/x/.claude-personal')[0]).toBe('/Users/x/.claude-personal/skills')
+    expect(skillSearchRoots('/Users/x')[0]).toBe('/Users/x/.claude-personal/skills')
+    await loadingCliChoices(Promise.reject(new Error('unreadable')))
+    expect(await claudeConfigDirChoice()).toBeNull()
+    expect(skillSearchRoots('/Users/x')[0]).toBe('/Users/x/.claude/skills')
   })
 })
 

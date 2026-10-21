@@ -11,7 +11,23 @@ import { agyModel } from './agents/antigravity'
 import { codexModel } from './agents/codex'
 import { skillStatus } from './agents/skills'
 import { buildSystemPrompt, requireStartParams, texRootOf, type UnattendedPromptOptions } from './command'
-import { buildChildEnv, cliChoice, cliPin, findCli, findCliCandidates, findTexBin, isExecutable, loadingCliChoices, loginShellPath, setCliChoices } from './env'
+import {
+  buildChildEnv,
+  claudeConfigDirChoice,
+  claudeConfigDirFor,
+  cliChoice,
+  cliPin,
+  defaultClaudeConfigDir,
+  findClaudeConfigDirs,
+  findCli,
+  findCliCandidates,
+  findTexBin,
+  isExecutable,
+  loadingCliChoices,
+  loginShellPath,
+  setClaudeConfigChoice,
+  setCliChoices
+} from './env'
 import { discoverRuntime } from './environment'
 import { requireSignedIn } from './install-claude'
 import { fetchPostingText } from './posting'
@@ -70,7 +86,11 @@ export async function setDefaultAgent(agent: AgentId): Promise<void> {
 
 /** Applies the CLI copies chosen in Settings (#79) to every later `findCli`. Called once at startup. */
 export function loadCliChoices(): Promise<void> {
-  return loadingCliChoices(loadSettings(settingsFile()).then((s) => s.cliPaths))
+  const settings = loadSettings(settingsFile())
+  return loadingCliChoices(
+    settings.then((s) => s.cliPaths),
+    settings.then((s) => s.claudeConfigDir)
+  )
 }
 
 /** CLI-choice updates, one after another, so two quick changes never save over each other. */
@@ -103,6 +123,27 @@ async function applyCliPath(agent: AgentId, path: string | null, fromDialog: boo
   else next[binary] = path
   await saveSettings(settingsFile(), { cliPaths: next })
   setCliChoices(next)
+}
+
+/**
+ * Runs Claude with the account in config folder `dir` from now on, or, with `null`, the default one.
+ * `fromDialog`: the user picked `dir` in a folder dialog; otherwise it must be a folder the search finds,
+ * so the renderer cannot point Claude at an arbitrary folder.
+ */
+export function setClaudeAccount(dir: string | null, fromDialog = false): Promise<void> {
+  const update = cliPathUpdates.then(() => applyClaudeAccount(dir, fromDialog))
+  cliPathUpdates = update.catch(() => {})
+  return update
+}
+
+async function applyClaudeAccount(dir: string | null, fromDialog: boolean): Promise<void> {
+  const current = await claudeConfigDirChoice()
+  if (dir !== null && !fromDialog && dir !== current && !(await findClaudeConfigDirs(homedir(), [process.env.CLAUDE_CONFIG_DIR])).includes(dir))
+    throw new Error(`${dir} is not a Claude config folder Huntgry found.`)
+  // The default folder is the same as no choice (CLAUDE_CONFIG_DIR unset), unless the app's own environment names another one.
+  const next = dir === defaultClaudeConfigDir() && !process.env.CLAUDE_CONFIG_DIR ? null : dir
+  await saveSettings(settingsFile(), { claudeConfigDir: next ?? undefined })
+  setClaudeConfigChoice(next)
 }
 
 /** The context to continue run `runId` of the open workspace with: always the run's own agent and prompt variant. */
@@ -218,12 +259,13 @@ async function otherAgentContext(
 }
 
 /**
- * The model the user chose for Claude Code (`model` in ~/.claude/settings.json).
+ * The model the user chose for Claude Code (`model` in the chosen account's `settings.json`, `~/.claude` by default).
  * Runs load no settings files, so it is passed explicitly; `undefined` = Claude's default.
  */
 async function preferredModel(): Promise<string | undefined> {
+  const configDir = claudeConfigDirFor(process.env, await claudeConfigDirChoice()) ?? defaultClaudeConfigDir()
   try {
-    const settings = JSON.parse(await readFile(join(homedir(), '.claude', 'settings.json'), 'utf8')) as {
+    const settings = JSON.parse(await readFile(join(configDir, 'settings.json'), 'utf8')) as {
       model?: unknown
     }
     return typeof settings.model === 'string' && /^[\w.[\]:/@-]{1,300}$/.test(settings.model)

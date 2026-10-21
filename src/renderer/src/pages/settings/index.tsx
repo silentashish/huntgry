@@ -6,6 +6,7 @@ import {
   CLAUDE_COMMANDS,
   type AgentId,
   type AgentStatus,
+  type ClaudeAccount,
   type InstallResult,
   type PreflightItem,
   type RunnerEnvironment,
@@ -120,6 +121,16 @@ export function SettingsPage() {
     setError(null)
     try {
       const res = await api.runner.setCliPath(agent, path)
+      if (!res.ok && res.error) setError(res.error)
+      if (res.ok) await check()
+    } catch (err) {
+      setError(errorText(err))
+    }
+  }
+  async function setClaudeAccount(configDir?: string | null) {
+    setError(null)
+    try {
+      const res = await api.runner.setClaudeAccount(configDir)
       if (!res.ok && res.error) setError(res.error)
       if (res.ok) await check()
     } catch (err) {
@@ -252,6 +263,7 @@ export function SettingsPage() {
                     onUpdateClaude={updateClaude}
                     onInstallSkill={installSkill}
                     onSyncSkill={syncSkill}
+                    onSetClaudeAccount={setClaudeAccount}
                   >
                     {log.length > 0 && installing !== 'python' && installLog}
                   </ClaudeCard>
@@ -350,6 +362,7 @@ function ClaudeCard({
   onUpdateClaude,
   onInstallSkill,
   onSyncSkill,
+  onSetClaudeAccount,
   children
 }: {
   env: RunnerEnvironment
@@ -359,6 +372,8 @@ function ClaudeCard({
   onUpdateClaude(): void
   onInstallSkill(replace: boolean): void
   onSyncSkill(): void
+  /** `undefined`: pick a folder in a dialog; `null`: back to the default account. */
+  onSetClaudeAccount(configDir?: string | null): void
   /** The install log while one of this card's installs runs. */
   children?: ReactNode
 }) {
@@ -415,7 +430,7 @@ function ClaudeCard({
               ) : undefined
             }
           />
-          {env.claudePath && <AccountRow env={env} />}
+          {env.claudePath && <AccountRow env={env} busy={!!installing} onSetClaudeAccount={onSetClaudeAccount} />}
           <Row
             label="resume-tailor skill"
             value={env.skillDir}
@@ -721,30 +736,92 @@ function CliButtons({
   )
 }
 
-function AccountRow({ env }: { env: RunnerEnvironment }) {
+/** Who `env.claudeAccounts[i]` is, for the account picker: email and organization, else the folder. */
+function accountLabel(a: ClaudeAccount): string {
+  const who = a.auth?.loggedIn ? [a.auth.email, a.auth.orgName].filter(Boolean).join(' · ') || 'Signed in' : a.auth ? 'Not signed in' : 'Unknown'
+  return `${who} (${a.configDir})`
+}
+
+/**
+ * The Claude account runs use and who is signed in. Several accounts (config folders such as
+ * `~/.claude` and `~/.claude-personal`) can share one CLI; pick one, or Choose… another folder.
+ */
+function AccountRow({
+  env,
+  busy,
+  onSetClaudeAccount
+}: {
+  env: RunnerEnvironment
+  busy: boolean
+  onSetClaudeAccount(configDir?: string | null): void
+}) {
   const auth = env.claudeAuth
+  const gone = env.claudeConfigChoice !== null && !env.claudeAccounts.some((a) => a.configDir === env.claudeConfigChoice)
   return (
     <Table.Tr>
       <Table.Th w={130}>Account</Table.Th>
       <Table.Td>
-        {auth?.loggedIn ? (
-          <Group gap="xs" wrap="nowrap">
-            <Text size="sm" truncate>
-              Signed in{auth.email ? ` as ${auth.email}` : ''}
+        <Stack gap={6} align="flex-start">
+          {auth?.loggedIn ? (
+            <Group gap="xs" wrap="nowrap">
+              <Text size="sm" truncate>
+                Signed in{auth.email ? ` as ${auth.email}` : ''}
+                {auth.orgName ? ` (${auth.orgName})` : ''}
+              </Text>
+              {auth.subscriptionType && <StatusPill>{auth.subscriptionType}</StatusPill>}
+            </Group>
+          ) : auth ? (
+            <Stack gap={4} align="flex-start">
+              <StatusPill tone="danger">Not signed in</StatusPill>
+              <Text size="xs" c="dimmed">
+                Sign in once in a terminal with{' '}
+                <Code>
+                  {env.claudeConfigDir === env.claudeAccounts.find((a) => a.isDefault)?.configDir
+                    ? CLAUDE_COMMANDS.login
+                    : `CLAUDE_CONFIG_DIR=${env.claudeConfigDir} ${CLAUDE_COMMANDS.login}`}
+                </Code>
+                , then Check again. Claude Code needs a Pro, Max, Team, Enterprise or Console account.
+              </Text>
+            </Stack>
+          ) : (
+            <StatusPill>Unknown</StatusPill>
+          )}
+          {env.claudeAccounts.length > 1 && (
+            <Select
+              size="xs"
+              w="100%"
+              aria-label="Claude account to use"
+              data={env.claudeAccounts.map((a) => ({ value: a.configDir, label: accountLabel(a) }))}
+              value={env.claudeConfigDir}
+              allowDeselect={false}
+              disabled={busy}
+              comboboxProps={{ withinPortal: true }}
+              onChange={(v) => v && v !== env.claudeConfigDir && onSetClaudeAccount(v)}
+            />
+          )}
+          {gone && (
+            <Text size="xs" c="var(--hg-status-warning)">
+              The chosen account folder <Code>{env.claudeConfigChoice}</Code> is gone. Choose another account or Use default.
             </Text>
-            {auth.subscriptionType && <StatusPill>{auth.subscriptionType}</StatusPill>}
+          )}
+          <Group gap={4}>
+            <Button size="compact-xs" variant="subtle" disabled={busy} onClick={() => onSetClaudeAccount()}>
+              Choose folder…
+            </Button>
+            {env.claudeConfigChoice !== null && (
+              <Button
+                size="compact-xs"
+                variant="subtle"
+                color="red"
+                disabled={busy}
+                onClick={() => onSetClaudeAccount(null)}
+                aria-label="Use the default Claude account"
+              >
+                Use default
+              </Button>
+            )}
           </Group>
-        ) : auth ? (
-          <Stack gap={4} align="flex-start">
-            <StatusPill tone="danger">Not signed in</StatusPill>
-            <Text size="xs" c="dimmed">
-              Sign in once in a terminal with <Code>{CLAUDE_COMMANDS.login}</Code>, then Check again. Claude Code needs
-              a Pro, Max, Team, Enterprise or Console account.
-            </Text>
-          </Stack>
-        ) : (
-          <StatusPill>Unknown</StatusPill>
-        )}
+        </Stack>
       </Table.Td>
     </Table.Tr>
   )
