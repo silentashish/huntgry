@@ -137,7 +137,9 @@ export function JobDrawer({ job, score, onClose, onChange, onTailor }: Props) {
                 <Notice tone="info" icon={<IconInfoCircle size={18} />}>
                   {job.source === 'indeed'
                     ? 'Indeed search results include only a snippet, and its job pages need a human check. Tailor resume sends this snippet with the job’s details; for a better resume, open the posting and paste the full description on the Tailor page (or with “Paste a job”).'
-                    : 'This is the job board’s summary, not the full posting. Tailor resume fetches the full description from the employer’s page first, and falls back to this summary if it cannot.'}
+                    : job.source === 'jobright'
+                      ? 'Jobright’s list gives only the title, company and location. Fetch full description (or Tailor resume) reads the posting from Jobright’s page; if Jobright asks for a human check, open the posting and paste the description.'
+                      : 'This is the job board’s summary, not the full posting. Tailor resume fetches the full description from the employer’s page first, and falls back to this summary if it cannot.'}
                 </Notice>
               )}
               <Facts job={job} />

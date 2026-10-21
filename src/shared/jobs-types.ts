@@ -2,15 +2,16 @@
  * Jobs added by URL or pasted text, normalized to one shape and saved in the
  * workspace (`.huntgry/jobs/<source>-<id>.json`). `hiring.cafe` and `indeed`
  * jobs were found by the board search removed in #78; ones saved before that
- * are still read.
+ * are still read. `jobright` jobs were added from the Explore page's daily
+ * new-grad list (#142).
  */
 
 import type { JobsPrefs, JobsPrefsPatch } from './jobs-prefs'
 
-export type JobSourceId = 'hiring.cafe' | 'indeed' | 'url' | 'pasted'
+export type JobSourceId = 'hiring.cafe' | 'indeed' | 'url' | 'pasted' | 'jobright'
 
 /** Shape of `Job.id`, checked on every id the renderer sends. */
-export const JOB_ID_PATTERN = /^(hiring\.cafe|indeed|url|pasted):[\w.:-]{1,200}$/
+export const JOB_ID_PATTERN = /^(hiring\.cafe|indeed|url|pasted|jobright):[\w.:-]{1,200}$/
 
 /** hiring.cafe's `workplace_type` values. */
 export type WorkplaceType = 'Remote' | 'Hybrid' | 'Onsite' | 'Field'
