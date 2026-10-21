@@ -232,7 +232,10 @@ Routes: `/postings/employer/<id>`
 employer pages with a JSON-LD `JobPosting` and a full description; `/postings/lever-style` and
 `/postings/ashby-style` (the latter without JSON-LD, for the text fallback); `/bot-wall` (403,
 "Just a moment…"); `/page/one`, `/page/two`, `/hang` for the browser's history and Stop;
-`/redirect/lever` (302 to the Lever form on `altOrigin`, the second port); and the mock ATS at `/greenhouse/`,
+`/redirect/lever` (302 to the Lever form on `altOrigin`, the second port); `/jobright/README.md`, a Jobright
+new-grad list dated relative to today, and `/jobs/info/<id>`, its posting pages (one behind a bot wall), from
+`scripts/mock-ats/jobright.mjs` (#142: the fixture sets `HUNTGRY_EXPLORE_SOURCE_URL` to it, and
+`mock.jobright.status` makes it fail); and the mock ATS at `/greenhouse/`,
 `/lever/`, `/generic/`, `/generic-cover/` (+ `…/submit`, the thanks pages). The ATS routes are
 `scripts/mock-ats/server.mjs`, the same module `node scripts/mock-ats.mjs` runs; `generic-cover`
 is the generic form with a cover-letter upload added, so `cover.pdf` is exercised.

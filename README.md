@@ -205,6 +205,13 @@ minimum salary apply to any list and are kept in `<workspace>/.huntgry/jobs-pref
 Work authorization says you need a sponsor, Relevant leaves out postings that say they won't
 sponsor.
 
+**Explore** lists the daily new-grad software jobs from Jobright's public GitHub list
+([jobright-ai/2026-Software-Engineer-New-Grad](https://github.com/jobright-ai/2026-Software-Engineer-New-Grad)),
+grouped by the day they were posted, today first. Huntgry fetches that one README from GitHub
+when the page first opens and when you click **Refresh**, and keeps a copy in
+`<workspace>/.huntgry/explore/jobright.json`. **Add to Jobs** saves a row as a `jobright` job.
+See [docs/changes/142-explore.md](docs/changes/142-explore.md).
+
 ## Browser
 
 **Open posting** (Jobs) and the posting links on the Dashboard open the job in the
