@@ -116,7 +116,7 @@ describe('palette search', () => {
   it('opens on the pages, the general actions and the live runs', () => {
     const sections = searchPalette(items, '')
     expect(sections.map((s) => s.group)).toEqual(['goto', 'actions', 'runs'])
-    expect(titles(sections[0].items)).toEqual(['Dashboard', 'Board', 'Jobs', 'Browser', 'Tailor', 'Review', 'Profile', 'Settings'])
+    expect(titles(sections[0].items)).toEqual(['Dashboard', 'Board', 'Jobs', 'Explore', 'Browser', 'Tailor', 'Review', 'Profile', 'Settings'])
     expect(titles(sections[1].items)).toEqual(['New tailored resume', 'Paste a job', 'Switch theme', 'Switch workspace'])
     expect(titles(sections[2].items)).toEqual(['Stripe · Senior Backend Engineer'])
   })

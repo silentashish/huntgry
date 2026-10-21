@@ -12,6 +12,7 @@ import { locationOf, paramsFor, type Location } from './navigation'
 import { BoardPage } from './pages/board'
 import { BrowserPage } from './pages/browser'
 import { DashboardPage } from './pages/dashboard'
+import { ExplorePage } from './pages/explore'
 import { JobsPage } from './pages/jobs'
 import { ProfilePage } from './pages/profile'
 import { ReviewPage } from './pages/review'
@@ -85,7 +86,9 @@ export function App() {
               case 'board':
                 return <BoardPage />
               case 'jobs':
-                return <JobsPage key={paramsFor(location, 'jobs')?.reload} />
+                return <JobsPage key={paramsFor(location, 'jobs')?.reload} openId={paramsFor(location, 'jobs')?.openId} />
+              case 'explore':
+                return <ExplorePage />
               case 'browser':
                 return <BrowserPage params={paramsFor(location, 'browser')} />
               case 'tailor':

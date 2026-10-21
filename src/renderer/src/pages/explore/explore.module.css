@@ -1,0 +1,151 @@
+/* Explore page (#142). Same layout as the Jobs page (#111); colours are --hg-* tokens. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hg-space-5);
+  min-height: 100%;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.grow {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.empty {
+  margin-top: var(--hg-space-6);
+}
+
+.note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--hg-text-muted);
+}
+
+/* ---------- Posted days ---------- */
+
+.days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.day {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-lg);
+  background-color: var(--hg-bg-surface);
+  font-family: var(--hg-font-ui);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--hg-text-secondary);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.day:hover {
+  border-color: var(--hg-border-default);
+  color: var(--hg-text-primary);
+}
+
+.day[aria-pressed='true'] {
+  border-color: var(--hg-accent-primary);
+  color: var(--hg-text-primary);
+}
+
+.day:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: 2px;
+}
+
+.dayCount {
+  font-family: var(--hg-font-mono);
+  font-size: 11px;
+  color: var(--hg-text-muted);
+}
+
+/* ---------- Job list ---------- */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.job {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-xl);
+  background-color: var(--hg-bg-surface);
+}
+
+.job:hover {
+  border-color: var(--hg-border-default);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.title {
+  all: unset;
+  font-family: var(--hg-font-ui);
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--hg-text-primary);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.title:hover {
+  text-decoration: underline;
+}
+
+.title:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: 2px;
+  border-radius: var(--hg-radius-xs);
+}
+
+.meta {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--hg-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
