@@ -6,7 +6,7 @@ import { JOB_ID_PATTERN } from '@shared/jobs-types'
 import { fetchDetails, JOBRIGHT_HUMAN_CHECK } from '../jobs/service'
 import { jobsDir, listJobs, readJob, saveJob } from '../jobs/store'
 import { inferDate, jobrightId, JOBRIGHT_NEW_GRAD_README, linkCell, parseReadme, safeCompanyUrl, workModelOf } from './parse'
-import { addExplore, cachePath, listExplore, readCache, refreshExplore, toJob, type ExploreDeps } from './service'
+import { addExplore, cachePath, fetchReadme, listExplore, readCache, refreshExplore, toJob, type ExploreDeps } from './service'
 import { exploreSource } from './source'
 
 const TODAY = new Date(2026, 9, 21, 9, 30) // Oct 21 2026, local time
@@ -103,6 +103,9 @@ describe('Jobright README parser', () => {
     expect(jobrightId('https://u:p@jobright.ai/jobs/info/abc123def')).toBeNull()
     expect(jobrightId('https://jobright.ai/jobs/info/../x')).toBeNull()
     expect(jobrightId('http://127.0.0.1:4000/jobs/info/abc123def', ['127.0.0.1:4000'])).toBe('abc123def')
+    // Jobright's own host only over https.
+    expect(jobrightId('http://jobright.ai/jobs/info/abc123def')).toBeNull()
+    expect(jobrightId('http://www.jobright.ai/jobs/info/abc123def')).toBeNull()
   })
 
   it('keeps a test host on its own origin', () => {
@@ -193,6 +196,20 @@ describe('Explore service', () => {
     expect(await readCache(ws, JOBRIGHT_NEW_GRAD_README)).toEqual({ jobs: [], fetchedAt: 'x' })
   })
 
+  it('drops cached rows whose URL is not the posting page of their own id', async () => {
+    await listExplore(ws, deps())
+    const cache = JSON.parse(await readFile(cachePath(ws), 'utf8'))
+    const [a, b, c] = cache.jobs
+    cache.jobs = [
+      { ...a, url: 'https://evil.example.com/' },
+      { ...b, url: `https://jobright.ai/jobs/info/${c.id}` },
+      { ...c, url: `http://jobright.ai/jobs/info/${c.id}` }
+    ]
+    await writeFile(cachePath(ws), JSON.stringify(cache))
+    expect((await readCache(ws, JOBRIGHT_NEW_GRAD_README))?.jobs).toEqual([])
+    await expect(addExplore(ws, a.id, deps())).rejects.toThrow(/no longer on the Jobright list/)
+  })
+
   it('adds a row as a jobright job, idempotently', async () => {
     await listExplore(ws, deps())
     const job = await addExplore(ws, '6a8dbb62cc0cf27068524b7a', deps())
@@ -265,5 +282,30 @@ describe('Explore service', () => {
     }))
     expect(full).toMatchObject({ id: job.id, source: 'jobright', descriptionComplete: true, url: job.url })
     expect(full.description).toContain('Prove hardware designs correct')
+  })
+})
+
+describe('fetchReadme', () => {
+  const realFetch = globalThis.fetch
+  afterEach(() => {
+    globalThis.fetch = realFetch
+  })
+
+  const streamOf = (chunks: number, size: number) =>
+    new ReadableStream<Uint8Array>({
+      start(c) {
+        for (let i = 0; i < chunks; i++) c.enqueue(new Uint8Array(size).fill(97))
+        c.close()
+      }
+    })
+
+  it('stops reading a body past 5 MB even without a Content-Length', async () => {
+    globalThis.fetch = (async () => new Response(streamOf(6, 1024 * 1024))) as typeof fetch
+    await expect(fetchReadme('https://example.com/r.md')).rejects.toThrow(/unexpectedly large/)
+  })
+
+  it('reads a body under the cap as UTF-8', async () => {
+    globalThis.fetch = (async () => new Response('| ↳ | ok |')) as typeof fetch
+    await expect(fetchReadme('https://example.com/r.md')).resolves.toBe('| ↳ | ok |')
   })
 })

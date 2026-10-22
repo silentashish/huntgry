@@ -5,7 +5,7 @@ import { JOBRIGHT_ID_PATTERN, savedJobId, WORK_MODELS, type ExploreJob, type Exp
 import type { Job, WorkplaceType } from '@shared/jobs-types'
 import { HUNTGRY_DIR } from '../workspace/constants'
 import { findCanonical, readJob, saveJob } from '../jobs/store'
-import { parseReadme } from './parse'
+import { JOBRIGHT_HOSTS, jobrightId, parseReadme } from './parse'
 
 /**
  * Explore (#142): Jobright's new-grad list, fetched from GitHub only when the workspace has no copy yet or
@@ -34,8 +34,11 @@ export const cachePath = (workspace: string) => join(exploreDir(workspace), 'job
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/
 
-/** A cached row, checked again on read (the file is in the user's folder and may have been edited). */
-function validRow(r: unknown): r is ExploreJob {
+/**
+ * A cached row, checked again on read (the file is in the user's folder and may have been edited): its URL
+ * must be the posting page of its own id on an allowed host, as the parser wrote it.
+ */
+function validRow(r: unknown, hosts: readonly string[]): r is ExploreJob {
   if (typeof r !== 'object' || r === null) return false
   const j = r as Record<string, unknown>
   return (
@@ -45,7 +48,7 @@ function validRow(r: unknown): r is ExploreJob {
     typeof j.company === 'string' &&
     typeof j.location === 'string' &&
     typeof j.url === 'string' &&
-    /^https?:\/\//i.test(j.url) &&
+    jobrightId(j.url, hosts) === j.id &&
     (j.companyUrl === null || typeof j.companyUrl === 'string') &&
     (j.workModel === null || WORK_MODELS.includes(j.workModel as never)) &&
     typeof j.postedAt === 'string' &&
@@ -54,7 +57,11 @@ function validRow(r: unknown): r is ExploreJob {
 }
 
 /** The cached list for `source`, or `null` when there is none (or it was fetched from another URL). */
-export async function readCache(workspace: string, source: string): Promise<ExploreList | null> {
+export async function readCache(
+  workspace: string,
+  source: string,
+  hosts: readonly string[] = JOBRIGHT_HOSTS
+): Promise<ExploreList | null> {
   let raw: unknown
   try {
     raw = JSON.parse(await readFile(cachePath(workspace), 'utf8'))
@@ -63,7 +70,7 @@ export async function readCache(workspace: string, source: string): Promise<Expl
   }
   const c = (typeof raw === 'object' && raw !== null ? raw : {}) as Partial<CacheFile>
   if (c.source !== source || !Array.isArray(c.jobs)) return null
-  return { jobs: c.jobs.filter(validRow), fetchedAt: typeof c.fetchedAt === 'string' ? c.fetchedAt : null }
+  return { jobs: c.jobs.filter((j) => validRow(j, hosts)), fetchedAt: typeof c.fetchedAt === 'string' ? c.fetchedAt : null }
 }
 
 async function writeCache(workspace: string, data: CacheFile): Promise<void> {
@@ -75,7 +82,7 @@ async function writeCache(workspace: string, data: CacheFile): Promise<void> {
 
 /** The cached list; fetched (and cached) when the workspace has none yet. */
 export async function listExplore(workspace: string, deps: ExploreDeps): Promise<ExploreList> {
-  return (await readCache(workspace, deps.sourceUrl)) ?? refreshExplore(workspace, deps)
+  return (await readCache(workspace, deps.sourceUrl, deps.hosts)) ?? refreshExplore(workspace, deps)
 }
 
 /** Fetches the README again, parses it and replaces the cache. A failed fetch leaves the cache as it was. */
@@ -127,7 +134,7 @@ export function toJob(e: ExploreJob, now: Date): Job {
 export async function addExplore(workspace: string, id: string, deps: ExploreDeps): Promise<Job> {
   const existing = await findCanonical(workspace, savedJobId(id))
   if (existing) return existing
-  const list = await readCache(workspace, deps.sourceUrl)
+  const list = await readCache(workspace, deps.sourceUrl, deps.hosts)
   const row = list?.jobs.find((j) => j.id === id)
   if (!row) throw new Error('This job is no longer on the Jobright list. Refresh and try again.')
   const refusal = await deps.refusal(row.url)
@@ -154,9 +161,29 @@ export async function fetchReadme(url: string, timeoutMs = TIMEOUT_MS): Promise<
     throw new Error(`Could not reach GitHub for the Jobright list (${why}).`)
   }
   if (!res.ok) throw new Error(`GitHub answered HTTP ${res.status} for the Jobright list.`)
+  const tooLarge = 'The Jobright list is unexpectedly large; not read.'
   const length = Number(res.headers.get('content-length') ?? 0)
-  if (length > MAX_BYTES) throw new Error('The Jobright list is unexpectedly large; not read.')
-  const text = await res.text()
-  if (text.length > MAX_BYTES) throw new Error('The Jobright list is unexpectedly large; not read.')
-  return text
+  if (length > MAX_BYTES) throw new Error(tooLarge)
+  // Content-Length may be absent or wrong: count the bytes as they arrive and stop at the cap.
+  if (!res.body) return ''
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > MAX_BYTES) break
+      chunks.push(value)
+    }
+  } catch (err) {
+    const why = err instanceof Error && err.name === 'TimeoutError' ? 'it did not answer in time' : 'the connection dropped'
+    throw new Error(`Could not read the Jobright list from GitHub (${why}).`)
+  }
+  if (total > MAX_BYTES) {
+    await reader.cancel().catch(() => {})
+    throw new Error(tooLarge)
+  }
+  return Buffer.concat(chunks, total).toString('utf8')
 }

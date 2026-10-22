@@ -91,9 +91,11 @@ export function jobrightId(url: string, hosts: readonly string[] = JOBRIGHT_HOST
   } catch {
     return null
   }
-  if (u.protocol !== 'https:' && u.protocol !== 'http:') return null
   if (u.username || u.password) return null
-  if (!hosts.includes(u.host.toLowerCase())) return null
+  const host = u.host.toLowerCase()
+  if (!hosts.includes(host)) return null
+  // Jobright's own links must be https; plain http is left only to the e2e mock's loopback host.
+  if (u.protocol !== 'https:' && (u.protocol !== 'http:' || JOBRIGHT_HOSTS.includes(host))) return null
   const m = /^\/jobs\/info\/([A-Za-z0-9]{6,64})\/?$/.exec(u.pathname)
   return m ? m[1] : null
 }
