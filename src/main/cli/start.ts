@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { readFile, realpath } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { AGENT_LABEL, type AgentId, type RunSummary } from '@shared/runner-types'
@@ -10,7 +10,7 @@ import { adapterFor, agentOr } from './agents'
 import { agyModel } from './agents/antigravity'
 import { codexModel } from './agents/codex'
 import { skillStatus } from './agents/skills'
-import { buildSystemPrompt, requireStartParams, texRootOf, type UnattendedPromptOptions } from './command'
+import { buildSystemPrompt, requireStartParams, resolveRunPaths, texRootOf, type UnattendedPromptOptions } from './command'
 import {
   buildChildEnv,
   claudeConfigDirChoice,
@@ -181,8 +181,6 @@ export async function context(
   const env = await discoverRuntime()
   if (!env.claudePath) throw new Error('The claude CLI was not found. See Settings.')
   if (!env.skillDir) throw new Error('The resume-tailor skill was not found. See Settings.')
-  // Sandbox rules apply to real paths; allow the given spelling and its target (the venv may be a symlink).
-  const real = async (p: string) => [p, await realpath(p).catch(() => p)]
   const childEnv = buildChildEnv({
     base: process.env,
     workspace: workspace.path,
@@ -196,17 +194,18 @@ export async function context(
     // A signed-out CLI would only produce a failed run; say what to do instead (start and resume).
     requireSignedIn(env.claudePath, childEnv)
   ])
-  const texRoot = texRootOf(env.texBin)
-  const allow = [
-    ...new Set(
-      (await Promise.all([workspace.path, env.skillDir, venvDir(), ...(texRoot ? [texRoot] : [])].map(real))).flat()
-    )
-  ]
+  // The skill at its real path: the chosen account's skills folder may be a link (#144).
+  const { skillDir, sandbox } = await resolveRunPaths({
+    workspace: workspace.path,
+    skillDir: env.skillDir,
+    venvDir: venvDir(),
+    texRoot: texRootOf(env.texBin)
+  })
   return {
     agent: 'claude',
     workspace: workspace.path,
-    skillDir: env.skillDir,
-    sandbox: { workspace: workspace.path, skillDir: env.skillDir, venvDir: venvDir(), texRoot, extraRead: allow },
+    skillDir,
+    sandbox,
     command: env.claudePath,
     env: childEnv,
     claudeVersion: version,
@@ -215,7 +214,7 @@ export async function context(
     systemPrompt: buildSystemPrompt({
       workspace: workspace.path,
       masterProfile: workspace.masterProfile,
-      skillDir: env.skillDir,
+      skillDir,
       unattended
     })
   }
@@ -238,25 +237,25 @@ async function otherAgentContext(
   if (!cliPath) throw new Error(`The ${adapter.binary} CLI (${label}) was not found. See Settings → Agents.`)
   if (!skill.path)
     throw new Error(`${label} cannot see the resume-tailor skill. Use "Install skill" for ${label} in Settings → Agents.`)
-  const real = async (p: string) => [p, await realpath(p).catch(() => p)]
-  const texRoot = texRootOf(texBin)
-  const allow = [
-    ...new Set(
-      (await Promise.all([workspace.path, skill.path, venvDir(), ...(texRoot ? [texRoot] : [])].map(real))).flat()
-    )
-  ]
+  // Their skill is a link to the Claude copy (`installAgentSkill`): run it at its real path (#144).
+  const { skillDir, sandbox } = await resolveRunPaths({
+    workspace: workspace.path,
+    skillDir: skill.path,
+    venvDir: venvDir(),
+    texRoot: texRootOf(texBin)
+  })
   return {
     agent,
     workspace: workspace.path,
-    skillDir: skill.path,
-    sandbox: { workspace: workspace.path, skillDir: skill.path, venvDir: venvDir(), texRoot, extraRead: allow },
+    skillDir,
+    sandbox,
     command: cliPath,
     env: buildChildEnv({ base: process.env, workspace: workspace.path, venvDir: venvDir(), texBin, loginPath }),
     ...(agent === 'codex'
       ? { model: await codexModel(homedir()) }
       : // agy gets no --model: it runs the model of its own settings, read only to price the run (#44).
         { expectedModel: (await agyModel(homedir())) ?? null }),
-    systemPrompt: buildSystemPrompt({ workspace: workspace.path, masterProfile: workspace.masterProfile, skillDir: skill.path, unattended })
+    systemPrompt: buildSystemPrompt({ workspace: workspace.path, masterProfile: workspace.masterProfile, skillDir, unattended })
   }
 }
 

@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -13,6 +13,7 @@ import {
   buildFirstPrompt,
   buildSystemPrompt,
   requireStartParams,
+  resolveRunPaths,
   runTitle,
   userMessageLine
 } from './command'
@@ -357,6 +358,58 @@ describe('command line and prompts', () => {
       '/Users/x/Library/TinyTeX',
       '/private/real/venv'
     ])
+  })
+
+  it('runs the skill at its real path when the account\'s skills folder is a link (#144)', async () => {
+    // macOS's tmpdir is itself a link (/var → /private/var): start from the real folder.
+    const home = await realpath(await mkdtemp(join(tmpdir(), 'huntgry-skill-link-')))
+    try {
+      const realSkill = join(home, '.claude/skills/resume-tailor')
+      await mkdir(join(realSkill, 'scripts'), { recursive: true })
+      await writeFile(join(realSkill, 'SKILL.md'), '# skill')
+      const account = join(home, '.claude-personal')
+      await mkdir(account)
+      await symlink(join(home, '.claude/skills'), join(account, 'skills'), 'dir')
+      const venv = join(home, 'venv-link')
+      await mkdir(join(home, 'venv'))
+      await symlink(join(home, 'venv'), venv, 'dir')
+
+      // The chosen account's skills folder is searched first, so the skill is found through the link…
+      const found = await findSkillDir(skillSearchRoots(home, account))
+      expect(found).toBe(join(account, 'skills/resume-tailor'))
+      const { skillDir, sandbox } = await resolveRunPaths({
+        workspace: join(home, 'cv'),
+        skillDir: found!,
+        venvDir: venv,
+        texRoot: null
+      })
+      // …but the run names only the real folder: allowlist, sandbox and prompt.
+      expect(skillDir).toBe(realSkill)
+      const args = buildClaudeArgs({
+        skillDir,
+        systemPrompt: buildSystemPrompt({ workspace: join(home, 'cv'), masterProfile: 'master-profile.md', skillDir }),
+        sandbox
+      })
+      expect(args.join('\n')).not.toContain('.claude-personal')
+      expect(args).toContain(`Read(/${realSkill}/**)`)
+      expect(args).toContain(`Bash(python3 ${realSkill}/scripts/build.py:*)`)
+      // A linked venv is still allowed by both spellings.
+      expect(sandbox.extraRead).toEqual([join(home, 'cv'), realSkill, venv, join(home, 'venv')])
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps a skill path that is already real, and one that does not exist', async () => {
+    const plain = await resolveRunPaths({ workspace: '/no/cv', skillDir: '/no/skill', venvDir: '/no/venv', texRoot: '/no/tex' })
+    expect(plain.skillDir).toBe('/no/skill')
+    expect(plain.sandbox).toEqual({
+      workspace: '/no/cv',
+      skillDir: '/no/skill',
+      venvDir: '/no/venv',
+      texRoot: '/no/tex',
+      extraRead: ['/no/cv', '/no/skill', '/no/venv', '/no/tex']
+    })
   })
 
   it('finds the TeX root to allow', () => {
