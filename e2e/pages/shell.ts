@@ -1,13 +1,14 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 
 /**
- * Sidebar entries in order, with the label of each and how its page announces itself. 8 entries: the
- * Knowledge graph is a view of Profile (#108), opened with `Shell.openGraph()`.
+ * Sidebar entries in order, with the label of each and how its page announces itself. 9 entries: the
+ * Knowledge graph is a view of Profile (#108), opened with `Shell.openGraph()`; Explore follows Jobs (#142).
  */
 export const SHELL_PAGES = {
   dashboard: { label: 'Dashboard', heading: 'Dashboard' },
   board: { label: 'Board', heading: 'Board' },
   jobs: { label: 'Jobs', heading: 'Jobs' },
+  explore: { label: 'Explore', heading: 'Explore' },
   browser: { label: 'Browser', heading: null },
   tailor: { label: 'Tailor', heading: 'Tailor' },
   review: { label: 'Review', heading: null },

@@ -28,7 +28,7 @@ const isUrl = (s: string) => /^https?:\/\//i.test(s.trim())
  * Jobs added by URL or pasted; a job can be sent to the Tailor page. Opens on the saved jobs relevant to the
  * master profile, each with its Scent score and why it fits. Huntgry does not search job boards (#78).
  */
-export function JobsPage() {
+export function JobsPage({ openId: initialOpenId }: { openId?: string } = {}) {
   const { navigate } = useNavigation()
   const [jobs, setJobs] = useState<Job[] | null>(null)
   const [url, setUrl] = useState('')
@@ -39,7 +39,7 @@ export function JobsPage() {
   const [filtersOpen, setFiltersOpen] = useState(true)
   /** `null` until the user picks a segment: then the default (Relevant when the profile allows) applies. */
   const [pickedShow, setShow] = useState<Show | null>(null)
-  const [openId, setOpenId] = useState<string | null>(null)
+  const [openId, setOpenId] = useState<string | null>(initialOpenId ?? null)
   /** Saved per workspace: the list filters. */
   const [prefs, setPrefsState] = useState<JobsPrefs | null>(null)
   /** What the master profile says to match jobs on; `null` while loading (an unreadable profile gives no signals). */

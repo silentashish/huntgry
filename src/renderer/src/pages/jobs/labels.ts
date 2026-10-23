@@ -17,7 +17,8 @@ export const SOURCE_LABEL: Record<JobSourceId, string> = {
   'hiring.cafe': 'hiring.cafe',
   indeed: 'Indeed',
   url: 'Added by URL',
-  pasted: 'Pasted'
+  pasted: 'Pasted',
+  jobright: 'Jobright'
 }
 
 /** "3 days ago" style age of a posting. */

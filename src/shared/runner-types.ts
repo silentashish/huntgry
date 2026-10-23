@@ -242,7 +242,7 @@ export interface StartRunParams {
   dateStyle: DateStyle
   /** Anything else the user wants the skill to know (angle, seniority, stack). */
   notes?: string
-  /** Where the job was found (`hiring.cafe`, `indeed`, `url`, `pasted`); `manual` when typed on the Tailor page. */
+  /** Where the job was found (`hiring.cafe`, `indeed`, `url`, `pasted`, `jobright`); `manual` when typed on the Tailor page. */
   source?: JobSourceTag
   /** Agent to run with; the default agent from Settings when absent. */
   agent?: AgentId
@@ -253,7 +253,7 @@ export interface StartRunParams {
 }
 
 /** Recorded with the application in `huntgry.json`, so the Dashboard can show where a job came from. */
-export const JOB_SOURCE_TAGS = ['hiring.cafe', 'indeed', 'url', 'pasted', 'manual'] as const
+export const JOB_SOURCE_TAGS = ['hiring.cafe', 'indeed', 'url', 'pasted', 'jobright', 'manual'] as const
 export type JobSourceTag = (typeof JOB_SOURCE_TAGS)[number]
 
 export type RunStatus =

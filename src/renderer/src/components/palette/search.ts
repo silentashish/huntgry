@@ -188,7 +188,7 @@ export function searchPalette(items: readonly PaletteItem[], query: string, opti
   for (const group of GROUP_ORDER) {
     const list = byGroup.get(group)
     if (!list?.length) continue
-    const max = group === 'goto' ? Math.max(limit, 8) : limit
+    const max = group === 'goto' ? Math.max(limit, PAGES.length) : limit
     sections.push({
       group,
       label: COUNTED.has(group) ? `${GROUP_LABEL[group]} · ${list.length}` : GROUP_LABEL[group],
@@ -224,6 +224,7 @@ const PAGE_KEYWORDS: Record<NavPage, string> = {
   dashboard: 'home applications usage resumes',
   board: 'kanban columns to do applied interviewing offer archived',
   jobs: 'saved postings relevant scent',
+  explore: 'jobright new grad daily list discover github',
   browser: 'tabs web posting apply',
   tailor: 'runs resume agent claude codex antigravity queue',
   review: 'unattended results approve',

@@ -2,6 +2,7 @@ import { ActionIcon, Kbd, Tooltip, VisuallyHidden } from '@mantine/core'
 import {
   IconBriefcase,
   IconClipboardCheck,
+  IconCompass,
   IconCpu,
   IconDeviceDesktop,
   IconFolder,
@@ -31,6 +32,7 @@ const NAV_ICON: Record<NavPage, Icon> = {
   dashboard: IconLayoutDashboard,
   board: IconLayoutKanban,
   jobs: IconBriefcase,
+  explore: IconCompass,
   browser: IconWorld,
   tailor: IconSparkles,
   review: IconClipboardCheck,
@@ -53,7 +55,7 @@ interface Props {
 
 /**
  * The sidebar (Figma 5:3): paw and version, the "Sniff anything…" button that opens the ⌘K palette, the
- * 8 pages with counts on Tailor and Review, the unattended pipeline while one runs, the System / Light /
+ * 9 pages with counts on Tailor and Review, the unattended pipeline while one runs, the System / Light /
  * Dark toggle and the workspace with its switch.
  */
 export function Sidebar({ current, onNavigate, onOpenPipeline, onOpenPalette, mod, workspacePath, onSwitchWorkspace }: Props) {

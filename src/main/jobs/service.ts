@@ -4,6 +4,10 @@ import type { LoadResult } from './loader'
 import { parsePosting, POSTING_EXTRACT, type PageData } from './sources/posting'
 import { findCanonical, listJobs, readJob, saveJob, writeJobFile } from './store'
 
+/** What Fetch full description says when jobright.ai shows the hidden window a human check (#142). */
+export const JOBRIGHT_HUMAN_CHECK =
+  'Jobright shows full job descriptions only after a human check. Open the posting and paste the description.'
+
 /** Loads a page and reads data from it; the hidden-window loader in the app, a stub in tests. */
 export type Loader = (url: string, extract: string) => Promise<LoadResult>
 
@@ -46,6 +50,11 @@ export async function fetchDetails(workspace: string, id: string, load: Loader):
     } catch (err) {
       // Keep going: a later copy may load, and a partial description found so far is still saved.
       failure = `${err instanceof Error ? err.message : String(err)} The summary from the job board is kept; open the posting to read it all.`
+      continue
+    }
+    if (res.status === 'blocked' && copy.source === 'jobright') {
+      // Like Indeed's job pages: a human check the hidden window cannot pass (#142).
+      failure = JOBRIGHT_HUMAN_CHECK
       continue
     }
     if (res.status !== 'ok') {

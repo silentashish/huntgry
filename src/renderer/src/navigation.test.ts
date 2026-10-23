@@ -10,7 +10,7 @@ describe('navigation', () => {
   })
 
   it('has 8 sidebar entries: the Knowledge graph is a view of Profile (#108)', () => {
-    expect(PAGES).toEqual(['dashboard', 'board', 'jobs', 'browser', 'tailor', 'review', 'profile', 'settings'])
+    expect(PAGES).toEqual(['dashboard', 'board', 'jobs', 'explore', 'browser', 'tailor', 'review', 'profile', 'settings'])
     expect(PAGES as readonly string[]).not.toContain('graph')
   })
 
@@ -81,8 +81,14 @@ describe('navigation', () => {
     expect(paramsFor(locationOf('profile', { view: 'skills' }), 'profile')?.view).toBe('skills')
   })
 
-  it('has a full-bleed Browser page between Jobs and Tailor that takes a URL', () => {
-    expect(PAGES.indexOf('browser')).toBe(PAGES.indexOf('jobs') + 1)
+  it('has Explore between Jobs and Browser, and Jobs opens a saved job (#142)', () => {
+    expect(PAGES.indexOf('explore')).toBe(PAGES.indexOf('jobs') + 1)
+    expect(PAGES.indexOf('browser')).toBe(PAGES.indexOf('explore') + 1)
+    expect(paramsFor(locationOf('jobs', { reload: 1, openId: 'jobright:abc123' }), 'jobs')?.openId).toBe('jobright:abc123')
+  })
+
+  it('has a full-bleed Browser page between Explore and Tailor that takes a URL', () => {
+    expect(PAGES.indexOf('browser')).toBe(PAGES.indexOf('explore') + 1)
     expect(PAGES.indexOf('tailor')).toBe(PAGES.indexOf('browser') + 1)
     expect(FULL_BLEED.has('browser')).toBe(true)
     expect(FULL_BLEED.has('dashboard')).toBe(false)

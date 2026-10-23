@@ -9,7 +9,7 @@ test.describe('app shell', () => {
     const shell = new Shell(app.window)
     await shell.expectVisible(app.workspace!)
     await shell.expectActive('dashboard')
-    // 8 entries: the Knowledge graph moved into Profile (#108).
+    // 9 entries: the Knowledge graph moved into Profile (#108); Explore was added after Jobs (#142).
     await expect(shell.navbar.getByRole('button', { name: /^Knowledge graph/ })).toHaveCount(0)
     await expect(shell.navbar.getByRole('button', { name: /^Master profile/ })).toHaveCount(0)
 
@@ -61,7 +61,7 @@ test.describe('command palette (⌘K)', () => {
 
     await shell.openPalette('keyboard')
     // Before typing: the pages to go to and the general actions.
-    await expect(shell.paletteGroup('Go to').getByRole('option')).toHaveCount(8)
+    await expect(shell.paletteGroup('Go to').getByRole('option')).toHaveCount(9)
     await expect(shell.paletteOption('New tailored resume')).toBeVisible()
     await app.window.keyboard.press('Escape')
     await expect(shell.palette).toBeHidden()

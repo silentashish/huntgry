@@ -2,6 +2,7 @@ import type { ApplicationsApi } from './applications-types'
 import type { ApplyApi } from './apply-types'
 import type { BrowserApi } from './browser-types'
 import type { Subscribe } from './events'
+import type { ExploreApi } from './explore-types'
 import type { RunnerApi } from './runner-types'
 import type { GraphApi } from './graph-types'
 import type { InsightsApi } from './insights-types'
@@ -27,6 +28,8 @@ export interface HuntgryApi {
   graph: GraphApi
   /** Job boards: search, saved jobs, add by URL or pasted text. */
   jobs: JobsApi
+  /** Explore (#142): Jobright's daily new-grad list, cached per workspace, addable to Jobs. */
+  explore: ExploreApi
   /** Gaps job descriptions keep asking for, and Claude-drafted evidence for the master profile. */
   insights: InsightsApi
   /** In-app browser tabs for job postings (pages live in main). */

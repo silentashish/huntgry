@@ -11,8 +11,13 @@ export interface PageParams {
   dashboard: undefined
   /** Every job as a card, from To do to Archived (#85). */
   board: undefined
-  /** `reload` (any new value) draws the page afresh, e.g. after the palette's "Paste a job" saved one. */
-  jobs: { reload?: number } | undefined
+  /**
+   * `reload` (any new value) draws the page afresh, e.g. after the palette's "Paste a job" saved one;
+   * `openId` opens that saved job's drawer (Explore's "Added", #142).
+   */
+  jobs: { reload?: number; openId?: string } | undefined
+  /** Jobright's daily new-grad list, grouped by posted day; rows are added to Jobs (#142). */
+  explore: undefined
   /** Opens `url` in an in-app browser tab (or shows the open tabs when absent). */
   browser: { url?: string } | undefined
   /** Pre-fills the Tailor form, e.g. from a job found on the Jobs page. */
@@ -86,14 +91,25 @@ export type Location = { [P in Page]: { page: P; params: PageParams[P] } }[Page]
 /** Pages with an entry in the sidebar; `graph` is a view of Profile (#95). */
 export type NavPage = Exclude<Page, 'graph'>
 
-/** Navbar order: 8 entries (the Knowledge graph moved into Profile). */
-export const PAGES: readonly NavPage[] = ['dashboard', 'board', 'jobs', 'browser', 'tailor', 'review', 'profile', 'settings']
+/** Navbar order: 9 entries (the Knowledge graph moved into Profile; Explore follows Jobs, #142). */
+export const PAGES: readonly NavPage[] = [
+  'dashboard',
+  'board',
+  'jobs',
+  'explore',
+  'browser',
+  'tailor',
+  'review',
+  'profile',
+  'settings'
+]
 
 /** Sidebar and palette label of each page (#108: "Master profile" is now "Profile"). */
 export const PAGE_LABEL: Record<NavPage, string> = {
   dashboard: 'Dashboard',
   board: 'Board',
   jobs: 'Jobs',
+  explore: 'Explore',
   browser: 'Browser',
   tailor: 'Tailor',
   review: 'Review',

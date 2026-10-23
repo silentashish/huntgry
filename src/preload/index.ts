@@ -4,6 +4,7 @@ import { applications } from './applications'
 import { apply } from './apply'
 import { browser } from './browser'
 import { on } from './events'
+import { explore } from './explore'
 import { graph } from './graph'
 import { insights } from './insights'
 import { runner } from './runner'
@@ -24,6 +25,7 @@ const api: HuntgryApi = {
   applications,
   graph,
   jobs,
+  explore,
   insights,
   browser,
   queue,
