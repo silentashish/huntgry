@@ -14,11 +14,13 @@ import {
 } from '@shared/runner-types'
 import { api, errorText } from '../../api'
 import { MonoLabel, PageHeader, StatusPill, type UiTone } from '../../components/ui'
+import { useNavigation } from '../../navigation'
 import { AppearanceCard } from './AppearanceCard'
+import { JobrightCard } from './JobrightCard'
 import { PricingCard } from './PricingCard'
 import { RemoteCard } from './RemoteCard'
 import { SavedAnswersCard } from './SavedAnswersCard'
-import { SectionNav, SettingsSection, type SettingsSectionId } from './SectionNav'
+import { SectionNav, sectionDomId, SettingsSection, type SettingsSectionId } from './SectionNav'
 import { PathText, SettingsCard, toneOfColor } from './SettingsCard'
 import { StandingApprovalsCard } from './StandingApprovalsCard'
 import classes from './settings.module.css'
@@ -42,12 +44,12 @@ const ENV_SECTIONS: readonly SettingsSectionId[] = [
   'claude',
   'skill-dependencies'
 ]
-const ALWAYS_SECTIONS: readonly SettingsSectionId[] = ['remote-control', 'appearance']
+const ALWAYS_SECTIONS: readonly SettingsSectionId[] = ['jobright', 'remote-control', 'appearance']
 
 /**
  * Settings (#116, Figma "Settings"): a sticky section nav on the left and the cards on the right:
  * the agent CLIs, standing approvals, saved answers, pricing, the Claude CLI and the skill's
- * dependencies, remote control and appearance.
+ * dependencies, the Jobright sign-in, remote control and appearance.
  */
 export function SettingsPage() {
   const [env, setEnv] = useState<RunnerEnvironment | null>(null)
@@ -73,6 +75,19 @@ export function SettingsPage() {
   useEffect(() => {
     void check()
   }, [check])
+
+  // A card below the agent check (Jobright, Remote control…) opened by name, e.g. from Explore's "Connect Jobright"
+  // (#146): the shell scrolls to it at once, then the cards drawn after the check push it down; bring it back.
+  const { location } = useNavigation()
+  const linkedSection = location.page === 'settings' ? location.params?.section : undefined
+  const envReady = env !== null
+  useEffect(() => {
+    if (!envReady || !linkedSection || !ALWAYS_SECTIONS.includes(linkedSection)) return
+    const raf = requestAnimationFrame(() =>
+      document.getElementById(sectionDomId(linkedSection))?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })
+    )
+    return () => cancelAnimationFrame(raf)
+  }, [envReady, linkedSection])
 
   // One GitHub lookup per skill folder seen; a failure (offline, rate limit) just hides the badge.
   const skillDir = env?.skillDir ?? null
@@ -339,6 +354,10 @@ brew install poppler`}</Code>
               </SettingsCard>
             </>
           )}
+
+          <SettingsSection id="jobright">
+            <JobrightCard />
+          </SettingsSection>
 
           <SettingsSection id="remote-control">
             <RemoteCard />

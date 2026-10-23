@@ -70,6 +70,7 @@ export type SettingsSection =
   | 'pricing'
   | 'claude'
   | 'skill-dependencies'
+  | 'jobright'
   | 'remote-control'
   | 'appearance'
 
@@ -125,6 +126,7 @@ export const SETTINGS_SECTION_LABEL: Record<SettingsSection, string> = {
   pricing: 'Pricing',
   claude: 'Claude',
   'skill-dependencies': 'Skill dependencies',
+  jobright: 'Jobright',
   'remote-control': 'Remote control',
   appearance: 'Appearance'
 }

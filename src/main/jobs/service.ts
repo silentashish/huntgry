@@ -52,8 +52,9 @@ export async function fetchDetails(workspace: string, id: string, load: Loader):
       failure = `${err instanceof Error ? err.message : String(err)} The summary from the job board is kept; open the posting to read it all.`
       continue
     }
-    if (res.status === 'blocked' && copy.source === 'jobright') {
-      // Like Indeed's job pages: a human check the hidden window cannot pass (#142).
+    if (res.status === 'blocked' && copy.source === 'jobright' && copy.boardUrl === copy.url) {
+      // Like Indeed's job pages: a human check the hidden window cannot pass (#142). Not once the link is the
+      // employer's posting (#146): that site's own human check gets the generic message.
       failure = JOBRIGHT_HUMAN_CHECK
       continue
     }

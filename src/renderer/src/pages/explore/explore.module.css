@@ -149,3 +149,16 @@
   gap: 8px;
   flex: 0 0 auto;
 }
+
+/* The "Connect Jobright" hint (#146): text and button on one line when there is room. */
+.connectBody {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.connect {
+  flex-shrink: 0;
+}

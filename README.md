@@ -212,6 +212,12 @@ when the page first opens and when you click **Refresh**, and keeps a copy in
 `<workspace>/.huntgry/explore/jobright.json`. **Add to Jobs** saves a row as a `jobright` job.
 See [docs/changes/142-explore.md](docs/changes/142-explore.md).
 
+Jobright shows the employer's own posting link only to signed-in users. Sign in once under
+**Settings → Jobright → Connect Jobright** (Explore links there until you do). After that, a job you
+add from Explore, or whose full description you fetch, links the employer's posting, with the
+Jobright page kept as its board link. You sign in on Jobright's own page, so Huntgry never sees
+your password. See [docs/changes/146-jobright-employer-link.md](docs/changes/146-jobright-employer-link.md).
+
 ## Browser
 
 **Open posting** (Jobs) and the posting links on the Dashboard open the job in the

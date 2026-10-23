@@ -23,8 +23,11 @@ let queue: Promise<unknown> = Promise.resolve()
 
 let configured: Electron.Session | null = null
 
-/** The loader's session, configured once (it is the same object on every call). */
-function configureSession(): Electron.Session {
+/**
+ * The loader's session, configured once (it is the same object on every call). Persistent, so a sign-in
+ * made in it (Settings → Jobright, #146) lasts across restarts.
+ */
+export function configureSession(): Electron.Session {
   if (configured) return configured
   const s = session.fromPartition(PARTITION)
   // The board pages never need camera, notifications or the like, nor downloads.
@@ -48,6 +51,11 @@ function configureSession(): Electron.Session {
  * `empty: true` is provisional: pages often render an empty list before the
  * results arrive, so it is only accepted after `EMPTY_GRACE_MS`.
  */
+/** Resolves once every load queued so far has finished (Disconnect waits for in-flight signed-in loads, #146). */
+export function loaderIdle(): Promise<void> {
+  return queue.then(() => undefined)
+}
+
 export function loadAndExtract(url: string, extract: string, timeoutMs = 25000): Promise<LoadResult> {
   const run = queue.then(() => load(url, extract, timeoutMs))
   queue = run.catch(() => undefined)

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Loader, SegmentedControl, TextInput } from '@mantine/core'
-import { IconCheck, IconCompass, IconPlus, IconRefresh, IconSearch } from '@tabler/icons-react'
-import { WORK_MODELS, type ExploreJob, type ExploreList } from '@shared/explore-types'
+import { IconCheck, IconCompass, IconLink, IconPlus, IconRefresh, IconSearch } from '@tabler/icons-react'
+import { WORK_MODELS, type ExploreJob, type ExploreList, type JobrightAccount } from '@shared/explore-types'
 import type { Job } from '@shared/jobs-types'
 import { api, errorText } from '../../api'
 import { CompanyAvatar, EmptyState, MonoLabel, PageHeader, StatusPill } from '../../components/ui'
@@ -27,6 +27,7 @@ export function ExplorePage() {
   const [workModel, setWorkModel] = useState<WorkModelFilter>('all')
   const [adding, setAdding] = useState<Set<string>>(new Set())
   const [now, setNow] = useState(() => Date.now())
+  const [account, setAccount] = useState<JobrightAccount | null>(null)
 
   useEffect(() => {
     api.explore
@@ -34,6 +35,7 @@ export function ExplorePage() {
       .then(setList, (err) => setError(errorText(err)))
       .finally(() => setLoading(false))
     api.jobs.list().then(setSaved, () => undefined)
+    api.explore.account().then(setAccount, () => undefined)
     // "Updated … ago" stays true while the page is open.
     const tick = setInterval(() => setNow(Date.now()), 60_000)
     return () => clearInterval(tick)
@@ -94,6 +96,26 @@ export function ExplorePage() {
           </>
         }
       />
+
+      {account && account.connected !== true && (
+        <Alert
+          color="info"
+          variant="light"
+          icon={<IconLink size={18} />}
+          title="Get the employer's own posting links"
+          className={classes.connect}
+        >
+          <div className={classes.connectBody}>
+            <span>
+              Jobs from this list link Jobright's page. Connect your Jobright account once and jobs you add link the
+              employer's posting instead.
+            </span>
+            <Button size="xs" variant="default" onClick={() => navigate('settings', { section: 'jobright' })}>
+              Connect Jobright
+            </Button>
+          </div>
+        </Alert>
+      )}
 
       {error && (
         <Alert color="danger" variant="light" title="The Jobright list could not be loaded" withCloseButton onClose={() => setError(null)}>
