@@ -1,3 +1,4 @@
+import { realpath } from 'node:fs/promises'
 import { isAgentId, JOB_SOURCE_TAGS, type JobSourceTag, type StartRunParams } from '@shared/runner-types'
 
 /**
@@ -46,6 +47,29 @@ export interface SandboxPaths {
   texRoot: string | null
   /** More readable paths, e.g. the real targets of symlinked ones. */
   extraRead?: string[]
+}
+
+/**
+ * The skill folder and sandbox paths of a run, with the skill at its real path (#144). An account's
+ * `skills` folder may be a symlink (e.g. `~/.claude-personal/skills → ~/.claude/skills`): Seatbelt
+ * refuses a path through a link whose own node is not readable, and Claude Code matches a `Read`
+ * rule against the resolved path, so the allowlist, the sandbox and the prompt all name the real one.
+ * The sandbox still allows each given spelling next to its target (a symlinked venv, say).
+ */
+export async function resolveRunPaths(paths: {
+  workspace: string
+  skillDir: string
+  venvDir: string
+  texRoot: string | null
+}): Promise<{ skillDir: string; sandbox: SandboxPaths }> {
+  const real = (p: string) => realpath(p).catch(() => p)
+  const skillDir = await real(paths.skillDir)
+  const given = [paths.workspace, skillDir, paths.venvDir, ...(paths.texRoot ? [paths.texRoot] : [])]
+  const extraRead = [...new Set((await Promise.all(given.map(async (p) => [p, await real(p)]))).flat())]
+  return {
+    skillDir,
+    sandbox: { workspace: paths.workspace, skillDir, venvDir: paths.venvDir, texRoot: paths.texRoot, extraRead }
+  }
 }
 
 /**
