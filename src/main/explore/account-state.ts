@@ -86,3 +86,50 @@ export function createProbe(check: () => Promise<boolean>): { request(): Promise
     }
   }
 }
+
+/**
+ * Who may run when (#146): one Connect at a time, one Disconnect at a time, and Disconnect exclusive.
+ * A Connect asked for during a Disconnect starts after its cleanup (in the new generation), never joins
+ * the sign-in being cancelled; Disconnect is handed only the Connect it cancels, never one started later.
+ */
+export interface SignInLifecycle<T> {
+  /** Whether a Disconnect is cleaning up. */
+  readonly disconnecting: boolean
+  /** Runs `run` unless a Connect is already running (then that one's result); after any Disconnect in progress. */
+  connect(run: () => Promise<T>): Promise<T>
+  /** Resolves once no Disconnect is in progress (Check waits for it). */
+  settled(): Promise<void>
+  /** Runs `run` with the Connect it cancels (or `null`); a second Disconnect meanwhile shares the first. */
+  disconnect(run: (cancelled: Promise<T> | null) => Promise<T>): Promise<T>
+}
+
+export function createSignInLifecycle<T>(): SignInLifecycle<T> {
+  let connecting: Promise<T> | null = null
+  let disconnecting: Promise<T> | null = null
+  const lifecycle: SignInLifecycle<T> = {
+    get disconnecting() {
+      return disconnecting !== null
+    },
+    connect(run) {
+      if (disconnecting) return disconnecting.catch(() => undefined).then(() => lifecycle.connect(run))
+      if (connecting) return connecting
+      const started: Promise<T> = run().finally(() => {
+        if (connecting === started) connecting = null
+      })
+      connecting = started
+      return started
+    },
+    settled: async () => {
+      while (disconnecting) await disconnecting.catch(() => undefined)
+    },
+    disconnect(run) {
+      if (disconnecting) return disconnecting
+      const started: Promise<T> = run(connecting).finally(() => {
+        if (disconnecting === started) disconnecting = null
+      })
+      disconnecting = started
+      return started
+    }
+  }
+  return lifecycle
+}

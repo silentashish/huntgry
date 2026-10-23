@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createAccountState, createProbe } from './account-state'
+import { createAccountState, createProbe, createSignInLifecycle } from './account-state'
 
 const NOW = new Date('2026-10-22T12:00:00.000Z')
 
@@ -88,5 +88,77 @@ describe('createProbe (#146)', () => {
     probe.stop()
     await probe.request()
     expect(calls).toBe(2)
+  })
+})
+
+describe('createSignInLifecycle (#146)', () => {
+  const deferred = <T>() => {
+    let resolve: (v: T) => void = () => undefined
+    const promise = new Promise<T>((r) => (resolve = r))
+    return { promise, resolve }
+  }
+
+  it('a Connect during a Disconnect starts after its cleanup, and Disconnect never waits for it', async () => {
+    const life = createSignInLifecycle<string>()
+    const log: string[] = []
+    // A sign-in window is open.
+    const firstWindow = deferred<string>()
+    const first = life.connect(() => firstWindow.promise)
+    // Disconnect starts; its cleanup is held (the loader queue is busy).
+    const cleanup = deferred<void>()
+    let cancelledSeen: Promise<string> | null = null
+    const disconnect = life.disconnect(async (cancelled) => {
+      cancelledSeen = cancelled
+      log.push('disconnect: start')
+      await cleanup.promise
+      await cancelled
+      log.push('disconnect: done')
+      return 'disconnected'
+    })
+    expect(life.disconnecting).toBe(true)
+    expect(cancelledSeen).toBe(first)
+    // The user remounts Settings and clicks Connect again during the cleanup: it does not start yet,
+    // and it does not join the sign-in being cancelled.
+    const secondWindow = deferred<string>()
+    let secondStarted = false
+    const second = life.connect(() => {
+      secondStarted = true
+      log.push('connect 2: start')
+      return secondWindow.promise
+    })
+    expect(second).not.toBe(first)
+    await Promise.resolve()
+    expect(secondStarted).toBe(false)
+    // Check waits for the cleanup too.
+    let checked = false
+    const check = life.settled().then(() => (checked = true))
+
+    // The cancelled window closes, then the cleanup finishes: Disconnect is done without waiting for Connect 2.
+    firstWindow.resolve('closed')
+    cleanup.resolve()
+    expect(await disconnect).toBe('disconnected')
+    await check
+    expect(checked).toBe(true)
+    expect(life.disconnecting).toBe(false)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(log).toEqual(['disconnect: start', 'disconnect: done', 'connect 2: start'])
+    // Connect 2 signs in afterwards and keeps its result.
+    secondWindow.resolve('connected')
+    expect(await second).toBe('connected')
+  })
+
+  it('shares a running Connect, and a second Disconnect joins the first', async () => {
+    const life = createSignInLifecycle<string>()
+    const win = deferred<string>()
+    const a = life.connect(() => win.promise)
+    expect(life.connect(async () => 'other')).toBe(a)
+    const hold = deferred<string>()
+    const d1 = life.disconnect(() => hold.promise)
+    expect(life.disconnect(async () => 'other')).toBe(d1)
+    win.resolve('closed')
+    hold.resolve('done')
+    expect(await d1).toBe('done')
+    // A new Connect after everything settled runs on its own.
+    expect(await life.connect(async () => 'fresh')).toBe('fresh')
   })
 })

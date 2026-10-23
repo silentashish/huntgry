@@ -4,7 +4,7 @@ import { currentInspection } from '../current-workspace'
 import { configureSession, loadAndExtract, loaderIdle } from '../jobs/loader'
 import { listJobs } from '../jobs/store'
 import { createProbe } from './account-state'
-import { accountState, exploreDeps, refusal } from './deps'
+import { accountState, exploreDeps, refusal, signIn } from './deps'
 import { JOBRIGHT_PAGE_EXTRACT, jobrightPageOf } from './employer-link'
 import { jobrightId } from './parse'
 import { listExplore, readCache } from './service'
@@ -51,6 +51,8 @@ async function probe(url: string): Promise<boolean | null> {
 
 /** Loads one Jobright posting page in the hidden browser and stores whether it was rendered signed in. */
 export async function checkJobrightAccount(): Promise<JobrightAccount> {
+  // A check during a Disconnect waits for it: its cookies may still be on their way out.
+  await signIn.settled()
   const url = await samplePostingUrl()
   const generation = accountState.generation()
   const res = await loadAndExtract(url, JOBRIGHT_PAGE_EXTRACT)
@@ -63,7 +65,6 @@ export async function checkJobrightAccount(): Promise<JobrightAccount> {
 
 /** The open sign-in window, if any: Disconnect closes it. */
 let signInWindow: BrowserWindow | null = null
-let connecting: Promise<JobrightAccount> | null = null
 
 /** Removes Jobright's cookies and site data from the hidden browser's session. */
 async function clearJobright(): Promise<void> {
@@ -86,17 +87,22 @@ async function clearJobright(): Promise<void> {
 
 /**
  * Signs the hidden browser out of Jobright. A new account generation first, so no probe already running can
- * store "connected" afterwards; the sign-in window (and its popups) closes; then the cookies are cleared,
- * and cleared once more after the loads queued so far finished (a response may still set a cookie).
+ * store "connected" afterwards; the sign-in window that is open now (and its popups) closes; then the cookies
+ * are cleared, and cleared once more after the loads queued so far finished (a response may still set a
+ * cookie). Exclusive: Connect and Check started meanwhile wait until it is done, and it waits only for the
+ * Connect it cancelled, never for one started after it.
  */
-export async function disconnectJobright(): Promise<JobrightAccount> {
-  await accountState.reset()
-  if (signInWindow && !signInWindow.isDestroyed()) signInWindow.destroy()
-  await clearJobright()
-  await loaderIdle()
-  await connecting?.catch(() => undefined)
-  await clearJobright()
-  return jobrightAccount()
+export function disconnectJobright(): Promise<JobrightAccount> {
+  return signIn.disconnect(async (cancelled) => {
+    const win = signInWindow
+    await accountState.reset()
+    if (win && !win.isDestroyed()) win.destroy()
+    await clearJobright()
+    await loaderIdle()
+    await cancelled?.catch(() => undefined)
+    await clearJobright()
+    return jobrightAccount()
+  })
 }
 
 /** A Chrome user agent: Electron's own names itself and the app, which some sign-in pages (Google's) refuse. */
@@ -111,8 +117,8 @@ function chromeUserAgent(): string {
  * it by hand checks once more. One window at a time; Disconnect closes it and drops its results.
  */
 export function connectJobright(parent: BrowserWindow | null): Promise<JobrightAccount> {
-  if (connecting) return connecting
-  connecting = (async () => {
+  // `signIn.connect` starts this only after a Disconnect in progress, in the new generation.
+  return signIn.connect(async () => {
     const generation = accountState.generation()
     // A posting is needed to tell a signed-in user: without one, say so before opening anything.
     const start = await samplePostingUrl()
@@ -168,8 +174,5 @@ export function connectJobright(parent: BrowserWindow | null): Promise<JobrightA
       if (logined !== null) await accountState.record(logined, generation)
     }
     return jobrightAccount()
-  })().finally(() => {
-    connecting = null
   })
-  return connecting
 }
