@@ -51,6 +51,11 @@ export function configureSession(): Electron.Session {
  * `empty: true` is provisional: pages often render an empty list before the
  * results arrive, so it is only accepted after `EMPTY_GRACE_MS`.
  */
+/** Resolves once every load queued so far has finished (Disconnect waits for in-flight signed-in loads, #146). */
+export function loaderIdle(): Promise<void> {
+  return queue.then(() => undefined)
+}
+
 export function loadAndExtract(url: string, extract: string, timeoutMs = 25000): Promise<LoadResult> {
   const run = queue.then(() => load(url, extract, timeoutMs))
   queue = run.catch(() => undefined)

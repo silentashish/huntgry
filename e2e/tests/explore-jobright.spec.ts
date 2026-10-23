@@ -78,3 +78,47 @@ test('connect Jobright once in Settings; added jobs link the employer posting an
   const other = JSON.parse(await readFile(join(app.workspace!, '.huntgry/jobs', 'jobright-e2e0000000000000000000a2.json'), 'utf8'))
   expect(other.url).toBe(`${mock.origin}/jobs/info/e2e0000000000000000000a2`)
 })
+
+test('Connect works from Settings before Explore was ever opened (the list is fetched for a posting)', async ({ app, mock }) => {
+  const shell = new Shell(app.window)
+  await shell.goTo('settings')
+  const settings = new SettingsPage(app.window)
+  await expect(settings.jobrightStatus('Not connected')).toBeVisible()
+  expect(mock.requests).not.toContain('/jobright/README.md')
+
+  const signIn = app.electronApp.waitForEvent('window')
+  await settings.jobrightButton('Connect Jobright').click()
+  const win = await signIn
+  // The list was fetched to find a posting, and the window opened on one.
+  await expect.poll(() => win.url()).toContain('/jobs/info/')
+  expect(mock.requests).toContain('/jobright/README.md')
+  await win.getByRole('link', { name: 'Sign in' }).click()
+  await win.getByRole('button', { name: 'Sign in' }).click()
+  await expect(settings.jobrightStatus('Connected')).toBeVisible({ timeout: 30_000 })
+})
+
+test('Disconnect while a sign-in window is open closes it, and nothing marks the account connected again', async ({ app }) => {
+  const shell = new Shell(app.window)
+  await shell.goTo('settings')
+  const settings = new SettingsPage(app.window)
+  let signIn = app.electronApp.waitForEvent('window')
+  await settings.jobrightButton('Connect Jobright').click()
+  let win = await signIn
+  await win.getByRole('link', { name: 'Sign in' }).click()
+  await win.getByRole('button', { name: 'Sign in' }).click()
+  await expect(settings.jobrightStatus('Connected')).toBeVisible({ timeout: 30_000 })
+
+  // Reconnect opens the window again; leaving Settings and coming back shows a fresh card with Disconnect.
+  signIn = app.electronApp.waitForEvent('window')
+  await settings.jobrightButton('Reconnect').click()
+  win = await signIn
+  await shell.goTo('jobs')
+  await shell.goTo('settings')
+  await settings.jobrightButton('Disconnect').click()
+  await expect(settings.jobrightStatus('Not connected')).toBeVisible()
+  await expect.poll(() => win.isClosed()).toBe(true)
+  // The sign-in cookie is gone: a check loads a signed-out page.
+  await settings.jobrightButton('Check sign-in').click()
+  await expect(app.window.getByText(/Checked just now/)).toBeVisible({ timeout: 30_000 })
+  await expect(settings.jobrightStatus('Not connected')).toBeVisible()
+})

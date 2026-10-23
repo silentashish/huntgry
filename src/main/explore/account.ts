@@ -1,77 +1,72 @@
 import { app, BrowserWindow } from 'electron'
 import type { JobrightAccount } from '@shared/explore-types'
-import { refusalFor } from '../browser/url'
-import { localUrlsAllowed, loopbackOnly } from '../cli/dev-urls'
-import { currentInspection, settingsFile } from '../current-workspace'
-import { configureSession, loadAndExtract } from '../jobs/loader'
+import { currentInspection } from '../current-workspace'
+import { configureSession, loadAndExtract, loaderIdle } from '../jobs/loader'
 import { listJobs } from '../jobs/store'
-import { loadSettings, saveSettings } from '../workspace'
-import { accountOf, JOBRIGHT_PAGE_EXTRACT, jobrightPageOf, type LinkDeps } from './employer-link'
+import { createProbe } from './account-state'
+import { accountState, exploreDeps, refusal } from './deps'
+import { JOBRIGHT_PAGE_EXTRACT, jobrightPageOf } from './employer-link'
 import { jobrightId } from './parse'
-import { readCache } from './service'
+import { listExplore, readCache } from './service'
 import { exploreSource } from './source'
 
 /**
  * Settings → Jobright (#146): the hidden job-board browser's Jobright sign-in. The user signs in once in a
  * window on that browser's persistent session; afterwards every Jobright posting page it loads is rendered
- * for them, with the employer's link. The state shown is the last page's `logined`, kept with the app
- * settings. Huntgry never sees the password: the user types it on Jobright's own pages.
+ * for them, with the employer's link. The state shown is the last posting page's `logined` (only posting
+ * pages carry it), kept with the app settings. Huntgry never sees the password: the user types it on
+ * Jobright's own pages.
  */
 
 const source = () => exploreSource(app.isPackaged)
 
-const refusal = (url: string) => refusalFor(url, undefined, localUrlsAllowed(app.isPackaged), loopbackOnly(app.isPackaged))
+export const jobrightAccount = (): Promise<JobrightAccount> => accountState.read()
 
-export async function jobrightAccount(): Promise<JobrightAccount> {
-  return accountOf(await loadSettings(settingsFile()))
-}
-
-/** Stores what a loaded Jobright posting page said about the sign-in. */
-export async function recordLogin(logined: boolean): Promise<void> {
-  await saveSettings(settingsFile(), { jobright: { connected: logined, checkedAt: new Date().toISOString() } })
-}
-
-/** What `addExplore` and Fetch full description use to look up employer links. */
-export function linkDeps(): LinkDeps & { connected(): Promise<boolean> } {
-  return {
-    load: loadAndExtract,
-    hosts: source().hosts,
-    refusal,
-    onLogin: recordLogin,
-    connected: async () => (await jobrightAccount()).connected === true
-  }
-}
+const NO_POSTING =
+  'Huntgry checks the Jobright sign-in on one of the Explore list\'s postings, and the list could not be loaded. Open Explore (it needs the internet), then try again.'
 
 /**
- * A Jobright posting page to check the sign-in with (only posting pages say whether they were rendered for a
- * signed-in user): the first row of the current workspace's Explore list, else a saved Jobright job's page.
+ * A Jobright posting page to check the sign-in with: the first row of the current workspace's Explore list,
+ * else a saved Jobright job's page, else the list fetched now (a fresh workspace that never opened Explore).
  */
-async function samplePostingUrl(): Promise<string | null> {
+async function samplePostingUrl(): Promise<string> {
   const workspace = (await currentInspection().catch(() => null))?.path
-  if (!workspace) return null
+  if (!workspace) throw new Error('Open a workspace first.')
   const { sourceUrl, hosts } = source()
-  const listed = (await readCache(workspace, sourceUrl, hosts))?.jobs[0]?.url
-  if (listed) return listed
+  const cached = (await readCache(workspace, sourceUrl, hosts))?.jobs[0]?.url
+  if (cached) return cached
   for (const job of await listJobs(workspace).catch(() => [])) {
     for (const url of [job.boardUrl, job.url]) if (url && jobrightId(url, hosts)) return url
   }
-  return null
+  const fetched = (await listExplore(workspace, exploreDeps()).catch(() => null))?.jobs[0]?.url
+  if (fetched) return fetched
+  throw new Error(NO_POSTING)
+}
+
+/** Loads `url` in the hidden browser: the page's `logined`, or `null` when it did not load or say. */
+async function probe(url: string): Promise<boolean | null> {
+  const res = await loadAndExtract(url, JOBRIGHT_PAGE_EXTRACT)
+  return res.status === 'ok' ? jobrightPageOf(res.data).logined : null
 }
 
 /** Loads one Jobright posting page in the hidden browser and stores whether it was rendered signed in. */
 export async function checkJobrightAccount(): Promise<JobrightAccount> {
   const url = await samplePostingUrl()
-  if (!url) throw new Error('Open Explore once first: Huntgry checks the sign-in on one of its Jobright postings.')
+  const generation = accountState.generation()
   const res = await loadAndExtract(url, JOBRIGHT_PAGE_EXTRACT)
   if (res.status !== 'ok') throw new Error(`Could not check the Jobright sign-in: ${res.message}`)
   const { logined } = jobrightPageOf(res.data)
   if (logined === null) throw new Error('The Jobright page did not say whether you are signed in. Try again later.')
-  await recordLogin(logined)
+  await accountState.record(logined, generation)
   return jobrightAccount()
 }
 
-/** Removes Jobright's cookies and site data from the hidden browser, then marks the account as not connected. */
-export async function disconnectJobright(): Promise<JobrightAccount> {
+/** The open sign-in window, if any: Disconnect closes it. */
+let signInWindow: BrowserWindow | null = null
+let connecting: Promise<JobrightAccount> | null = null
+
+/** Removes Jobright's cookies and site data from the hidden browser's session. */
+async function clearJobright(): Promise<void> {
   const ses = configureSession()
   const hostnames = source().hosts.map((h) => h.replace(/:\d+$/, ''))
   const matches = (domain: string | undefined) => {
@@ -87,7 +82,20 @@ export async function disconnectJobright(): Promise<JobrightAccount> {
     const origin = host === 'jobright.ai' || host === 'www.jobright.ai' ? `https://${host}` : `http://${host}`
     await ses.clearStorageData({ origin, storages: ['localstorage', 'indexdb', 'serviceworkers', 'cachestorage'] }).catch(() => undefined)
   }
-  await recordLogin(false)
+}
+
+/**
+ * Signs the hidden browser out of Jobright. A new account generation first, so no probe already running can
+ * store "connected" afterwards; the sign-in window (and its popups) closes; then the cookies are cleared,
+ * and cleared once more after the loads queued so far finished (a response may still set a cookie).
+ */
+export async function disconnectJobright(): Promise<JobrightAccount> {
+  await accountState.reset()
+  if (signInWindow && !signInWindow.isDestroyed()) signInWindow.destroy()
+  await clearJobright()
+  await loaderIdle()
+  await connecting?.catch(() => undefined)
+  await clearJobright()
   return jobrightAccount()
 }
 
@@ -96,19 +104,22 @@ function chromeUserAgent(): string {
   return app.userAgentFallback.replace(/\s(?:Electron|huntgry)\/\S+/gi, '')
 }
 
-let open: Promise<JobrightAccount> | null = null
-
 /**
  * Opens a Jobright posting in a visible window on the hidden browser's session for the user to sign in.
- * After each page load on a Jobright host, the posting is checked in the background; once it reports a
- * signed-in user the window closes. Closing it by hand checks once more. One window at a time.
+ * After each page load on a Jobright host, the posting is checked in the background (a load during a check
+ * runs one more check after it, `createProbe`); once it reports a signed-in user the window closes. Closing
+ * it by hand checks once more. One window at a time; Disconnect closes it and drops its results.
  */
 export function connectJobright(parent: BrowserWindow | null): Promise<JobrightAccount> {
-  if (open) return open
-  open = (async () => {
-    const start = (await samplePostingUrl()) ?? 'https://jobright.ai/'
+  if (connecting) return connecting
+  connecting = (async () => {
+    const generation = accountState.generation()
+    // A posting is needed to tell a signed-in user: without one, say so before opening anything.
+    const start = await samplePostingUrl()
     const startRefusal = await refusal(start)
     if (startRefusal) throw new Error(startRefusal)
+    // Disconnected meanwhile: open nothing (Disconnect waits for this).
+    if (accountState.generation() !== generation) return jobrightAccount()
     const hosts = source().hosts
     const win = new BrowserWindow({
       width: 1100,
@@ -117,51 +128,48 @@ export function connectJobright(parent: BrowserWindow | null): Promise<JobrightA
       ...(parent ? { parent } : {}),
       webPreferences: { session: configureSession(), sandbox: true, contextIsolation: true, nodeIntegration: false }
     })
+    signInWindow = win
     win.webContents.setUserAgent(chromeUserAgent())
-    // A sign-in may open a popup (Google's); it stays on this session, in a child window.
+    // A sign-in may open a popup (Google's); it stays on this session, in a child window that closes with this one.
     win.webContents.setWindowOpenHandler(({ url }) =>
       /^https?:\/\//i.test(url) ? { action: 'allow', overrideBrowserWindowOptions: { parent: win, width: 520, height: 680 } } : { action: 'deny' }
     )
     win.webContents.on('did-create-window', (child) => child.webContents.setUserAgent(chromeUserAgent()))
 
-    let checking = false
     let signedIn = false
-    const check = async () => {
-      if (checking || signedIn || win.isDestroyed()) return
-      checking = true
-      try {
-        const res = await loadAndExtract(start, JOBRIGHT_PAGE_EXTRACT)
-        const { logined } = res.status === 'ok' ? jobrightPageOf(res.data) : { logined: null }
-        if (logined === true) {
-          signedIn = true
-          await recordLogin(true)
-          if (!win.isDestroyed()) win.close()
-        }
-      } finally {
-        checking = false
-      }
-    }
-    win.webContents.on('did-navigate', (_e, url) => {
+    const checks = createProbe(async () => {
+      if (win.isDestroyed() || accountState.generation() !== generation) return true
+      if ((await probe(start)) !== true) return false
+      if (!(await accountState.record(true, generation))) return true
+      signedIn = true
+      if (!win.isDestroyed()) win.close()
+      return true
+    })
+    const onJobrightPage = (url: string) => {
       // Only pages on a Jobright host: a sign-in on Google's pages has not finished yet.
       try {
         const host = new URL(url).host.toLowerCase()
-        if (hosts.includes(host) || host.endsWith('.jobright.ai')) setTimeout(() => void check(), 800)
+        if (hosts.includes(host) || host.endsWith('.jobright.ai')) setTimeout(() => void checks.request(), 800)
       } catch {
         // not a URL: nothing to check
       }
-    })
+    }
+    win.webContents.on('did-navigate', (_e, url) => onJobrightPage(url))
+    // Jobright may finish a sign-in without a full page load.
+    win.webContents.on('did-navigate-in-page', (_e, url, isMainFrame) => isMainFrame && onJobrightPage(url))
     const closed = new Promise<void>((resolve) => win.once('closed', () => resolve()))
     void win.loadURL(start).catch(() => undefined)
     await closed
-    if (!signedIn) {
+    checks.stop()
+    if (signInWindow === win) signInWindow = null
+    if (!signedIn && accountState.generation() === generation) {
       // Closed by hand: the sign-in may have finished on a page that was not reloaded.
-      const res = await loadAndExtract(start, JOBRIGHT_PAGE_EXTRACT)
-      const { logined } = res.status === 'ok' ? jobrightPageOf(res.data) : { logined: null }
-      if (logined !== null) await recordLogin(logined)
+      const logined = await probe(start).catch(() => null)
+      if (logined !== null) await accountState.record(logined, generation)
     }
     return jobrightAccount()
   })().finally(() => {
-    open = null
+    connecting = null
   })
-  return open
+  return connecting
 }
