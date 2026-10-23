@@ -5,6 +5,7 @@ import { JOBRIGHT_ID_PATTERN, savedJobId, WORK_MODELS, type ExploreJob, type Exp
 import type { Job, WorkplaceType } from '@shared/jobs-types'
 import { HUNTGRY_DIR } from '../workspace/constants'
 import { findCanonical, readJob, saveJob } from '../jobs/store'
+import { resolveEmployerLink, type LinkDeps } from './employer-link'
 import { JOBRIGHT_HOSTS, jobrightId, parseReadme } from './parse'
 
 /**
@@ -22,6 +23,11 @@ export interface ExploreDeps {
   fetchText(url: string): Promise<string>
   /** Why a URL may not be fetched or opened (the public-URL guard), or `null`. */
   refusal(url: string): Promise<string | null>
+  /**
+   * The employer link of a newly added job (#146): looked up only while `connected()` (the Jobright sign-in as
+   * last seen), so nothing is loaded for a user who never connected. Absent in tests of the list itself.
+   */
+  link?: LinkDeps & { connected(): Promise<boolean> }
   now?: () => Date
 }
 
@@ -129,7 +135,9 @@ export function toJob(e: ExploreJob, now: Date): Job {
 
 /**
  * Saves a listed job to the Jobs page. Idempotent: a job already saved (by this id, or merged into another
- * board's copy) is returned as it is, never written again, so a description fetched since is kept.
+ * board's copy) is returned as it is, never written again, so a description fetched since is kept. A new
+ * job's link becomes the employer's posting while Jobright is connected and gives one (#146); adding never
+ * fails because of that lookup.
  */
 export async function addExplore(workspace: string, id: string, deps: ExploreDeps): Promise<Job> {
   const existing = await findCanonical(workspace, savedJobId(id))
@@ -140,6 +148,7 @@ export async function addExplore(workspace: string, id: string, deps: ExploreDep
   const refusal = await deps.refusal(row.url)
   if (refusal) throw new Error(refusal)
   const saved = await saveJob(workspace, toJob(row, deps.now?.() ?? new Date()))
+  if (deps.link && (await deps.link.connected().catch(() => false))) await resolveEmployerLink(workspace, saved.id, deps.link)
   return (await findCanonical(workspace, saved.id)) ?? (await readJob(workspace, saved.id)) ?? saved
 }
 

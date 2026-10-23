@@ -1,8 +1,9 @@
-import { app, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { EXPLORE_CHANNELS, JOBRIGHT_ID_PATTERN } from '@shared/explore-types'
 import { refusalFor } from '../browser/url'
 import { localUrlsAllowed, loopbackOnly } from '../cli/dev-urls'
 import { requireCurrentWorkspace } from '../current-workspace'
+import { checkJobrightAccount, connectJobright, disconnectJobright, jobrightAccount, linkDeps } from './account'
 import { addExplore, fetchReadme, listExplore, refreshExplore, type ExploreDeps } from './service'
 import { exploreSource } from './source'
 
@@ -14,7 +15,8 @@ function deps(): ExploreDeps {
     fetchText: (url) => fetchReadme(url),
     // The same guard as the in-app browser and the posting loader: public hosts only (loopback only in a
     // dev build with the mock-server allowance, and nothing but loopback under the e2e harness).
-    refusal: (url) => refusalFor(url, undefined, localUrlsAllowed(app.isPackaged), loopbackOnly(app.isPackaged))
+    refusal: (url) => refusalFor(url, undefined, localUrlsAllowed(app.isPackaged), loopbackOnly(app.isPackaged)),
+    link: linkDeps()
   }
 }
 
@@ -26,4 +28,9 @@ export function registerExploreIpc(): void {
     if (typeof id !== 'string' || !JOBRIGHT_ID_PATTERN.test(id)) throw new Error('Invalid job id.')
     return addExplore(await workspace(), id, deps())
   })
+  // Settings → Jobright (#146): the hidden job-board browser's sign-in.
+  ipcMain.handle(EXPLORE_CHANNELS.account, () => jobrightAccount())
+  ipcMain.handle(EXPLORE_CHANNELS.connect, (e) => connectJobright(BrowserWindow.fromWebContents(e.sender)))
+  ipcMain.handle(EXPLORE_CHANNELS.checkAccount, () => checkJobrightAccount())
+  ipcMain.handle(EXPLORE_CHANNELS.disconnect, () => disconnectJobright())
 }

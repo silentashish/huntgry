@@ -29,6 +29,8 @@ export interface AppSettings {
   pickDropdowns?: boolean
   /** Apply (#136): one model call per page answers unknown questions from the master profile; on unless set to false. */
   aiAnswers?: boolean
+  /** Settings → Jobright (#146): whether the hidden job-board browser was signed in to Jobright when last seen, and when. */
+  jobright?: { connected?: boolean; checkedAt?: string }
 }
 
 /** Reads the settings file; a missing or corrupt file yields empty settings. */

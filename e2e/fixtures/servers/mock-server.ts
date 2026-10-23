@@ -1,7 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { jobrightPostingPage, jobrightReadme } from '../../../scripts/mock-ats/jobright.mjs'
+import {
+  JOBRIGHT_SESSION_COOKIE,
+  jobrightPostingPage,
+  jobrightReadme,
+  jobrightSignInPage
+} from '../../../scripts/mock-ats/jobright.mjs'
 import { createMockAts, sendHtml, type MockAts } from '../../../scripts/mock-ats/server.mjs'
 import { EMPLOYER_POSTINGS, postingPage } from './pages'
 
@@ -14,6 +19,7 @@ import { EMPLOYER_POSTINGS, postingPage } from './pages'
  * - `/page/one`, `/page/two`, `/hang`  plain pages for the browser's history and Stop
  * - `/redirect/lever`      302 to the Lever form on the *other* loopback origin (a second 127.0.0.1 port)
  * - `/jobright/README.md`  a Jobright new-grad list dated relative to today (#142), `/jobs/info/:id` its posting pages
+ *   (signed in with the `/jobright/signin` cookie, they link the employer's posting on `altOrigin`, #146)
  * - `/greenhouse/`, `/lever/`, `/generic/`, `/generic-cover/` + `…/submit` + the thanks pages: the mock ATS
  *   (`scripts/mock-ats/server.mjs`, the same code as `node scripts/mock-ats.mjs`), with Greenhouse's hydration and
  *   S3 upload widget, Lever's résumé parser, `/greenhouse/redirect-company` → `altOrigin/company/careers` with a
@@ -88,8 +94,25 @@ export async function startMockServer(submissionFile: string): Promise<MockServe
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
       return void res.end(jobrightReadme(origin))
     }
+    if (url.pathname === '/jobright/signin') {
+      // A mock Jobright sign-in (#146): POST sets the httpOnly session cookie and goes back to the posting.
+      if (req.method !== 'POST') return sendHtml(res, 200, jobrightSignInPage(url.searchParams.get('next') ?? '/'))
+      let body = ''
+      req.on('data', (c) => (body += c))
+      req.on('end', () => {
+        const next = new URLSearchParams(body).get('next') ?? '/'
+        res.writeHead(302, {
+          location: next.startsWith('/') && !next.startsWith('//') ? next : '/',
+          'set-cookie': `${JOBRIGHT_SESSION_COOKIE}=e2e; Path=/; HttpOnly; SameSite=Lax`,
+          'cache-control': 'no-store'
+        })
+        res.end()
+      })
+      return
+    }
     if (url.pathname.startsWith('/jobs/info/')) {
-      const posting = jobrightPostingPage(url.pathname.slice('/jobs/info/'.length))
+      const signedIn = (req.headers.cookie ?? '').split(/;\s*/).some((c) => c.startsWith(`${JOBRIGHT_SESSION_COOKIE}=`))
+      const posting = jobrightPostingPage(url.pathname.slice('/jobs/info/'.length), { signedIn, employerOrigin: altOrigin })
       return posting ? sendHtml(res, posting.status, posting.html) : sendHtml(res, 404, 'Not found')
     }
     if (url.pathname === '/page/one') {

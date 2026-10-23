@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 
 import { UnstyledButton } from '@mantine/core'
 import {
   IconCpu,
+  IconBriefcase,
   IconCurrencyDollar,
   IconDeviceMobile,
   IconListCheck,
@@ -23,6 +24,7 @@ export type SettingsSectionId =
   | 'pricing'
   | 'claude'
   | 'skill-dependencies'
+  | 'jobright'
   | 'remote-control'
   | 'appearance'
 
@@ -37,6 +39,7 @@ export const SETTINGS_SECTIONS: readonly {
   { id: 'pricing', label: 'Pricing', icon: IconCurrencyDollar },
   { id: 'claude', label: 'Claude', icon: IconTerminal2 },
   { id: 'skill-dependencies', label: 'Skill dependencies', icon: IconListCheck },
+  { id: 'jobright', label: 'Jobright', icon: IconBriefcase },
   { id: 'remote-control', label: 'Remote control', icon: IconDeviceMobile },
   { id: 'appearance', label: 'Appearance', icon: IconSun }
 ]

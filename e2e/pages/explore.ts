@@ -8,6 +8,8 @@ export class ExplorePage {
   readonly days: Locator
   readonly list: Locator
   readonly error: Locator
+  /** Shown while Jobright is not connected (#146), with a "Connect Jobright" button to Settings. */
+  readonly connectHint: Locator
 
   constructor(readonly page: Page) {
     this.heading = page.getByRole('heading', { name: 'Explore', level: 2 })
@@ -16,6 +18,7 @@ export class ExplorePage {
     this.days = page.getByRole('group', { name: 'Posted day' })
     this.list = page.getByRole('list', { name: 'Jobright jobs' })
     this.error = page.getByRole('alert').filter({ hasText: 'The Jobright list could not be loaded' })
+    this.connectHint = page.getByRole('alert').filter({ hasText: "Get the employer's own posting links" })
   }
 
   /** A posted-day button, by its label ("Today", "Yesterday", "Oct 18"); its name ends with the day's count. */

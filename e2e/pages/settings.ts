@@ -10,6 +10,7 @@ export type SettingsSection =
   | 'Pricing'
   | 'Claude'
   | 'Skill dependencies'
+  | 'Jobright'
   | 'Remote control'
   | 'Appearance'
 
@@ -56,6 +57,16 @@ export class SettingsPage {
   /** A card's title (level 3). */
   cardHeading(title: string): Locator {
     return this.page.getByRole('heading', { name: title, level: 3, exact: true })
+  }
+
+  /** The Jobright card's buttons (#146): Connect Jobright / Reconnect, Check sign-in, Disconnect. */
+  jobrightButton(name: 'Connect Jobright' | 'Reconnect' | 'Check sign-in' | 'Disconnect'): Locator {
+    return this.page.getByRole('button', { name, exact: true })
+  }
+
+  /** The Jobright card's status pill: "Connected" or "Not connected". */
+  jobrightStatus(status: 'Connected' | 'Not connected'): Locator {
+    return this.page.getByText(status, { exact: true })
   }
 
   /** System / Light / Dark in the Appearance card. */

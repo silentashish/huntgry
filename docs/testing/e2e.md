@@ -235,7 +235,9 @@ employer pages with a JSON-LD `JobPosting` and a full description; `/postings/le
 `/redirect/lever` (302 to the Lever form on `altOrigin`, the second port); `/jobright/README.md`, a Jobright
 new-grad list dated relative to today, and `/jobs/info/<id>`, its posting pages (one behind a bot wall), from
 `scripts/mock-ats/jobright.mjs` (#142: the fixture sets `HUNTGRY_EXPLORE_SOURCE_URL` to it, and
-`mock.jobright.status` makes it fail); and the mock ATS at `/greenhouse/`,
+`mock.jobright.status` makes it fail). The posting pages carry Next.js data like jobright.ai's; after
+`/jobright/signin` sets its httpOnly `jr_session` cookie, they render signed in, with the employer's posting
+on `altOrigin` as `applyLink` (#146). Then there is the mock ATS at `/greenhouse/`,
 `/lever/`, `/generic/`, `/generic-cover/` (+ `…/submit`, the thanks pages). The ATS routes are
 `scripts/mock-ats/server.mjs`, the same module `node scripts/mock-ats.mjs` runs; `generic-cover`
 is the generic form with a cover-letter upload added, so `cover.pdf` is exercised.

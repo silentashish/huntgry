@@ -23,8 +23,11 @@ let queue: Promise<unknown> = Promise.resolve()
 
 let configured: Electron.Session | null = null
 
-/** The loader's session, configured once (it is the same object on every call). */
-function configureSession(): Electron.Session {
+/**
+ * The loader's session, configured once (it is the same object on every call). Persistent, so a sign-in
+ * made in it (Settings → Jobright, #146) lasts across restarts.
+ */
+export function configureSession(): Electron.Session {
   if (configured) return configured
   const s = session.fromPartition(PARTITION)
   // The board pages never need camera, notifications or the like, nor downloads.
