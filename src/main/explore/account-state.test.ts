@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createAccountState, createProbe, createSignInLifecycle } from './account-state'
+import { checkSignIn, createAccountState, createProbe, createSignInLifecycle } from './account-state'
 
 const NOW = new Date('2026-10-22T12:00:00.000Z')
 
@@ -160,5 +160,88 @@ describe('createSignInLifecycle (#146)', () => {
     expect(await d1).toBe('done')
     // A new Connect after everything settled runs on its own.
     expect(await life.connect(async () => 'fresh')).toBe('fresh')
+  })
+})
+
+describe('checkSignIn (#146)', () => {
+  let dir: string
+  let file: string
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'huntgry-jobright-check-'))
+    file = join(dir, 'settings.json')
+  })
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+  const deferred = <T>() => {
+    let resolve: (v: T) => void = () => undefined
+    const promise = new Promise<T>((r) => (resolve = r))
+    return { promise, resolve }
+  }
+
+  it('a Disconnect while the check picks a posting is never undone: the check starts over after it', async () => {
+    const state = createAccountState(() => file, () => NOW)
+    const life = createSignInLifecycle<unknown>()
+    await state.record(true, state.generation())
+    // The session cookie, as the loader would send it.
+    let cookie = true
+    const picking = deferred<string>()
+    let picks = 0
+    const loads: boolean[] = []
+    const check = checkSignIn({
+      lifecycle: life,
+      state,
+      pick: () => (++picks === 1 ? picking.promise : Promise.resolve('https://jobright.ai/jobs/info/abc123')),
+      load: async () => {
+        loads.push(cookie)
+        return { ok: true, logined: cookie }
+      }
+    })
+    // Disconnect starts while the posting is being picked; its cookie removal is still running.
+    const removal = deferred<void>()
+    const disconnect = life.disconnect(async () => {
+      await state.reset()
+      await removal.promise
+      cookie = false
+      return null
+    })
+    // Picking finishes before the cookies are gone: the check must not load now.
+    picking.resolve('https://jobright.ai/jobs/info/abc123')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(loads).toEqual([])
+    removal.resolve()
+    await disconnect
+    // It started over after the cleanup and saw the signed-out page.
+    expect(await check).toBe(false)
+    expect(loads).toEqual([false])
+    expect(picks).toBe(2)
+    expect((await state.read()).connected).toBe(false)
+  })
+
+  it('a Disconnect after the load was queued drops the signed-in result', async () => {
+    const state = createAccountState(() => file, () => NOW)
+    const life = createSignInLifecycle<unknown>()
+    const page = deferred<{ ok: true; logined: boolean }>()
+    const check = checkSignIn({ lifecycle: life, state, pick: async () => 'https://jobright.ai/jobs/info/abc123', load: () => page.promise })
+    await new Promise((r) => setTimeout(r, 0))
+    await life.disconnect(async () => {
+      await state.reset()
+      return null
+    })
+    page.resolve({ ok: true, logined: true })
+    expect(await check).toBe(true)
+    expect((await state.read()).connected).toBe(false)
+  })
+
+  it('says why when the page did not load or did not say', async () => {
+    const state = createAccountState(() => file, () => NOW)
+    const life = createSignInLifecycle<unknown>()
+    const pick = async () => 'https://jobright.ai/jobs/info/abc123'
+    await expect(checkSignIn({ lifecycle: life, state, pick, load: async () => ({ ok: false, message: 'offline' }) })).rejects.toThrow(
+      'Could not check the Jobright sign-in: offline'
+    )
+    await expect(checkSignIn({ lifecycle: life, state, pick, load: async () => ({ ok: true, logined: null }) })).rejects.toThrow(
+      /did not say whether you are signed in/
+    )
   })
 })

@@ -3,7 +3,7 @@ import type { JobrightAccount } from '@shared/explore-types'
 import { currentInspection } from '../current-workspace'
 import { configureSession, loadAndExtract, loaderIdle } from '../jobs/loader'
 import { listJobs } from '../jobs/store'
-import { createProbe } from './account-state'
+import { checkSignIn, createProbe } from './account-state'
 import { accountState, exploreDeps, refusal, signIn } from './deps'
 import { JOBRIGHT_PAGE_EXTRACT, jobrightPageOf } from './employer-link'
 import { jobrightId } from './parse'
@@ -49,17 +49,20 @@ async function probe(url: string): Promise<boolean | null> {
   return res.status === 'ok' ? jobrightPageOf(res.data).logined : null
 }
 
-/** Loads one Jobright posting page in the hidden browser and stores whether it was rendered signed in. */
+/**
+ * Loads one Jobright posting page in the hidden browser and stores whether it was rendered signed in; a
+ * Disconnect that starts meanwhile is never undone (`checkSignIn`).
+ */
 export async function checkJobrightAccount(): Promise<JobrightAccount> {
-  // A check during a Disconnect waits for it: its cookies may still be on their way out.
-  await signIn.settled()
-  const url = await samplePostingUrl()
-  const generation = accountState.generation()
-  const res = await loadAndExtract(url, JOBRIGHT_PAGE_EXTRACT)
-  if (res.status !== 'ok') throw new Error(`Could not check the Jobright sign-in: ${res.message}`)
-  const { logined } = jobrightPageOf(res.data)
-  if (logined === null) throw new Error('The Jobright page did not say whether you are signed in. Try again later.')
-  await accountState.record(logined, generation)
+  await checkSignIn({
+    lifecycle: signIn,
+    state: accountState,
+    pick: samplePostingUrl,
+    load: async (url) => {
+      const res = await loadAndExtract(url, JOBRIGHT_PAGE_EXTRACT)
+      return res.status === 'ok' ? { ok: true, logined: jobrightPageOf(res.data).logined } : { ok: false, message: res.message }
+    }
+  })
   return jobrightAccount()
 }
 

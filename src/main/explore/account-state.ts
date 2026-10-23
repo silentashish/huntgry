@@ -133,3 +133,32 @@ export function createSignInLifecycle<T>(): SignInLifecycle<T> {
   }
   return lifecycle
 }
+
+export type CheckLoad = { ok: true; logined: boolean | null } | { ok: false; message: string }
+
+/**
+ * Check sign-in (#146) without letting a Disconnect be undone. The generation is taken before the first await;
+ * picking a posting may take a while (it can fetch the Explore list), so right before the load is queued, with
+ * no await in between, the check makes sure no Disconnect started meanwhile, and starts over after it if one
+ * did. A Disconnect that starts once the load is queued bumps the generation, so the result is dropped.
+ * Returns the page's `logined`; throws when the page did not load or say.
+ */
+export async function checkSignIn(deps: {
+  lifecycle: Pick<SignInLifecycle<unknown>, 'disconnecting' | 'settled'>
+  state: Pick<AccountState, 'generation' | 'record'>
+  pick(): Promise<string>
+  /** Queues the page load synchronously (the hidden loader does), then resolves with what it said. */
+  load(url: string): Promise<CheckLoad>
+}): Promise<boolean> {
+  for (;;) {
+    await deps.lifecycle.settled()
+    const generation = deps.state.generation()
+    const url = await deps.pick()
+    if (deps.lifecycle.disconnecting || deps.state.generation() !== generation) continue
+    const res = await deps.load(url)
+    if (!res.ok) throw new Error(`Could not check the Jobright sign-in: ${res.message}`)
+    if (res.logined === null) throw new Error('The Jobright page did not say whether you are signed in. Try again later.')
+    await deps.state.record(res.logined, generation)
+    return res.logined
+  }
+}
