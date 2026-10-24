@@ -211,6 +211,8 @@ test.describe('adding and moving cards', () => {
     await expect(page.cards('todo')).toHaveCount(0)
 
     await page.moveTo(DEMO.savedJob, 'todo')
+    // Restored today, the saved job (fetched weeks ago) is in This week (#160).
+    await expect(page.week('todo', 'This week').getByRole('article', { name: DEMO.savedJob, exact: true })).toBeVisible()
     await expect.poll(async () => (await readJob(app.workspace!, 'hiring.cafe-demo-1.json')).dismissed).toBe(false)
     expect((await readJob(app.workspace!, 'hiring.cafe-demo-1.json')).dismissedAt).toBeUndefined()
   })
@@ -325,10 +327,21 @@ test.describe('weeks, rails and search (#160)', () => {
     await expect(page.column('offer').getByLabel('0 cards', { exact: true })).toBeVisible()
     await page.openAllWeeks('applied')
 
-    // Move to an empty column (its rail), from a compact card.
-    await page.moveTo('Applied role 12', 'offer')
+    // Move to an empty column (its rail), from a compact card of last week. The card just moved
+    // lands in This week, open and full, without opening any folded week to find it.
+    await page.openMenu('Applied role 12')
+    await app.window.getByRole('menuitem', { name: 'Offer', exact: true }).click()
+    const moved = page.week('offer', 'This week').getByRole('article', { name: 'Applied role 12', exact: true })
+    await expect(moved).toBeVisible()
+    await expect(moved).not.toHaveAttribute('data-compact')
+    expect(await page.weeks('offer')).toEqual(['This week'])
     await expect.poll(async () => (await tracking(app.workspace!, backlogFolder(12))).status).toBe('offer')
-    await page.moveTo('Applied role 12', 'applied')
+    expect(Date.parse(String((await tracking(app.workspace!, backlogFolder(12))).statusChangedAt))).toBeGreaterThan(Date.now() - 5 * 60_000)
+
+    // Moved back, it is in Applied's This week too, not in the folded Last week it came from.
+    await page.openMenu('Applied role 12')
+    await app.window.getByRole('menuitem', { name: 'Applied', exact: true }).click()
+    await expect(page.week('applied', 'This week').getByRole('article', { name: 'Applied role 12', exact: true })).toBeVisible()
     await expect(page.column('offer').getByLabel('0 cards', { exact: true })).toBeVisible()
 
     // Drag onto the rail.

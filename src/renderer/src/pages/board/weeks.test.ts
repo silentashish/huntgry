@@ -124,12 +124,51 @@ describe('weekGroups', () => {
     // Applied today, though its files are from three weeks ago.
     const moved = app('m', local(2026, 9, 30), { appliedAt: '2026-10-21' })
     expect(lastChange(cardsOf([moved], now)[0])).toBe(local(2026, 10, 21, 0).getTime())
+    // Moved to Offer, Interviewing, Rejected or back to Ready today: the status change dates it.
+    for (const status of ['offer', 'interviewing', 'rejected', 'generated'] as const) {
+      const card = cardsOf([app('o', local(2026, 9, 1), { status, statusChangedAt: local(2026, 10, 21, 9).toISOString() })], now)[0]
+      expect(weekGroups([card], { now, locale: 'en-US' })[0].label).toBe('This week')
+    }
+    // Reviewed today, a run's result moves to Ready to apply.
+    const reviewed = app('r', local(2026, 9, 1), {
+      status: 'generated',
+      review: { state: 'approved', runId: 'r', at: local(2026, 9, 1).toISOString(), reviewedAt: local(2026, 10, 20).toISOString() }
+    })
+    expect(weekGroups(cardsOf([reviewed], now), { now, locale: 'en-US' })[0].label).toBe('This week')
     const cards = cardsOf([moved, app('f', local(2026, 11, 2)), app('u', 'unknown')], now)
     const groups = weekGroups(cards, { now, locale: 'en-US' })
     expect(groups.map((g) => [g.label, g.cards.map((c) => c.title)])).toEqual([
       ['This week', ['Role f', 'Role m']],
       ['Undated', ['Role u']]
     ])
+  })
+})
+
+describe('lastChange of a saved job', () => {
+  it('is its restore from Archived or its tailoring when later than when it was saved', () => {
+    const now = local(2026, 10, 21)
+    const job = {
+      id: 'url:j',
+      source: 'url' as const,
+      sourceId: 'j',
+      title: 'Backend Engineer',
+      company: 'Acme',
+      location: '',
+      remote: false,
+      salary: '',
+      postedAt: null,
+      url: 'https://jobs.example.com/j',
+      boardUrl: null,
+      description: '',
+      descriptionComplete: true,
+      tags: [],
+      fetchedAt: local(2026, 9, 1).toISOString()
+    }
+    const at = (j: typeof job & { restoredAt?: string; tailoredAt?: string }) =>
+      lastChange(buildBoard({ jobs: [j], applications: [], queue: [], now }).columns[0].cards[0])
+    expect(at(job)).toBe(local(2026, 9, 1).getTime())
+    expect(at({ ...job, restoredAt: local(2026, 10, 21, 8).toISOString() })).toBe(local(2026, 10, 21, 8).getTime())
+    expect(at({ ...job, tailoredAt: local(2026, 10, 19).toISOString() })).toBe(local(2026, 10, 19).getTime())
   })
 })
 

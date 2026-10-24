@@ -181,6 +181,7 @@ export async function updateJob(
       // When it was dismissed: the Board drops an archived card a week later (#85).
       if (patch.dismissed && !raw.dismissed) next.dismissedAt = now
       if (!patch.dismissed) delete next.dismissedAt
+      if (!patch.dismissed && raw.dismissed) next.restoredAt = now
       next.dismissed = patch.dismissed
     }
     if (tailoredAt) next.tailoredAt = tailoredAt

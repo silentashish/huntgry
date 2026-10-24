@@ -64,14 +64,21 @@ function localDay(iso: string): number {
 
 /**
  * When a card last changed, in ms (NaN when unknown): the time the board sorts by (`card.at`), or
- * a later status change the scan does not count as one, such as the day it was applied.
+ * a later change of where it stands, which the scan does not count as one: a status change (Move
+ * to, drag, the drawer), the day it was applied, a review, a restore from Archived, tailoring.
  */
 export function lastChange(card: BoardCard): number {
   const times = [Date.parse(card.at)]
   if (card.kind === 'application') {
     const t = card.app.tracking
+    if (t.statusChangedAt) times.push(Date.parse(t.statusChangedAt))
     if (card.column === 'applied' && t.appliedAt) times.push(localDay(t.appliedAt))
     if (card.column === 'archived' && t.archivedAt) times.push(Date.parse(t.archivedAt))
+    if (t.review?.reviewedAt) times.push(Date.parse(t.review.reviewedAt))
+  }
+  if (card.kind === 'job' && card.column === 'todo') {
+    const j = card.job
+    for (const at of [j.restoredAt, j.tailoredAt]) if (at) times.push(Date.parse(at))
   }
   const ok = times.filter(Number.isFinite)
   return ok.length > 0 ? Math.max(...ok) : NaN

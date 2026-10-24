@@ -33,7 +33,7 @@ export async function readJob(workspace: string, id: string): Promise<Job | null
 
 /**
  * Merges a fresh copy of a job into the saved one: board data is refreshed,
- * but the user's state (tailored, dismissed) and a full description fetched
+ * but the user's state (tailored, dismissed, restored) and a full description fetched
  * earlier are kept.
  */
 export function mergeJob(saved: Job | null, fresh: Job): Job {
@@ -49,7 +49,8 @@ export function mergeJob(saved: Job | null, fresh: Job): Job {
     descriptionSource: fromSaved ? saved.descriptionSource : fresh.descriptionSource,
     tailoredAt: saved.tailoredAt,
     dismissed: saved.dismissed,
-    dismissedAt: saved.dismissedAt
+    dismissedAt: saved.dismissedAt,
+    restoredAt: saved.restoredAt
   }
   if (!merged.descriptionSource) delete merged.descriptionSource
   return merged
