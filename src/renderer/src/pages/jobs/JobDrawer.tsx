@@ -11,7 +11,7 @@ import {
   IconX
 } from '@tabler/icons-react'
 import type { JobScore } from '@shared/job-relevance'
-import { canFetchDetails, type Job } from '@shared/jobs-types'
+import { canFetchDetails, canRefetchDetails, JOBRIGHT_SUMMARY_NOTE, type Job } from '@shared/jobs-types'
 import { api, errorText } from '../../api'
 import { KpiTile, MonoLabel, ScoreRing, StatusPill, toneStyle, type UiTone } from '../../components/ui'
 import { useNavigation } from '../../navigation'
@@ -101,8 +101,9 @@ export function JobDrawer({ job, score, onClose, onChange, onTailor }: Props) {
                 >
                   Open posting
                 </Button>
-                {/* An Indeed job can still be fetched through a copy of it found on another board. */}
-                {canFetchDetails(job) && (
+                {/* An Indeed job can still be fetched through a copy of it found on another board; Jobright's summary
+                    can be swapped for the employer's posting once that page has one (#148). */}
+                {canRefetchDetails(job) && (
                   <Button
                     variant="subtle"
                     leftSection={<IconCloudDownload size={16} />}
@@ -132,6 +133,11 @@ export function JobDrawer({ job, score, onClose, onChange, onTailor }: Props) {
                 <Alert color="warning" variant="light" withCloseButton onClose={() => setError(null)}>
                   {error}
                 </Alert>
+              )}
+              {job.descriptionSource === 'jobright-summary' && (
+                <Notice tone="info" icon={<IconInfoCircle size={18} />}>
+                  {JOBRIGHT_SUMMARY_NOTE}
+                </Notice>
               )}
               {!job.descriptionComplete && (
                 <Notice tone="info" icon={<IconInfoCircle size={18} />}>

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import type { Job } from '@shared/jobs-types'
 import type { LoadResult } from './loader'
-import { parsePosting, POSTING_EXTRACT, type PageData } from './sources/posting'
+import { JOBRIGHT_POSTING_EXTRACT, jobrightSummaryOf } from './sources/jobright'
+import { findJobPosting, parsePosting, POSTING_EXTRACT, type PageData } from './sources/posting'
 import { findCanonical, listJobs, readJob, saveJob, writeJobFile } from './store'
 
 /** What Fetch full description says when jobright.ai shows the hidden window a human check (#142). */
@@ -26,12 +27,16 @@ export async function addByUrl(workspace: string, url: string, load: Loader): Pr
  * Full description for a saved job, from the employer's posting page of the
  * first copy of the job that loads and reads. Jobs saved from Indeed before
  * board search was removed (#78) cannot: its job pages are behind a human
- * check. The description is saved to the canonical record.
+ * check. When no employer page gives a complete description (an ATS apply step
+ * is only a form) and a Jobright copy's page gives a longer summary, that
+ * summary is used, marked `descriptionSource: 'jobright-summary'` (#148). The
+ * description is saved to the canonical record.
  */
 export async function fetchDetails(workspace: string, id: string, load: Loader): Promise<Job> {
   const job = await findCanonical(workspace, id)
   if (!job) throw new Error('This job is no longer saved.')
-  if (job.descriptionComplete) return job
+  // Jobright's summary is tried again: the employer's page may have the posting by now.
+  if (job.descriptionComplete && job.descriptionSource !== 'jobright-summary') return job
   // A job seen on several boards: the canonical copy may be Indeed's while another board's copy has a loadable URL.
   const copies = [job, ...(await Promise.all((job.aliases ?? []).map((a) => readJob(workspace, a))))]
   const fetchable = copies.filter((c): c is Job => !!c && c.source !== 'indeed' && /^https?:\/\//i.test(c.url))
@@ -40,19 +45,25 @@ export async function fetchDetails(workspace: string, id: string, load: Loader):
       'Indeed shows full job descriptions only after a human check. Open the posting and paste the description.'
     )
   }
+  // A Jobright copy whose link is still the Jobright page (#142): one load reads the page and Jobright's summary.
+  const onJobright = (c: Job) => c.source === 'jobright' && c.boardUrl === c.url
   // Try each loadable copy in turn until one gives a complete posting; a longer partial one is the fallback.
   let posting: Job | null = null
+  let summary = ''
+  // Jobright pages already read with the summary extract, not loaded again for the fallback.
+  const read = new Set<string>()
   let failure = ''
   for (const copy of fetchable) {
     let res: LoadResult
+    if (onJobright(copy)) read.add(copy.url)
     try {
-      res = await load(copy.url, POSTING_EXTRACT)
+      res = await load(copy.url, onJobright(copy) ? JOBRIGHT_POSTING_EXTRACT : POSTING_EXTRACT)
     } catch (err) {
       // Keep going: a later copy may load, and a partial description found so far is still saved.
       failure = `${err instanceof Error ? err.message : String(err)} The summary from the job board is kept; open the posting to read it all.`
       continue
     }
-    if (res.status === 'blocked' && copy.source === 'jobright' && copy.boardUrl === copy.url) {
+    if (res.status === 'blocked' && onJobright(copy)) {
       // Like Indeed's job pages: a human check the hidden window cannot pass (#142). Not once the link is the
       // employer's posting (#146): that site's own human check gets the generic message.
       failure = JOBRIGHT_HUMAN_CHECK
@@ -62,25 +73,60 @@ export async function fetchDetails(workspace: string, id: string, load: Loader):
       failure = `${res.message} The summary from the job board is kept; open the posting to read it all.`
       continue
     }
-    const parsed = parsePosting(res.data as PageData, copy.source)
+    const data = res.data as PageData
+    let parsed = parsePosting(data, copy.source)
+    if (onJobright(copy)) {
+      summary = summary || jobrightSummaryOf(res.data)
+      // Without JSON-LD, the page text is Jobright's rendering of its own summary: the fields read better.
+      if (summary && !findJobPosting(Array.isArray(data.ld) ? data.ld : [])) parsed = null
+    }
     if (parsed?.descriptionComplete) {
       posting = parsed
       break
     }
     // An incomplete posting is only worth keeping if it says more than what is saved already.
-    const best = posting?.description.length ?? job.description.length
+    const best = posting?.description.length ?? (job.descriptionSource ? 0 : job.description.length)
     if (parsed && parsed.description.length > best) posting = parsed
     else if (!posting) failure = "The employer's page did not have a readable description. Open the posting to read it."
+  }
+  let source: Job['descriptionSource']
+  if (!posting?.descriptionComplete) {
+    // The employer's page had no description, or only part of one: Jobright's summary of the job, from its board
+    // page, when it says more (#148). Signed out is fine; the summary is on the page either way.
+    summary = summary || (await jobrightSummary(copies, read, load))
+    // Not over a longer summary another board gave, which is kept as it is.
+    const saved = job.descriptionSource ? 0 : job.description.length
+    if (summary && summary.length > Math.max(posting?.description.length ?? 0, saved)) {
+      posting = { ...(posting ?? job), description: summary, descriptionComplete: true }
+      source = 'jobright-summary'
+    }
   }
   if (!posting) throw new Error(failure)
   await saveJob(workspace, {
     ...((await readJob(workspace, job.id)) ?? job),
     description: posting.description,
     descriptionComplete: posting.descriptionComplete,
+    descriptionSource: source,
     salary: job.salary || posting.salary,
     location: job.location || posting.location
   })
   return (await findCanonical(workspace, job.id)) ?? job
+}
+
+/** Jobright's summary from the board page of the first Jobright copy that gives one; empty when none does. */
+async function jobrightSummary(copies: readonly (Job | null)[], read: Set<string>, load: Loader): Promise<string> {
+  for (const copy of copies) {
+    if (!copy || copy.source !== 'jobright' || !copy.boardUrl || !/^https?:\/\//i.test(copy.boardUrl)) continue
+    if (read.has(copy.boardUrl)) continue
+    try {
+      const res = await load(copy.boardUrl, JOBRIGHT_POSTING_EXTRACT)
+      const summary = res.status === 'ok' ? jobrightSummaryOf(res.data) : ''
+      if (summary) return summary
+    } catch {
+      // The employer page's failure is what gets reported.
+    }
+  }
+  return ''
 }
 
 export async function addPasted(workspace: string, input: unknown): Promise<Job> {
