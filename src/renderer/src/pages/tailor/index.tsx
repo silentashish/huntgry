@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Loader } from '@mantine/core'
 import { IconListCheck, IconSettings } from '@tabler/icons-react'
-import type { RunDetail, RunnerEnvironment, RunSummary, StartRunParams } from '@shared/runner-types'
+import type { TailorJobInput } from '@shared/queue-types'
+import type { RunDetail, RunnerEnvironment, RunSummary } from '@shared/runner-types'
 import { appendLive } from '@shared/transcript'
 import { api, errorText } from '../../api'
 import { usePipeline } from '../../components/queue/usePipeline'
@@ -23,6 +24,8 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
   const [detail, setDetail] = useState<RunDetail | null>(null)
   const [environment, setEnvironment] = useState<RunnerEnvironment | null>(null)
   const [starting, setStarting] = useState(false)
+  /** The queue item a Start made: its run opens here once the queue starts it. */
+  const [pendingItem, setPendingItem] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [queue, setQueue] = useQueue()
   const [pipeline, setPipeline] = usePipeline()
@@ -93,19 +96,34 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
     if (params?.runId) void open(params.runId)
   }, [params?.runId, open])
 
-  async function start(p: StartRunParams) {
+  // One flow (#158): Start saves the job and queues it like any other; its run opens once it starts.
+  async function start(p: TailorJobInput) {
     setStarting(true)
     setError(null)
     try {
-      const run = await api.runner.start(p)
-      setRuns((rs) => [run, ...rs.filter((r) => r.id !== run.id)])
-      await open(run.id)
+      const res = await api.queue.tailor(p)
+      setQueue(res.state)
+      setShowQueue(true)
+      setPendingItem(res.itemId)
     } catch (err) {
       setError(errorText(err))
     } finally {
       setStarting(false)
     }
   }
+
+  useEffect(() => {
+    if (!pendingItem || !queue) return
+    const item = queue.items.find((i) => i.id === pendingItem)
+    if (!item || item.status === 'cancelled') return setPendingItem(null)
+    if (item.runId) {
+      setPendingItem(null)
+      void open(item.runId)
+    } else if (item.status === 'failed') {
+      setPendingItem(null)
+      setError(item.error ?? 'The job could not start.')
+    }
+  }, [queue, pendingItem, open])
 
   const queueVisible = !!queue && ((showQueue && !pipeline) || otherItems.length > 0)
 
@@ -116,7 +134,7 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
         title="Tailor"
         subtitle={
           selected === null
-            ? 'Run the resume-tailor skill with Claude, Codex or Antigravity. Every run stops at the gap analysis for your approval.'
+            ? 'Run the resume-tailor skill with Claude, Codex or Antigravity. Every run goes to the end; you check the result on the Review page.'
             : undefined
         }
         actions={
@@ -143,6 +161,11 @@ export function TailorPage({ params }: { params: PageParams['tailor'] }) {
       {error && (
         <Alert color="danger" withCloseButton onClose={() => setError(null)}>
           {error}
+        </Alert>
+      )}
+      {pendingItem && (
+        <Alert color="trail" title="Saved to Jobs and queued">
+          The run opens here as soon as the queue starts it (it waits for a free slot while other jobs run).
         </Alert>
       )}
       {((queue && pipeline) || queueVisible) && (

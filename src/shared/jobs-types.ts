@@ -169,6 +169,8 @@ export interface TailorPrefill {
   source: JobSourceId
   /** `false` when the description is only the board's summary or snippet. */
   descriptionComplete: boolean
+  /** The saved job itself (#158): the Tailor page queues it as it is. */
+  savedJobId: string
 }
 
 export function tailorPrefillFor(job: Job): TailorPrefill {
@@ -179,6 +181,7 @@ export function tailorPrefillFor(job: Job): TailorPrefill {
     role: job.title,
     jobId: jobIdFor(job),
     source: job.source,
-    descriptionComplete: job.descriptionComplete
+    descriptionComplete: job.descriptionComplete,
+    savedJobId: job.id
   }
 }

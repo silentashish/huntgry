@@ -1,14 +1,8 @@
 import { useState } from 'react'
 import { Alert, Button, Card, Group, SegmentedControl, SimpleGrid, Stack, Switch, Text, TextInput, Textarea } from '@mantine/core'
 import { IconAlertTriangle, IconExternalLink, IconLink, IconSparkles } from '@tabler/icons-react'
-import {
-  AGENT_LABEL,
-  DEFAULT_AGENT,
-  type AgentId,
-  type RunnerEnvironment,
-  type RunSummary,
-  type StartRunParams
-} from '@shared/runner-types'
+import type { TailorJobInput } from '@shared/queue-types'
+import { AGENT_LABEL, DEFAULT_AGENT, type AgentId, type RunnerEnvironment, type RunSummary } from '@shared/runner-types'
 import { api, errorText } from '../../api'
 import { AgentPicker, agentStatus } from '../../components/AgentPicker'
 import { useNavigation, type PageParams } from '../../navigation'
@@ -19,7 +13,7 @@ interface Props {
   prefill: PageParams['tailor']
   environment: RunnerEnvironment | null
   busy: boolean
-  onStart(params: StartRunParams): void
+  onStart(input: TailorJobInput): void
   /** A fresh environment check after installing something from the form. */
   onEnvironmentChange(environment: RunnerEnvironment): void
   /** This workspace's runs, for the time and cost estimate next to Start. */
@@ -44,7 +38,6 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
   const [jobUrl, setJobUrl] = useState(prefill?.jobUrl ?? '')
   const [company, setCompany] = useState(prefill?.company ?? '')
   const [role, setRole] = useState(prefill?.role ?? '')
-  const [jobId, setJobId] = useState(prefill?.jobId ?? '')
   const [notes, setNotes] = useState('')
   const [coverLetter, setCoverLetter] = useState(true)
   const [dateStyle, setDateStyle] = useState<'inline' | 'right'>('right')
@@ -72,6 +65,8 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
     prefill.descriptionComplete !== false &&
     jobDescription === (prefill.jobDescription ?? '') &&
     jobUrl === (prefill.jobUrl ?? '')
+  // The saved job as it was sent (full posting, unchanged): Start queues it. Anything edited is saved as a new job.
+  const fromSavedJob = prefilled && !!prefill?.savedJobId
   // The chosen agent's CLI or skill is missing: nothing can run. Shared dependencies (LaTeX, venv) only break the build.
   const blocking = !!status && !status.ready
   const problem = blocking ? status.problems[0] : environment?.sharedProblems[0]
@@ -102,8 +97,9 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
         <Stack gap={20}>
           <h3 className={classes.formTitle}>New tailored resume</h3>
           <p className={classes.formIntro}>
-            {agentLabel} runs the resume-tailor skill on your master profile. It stops after the gap analysis to ask you to
-            approve the wording, then builds the PDFs into this workspace.
+            {agentLabel} runs the resume-tailor skill on your master profile to the end, without stopping to ask: it uses
+            the bridges it can make honestly and lists each one. The job is saved in Jobs and queued; you check the result
+            on the Review page before you apply.
           </p>
         </Stack>
 
@@ -207,11 +203,13 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
           value={jobDescription}
           onChange={(e) => setJobDescription(e.currentTarget.value)}
         />
-        <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
-          <TextInput label={optional('Company')} value={company} onChange={(e) => setCompany(e.currentTarget.value)} />
-          <TextInput label={optional('Role')} value={role} onChange={(e) => setRole(e.currentTarget.value)} />
-          <TextInput label={optional('Job id')} value={jobId} onChange={(e) => setJobId(e.currentTarget.value)} />
-        </SimpleGrid>
+        {/* A saved job brings its own role and company; a pasted one is saved with these. */}
+        {!fromSavedJob && (
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+            <TextInput label={optional('Company')} value={company} onChange={(e) => setCompany(e.currentTarget.value)} />
+            <TextInput label={optional('Role')} value={role} onChange={(e) => setRole(e.currentTarget.value)} />
+          </SimpleGrid>
+        )}
         <Textarea
           label={`Notes for ${agentLabel}`}
           placeholder="Optional: angle, seniority, stack to emphasise…"
@@ -248,23 +246,20 @@ export function StartForm({ prefill, environment, busy, onStart, onEnvironmentCh
             loading={busy}
             disabled={!canStart || blocking}
             onClick={() =>
-              onStart({
-                jobDescription: jobDescription.trim() || undefined,
-                jobUrl: jobUrl.trim() || undefined,
-                company: company.trim() || undefined,
-                role: role.trim() || undefined,
-                jobId: jobId.trim() || undefined,
-                notes: notes.trim() || undefined,
-                coverLetter,
-                dateStyle,
-                agent,
-                // The Jobs page's board applies only while the URL is still that job's; anything else is manual.
-                source: jobUrl.trim()
-                  ? prefill?.source && jobUrl.trim() === prefill.jobUrl?.trim()
-                    ? prefill.source
-                    : 'manual'
-                  : undefined
-              })
+              onStart(
+                fromSavedJob
+                  ? { savedJobId: prefill!.savedJobId, notes: notes.trim() || undefined, coverLetter, dateStyle, agent }
+                  : {
+                      jobDescription: jobDescription.trim() || undefined,
+                      jobUrl: jobUrl.trim() || undefined,
+                      company: company.trim() || undefined,
+                      role: role.trim() || undefined,
+                      notes: notes.trim() || undefined,
+                      coverLetter,
+                      dateStyle,
+                      agent
+                    }
+              )
             }
           >
             Start tailoring

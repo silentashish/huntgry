@@ -5,10 +5,11 @@ import { readRun } from '../cli/runs'
 import { contextForRun, defaultAgent, onRunChange, manager, startTailorRun } from '../cli/start'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
-import { fetchDetails, updateJob } from '../jobs/service'
+import { addByUrl, addPasted, fetchDetails, updateJob } from '../jobs/service'
 import { loadAndExtract } from '../jobs/loader'
 import { findCanonical } from '../jobs/store'
 import { requireAgent, requireConcurrency, requireEnqueueInput, requireItemId, TailorQueue } from './queue'
+import { tailorJob } from './tailor-job'
 
 /** The app's one queue; the pipeline attaches its policy to it. */
 export const queue = new TailorQueue({
@@ -64,6 +65,19 @@ export function registerQueueIpc(): void {
   // One flow (#158): every queued job runs to the end and lands in Review (pipeline policy, verify gate).
   ipcMain.handle(QUEUE_CHANNELS.enqueue, async (_e, input: unknown) =>
     queue.enqueue({ ...requireEnqueueInput(input, await defaultAgent()), unattended: true })
+  )
+  ipcMain.handle(QUEUE_CHANNELS.tailor, (_e, input: unknown) =>
+    tailorJob(
+      {
+        workspace: async () => (await requireCurrentWorkspace()).path,
+        findJob: findCanonical,
+        addPasted,
+        addByUrl: (ws, url) => addByUrl(ws, url, loadAndExtract),
+        enqueue: (i, ws) => queue.enqueue(i, ws),
+        defaultAgent
+      },
+      input
+    )
   )
   ipcMain.handle(QUEUE_CHANNELS.cancel, (_e, id: unknown) => queue.cancel(requireItemId(id)))
   ipcMain.handle(QUEUE_CHANNELS.cancelAll, () => queue.cancelAll())

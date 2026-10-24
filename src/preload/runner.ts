@@ -15,7 +15,6 @@ export const runner: RunnerApi = {
   syncSkill: () => ipcRenderer.invoke(RUNNER_CHANNELS.syncSkill),
   listRuns: () => ipcRenderer.invoke(RUNNER_CHANNELS.listRuns),
   getRun: (id) => ipcRenderer.invoke(RUNNER_CHANNELS.getRun, id),
-  start: (params) => ipcRenderer.invoke(RUNNER_CHANNELS.start, params),
   reply: (id, text) => ipcRenderer.invoke(RUNNER_CHANNELS.reply, id, text),
   stop: (id) => ipcRenderer.invoke(RUNNER_CHANNELS.stop, id),
   finish: (id) => ipcRenderer.invoke(RUNNER_CHANNELS.finish, id),

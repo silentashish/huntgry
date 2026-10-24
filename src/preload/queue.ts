@@ -11,5 +11,6 @@ export const queue: QueueApi = {
   clearFinished: () => ipcRenderer.invoke(QUEUE_CHANNELS.clearFinished),
   setConcurrency: (n) => ipcRenderer.invoke(QUEUE_CHANNELS.setConcurrency, n),
   setPaused: (paused) => ipcRenderer.invoke(QUEUE_CHANNELS.setPaused, paused),
-  setAgent: (id, agent) => ipcRenderer.invoke(QUEUE_CHANNELS.setAgent, id, agent)
+  setAgent: (id, agent) => ipcRenderer.invoke(QUEUE_CHANNELS.setAgent, id, agent),
+  tailor: (input) => ipcRenderer.invoke(QUEUE_CHANNELS.tailor, input)
 }

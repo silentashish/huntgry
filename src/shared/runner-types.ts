@@ -375,7 +375,6 @@ export interface RunnerApi {
   syncSkill(): Promise<InstallResult & { tag?: string; upToDate?: boolean }>
   listRuns(): Promise<RunSummary[]>
   getRun(id: string): Promise<RunDetail>
-  start(params: StartRunParams): Promise<RunSummary>
   /** Send the user's reply. Resumes the agent's session if the process is gone. */
   reply(id: string, text: string): Promise<RunSummary>
   /** Kill the process now. */
@@ -416,7 +415,6 @@ export const RUNNER_CHANNELS = {
   syncSkill: 'runner:sync-skill',
   listRuns: 'runner:list-runs',
   getRun: 'runner:get-run',
-  start: 'runner:start',
   reply: 'runner:reply',
   stop: 'runner:stop',
   finish: 'runner:finish',
