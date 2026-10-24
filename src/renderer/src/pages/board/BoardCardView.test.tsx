@@ -65,7 +65,7 @@ const only = (input: Parameters<typeof buildBoard>[0]): BoardCard => {
 }
 
 const noop = () => undefined
-const render = (card: BoardCard, scent: Scent = cardScent(card, null)) =>
+const render = (card: BoardCard, scent: Scent = cardScent(card, null), compact = false) =>
   renderToStaticMarkup(
     <MantineProvider>
       <BoardCardView
@@ -79,6 +79,7 @@ const render = (card: BoardCard, scent: Scent = cardScent(card, null)) =>
         onTailor={noop}
         onFollow={noop}
         onApply={noop}
+        compact={compact}
       />
     </MantineProvider>
   )
@@ -138,5 +139,17 @@ describe('BoardCardView', () => {
     expect(html).toContain('resume.pdf · cover.pdf')
     const noUrl = render(only({ jobs: [], applications: [app({})], queue: [] }))
     expect(noUrl).not.toMatch(/>Apply</)
+  })
+
+  it('a card of an older week (#160) adds one line with the company, the title and the score, and keeps the full card and Move to', () => {
+    const card = only({ jobs: [job], applications: [], queue: [] })
+    const html = render(card, { mode: 'score', value: 87, reasons: [] }, true)
+    expect(html).toContain('data-compact="true"')
+    expect(html).toContain('Acme · Backend Engineer')
+    expect(html).toMatch(/>87<\/span><\/div>/)
+    // The full card is still there for hover and focus, and moving works as on any card.
+    expect(html).toMatch(/>Tailor</)
+    expect(html).toContain('aria-label="Move Backend Engineer"')
+    expect(render(card)).not.toContain('data-compact')
   })
 })

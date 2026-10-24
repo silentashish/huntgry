@@ -37,10 +37,15 @@ interface Props {
   onApply(): void
   /** An Apply is starting (the page's `useApply` is busy): the Apply button waits. */
   applying?: boolean
+  /**
+   * A card of an older week (#160): one line with the company, the title and the score, and the
+   * full card while it is hovered or has focus. Its Move to menu stays on that line.
+   */
+  compact?: boolean
 }
 
 /** One job on the Board (Figma Kanban card): company, role, Scent, where it stands, its next step and Move to. */
-export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDragEnd, onOpen, onMove, onTailor, onFollow, onApply, applying }: Props) {
+export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDragEnd, onOpen, onMove, onTailor, onFollow, onApply, applying, compact }: Props) {
   const targets = moveTargets(card)
   const company = companyOf(card)
   const meta = cardMeta(card)
@@ -50,6 +55,7 @@ export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDrag
     <article
       aria-label={card.title}
       className={classes.card}
+      data-compact={compact ? 'true' : undefined}
       tabIndex={0}
       draggable={targets.length > 0}
       onDragStart={(e) => {
@@ -73,6 +79,13 @@ export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDrag
           <h4 className={classes.cardTitle}>{card.title}</h4>
           {card.subtitle && <div className={classes.cardSubtitle}>{card.subtitle}</div>}
         </div>
+        {compact && (
+          // Shown instead of the head text and the rest of the card until it is hovered or focused.
+          <div className={classes.compactLine} aria-hidden>
+            <span className={classes.compactText}>{[company, card.title].filter(Boolean).join(' · ')}</span>
+            {scent.mode === 'score' && <MonoLabel size="xs">{scent.value}</MonoLabel>}
+          </div>
+        )}
         {targets.length > 0 && (
           <div onClick={stop}>
             <MoveMenu card={card} targets={targets} onMove={onMove} />
