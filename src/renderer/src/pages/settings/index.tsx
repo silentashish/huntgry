@@ -4,6 +4,7 @@ import { IconAlertTriangle, IconCheck, IconCircleCheck, IconLink, IconRefresh, I
 import {
   AGENT_LABEL,
   CLAUDE_COMMANDS,
+  MIN_SKILL_TAG,
   type AgentId,
   type AgentStatus,
   type ClaudeAccount,
@@ -455,6 +456,8 @@ function ClaudeCard({
             value={env.skillDir}
             badges={[
               ...(env.skillInstall ? [{ text: `${env.skillInstall.tag} · installed by Huntgry`, color: 'gray' }] : []),
+              // The single flow (#158) is built on v5; an older copy still runs, so this only asks for the update.
+              ...(env.skillSingleFlow === false ? [{ text: `Huntgry needs ${MIN_SKILL_TAG}`, color: 'orange' }] : []),
               // Without a Huntgry install record the local version is unknown, so only the latest tag is shown.
               ...(!skillUpdate
                 ? []
@@ -488,7 +491,9 @@ function ClaudeCard({
                 >
                   {skillUpdate?.updateAvailable && skillUpdate.installed
                     ? `Sync to ${skillUpdate.latest}`
-                    : 'Sync from GitHub'}
+                    : env.skillSingleFlow === false
+                      ? `Update to ${MIN_SKILL_TAG} or later`
+                      : 'Sync from GitHub'}
                 </Button>
                 {env.skillInstall && (
                   <Button

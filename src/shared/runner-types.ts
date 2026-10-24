@@ -191,6 +191,11 @@ export interface RunnerEnvironment {
   claudeAccounts: ClaudeAccount[]
   /** The skill copy Huntgry installed from GitHub, when that is the one in use. */
   skillInstall: { tag: string; installedAt: string } | null
+  /**
+   * The skill in use is resume-tailor `MIN_SKILL_TAG` or newer (#158: runs to the end, writes
+   * tailoring notes v2); `false` for an older copy (it still works), `null` without a skill.
+   */
+  skillSingleFlow: boolean | null
   /** Folder holding the installed resume-tailor `SKILL.md`, or `null`. */
   skillDir: string | null
   /** Python venv the app puts first on the skill's PATH. */
@@ -214,6 +219,9 @@ export interface RunnerEnvironment {
   /** Problems of the dependencies every agent shares (venv, LaTeX, preflight); `problems` adds the default agent's. */
   sharedProblems: string[]
 }
+
+/** The resume-tailor release the single flow (#158) is built on; older copies still run. */
+export const MIN_SKILL_TAG = 'v5'
 
 /** The latest resume-tailor release against the copy Huntgry installed. */
 export interface SkillUpdateStatus {
