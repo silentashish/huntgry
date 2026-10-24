@@ -252,12 +252,18 @@ test.describe('details on the board', () => {
   })
 })
 
-/** 57 Applied applications, 8 a week over 8 weeks (#160), and a saved Jobright job, on top of the board above. */
+/**
+ * 57 Applied applications, 8 a week over 8 weeks (#160), a Rejected one from 500 days ago and a
+ * saved Jobright job, on top of the board above.
+ */
 const JOBRIGHT = savedJob({ id: 'jobright:e2e-160', source: 'jobright', title: 'Growth Engineer', company: 'Hooli' })
 const backlog: Preparer = {
   async prepare(ctx) {
     await board.prepare(ctx)
     await seedApplications(ctx.workspace!, appliedBacklog(57, 8))
+    await seedApplications(ctx.workspace!, [
+      { folder: 'old-engineer/old-co/old-1', title: 'Old role', status: 'rejected', at: new Date(Date.now() - 500 * DAY) }
+    ])
     await seedJobs(ctx.workspace!, [JOBRIGHT])
   }
 }
@@ -311,13 +317,18 @@ test.describe('weeks, rails and search (#160)', () => {
     // The page does not grow with the cards: the column scrolls inside itself.
     expect(await app.window.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true)
 
-    // Fold this week; after a restart both choices hold.
+    // Fold this week, and open a week from more than a year ago; after a restart all three choices hold.
     await page.weekToggle('applied', 'This week').click()
     await expect(thisWeek.getByRole('article')).toHaveCount(0)
+    const oldWeek = (await page.weeks('rejected')).at(-1)!
+    expect(oldWeek).toMatch(/\d{4}/)
+    await page.weekToggle('rejected', oldWeek).click()
+    await expect(page.card('Old role')).toBeVisible()
     await app.relaunch()
     page = await openBacklog(app)
     await expect(page.weekToggle('applied', 'This week')).toHaveAttribute('aria-expanded', 'false')
     await expect(page.week('applied', 'Last week').getByRole('article')).toHaveCount(8)
+    await expect(page.week('rejected', oldWeek).getByRole('article', { name: 'Old role' })).toBeVisible()
     // Other columns keep their own state: Ready to apply's week is still open.
     await expect(page.weekToggle('ready', 'This week')).toHaveAttribute('aria-expanded', 'true')
   })
