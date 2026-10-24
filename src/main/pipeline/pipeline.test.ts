@@ -819,6 +819,19 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(events.some((e) => (e as { text?: string }).text === 'Once more.')).toBe(true)
   })
 
+  it('settles an unattended item queued without a pipeline (Jobs, Tailor page, phone; #158) through the verify gate', async () => {
+    jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
+    await queue.enqueue({ jobIds: ['url:a'], options, unattended: true, concurrency: 1 })
+    await until((_p, q) => q.items[0]?.status === 'done')
+    const item = queue.state().items[0]
+    expect(item).toMatchObject({ unattended: true, outcome: 'unreviewed' })
+    expect(item.pipelineId).toBeUndefined()
+    expect(await getReview(ws, item.applicationId!)).toMatchObject({ state: 'unreviewed', runId: item.runId })
+    const run = await readRun(ws, item.runId!)
+    expect(run.unattended).toBe(true)
+    expect(run.outputFiles).toEqual(expect.arrayContaining(['job-description.md', 'tailoring-notes.md', 'resume.pdf', 'build-report.json']))
+  })
+
   it('takes a re-run of a result whose queue item was removed back into the queue: slot, policy and verify gate', async () => {
     jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
     await pipeline.start(input(['url:a'], { concurrency: 1 }))

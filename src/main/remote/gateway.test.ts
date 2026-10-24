@@ -419,6 +419,9 @@ describe('Gateway: enqueue and reply through the real queue', () => {
     expect(body.added).toBe(1)
     expect(body.skipped).toHaveLength(1)
     expect(JSON.stringify(body)).not.toContain('from the phone') // notes never echo back
+    // One flow (#158): the phone's jobs are unattended items, not pipeline ones (protocol unchanged).
+    expect(queue.state().items[0]).toMatchObject({ unattended: true })
+    expect(queue.state().items[0].pipelineId).toBeUndefined()
     const waiting = await until((s) => s.items[0]?.status === 'needs-reply')
     const runId = waiting.items[0].runId!
     // The remote reply takes the queue path (the item goes running) into the same fake agent process.

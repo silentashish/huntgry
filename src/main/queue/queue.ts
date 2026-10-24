@@ -24,16 +24,18 @@ import { WorkspaceChangedError } from '../workspace/changed'
 import { HUNTGRY_DIR } from '../workspace/constants'
 
 /**
- * Bulk tailoring queue: starts one tailoring run per queued job, each with its
+ * Tailoring queue: starts one tailoring run per queued job, each with its
  * own agent, at most `concurrency` of them working at once and `spawnGapMs`
- * apart (Claude's server limits bursts of new sessions). A run that stops at the approval
- * step frees its slot; the user answers it on the Tailor page. Electron-free:
- * the app passes the workspace, the job store and the run starter in.
+ * apart (Claude's server limits bursts of new sessions). Electron-free: the
+ * app passes the workspace, the job store and the run starter in.
  *
- * Unattended items (#31) are the same items with `unattended` set: the queue
- * is still the one executor, but the policy (what a turn's end means, what a
- * failure means, whether a job may start now) comes from the pipeline through
- * `UnattendedHooks`. The pipeline's record is persisted here, in `queue.json`.
+ * Every new item is unattended (#31, #158: Jobs, the Tailor page, the phone and
+ * the pipeline all enqueue that way): the queue is the one executor, the policy
+ * (what a turn's end means, what a failure means, whether a job may start now)
+ * comes from the pipeline through `UnattendedHooks`, so every result goes
+ * through the verify gate to Review. The pipeline's record is persisted here,
+ * in `queue.json`. Older attended items (no `unattended`) still load: a run of
+ * theirs that waits for an answer frees its slot as `needs-reply`.
  */
 
 export interface QueueDeps {

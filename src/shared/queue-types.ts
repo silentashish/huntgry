@@ -14,7 +14,10 @@ export type QueueItemStatus =
   | 'preparing'
   /** The agent is working on a turn (takes a slot). */
   | 'running'
-  /** The run stopped at the approval step (or any other question) and waits for the user; the slot is free. */
+  /**
+   * The run stopped with a question and waits for the user; the slot is free. Since #158 only when a
+   * prerequisite is missing (after the pipeline's one nudge), or an older attended item.
+   */
   | 'needs-reply'
   /** The user ended the run. */
   | 'done'
@@ -61,7 +64,10 @@ export interface QueueItem {
   notBefore?: string
   createdAt: string
   updatedAt: string
-  /** Unattended pipeline item (#31): unattended prompt, auto-finished, retried with backoff, result Unreviewed. */
+  /**
+   * Unattended item (#31): auto-finished, retried with backoff, result Unreviewed after the verify
+   * gate. Every new item since #158 (Jobs, Tailor page, phone, pipeline); older items may lack it.
+   */
   unattended?: true
   pipelineId?: string
   /** Automatic retries used (≤ 2); `attempts` keeps counting every start. */
@@ -100,7 +106,7 @@ export interface EnqueueInput {
   concurrency?: number
   /** Agent for every job of this request (each item can be changed until it starts); the default agent when absent. */
   agent?: QueueAgent
-  /** Unattended pipeline items (main only; the pipeline sets both). */
+  /** Unattended items (main only: every IPC and phone enqueue sets it, #158; the pipeline also sets `pipelineId`). */
   unattended?: true
   pipelineId?: string
 }

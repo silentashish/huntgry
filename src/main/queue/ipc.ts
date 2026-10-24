@@ -61,8 +61,9 @@ export function stopQueue(): Promise<void> {
 /** Bulk tailoring: jobs queued from the Jobs page, started a few at a time. */
 export function registerQueueIpc(): void {
   ipcMain.handle(QUEUE_CHANNELS.state, () => queue.sync())
+  // One flow (#158): every queued job runs to the end and lands in Review (pipeline policy, verify gate).
   ipcMain.handle(QUEUE_CHANNELS.enqueue, async (_e, input: unknown) =>
-    queue.enqueue(requireEnqueueInput(input, await defaultAgent()))
+    queue.enqueue({ ...requireEnqueueInput(input, await defaultAgent()), unattended: true })
   )
   ipcMain.handle(QUEUE_CHANNELS.cancel, (_e, id: unknown) => queue.cancel(requireItemId(id)))
   ipcMain.handle(QUEUE_CHANNELS.cancelAll, () => queue.cancelAll())
