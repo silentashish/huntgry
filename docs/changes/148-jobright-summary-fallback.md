@@ -20,7 +20,7 @@ only loaded each copy's `url`.
 
 | Area | Files | Why |
 | --- | --- | --- |
-| Form pages | `src/main/jobs/sources/posting.ts` | `POSTING_EXTRACT` also counts the characters of the main text inside `<form>` elements (`formText`). Without JSON-LD the page text counts as a posting only when it has 200 characters outside forms. A posting with an application form below it still reads; an apply step alone does not. |
+| Form pages | `src/main/jobs/sources/posting.ts` | `POSTING_EXTRACT` also reads the page's prose: a copy of the main text without form controls and their labels (`label`, `legend`, `button`, `select`, `option`, `textarea`, `input`) or scripts, whitespace collapsed and capped like the text. Without JSON-LD the page counts as a posting only when that prose reaches 200 characters. A posting with an application form below it, or inside the same `<form>`, still reads, however long the form; an apply step alone does not. (Codex's review: an earlier version subtracted the whole form's text, which dropped descriptions inside a form and was thrown off by the 60,000-character cap.) |
 | Jobright's summary | `src/main/jobs/sources/jobright.ts` | `JOBRIGHT_POSTING_EXTRACT` reads everything `POSTING_EXTRACT` reads plus the summary fields, so one load of a Jobright page gives both. `jobrightSummaryOf` shape-checks them and builds Markdown: the summary, then `## Responsibilities`, `## Must have` and `## Nice to have` lists. |
 | Fallback | `src/main/jobs/service.ts` | `fetchDetails` tries every copy's link as before; a complete employer description wins and the Jobright page is never loaded. Otherwise the board page of the first Jobright copy is loaded and its summary used when it is longer than the employer's partial description (and than another board's saved summary). The job is saved with `descriptionSource: 'jobright-summary'`. A job whose link is still the Jobright page (#142, not connected) reads the page and the summary in one load, and a Jobright human check there still gets #142's message without a second load. |
 | Marker | `src/shared/jobs-types.ts`, `src/main/jobs/store.ts` | `Job.descriptionSource`. It follows the description it describes: a re-saved board copy without a description keeps it, a fetched posting clears it, and merging copies from several boards prefers a posting over Jobright's summary. `jobDescriptionFor` adds the note to the text the tailor gets. |
@@ -59,8 +59,10 @@ flowchart TD
   it has one rather than its page text.
 - **Skills (`skillSummaries`, `jdCoreSkills`) are left out.** They repeat the qualifications; the
   ticket's four sections are enough for tailoring.
-- **Form detection by `<form>` text, not by counting inputs.** A posting page often embeds its
-  application form; counting inputs would reject it. Excluding the form's own text keeps it.
+- **Form detection by removing controls and labels, not by counting inputs or `<form>` text.** A
+  posting page often embeds its application form, sometimes with the description inside the same
+  `<form>`; counting inputs or dropping everything under a form would reject it. Only what an
+  application form is made of is left out of the prose.
 
 ## How to test
 
@@ -72,6 +74,7 @@ flowchart TD
 
 ## Follow-ups
 
-- Apply steps that do not use `<form>` elements (some Workday steps render plain inputs) still pass
-  the page-text check when their labels are long; a role-based check could catch them.
+- Apply steps whose questions are plain text rather than `<label>`s (some Workday and Greenhouse
+  steps), or that carry long legal text (EEO statements), can still reach 200 characters of prose
+  and be read as a posting.
 - The drawer shows the Markdown as plain text, like every description; rendering it is separate.

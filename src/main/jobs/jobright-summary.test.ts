@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { JSDOM } from 'jsdom'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { canRefetchDetails, jobDescriptionFor, JOBRIGHT_SUMMARY_NOTE, tailorPrefillFor, type Job } from '@shared/jobs-types'
 import type { LoadResult } from './loader'
@@ -29,21 +30,44 @@ const SUMMARY = [
   '## Nice to have\n\n- Kubernetes.'
 ].join('\n\n')
 
-const FORM_TEXT =
-  'Apply for Software Engineer\nFirst name *\nLast name *\nEmail *\nPhone\nResume/CV * Attach, Dropbox or enter manually\nLinkedIn profile\nAre you legally authorized to work in the United States? *\nWill you now or in the future require sponsorship? *\nSubmit application'
+/** An application form's fields; `labels` long ones push the form past any length limit. */
+const formFields = (labels = '') => `
+<p><label for="fn">First name *</label> <input id="fn"></p>
+<p><label for="ln">Last name *</label> <input id="ln"></p>
+<p><label for="em">Email *</label> <input id="em" type="email"></p>
+<p><label for="cv">Resume/CV * (PDF, DOC or DOCX, up to 5 MB)</label> <input id="cv" type="file"></p>
+<p><label for="au">Are you legally authorized to work in the United States? *</label> <select id="au"><option>Yes</option><option>No</option></select></p>
+<p><label for="sp">Will you now or in the future require visa sponsorship? *</label> <select id="sp"><option>Yes</option><option>No</option></select></p>
+${labels}<button type="submit">Submit application</button>`
+
+const DESCRIPTION = 'Acme builds payment rails for small businesses in forty countries, and the ledger team keeps every cent accounted for. '.repeat(5)
+
+/** Runs a loader extract in a parsed page (jsdom has no layout, so `innerText` is the text content). */
+async function extract(html: string, expression: string, url = EMPLOYER): Promise<Record<string, unknown> | null> {
+  const dom = new JSDOM(html, { url })
+  Object.defineProperty(dom.window.HTMLElement.prototype, 'innerText', {
+    get(this: HTMLElement) {
+      return this.textContent ?? ''
+    }
+  })
+  if (dom.window.document.readyState !== 'complete') await new Promise((r) => dom.window.addEventListener('load', r))
+  const out = new Function('document', 'location', `return ${expression}`)(dom.window.document, dom.window.location) as string | null
+  return out === null ? null : JSON.parse(out)
+}
+
+const page = (body: string, head = '') =>
+  `<!DOCTYPE html><html><head><title>Software Engineer | Acme Careers</title>${head}</head><body>${body}</body></html>`
+const FORM_ONLY = page(`<main><h1>Apply: Software Engineer</h1><form>${formFields()}</form></main>`)
 
 /** What the hidden loader returns for each page kind. */
-const formOnly = (url: string): LoadResult => ({
-  status: 'ok',
-  data: { url, title: 'Apply | Acme Careers', ld: [], text: FORM_TEXT, formText: FORM_TEXT.length - 30 }
-})
+let formOnlyData: Record<string, unknown>
+const formOnly = (): LoadResult => ({ status: 'ok', data: formOnlyData })
 const fullPosting = (url: string): LoadResult => ({
   status: 'ok',
   data: {
     url,
     title: 'Software Engineer',
     text: '',
-    formText: 0,
     ld: [
       JSON.stringify({
         '@type': 'JobPosting',
@@ -82,33 +106,30 @@ const jobrightJob = (over: Partial<Job> = {}): Job => ({
 })
 
 describe("Jobright's summary fields", () => {
-  /** Evaluates the extract against a fake page: `next` is the `__NEXT_DATA__` text, `null` for none. */
-  const run = (next: string | null, readyState = 'complete') => {
-    const main = { innerText: 'Software Engineer\nAcme', querySelectorAll: () => [] }
-    const doc = {
-      readyState,
-      title: 'Software Engineer - Acme | Jobright',
-      getElementById: (id: string) => (id === '__NEXT_DATA__' && next !== null ? { textContent: next } : null),
-      querySelectorAll: () => [],
-      querySelector: () => main,
-      body: main
-    }
-    const out = new Function('document', 'location', `return ${JOBRIGHT_POSTING_EXTRACT}`)(doc, { href: PAGE }) as string | null
-    return out === null ? null : JSON.parse(out)
-  }
+  /** A Jobright page: `next` is the `__NEXT_DATA__` text, `null` for none. */
+  const run = (next: string | null) =>
+    extract(
+      page(
+        '<main><h1>Software Engineer</h1>\n<p>Acme</p></main>' +
+          (next === null ? '' : `<script id="__NEXT_DATA__" type="application/json">${next}</script>`)
+      ),
+      JOBRIGHT_POSTING_EXTRACT,
+      PAGE
+    )
   const next = (pageProps: unknown) => JSON.stringify({ props: { pageProps } })
 
-  it('reads the summary from a signed-out page, along with the posting data', () => {
-    const data = run(next({ logined: false, dataSource: { jobResult: JOB_RESULT } }))
-    expect(data).toMatchObject({ url: PAGE, ld: [], text: 'Software Engineer\nAcme', formText: 0 })
+  it('reads the summary from a signed-out page, along with the posting data', async () => {
+    const data = await run(next({ logined: false, dataSource: { jobResult: JOB_RESULT } }))
+    expect(data).toMatchObject({ url: PAGE, ld: [], prose: 'Software Engineer Acme' })
     expect(jobrightSummaryOf(data)).toBe(SUMMARY)
   })
 
-  it('waits for the Next.js data while the page loads, and gives nothing without it', () => {
-    expect(run(null, 'loading')).toBeNull()
-    expect(run(null)).toMatchObject({ jobright: {} })
-    expect(jobrightSummaryOf(run(null))).toBe('')
-    expect(jobrightSummaryOf(run('{not json'))).toBe('')
+  it('waits for the Next.js data while the page loads, and gives nothing without it', async () => {
+    const loading = { readyState: 'loading', getElementById: () => null }
+    expect(new Function('document', `return ${JOBRIGHT_POSTING_EXTRACT}`)(loading)).toBeNull()
+    expect(await run(null)).toMatchObject({ jobright: {} })
+    expect(jobrightSummaryOf(await run(null))).toBe('')
+    expect(jobrightSummaryOf(await run('{not json'))).toBe('')
   })
 
   it('builds Markdown from whichever fields there are, shape-checked', () => {
@@ -121,21 +142,36 @@ describe("Jobright's summary fields", () => {
 })
 
 describe('application-form pages (#148)', () => {
-  it('a page that is only an application form is not a posting', () => {
-    expect(parsePosting((formOnly(EMPLOYER) as { data: PageData }).data)).toBeNull()
+  const posting = async (html: string) => parsePosting((await extract(html, POSTING_EXTRACT)) as unknown as PageData)
+
+  it('a page that is only an application form is not a posting, however long its labels', async () => {
+    const data = (await extract(FORM_ONLY, POSTING_EXTRACT))!
+    expect((data.text as string).length).toBeGreaterThan(200)
+    expect(data.prose).toBe('Apply: Software Engineer')
+    expect(parsePosting(data as unknown as PageData)).toBeNull()
   })
 
-  it('a posting with an application form below it still is', () => {
-    const description = 'Acme builds payment rails for small businesses in forty countries. '.repeat(4)
-    const job = parsePosting({ url: EMPLOYER, title: 'Software Engineer', ld: [], text: `${description}\n${FORM_TEXT}`, formText: FORM_TEXT.length })
+  it('a posting with an application form below it still is', async () => {
+    const job = await posting(page(`<main><h1>Software Engineer</h1><p>${DESCRIPTION}</p><form>${formFields()}</form></main>`))
     expect(job?.descriptionComplete).toBe(true)
+    expect(job?.description).toContain('ledger team')
   })
 
-  it('the posting extract counts the text inside forms', () => {
-    const main = { innerText: `Intro\n${FORM_TEXT}`, querySelectorAll: (sel: string) => (sel === 'form' ? [{ innerText: FORM_TEXT }] : []) }
-    const doc = { title: 'Apply', querySelectorAll: () => [], querySelector: () => main, body: main }
-    const out = new Function('document', 'location', `return ${POSTING_EXTRACT}`)(doc, { href: EMPLOYER }) as string
-    expect(JSON.parse(out).formText).toBe(FORM_TEXT.length)
+  it('so is a description inside the form, next to the application fields', async () => {
+    const job = await posting(page(`<main><form><section><h1>Software Engineer</h1><p>${DESCRIPTION}</p></section>${formFields()}</form></main>`))
+    expect(job?.descriptionComplete).toBe(true)
+    expect(job?.description).toContain('ledger team')
+  })
+
+  it('and a description followed by a form longer than the text limit', async () => {
+    const labels = Array.from({ length: 700 }, (_, i) => `<p><label for="q${i}">${'Tell us about a project you are proud of. '.repeat(2)}</label> <textarea id="q${i}"></textarea></p>`).join('')
+    const data = (await extract(page(`<main><h1>Software Engineer</h1><p>${DESCRIPTION}</p><form>${formFields(labels)}</form></main>`), POSTING_EXTRACT))!
+    expect((data.text as string).length).toBe(60000)
+    expect(parsePosting(data as unknown as PageData)?.descriptionComplete).toBe(true)
+  })
+
+  it('pages read before #148 (no prose) are judged by their text, as before', () => {
+    expect(parsePosting({ url: EMPLOYER, title: 'Software Engineer', ld: [], text: DESCRIPTION })?.descriptionComplete).toBe(true)
   })
 })
 
@@ -150,6 +186,7 @@ describe('Fetch full description falls back to Jobright (#148)', () => {
     }
 
   beforeEach(async () => {
+    formOnlyData = (await extract(FORM_ONLY, POSTING_EXTRACT))!
     ws = await mkdtemp(join(tmpdir(), 'huntgry-jobright-summary-'))
     loads = []
   })
@@ -159,7 +196,7 @@ describe('Fetch full description falls back to Jobright (#148)', () => {
 
   it("uses Jobright's summary when the employer's page is only an application form", async () => {
     await saveJob(ws, jobrightJob())
-    const full = await fetchDetails(ws, `jobright:${ID}`, loader((url) => (url === EMPLOYER ? formOnly(url) : jobrightPage(url))))
+    const full = await fetchDetails(ws, `jobright:${ID}`, loader((url) => (url === EMPLOYER ? formOnly() : jobrightPage(url))))
     // The employer's page first, then the Jobright page.
     expect(loads).toEqual([EMPLOYER, PAGE])
     expect(full).toMatchObject({ description: SUMMARY, descriptionComplete: true, descriptionSource: 'jobright-summary', url: EMPLOYER })
@@ -179,6 +216,16 @@ describe('Fetch full description falls back to Jobright (#148)', () => {
     expect(full.descriptionSource).toBeUndefined()
     expect(full.description).toContain('Acme builds payment rails')
     expect(jobDescriptionFor(full)).not.toContain(JOBRIGHT_SUMMARY_NOTE)
+  })
+
+  it("keeps an employer description that sits inside the application form (no JSON-LD)", async () => {
+    await saveJob(ws, jobrightJob())
+    const html = page(`<main><form><section><h1>Software Engineer</h1><p>${DESCRIPTION}</p></section>${formFields()}</form></main>`)
+    const data = (await extract(html, POSTING_EXTRACT))!
+    const full = await fetchDetails(ws, `jobright:${ID}`, loader((url) => (url === EMPLOYER ? { status: 'ok', data } : jobrightPage(url))))
+    expect(loads).toEqual([EMPLOYER])
+    expect(full.descriptionSource).toBeUndefined()
+    expect(full.description).toContain('ledger team')
   })
 
   it('takes the summary over a shorter partial description, not over a longer one', async () => {
@@ -229,17 +276,17 @@ describe('Fetch full description falls back to Jobright (#148)', () => {
   it("reports the employer page's failure when the Jobright page gives no summary either", async () => {
     await saveJob(ws, jobrightJob())
     await expect(
-      fetchDetails(ws, `jobright:${ID}`, loader((url) => (url === EMPLOYER ? formOnly(url) : { status: 'blocked', message: 'Human check.' })))
+      fetchDetails(ws, `jobright:${ID}`, loader((url) => (url === EMPLOYER ? formOnly() : { status: 'blocked', message: 'Human check.' })))
     ).rejects.toThrow(/employer's page did not have a readable description/)
     await expect(
-      fetchDetails(ws, `jobright:${ID}`, loader((url) => (url === EMPLOYER ? formOnly(url) : jobrightPage(url, {}))))
+      fetchDetails(ws, `jobright:${ID}`, loader((url) => (url === EMPLOYER ? formOnly() : jobrightPage(url, {}))))
     ).rejects.toThrow(/employer's page did not have a readable description/)
     expect((await readJob(ws, `jobright:${ID}`))?.description).toBe('')
   })
 
   it("a later fetch that finds the employer's posting replaces the summary and its marker", async () => {
     await saveJob(ws, jobrightJob())
-    await fetchDetails(ws, `jobright:${ID}`, loader((url) => (url === EMPLOYER ? formOnly(url) : jobrightPage(url))))
+    await fetchDetails(ws, `jobright:${ID}`, loader((url) => (url === EMPLOYER ? formOnly() : jobrightPage(url))))
     loads = []
     const full = await fetchDetails(ws, `jobright:${ID}`, loader((url) => fullPosting(url)))
     expect(loads).toEqual([EMPLOYER])
