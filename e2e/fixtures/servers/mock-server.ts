@@ -14,7 +14,8 @@ import { EMPLOYER_POSTINGS, postingPage } from './pages'
  * One local server per worker, on a free `127.0.0.1` port, standing in for
  * every site the Jobs, Browser and Apply flows reach:
  *
- * - `/postings/employer/:id`, `/postings/lever-style`, `/postings/ashby-style`  posting pages
+ * - `/postings/employer/:id`, `/postings/lever-style`, `/postings/ashby-style`  posting pages; `/postings/apply-only`
+ *   an application form alone (#148)
  * - `/bot-wall`            a 403 "Just a moment…" human check
  * - `/page/one`, `/page/two`, `/hang`  plain pages for the browser's history and Stop
  * - `/redirect/lever`      302 to the Lever form on the *other* loopback origin (a second 127.0.0.1 port)

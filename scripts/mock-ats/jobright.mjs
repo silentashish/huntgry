@@ -11,12 +11,13 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 
 /**
  * Rows of the list: `daysAgo` 0 is today. `blocked` postings answer with a human check. `employer` is the path
- * of the employer's posting (on the mock's other origin) a signed-in posting page gives as `applyLink` (#146).
+ * of the employer's posting (on the mock's other origin) a signed-in posting page gives as `applyLink` (#146);
+ * Contoso's is only an application form, so its description comes from Jobright's summary (#148).
  */
 export const JOBRIGHT_JOBS = [
   { id: 'e2e0000000000000000000a1', company: 'Northwind Labs', site: 'https://northwind.example.com', title: 'Software Engineer, New Grad', location: 'Seattle, WA, United States', work: 'On Site', daysAgo: 0, employer: '/postings/employer/101' },
   { id: 'e2e0000000000000000000a2', company: '↳', title: 'Backend Engineer I', location: 'Remote, United States', work: 'Remote', daysAgo: 0 },
-  { id: 'e2e0000000000000000000a3', company: 'Contoso Robotics', site: 'https://contoso.example.com', title: 'Embedded Software Engineer', location: 'Austin, TX, United States', work: 'Hybrid', daysAgo: 0 },
+  { id: 'e2e0000000000000000000a3', company: 'Contoso Robotics', site: 'https://contoso.example.com', title: 'Embedded Software Engineer', location: 'Austin, TX, United States', work: 'Hybrid', daysAgo: 0, employer: '/postings/apply-only' },
   { id: 'e2e0000000000000000000b1', company: 'Fabrikam', site: 'https://fabrikam.example.com', title: 'Associate Data Engineer', location: 'Chicago, IL, United States', work: 'Remote', daysAgo: 1, blocked: true },
   { id: 'e2e0000000000000000000b2', company: '↳', title: 'Platform Engineer, Early Career', location: 'Chicago, IL, United States', work: 'On Site', daysAgo: 1 },
   { id: 'e2e0000000000000000000c1', company: 'Tailspin Toys', site: 'https://tailspin.example.com', title: 'Frontend Engineer, New Grad', location: 'Denver, CO, United States', work: 'Hybrid', daysAgo: 3 }
@@ -66,7 +67,8 @@ export function jobrightSignInPage(next) {
 
 /**
  * A Jobright posting page (`/jobs/info/<id>`): JSON-LD `JobPosting`, the text, and Next.js data like
- * jobright.ai's: `pageProps.logined`, and signed in only, `jobResult.applyLink` / `originalUrl` with the
+ * jobright.ai's: `pageProps.logined`, Jobright's summary (`jobSummary`, `coreResponsibilities`,
+ * `qualifications`, signed in or not, #148), and signed in only, `jobResult.applyLink` / `originalUrl` with the
  * employer's posting on `employerOrigin` (#146). `null` for an unknown id.
  */
 export function jobrightPostingPage(id, { signedIn = false, employerOrigin = '' } = {}) {
@@ -80,7 +82,12 @@ export function jobrightPostingPage(id, { signedIn = false, employerOrigin = '' 
 <p>Requirements: a degree in computer science or equivalent experience, and curiosity about distributed systems.</p>`
   const ld = { '@context': 'https://schema.org', '@type': 'JobPosting', title: job.title, description, hiringOrganization: { '@type': 'Organization', name: company }, jobLocation: { '@type': 'Place', address: { '@type': 'PostalAddress', addressLocality: job.location.split(',')[0] } } }
   const employer = signedIn && job.employer ? `${employerOrigin}${job.employer}` : undefined
-  const jobResult = { jobId: job.id, isCompanySiteLink: !!job.employer, ...(employer ? { applyLink: employer, originalUrl: employer } : {}) }
+  const summary = {
+    jobSummary: `Jobright's summary: ${company} is looking for a ${job.title} to join a small team shipping production software.`,
+    coreResponsibilities: ['Write and test firmware and services with a mentor.', 'Take part in design reviews and on-call handovers.'],
+    qualifications: { mustHave: ['A degree in computer science or equivalent experience.', 'C, C++ or Go.'], niceToHave: ['Experience with real-time systems.'] }
+  }
+  const jobResult = { jobId: job.id, isCompanySiteLink: !!job.employer, ...summary, ...(employer ? { applyLink: employer, originalUrl: employer } : {}) }
   const next = { props: { pageProps: { logined: signedIn, dataSource: { jobResult } } } }
   const account = signedIn ? '<p>Signed in</p>' : `<p><a href="/jobright/signin?next=${encodeURIComponent(`/jobs/info/${job.id}`)}">Sign in</a></p>`
   const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${esc(job.title)} - ${esc(company)} | Jobright</title>

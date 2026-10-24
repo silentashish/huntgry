@@ -136,6 +136,23 @@ const ASHBY_STYLE = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <a href="/generic/">Apply for this Job</a>
 </main></div></body></html>`
 
+/**
+ * An ATS apply step (#148): only the application form, its labels well over 200 characters, no JSON-LD and no
+ * description. A Jobright job's employer link can land here.
+ */
+const APPLY_ONLY = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Apply | Contoso Robotics Careers</title></head><body>
+<main><h1>Apply: Embedded Software Engineer</h1><form action="/generic/submit" method="post">
+<p><label for="fn">First name *</label> <input id="fn" name="first_name"></p>
+<p><label for="ln">Last name *</label> <input id="ln" name="last_name"></p>
+<p><label for="em">Email address *</label> <input id="em" name="email" type="email"></p>
+<p><label for="ph">Phone number</label> <input id="ph" name="phone"></p>
+<p><label for="cv">Resume/CV * (PDF, DOC or DOCX, up to 5 MB)</label> <input id="cv" name="resume" type="file"></p>
+<p><label for="li">LinkedIn profile URL</label> <input id="li" name="linkedin"></p>
+<p><label for="au">Are you legally authorized to work in the United States? *</label> <select id="au" name="authorized"><option>Yes</option><option>No</option></select></p>
+<p><label for="sp">Will you now or in the future require visa sponsorship? *</label> <select id="sp" name="sponsorship"><option>Yes</option><option>No</option></select></p>
+<p><button type="submit">Submit application</button></p>
+</form></main></body></html>`
+
 /** The posting page for `/postings/<path>`, or `null`. */
 export function postingPage(path: string, _origin: string): string | null {
   const employer = /^employer\/(\d+)$/.exec(path)
@@ -145,5 +162,6 @@ export function postingPage(path: string, _origin: string): string | null {
   }
   if (path === 'lever-style') return LEVER_STYLE
   if (path === 'ashby-style') return ASHBY_STYLE
+  if (path === 'apply-only') return APPLY_ONLY
   return null
 }
