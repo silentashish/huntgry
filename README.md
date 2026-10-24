@@ -191,6 +191,13 @@ job. Clicking a card opens its details. An archived card leaves the board 7 days
 archived, but nothing is deleted: the Dashboard's *Archived* filter and the *Dismissed* jobs still
 list it. See [docs/changes/85-board.md](docs/changes/85-board.md).
 
+Inside a column, cards are grouped by the week they last changed: **This week** is open, older
+weeks are folded to a header with a count and open on click, showing one-line cards (hover or
+focus one for the full card). The board remembers which weeks you opened or folded. Empty columns
+shrink to a narrow rail that still takes drops, and each column scrolls on its own. The search box
+and the source filter above the columns narrow every column at once. See
+[docs/changes/160-board-week-groups.md](docs/changes/160-board-week-groups.md).
+
 ## Finding jobs
 
 **Jobs** holds the postings you add: give a posting URL (the page is opened once in a hidden
