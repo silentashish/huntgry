@@ -5,12 +5,12 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { Job } from '@shared/jobs-types'
 import { COMMAND_TTL_SECONDS, LIMITS, requireEvent, type Envelope, type FileChunk, type RemoteCommandName, type RemoteEventName, type RemoteJob, type RemotePage } from '@shared/remote'
-import { resolveApplicationFile } from '../applications/safe-path'
 import { WorkspaceWatcher } from '../applications/watch'
 import { DeviceStore } from './devices'
 import { RemoteEvents } from './events'
 import { FILE_CHUNK_TTL_SECONDS, Gateway, type GatewayServices } from './gateway'
 import { command, fakeCipher, fakePhone, job, queueState, type FakePhone } from './test-helpers'
+import { resolveRemoteFile } from './notes-file'
 import { workspaceIdentity, type WorkspaceIdentity } from './workspace'
 
 /**
@@ -87,7 +87,7 @@ beforeEach(async () => {
       }
     },
     // The app's wiring (remote/ipc.ts): the applications' safe-path rules.
-    files: { resolve: resolveApplicationFile },
+    files: { resolve: resolveRemoteFile },
     transcripts: () => true,
     resolveHost: async (host) => (host === 'jobs.example.com' ? ['93.184.216.34'] : host === 'evil.example.com' ? ['127.0.0.1'] : ['10.0.0.5']),
     now: () => now
@@ -159,6 +159,21 @@ describe('file.get (#40)', () => {
     }
   })
 
+  it('serves tailoring-notes.md v2 under the review-notes.md name the phone asks for (#158), and never a free-form one', async () => {
+    const v2 = '# Tailoring notes\n<!-- resume-tailor notes v2 -->\n\n## Gaps left open\n- Go: never used\n'
+    await writeFile(join(ws, APP, 'tailoring-notes.md'), v2)
+    const { bytes } = await fetchAll('review-notes.md')
+    expect(bytes.toString('utf8')).toBe(v2)
+    // review-notes.md v1 of an older result wins when both are there.
+    await writeFile(join(ws, APP, 'review-notes.md'), '# Review notes\n')
+    expect(((await chunk('review-notes.md')).body as FileChunk).bytes).toBe(15)
+    await unlink(join(ws, APP, 'review-notes.md'))
+    await writeFile(join(ws, APP, 'tailoring-notes.md'), '# Tailoring notes\n\nFree-form.\n')
+    expect((await chunk('review-notes.md')).error?.code).toBe('invalid')
+    // The protocol does not know tailoring-notes.md: the phone cannot ask for it by that name.
+    expect((await chunk('tailoring-notes.md')).error?.code).toBe('invalid')
+  })
+
   it('refuses symlinks: a linked file, a linked application folder, and a link swapped in after the check', async () => {
     await writeFile(join(outside, 'resume.pdf'), 'outside the workspace')
     await unlink(join(ws, APP, 'cover.pdf'))
@@ -173,7 +188,7 @@ describe('file.get (#40)', () => {
     expect((await chunk('cover-page-9.jpg')).error?.code).toBe('invalid')
     // The check passed, then the file became a symlink before it was opened: O_NOFOLLOW refuses it.
     services.files.resolve = async (w, id, file) => {
-      const path = await resolveApplicationFile(w, id, file)
+      const path = await resolveRemoteFile(w, id, file)
       await unlink(path)
       await symlink(join(outside, 'resume.pdf'), path)
       return path
