@@ -1,10 +1,43 @@
 /* The Board (#110): Figma Board 6:2, Kanban card 22:467, Menu 22:585. Colours are --hg-* tokens only. */
 
+/* The page is as tall as the window: columns scroll inside themselves instead of the page growing (#160). */
+.page {
+  height: calc(100dvh - 2 * var(--app-shell-padding, 32px));
+  min-height: 0;
+}
+
+.toolbar {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.search {
+  flex: 1 1 280px;
+  max-width: 420px;
+  min-width: 0;
+}
+
+.sources {
+  flex: 0 1 320px;
+  min-width: 0;
+}
+
+/* Scrolls sideways when the busy columns do not fit; never the page. */
+.board {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 .lanes {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding-bottom: 12px;
+  height: 100%;
+  padding-bottom: 8px;
+  box-sizing: border-box;
 }
 
 /* ---------- Lane ---------- */
@@ -13,8 +46,11 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  flex: 0 0 252px;
-  width: 252px;
+  /* Busy columns share the width the rails leave. */
+  flex: 1 0 252px;
+  max-width: 360px;
+  max-height: 100%;
+  min-height: 0;
   box-sizing: border-box;
   padding: 10px;
   border: 1px solid var(--hg-border-subtle);
@@ -25,12 +61,117 @@
     border-color 120ms;
 }
 
+/* The cards scroll; the lane's head (name, count) and To do's link box stay put. */
+.laneBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* An empty column: its name read sideways and its count. */
+.rail {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 44px;
+  width: 44px;
+  align-self: stretch;
+  max-height: 100%;
+  box-sizing: border-box;
+  padding: 10px 0;
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-xl);
+  background-color: var(--hg-bg-surface-sunken);
+  transition:
+    opacity 120ms,
+    border-color 120ms;
+}
+
+.rail .laneHead {
+  flex-direction: column;
+  padding: 0;
+}
+
+.rail .laneTitle {
+  flex: 0 0 auto;
+  writing-mode: vertical-rl;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--hg-text-secondary);
+}
+
+.rail .laneCount {
+  order: -1;
+}
+
+.rail[data-drop='false'],
 .lane[data-drop='false'] {
   opacity: 0.45;
 }
 
+.rail[data-over='true'],
 .lane[data-over='true'] {
   border-color: var(--hg-accent-primary);
+}
+
+/* ---------- Week groups ---------- */
+
+.week {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.weekHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border-radius: var(--hg-radius-sm);
+  font-family: var(--hg-font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--hg-text-secondary);
+}
+
+.weekHead:hover {
+  background-color: var(--hg-bg-subtle);
+}
+
+.weekHead:focus-visible {
+  outline: 2px solid var(--hg-border-focus);
+  outline-offset: 1px;
+}
+
+.weekChevron {
+  flex: 0 0 auto;
+  color: var(--hg-icon-muted);
+  transform: rotate(90deg);
+  transition: transform 120ms;
+}
+
+.week[data-folded='true'] .weekChevron {
+  transform: none;
+}
+
+.weekLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.weekCount {
+  flex: 0 0 auto;
+  font-family: var(--hg-font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--hg-text-muted);
 }
 
 .laneHead {
@@ -203,6 +344,92 @@
 .action {
   flex: 0 0 auto;
   font-size: 11px;
+}
+
+/* ---------- Compact card (older weeks, #160) ---------- */
+
+.compactLine {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.compactText {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A full card's face is only a wrapper. */
+.face {
+  display: contents;
+}
+
+/*
+ * A compact card keeps a one-line slot in the column. Its face lies over that slot, so the full card
+ * shown on hover or focus overlaps the cards below instead of pushing them (no layout shift, no flicker).
+ */
+.card[data-compact='true'] {
+  position: relative;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.card[data-compact='true'] > .face {
+  position: absolute;
+  inset: 0 0 auto;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-lg);
+  background-color: var(--hg-bg-surface);
+  transition: border-color 120ms;
+}
+
+/* No room below in the column: the full face grows upward from the slot instead. */
+.card[data-compact='true'] > .face[data-up='true'] {
+  inset: auto 0 0;
+}
+
+.card[data-compact='true']:is(:hover, :focus-within) > .face {
+  z-index: 3;
+  border-color: var(--hg-border-default);
+  box-shadow: var(--hg-shadow-float);
+}
+
+/* One line until hovered or focused. */
+.card[data-compact='true']:not(:hover, :focus-within) > .face {
+  gap: 0;
+  padding: 6px 10px;
+}
+
+.card[data-compact='true']:not(:hover, :focus-within) :is(.cardAvatar, .cardHeadText, .pills, .foot) {
+  display: none;
+}
+
+.card[data-compact='true']:not(:hover, :focus-within) .compactLine {
+  display: flex;
+}
+
+.card[data-compact='true']:not(:hover, :focus-within) .cardHead {
+  align-items: center;
+}
+
+.card[data-compact='true']:not(:hover, :focus-within) .cardMenu {
+  margin: 0 -4px 0 0;
 }
 
 /* ---------- Move to menu ---------- */

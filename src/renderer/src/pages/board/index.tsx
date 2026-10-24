@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Button, Center, Group, Loader, ScrollArea, Stack, Text, TextInput } from '@mantine/core'
-import { IconLink, IconPlus, IconRefresh } from '@tabler/icons-react'
+import { Alert, Button, Center, Group, Loader, MultiSelect, Stack, Text, TextInput, UnstyledButton } from '@mantine/core'
+import { IconChevronRight, IconLink, IconPlus, IconRefresh, IconSearch } from '@tabler/icons-react'
 import type { ApplicationRecord, ApplicationTracking } from '@shared/applications-types'
 import {
   ARCHIVE_TTL_DAYS,
@@ -10,6 +10,15 @@ import {
   type BoardColumn,
   type BoardColumnId
 } from '@shared/board'
+import {
+  BOARD_SOURCES,
+  BOARD_SOURCE_LABEL,
+  EMPTY_BOARD_FILTER,
+  filterBoard,
+  isFilterActive,
+  type BoardFilter,
+  type BoardSource
+} from '@shared/board-filter'
 import { profileSignals, type ProfileSignals } from '@shared/job-relevance'
 import { tailorPrefillFor, type Job } from '@shared/jobs-types'
 import { emptyProfile } from '@shared/master-profile'
@@ -26,14 +35,20 @@ import { PasteModal } from '../jobs/PasteModal'
 import { prepareTailor } from '../jobs/handoff'
 import { BoardCardView } from './BoardCardView'
 import { cardScent, COLUMN_TONE, type Scent } from './card'
+import { useFolds } from './folds'
+import { foldKey, isFolded, weekGroups, type WeekGroup } from './weeks'
 import classes from './board.module.css'
 
 const isUrl = (s: string) => /^https?:\/\//i.test(s.trim())
+
+const SOURCE_OPTIONS = BOARD_SOURCES.map((s) => ({ value: s, label: BOARD_SOURCE_LABEL[s] }))
 
 /**
  * Every job of the workspace on one Kanban board (#85): saved jobs (To do), runs (Tailoring,
  * Needs review) and applications by status, one card per job. A link pasted into To do saves
  * the job; cards move by drag and drop or their Move to menu; archived cards leave the board a week later.
+ * Inside a column, cards are grouped by week with past weeks folded; empty columns shrink to a
+ * rail; a search and a source filter narrow every column (#160).
  */
 export function BoardPage() {
   const { navigate } = useNavigation()
@@ -53,6 +68,8 @@ export function BoardPage() {
   const applier = useApply(setError)
   /** What the master profile says to score jobs on (the Scent ring); `null` until read. */
   const [signals, setSignals] = useState<ProfileSignals | null>(null)
+  const [filter, setFilter] = useState<BoardFilter>(EMPTY_BOARD_FILTER)
+  const [folds, setFold] = useFolds()
 
   useEffect(() => {
     api.profile.read().then(
@@ -94,6 +111,11 @@ export function BoardPage() {
     () => (jobs && apps ? buildBoard({ jobs, applications: apps, queue: queue?.items ?? [] }) : null),
     [jobs, apps, queue]
   )
+  const shown = useMemo(() => (board ? filterBoard(board, filter) : null), [board, filter])
+  const groups = useMemo(() => {
+    const now = new Date()
+    return new Map(shown?.columns.map((c) => [c.id, weekGroups(c.cards, { now })] as const) ?? [])
+  }, [shown])
   // Scored once per board, not on every drag-state render.
   const scents = useMemo(() => {
     const now = new Date()
@@ -151,7 +173,7 @@ export function BoardPage() {
   const openApp = (apps ?? []).find((a) => a.id === openAppId) ?? null
 
   return (
-    <Stack gap="lg">
+    <Stack gap="lg" className={classes.page}>
       <PageHeader
         eyebrow="Every job, from sniffed to signed"
         title="Board"
@@ -180,80 +202,127 @@ export function BoardPage() {
         </Center>
       )}
 
-      {board && (
-        <ScrollArea type="auto" offsetScrollbars>
-          <div className={classes.lanes}>
-            {board.columns.map((column) => (
-              <Column
-                key={column.id}
-                column={column}
-                dropTarget={dragging ? moveFor(dragging, column.id) !== null : null}
-                over={over === column.id}
-                onDragOver={() => setOver(column.id)}
-                onDragLeave={() => setOver((o) => (o === column.id ? null : o))}
-                onDrop={() => {
-                  if (dragging) void move(dragging, column.id)
-                  setDragging(null)
-                  setOver(null)
-                }}
-                header={
-                  column.id === 'todo' ? (
-                    <Stack gap={10}>
-                      <Group gap={6} wrap="nowrap" align="center">
-                        <TextInput
-                          style={{ flex: 1 }}
-                          leftSection={<IconLink size={16} />}
-                          placeholder="Paste a posting link"
-                          aria-label="Paste a posting link"
-                          value={url}
-                          onChange={(e) => setUrl(e.currentTarget.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && void addUrl()}
-                        />
-                        <Button size="xs" variant="secondary" onClick={addUrl} loading={adding} disabled={!isUrl(url)}>
-                          Add
-                        </Button>
-                      </Group>
-                      <button type="button" className={classes.pasteLink} onClick={() => setPasteOpen(true)}>
-                        or paste the description
-                      </button>
-                      {addError && (
-                        <Alert color="red" variant="light" p="xs" withCloseButton onClose={() => setAddError(null)}>
-                          <Text size="xs">{addError}</Text>
-                        </Alert>
-                      )}
-                    </Stack>
-                  ) : column.id === 'archived' ? (
-                    <div className={classes.laneNote}>
-                      Cards leave the board {ARCHIVE_TTL_DAYS} days after they are archived.
-                      {board.hiddenArchived > 0 && ` ${board.hiddenArchived} older not shown.`}
-                    </div>
-                  ) : null
-                }
-              >
-                {column.cards.map((card, i) => (
-                  <BoardCardView
-                    key={card.key}
-                    card={card}
-                    scent={scents.get(card.key) ?? { mode: 'initial', letter: '?' }}
-                    lead={column.id === 'todo' && i === 0}
-                    dragging={dragging?.key === card.key}
-                    onDragStart={() => setDragging(card)}
-                    onDragEnd={() => {
+      {board && shown && (
+        <>
+          <Group gap="sm" wrap="nowrap" className={classes.toolbar}>
+            <TextInput
+              className={classes.search}
+              leftSection={<IconSearch size={16} />}
+              placeholder="Search company, role, title or notes"
+              aria-label="Search the board"
+              value={filter.text}
+              onChange={(e) => {
+                const text = e.currentTarget.value
+                setFilter((f) => ({ ...f, text }))
+              }}
+            />
+            <MultiSelect
+              className={classes.sources}
+              aria-label="Source"
+              placeholder={filter.sources.length ? undefined : 'All sources'}
+              data={SOURCE_OPTIONS}
+              value={filter.sources}
+              onChange={(v) => setFilter((f) => ({ ...f, sources: v as BoardSource[] }))}
+              clearable
+              // Searchable keeps the input on the page (and named) once sources are picked.
+              searchable
+              // A narrow typing field, so picked sources stay on one line with it.
+              styles={{ inputField: { minWidth: 24, flexBasis: 24 } }}
+              comboboxProps={{ withinPortal: true }}
+            />
+            {isFilterActive(filter) && (
+              <Button variant="subtle" size="xs" onClick={() => setFilter(EMPTY_BOARD_FILTER)}>
+                Clear
+              </Button>
+            )}
+          </Group>
+
+          <div className={classes.board}>
+            <div className={classes.lanes}>
+              {shown.columns.map((column) => {
+                const weeks = groups.get(column.id) ?? []
+                const lead = column.id === 'todo' ? weeks[0]?.cards[0]?.key : undefined
+                return (
+                  <Column
+                    key={column.id}
+                    column={column}
+                    // To do keeps its link box, so it never shrinks to a rail.
+                    rail={column.cards.length === 0 && column.id !== 'todo'}
+                    railTitle={column.id === 'archived' ? archiveNote(board.hiddenArchived) : undefined}
+                    dropTarget={dragging ? moveFor(dragging, column.id) !== null : null}
+                    over={over === column.id}
+                    onDragOver={() => setOver(column.id)}
+                    onDragLeave={() => setOver((o) => (o === column.id ? null : o))}
+                    onDrop={() => {
+                      if (dragging) void move(dragging, column.id)
                       setDragging(null)
                       setOver(null)
                     }}
-                    onOpen={() => open(card)}
-                    onMove={(to) => void move(card, to)}
-                    onTailor={() => card.kind === 'job' && setTailorJob(card.job)}
-                    onFollow={() => follow(card)}
-                    onApply={() => card.kind === 'application' && applier.apply(card.app)}
-                    applying={applier.busy}
-                  />
-                ))}
-              </Column>
-            ))}
+                    header={
+                      column.id === 'todo' ? (
+                        <Stack gap={10}>
+                          <Group gap={6} wrap="nowrap" align="center">
+                            <TextInput
+                              style={{ flex: 1 }}
+                              leftSection={<IconLink size={16} />}
+                              placeholder="Paste a posting link"
+                              aria-label="Paste a posting link"
+                              value={url}
+                              onChange={(e) => setUrl(e.currentTarget.value)}
+                              onKeyDown={(e) => e.key === 'Enter' && void addUrl()}
+                            />
+                            <Button size="xs" variant="secondary" onClick={addUrl} loading={adding} disabled={!isUrl(url)}>
+                              Add
+                            </Button>
+                          </Group>
+                          <button type="button" className={classes.pasteLink} onClick={() => setPasteOpen(true)}>
+                            or paste the description
+                          </button>
+                          {addError && (
+                            <Alert color="red" variant="light" p="xs" withCloseButton onClose={() => setAddError(null)}>
+                              <Text size="xs">{addError}</Text>
+                            </Alert>
+                          )}
+                        </Stack>
+                      ) : column.id === 'archived' ? (
+                        <div className={classes.laneNote}>{archiveNote(board.hiddenArchived)}</div>
+                      ) : null
+                    }
+                  >
+                    {weeks.map((week) => {
+                      const folded = isFolded(folds, column.id, week)
+                      return (
+                        <Week key={week.key} week={week} folded={folded} onToggle={() => setFold(foldKey(column.id, week.key), !folded)}>
+                          {week.cards.map((card) => (
+                            <BoardCardView
+                              key={card.key}
+                              card={card}
+                              scent={scents.get(card.key) ?? { mode: 'initial', letter: '?' }}
+                              lead={card.key === lead}
+                              compact={!week.current}
+                              dragging={dragging?.key === card.key}
+                              onDragStart={() => setDragging(card)}
+                              onDragEnd={() => {
+                                setDragging(null)
+                                setOver(null)
+                              }}
+                              onOpen={() => open(card)}
+                              onMove={(to) => void move(card, to)}
+                              onTailor={() => card.kind === 'job' && setTailorJob(card.job)}
+                              onFollow={() => follow(card)}
+                              onApply={() => card.kind === 'application' && applier.apply(card.app)}
+                              applying={applier.busy}
+                            />
+                          ))}
+                        </Week>
+                      )
+                    })}
+                  </Column>
+                )
+              })}
+            </div>
           </div>
-        </ScrollArea>
+        </>
       )}
 
       <JobDrawer
@@ -292,9 +361,16 @@ export function BoardPage() {
   )
 }
 
+const archiveNote = (hidden: number) =>
+  `Cards leave the board ${ARCHIVE_TTL_DAYS} days after they are archived.${hidden > 0 ? ` ${hidden} older not shown.` : ''}`
+
 interface ColumnProps {
   column: BoardColumn
   header: React.ReactNode
+  /** An empty column: a narrow rail with its name and 0, still a drop target. */
+  rail: boolean
+  /** Hover text of the rail. */
+  railTitle?: string
   /** While a card is dragged: whether this column takes it; `null` when nothing is dragged. */
   dropTarget: boolean | null
   over: boolean
@@ -304,11 +380,13 @@ interface ColumnProps {
   children: React.ReactNode
 }
 
-function Column({ column, header, dropTarget, over, onDragOver, onDragLeave, onDrop, children }: ColumnProps) {
+function Column({ column, header, rail, railTitle, dropTarget, over, onDragOver, onDragLeave, onDrop, children }: ColumnProps) {
+  const count = column.cards.length
   return (
     <section
       aria-label={column.label}
-      className={classes.lane}
+      className={rail ? classes.rail : classes.lane}
+      title={rail ? (railTitle ?? `${column.label}: nothing here`) : undefined}
       data-drop={dropTarget === null ? undefined : String(dropTarget)}
       data-over={over && dropTarget ? 'true' : undefined}
       onDragOver={(e) => {
@@ -326,16 +404,40 @@ function Column({ column, header, dropTarget, over, onDragOver, onDragLeave, onD
     >
       <div className={classes.laneHead}>
         <span className={classes.laneDot} style={toneStyle(COLUMN_TONE[column.id])} aria-hidden />
-        <h3 className={classes.laneTitle}>
-          {column.label}
-        </h3>
-        <span className={classes.laneCount} aria-label={`${column.cards.length} cards`}>
-          {column.cards.length}
+        <h3 className={classes.laneTitle}>{column.label}</h3>
+        <span className={classes.laneCount} aria-label={`${count} cards`}>
+          {count}
         </span>
       </div>
-      {header}
-      {children}
-      {column.cards.length === 0 && <div className={classes.laneEmpty}>Nothing here</div>}
+      {!rail && (
+        <>
+          {header}
+          <div className={classes.laneBody}>
+            {children}
+            {count === 0 && <div className={classes.laneEmpty}>Nothing here</div>}
+          </div>
+        </>
+      )}
     </section>
+  )
+}
+
+/** One week of a column: a header with its count that folds and opens the cards below it. */
+function Week({ week, folded, onToggle, children }: { week: WeekGroup; folded: boolean; onToggle(): void; children: React.ReactNode }) {
+  const n = week.cards.length
+  return (
+    <div role="group" aria-label={week.label} className={classes.week} data-folded={folded ? 'true' : undefined}>
+      <UnstyledButton
+        className={classes.weekHead}
+        aria-expanded={!folded}
+        aria-label={`${week.label}, ${n} card${n === 1 ? '' : 's'}`}
+        onClick={onToggle}
+      >
+        <IconChevronRight size={14} className={classes.weekChevron} aria-hidden />
+        <span className={classes.weekLabel}>{week.label}</span>
+        <span className={classes.weekCount}>{n}</span>
+      </UnstyledButton>
+      {!folded && children}
+    </div>
   )
 }

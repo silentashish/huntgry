@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Preparer } from '../fixtures/app'
+import { appliedBacklog, seedApplications } from '../fixtures/board'
 import { savedJob, seedJobs, seedQueue } from '../fixtures/queue'
 import { seedResult, seedReviews } from '../fixtures/review'
 import { expect, test } from '../fixtures/servers/fixture'
@@ -76,6 +77,8 @@ async function openBoard(app: { window: import('@playwright/test').Page }): Prom
   const page = new BoardPage(app.window)
   await expect(page.heading).toBeVisible()
   await expect(page.card(DEMO.acme)).toBeVisible()
+  // Cards of past weeks start folded (#160); these tests look at every card.
+  await page.openAllWeeks()
   return page
 }
 
@@ -95,8 +98,10 @@ test.describe('board columns', () => {
     await expect(page.card(DEMO.globex)).toContainText('applied 2026-09-20')
     await page.expectIn('interviewing', DEMO.initech)
     await page.expectIn('rejected', DEMO.wayne)
+    // An empty column is a narrow rail with its name and 0 (#160).
     await expect(page.cards('offer')).toHaveCount(0)
-    await expect(page.column('offer')).toContainText('Nothing here')
+    await expect(page.column('offer').getByLabel('0 cards', { exact: true })).toBeVisible()
+    expect((await page.column('offer').boundingBox())!.width).toBeLessThan(60)
 
     // Archived keeps a week: the result archived two days ago and the job dismissed yesterday, not the one from eight days ago.
     await expect.poll(() => page.titles('archived')).toEqual(['Solutions Architect', ARCHIVED.recent.title])
@@ -104,12 +109,14 @@ test.describe('board columns', () => {
     await expect(page.column('archived')).toContainText('Cards leave the board 7 days after they are archived. 1 older not shown.')
 
     // Each card carries the Scent ring (#110): the job's score against the profile, or a check for a result with no saved job.
+    // The saved job is from an earlier week, so its card is compact (#160) until hovered.
+    await page.card(DEMO.savedJob).hover()
     await expect(page.card(DEMO.savedJob).getByRole('img', { name: /^Scent \d+ of 100$/ })).toBeVisible()
     await expect(page.card(DEMO.umbrella).getByRole('img', { name: 'Tailored' })).toBeVisible()
 
     // Each column header counts its cards.
-    await expect(page.column('ready').getByLabel('2 cards')).toBeVisible()
-    await expect(page.column('review').getByLabel('2 cards')).toBeVisible()
+    await expect(page.column('ready').getByLabel('2 cards', { exact: true })).toBeVisible()
+    await expect(page.column('review').getByLabel('2 cards', { exact: true })).toBeVisible()
   })
 
   test('a card that left the board is still on the Dashboard and on Jobs', async ({ app }) => {
@@ -162,7 +169,7 @@ test.describe('adding and moving cards', () => {
     const page = await openBoard(app)
     const acme = 'software-engineer/acme/acme-4821'
     // The menu shows the card's own column ticked, as a disabled item, above the ones it can go to.
-    await page.card(DEMO.acme).getByRole('button', { name: /^Move / }).click()
+    await page.openMenu(DEMO.acme)
     await expect(page.currentColumnItem('ready')).toBeDisabled()
     await app.window.keyboard.press('Escape')
     expect(await page.moveTargets(DEMO.acme)).toEqual(['Applied', 'Interviewing', 'Offer', 'Rejected', 'Archive'])
@@ -204,6 +211,8 @@ test.describe('adding and moving cards', () => {
     await expect(page.cards('todo')).toHaveCount(0)
 
     await page.moveTo(DEMO.savedJob, 'todo')
+    // Restored today, the saved job (fetched weeks ago) is in This week (#160).
+    await expect(page.week('todo', 'This week').getByRole('article', { name: DEMO.savedJob, exact: true })).toBeVisible()
     await expect.poll(async () => (await readJob(app.workspace!, 'hiring.cafe-demo-1.json')).dismissed).toBe(false)
     expect((await readJob(app.workspace!, 'hiring.cafe-demo-1.json')).dismissedAt).toBeUndefined()
   })
@@ -230,6 +239,7 @@ test.describe('details on the board', () => {
     await expect(dash.drawer.getByRole('heading', { level: 2 })).toContainText('Globex')
     await dash.closeDrawer()
 
+    await page.card(DEMO.savedJob).hover()
     await page.card(DEMO.savedJob).getByText(DEMO.savedJob, { exact: true }).click()
     const jobs = new JobsPage(app.window)
     await expect(jobs.drawer).toBeVisible()
@@ -239,5 +249,187 @@ test.describe('details on the board', () => {
 
     await page.card('Security Engineer').getByRole('button', { name: 'Review', exact: true }).click()
     await expect(app.window.getByRole('heading', { name: 'Review', level: 2 })).toBeVisible()
+  })
+})
+
+/**
+ * 57 Applied applications, 8 a week over 8 weeks (#160), a Rejected one from 500 days ago and a
+ * saved Jobright job, on top of the board above.
+ */
+const JOBRIGHT = savedJob({ id: 'jobright:e2e-160', source: 'jobright', title: 'Growth Engineer', company: 'Hooli' })
+const backlog: Preparer = {
+  async prepare(ctx) {
+    await board.prepare(ctx)
+    await seedApplications(ctx.workspace!, appliedBacklog(57, 8))
+    await seedApplications(ctx.workspace!, [
+      { folder: 'old-engineer/old-co/old-1', title: 'Old role', status: 'rejected', at: new Date(Date.now() - 500 * DAY) }
+    ])
+    await seedJobs(ctx.workspace!, [JOBRIGHT])
+  }
+}
+
+/** The backlog's application folder for "Applied role <n>". */
+const backlogFolder = (n: number) => {
+  const id = String(n).padStart(2, '0')
+  return `backlog-engineer/company-${id}/backlog-${id}`
+}
+
+test.describe('weeks, rails and search (#160)', () => {
+  test.use({ prepare: backlog })
+
+  async function openBacklog(app: { window: import('@playwright/test').Page }): Promise<BoardPage> {
+    await new Shell(app.window).goTo('board')
+    const page = new BoardPage(app.window)
+    await expect(page.week('applied', 'This week')).toBeVisible()
+    return page
+  }
+
+  test('past weeks are folded with their counts, open as compact cards, and stay as left after a restart', async ({ app }) => {
+    let page = await openBacklog(app)
+    const weeks = await page.weeks('applied')
+    expect(weeks.slice(0, 2)).toEqual(['This week', 'Last week'])
+    expect(weeks).toHaveLength(8)
+    await expect(page.column('applied').getByLabel('58 cards', { exact: true })).toBeVisible()
+
+    // This week is open with full cards; Last week shows its header and count only.
+    const thisWeek = page.week('applied', 'This week')
+    await expect(page.weekToggle('applied', 'This week')).toHaveAttribute('aria-expanded', 'true')
+    await expect(thisWeek.getByRole('article', { name: 'Applied role 01' })).not.toHaveAttribute('data-compact')
+    await expect(page.weekToggle('applied', 'Last week')).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.weekToggle('applied', 'Last week')).toHaveAccessibleName('Last week, 8 cards')
+    await expect(page.week('applied', 'Last week').getByRole('article')).toHaveCount(0)
+
+    // Opened, a past week lists its cards newest first, one line each; hover shows the full card.
+    await page.weekToggle('applied', 'Last week').click()
+    const lastWeek = page.week('applied', 'Last week').getByRole('article')
+    await expect(lastWeek).toHaveCount(8)
+    expect(await lastWeek.evaluateAll((cs) => cs.map((c) => c.getAttribute('aria-label')))).toEqual(
+      Array.from({ length: 8 }, (_, i) => `Applied role ${String(9 + i).padStart(2, '0')}`)
+    )
+    const card = page.card('Applied role 10')
+    await expect(card).toHaveAttribute('data-compact', 'true')
+    await expect(card.getByText('Company 10 · Applied role 10')).toBeVisible()
+    await expect(card.getByText('No report')).toBeHidden()
+    await card.hover()
+    await expect(card.getByText('No report')).toBeVisible()
+    await expect(card.getByText('Company 10 · Applied role 10')).toBeHidden()
+
+    // The page does not grow with the cards: the column scrolls inside itself.
+    expect(await app.window.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true)
+
+    // Fold this week, and open a week from more than a year ago; after a restart all three choices hold.
+    await page.weekToggle('applied', 'This week').click()
+    await expect(thisWeek.getByRole('article')).toHaveCount(0)
+    const oldWeek = (await page.weeks('rejected')).at(-1)!
+    expect(oldWeek).toMatch(/\d{4}/)
+    await page.weekToggle('rejected', oldWeek).click()
+    await expect(page.card('Old role')).toBeVisible()
+    await app.relaunch()
+    page = await openBacklog(app)
+    await expect(page.weekToggle('applied', 'This week')).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.week('applied', 'Last week').getByRole('article')).toHaveCount(8)
+    await expect(page.week('rejected', oldWeek).getByRole('article', { name: 'Old role' })).toBeVisible()
+    // Other columns keep their own state: Ready to apply's week is still open.
+    await expect(page.weekToggle('ready', 'This week')).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  test('cards of a past week move with Move to and by drag, also onto an empty column rail', async ({ app }) => {
+    const page = await openBacklog(app)
+    await expect(page.column('offer').getByLabel('0 cards', { exact: true })).toBeVisible()
+    await page.openAllWeeks('applied')
+
+    // Move to an empty column (its rail), from a compact card of last week. The card just moved
+    // lands in This week, open and full, without opening any folded week to find it.
+    await page.openMenu('Applied role 12')
+    await app.window.getByRole('menuitem', { name: 'Offer', exact: true }).click()
+    const moved = page.week('offer', 'This week').getByRole('article', { name: 'Applied role 12', exact: true })
+    await expect(moved).toBeVisible()
+    await expect(moved).not.toHaveAttribute('data-compact')
+    expect(await page.weeks('offer')).toEqual(['This week'])
+    await expect.poll(async () => (await tracking(app.workspace!, backlogFolder(12))).status).toBe('offer')
+    expect(Date.parse(String((await tracking(app.workspace!, backlogFolder(12))).statusChangedAt))).toBeGreaterThan(Date.now() - 5 * 60_000)
+
+    // Moved back, it is in Applied's This week too, not in the folded Last week it came from.
+    await page.openMenu('Applied role 12')
+    await app.window.getByRole('menuitem', { name: 'Applied', exact: true }).click()
+    await expect(page.week('applied', 'This week').getByRole('article', { name: 'Applied role 12', exact: true })).toBeVisible()
+    await expect(page.column('offer').getByLabel('0 cards', { exact: true })).toBeVisible()
+
+    // Drag onto the rail.
+    await page.openAllWeeks('applied')
+    await page.drag('Applied role 20', 'offer')
+    await page.expectIn('offer', 'Applied role 20')
+    await expect.poll(async () => (await tracking(app.workspace!, backlogFolder(20))).status).toBe('offer')
+  })
+
+  test("a compact card at the bottom of a column shows its whole card inside the column, on hover and on focus", async ({ app }) => {
+    // The window's minimum size: the least room a column has.
+    await app.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 600))
+    const page = await openBacklog(app)
+    await page.weekToggle('applied', 'This week').click()
+    await page.openAllWeeks('applied')
+    const last = page.card('Applied role 57')
+    await last.scrollIntoViewIfNeeded()
+
+    /** How far the card's full face (its foot included) sticks out of the column's scrolling list, in px. */
+    const clipped = () =>
+      last.evaluate((card) => {
+        let box = card.parentElement
+        while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement
+        const f = card.firstElementChild!.getBoundingClientRect()
+        const b = box!.getBoundingClientRect()
+        return Math.max(0, b.top - f.top) + Math.max(0, f.bottom - b.bottom)
+      })
+
+    await last.hover()
+    await expect(last.getByText('No report')).toBeVisible()
+    await expect.poll(clipped).toBe(0)
+
+    await app.window.mouse.move(2, 2)
+    await expect(last.getByText('No report')).toBeHidden()
+    // Keyboard focus: Tab from its week's header (the oldest week holds only this card).
+    await page.column('applied').getByRole('group').last().getByRole('button').first().focus()
+    await app.window.keyboard.press('Tab')
+    // Not toBeFocused: the test window need not be the OS's active window.
+    await expect.poll(() => app.window.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe('Applied role 57')
+    await expect(last.getByText('No report')).toBeVisible()
+    await expect.poll(clipped).toBe(0)
+  })
+
+  test('search and the source filter narrow every column, and the counts follow', async ({ app }) => {
+    const page = await openBacklog(app)
+
+    await page.search.fill('company 03')
+    await expect(page.column('applied').getByLabel('1 cards', { exact: true })).toBeVisible()
+    await page.expectIn('applied', 'Applied role 03')
+    for (const id of ['ready', 'interviewing', 'rejected'] as const) await expect(page.column(id).getByLabel('0 cards', { exact: true })).toBeVisible()
+    await expect(page.cards('todo')).toHaveCount(0)
+
+    // Notes are searched too: the demo's Globex application was "Referred by a former colleague."
+    await page.search.fill('FORMER colleague')
+    await page.expectIn('applied', DEMO.globex)
+    await expect(page.column('applied').getByLabel('1 cards', { exact: true })).toBeVisible()
+
+    await page.search.fill('')
+    await page.filterSources('Jobright')
+    await page.expectIn('todo', 'Growth Engineer')
+    await expect(page.column('todo').getByLabel('1 cards', { exact: true })).toBeVisible()
+    await expect(page.column('applied').getByLabel('0 cards', { exact: true })).toBeVisible()
+
+    await page.filterSources('Pasted')
+    await page.expectIn('tailoring', 'Site Reliability Engineer')
+    await page.expectIn('review', 'Machine Learning Engineer')
+    await page.expectIn('archived', 'Solutions Architect')
+    await expect(page.column('todo').getByLabel('1 cards', { exact: true })).toBeVisible()
+
+    // Search and source together.
+    await page.search.fill('hooli')
+    await expect(page.column('todo').getByLabel('1 cards', { exact: true })).toBeVisible()
+    await expect(page.column('tailoring').getByLabel('1 cards', { exact: true })).toBeVisible()
+    await expect(page.column('review').getByLabel('0 cards', { exact: true })).toBeVisible()
+
+    await page.page.getByRole('button', { name: 'Clear', exact: true }).click()
+    await expect(page.search).toHaveValue('')
+    await expect(page.column('applied').getByLabel('58 cards', { exact: true })).toBeVisible()
   })
 })

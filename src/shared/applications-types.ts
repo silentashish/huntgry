@@ -19,6 +19,11 @@ export interface ApplicationTracking {
   appliedAt?: string
   /** ISO time the status became `archived`; cleared when it leaves it. The Board hides a card a week after (#85). */
   archivedAt?: string
+  /**
+   * ISO time the status last changed (#160). Tracking edits do not change the application's
+   * `updatedAt` (its files' times), so the Board dates a moved card by this.
+   */
+  statusChangedAt?: string
   notes: string
   /** Job posting URL; overrides the one found in `job-description.md`. */
   jobUrl?: string

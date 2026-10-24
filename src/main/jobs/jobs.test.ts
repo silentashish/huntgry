@@ -356,6 +356,9 @@ describe('service with a stub loader', () => {
     const restored = await updateJob(ws, pasted.id, { dismissed: false })
     expect(restored.dismissed).toBe(false)
     expect(restored.dismissedAt).toBeUndefined()
+    // The Board dates the card back in To do by its restore (#160), and a refresh keeps it.
+    expect(Date.parse(restored.restoredAt!)).toBeGreaterThanOrEqual(Date.parse(dismissed.dismissedAt!))
+    expect(mergeJob(restored, { ...pasted }).restoredAt).toBe(restored.restoredAt)
     expect(jobDescriptionFor(t)).toMatch(/^# ML Engineer\n\nGlobex\n\nBuild ranking/)
 
     const indeed = await saveJob(ws, indeedCopy())

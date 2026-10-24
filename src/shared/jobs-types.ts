@@ -53,6 +53,8 @@ export interface Job {
   dismissed?: boolean
   /** ISO time the job was dismissed (archived on the Board, #85); cleared on restore. */
   dismissedAt?: string
+  /** ISO time a dismissed job was restored to To do (#160): the Board dates its card by it. */
+  restoredAt?: string
   /** Ids of the same job found on other boards, merged into this record (see `canonicalize`). */
   aliases?: string[]
   /*

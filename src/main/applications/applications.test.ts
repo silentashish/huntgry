@@ -107,7 +107,7 @@ describe('tracking', () => {
   it('merges updates, stamps appliedAt once, and keeps the skill files untouched', async () => {
     const dir = await app('eng/acme/1', { 'resume.pdf': 'original' })
     const t1 = await updateTracking(dir, { status: 'applied' }, new Date('2026-09-29T10:00:00Z'))
-    expect(t1).toEqual({ status: 'applied', notes: '', appliedAt: '2026-09-29' })
+    expect(t1).toEqual({ status: 'applied', notes: '', appliedAt: '2026-09-29', statusChangedAt: '2026-09-29T10:00:00.000Z' })
     const t2 = await updateTracking(dir, { notes: 'Recruiter: Sam', status: 'interviewing' })
     expect(t2).toMatchObject({ status: 'interviewing', appliedAt: '2026-09-29', notes: 'Recruiter: Sam' })
     const t3 = await updateTracking(dir, { appliedAt: '' })
@@ -127,6 +127,19 @@ describe('tracking', () => {
     const t4 = await updateTracking(dir, { status: 'archived' }, new Date('2026-10-07T08:00:00Z'))
     expect(t4.archivedAt).toBe('2026-10-07T08:00:00.000Z')
     expect(normalizeTracking({ status: 'archived', archivedAt: 'last week' }).archivedAt).toBeUndefined()
+  })
+
+  it('stamps statusChangedAt when the status changes, and only then (#160)', async () => {
+    const dir = await app('eng/acme/4', {})
+    const t1 = await updateTracking(dir, { status: 'offer' }, new Date('2026-10-01T08:00:00Z'))
+    expect(t1.statusChangedAt).toBe('2026-10-01T08:00:00.000Z')
+    // A note, or the same status again, is not a move.
+    expect((await updateTracking(dir, { notes: 'call Friday' }, new Date('2026-10-02T08:00:00Z'))).statusChangedAt).toBe(
+      '2026-10-01T08:00:00.000Z'
+    )
+    expect((await updateTracking(dir, { status: 'offer' }, new Date('2026-10-03T08:00:00Z'))).statusChangedAt).toBe('2026-10-01T08:00:00.000Z')
+    expect((await updateTracking(dir, { status: 'rejected' }, new Date('2026-10-04T08:00:00Z'))).statusChangedAt).toBe('2026-10-04T08:00:00.000Z')
+    expect(normalizeTracking({ status: 'offer', statusChangedAt: 'yesterday' }).statusChangedAt).toBeUndefined()
   })
 
   it('records the job source without resetting status or notes', async () => {

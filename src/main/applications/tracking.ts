@@ -28,6 +28,7 @@ export function normalizeTracking(input: unknown): ApplicationTracking {
   }
   if (typeof o.appliedAt === 'string' && DATE.test(o.appliedAt)) t.appliedAt = o.appliedAt
   if (typeof o.archivedAt === 'string' && !Number.isNaN(Date.parse(o.archivedAt))) t.archivedAt = o.archivedAt
+  if (typeof o.statusChangedAt === 'string' && !Number.isNaN(Date.parse(o.statusChangedAt))) t.statusChangedAt = o.statusChangedAt
   if (typeof o.jobUrl === 'string' && /^https?:\/\//i.test(o.jobUrl)) t.jobUrl = o.jobUrl.slice(0, 2000)
   if (typeof o.source === 'string' && o.source.trim()) t.source = o.source.trim().slice(0, 50)
   const review = normalizeReview(o.review)
@@ -72,6 +73,7 @@ export async function readTracking(folder: string): Promise<ApplicationTracking>
  * Merges `patch` into the folder's tracking and writes it atomically.
  * `appliedAt` is set to today the first time the status becomes `applied`;
  * `archivedAt` is set when the status becomes `archived` and dropped when it leaves it.
+ * `statusChangedAt` is set whenever the status changes (the Board's week groups, #160).
  * Empty strings clear optional fields.
  */
 export function updateTracking(
@@ -104,6 +106,7 @@ async function writeMerged(
   if (next.status === 'applied' && !next.appliedAt && patch.appliedAt === undefined) {
     next.appliedAt = today.toISOString().slice(0, 10)
   }
+  if (next.status !== current.status) next.statusChangedAt = today.toISOString()
   if (next.status !== 'archived') delete next.archivedAt
   else if (current.status !== 'archived' || !next.archivedAt) next.archivedAt = today.toISOString()
   const tmp = join(folder, `.${TRACKING_FILE}.${randomBytes(4).toString('hex')}.tmp`)

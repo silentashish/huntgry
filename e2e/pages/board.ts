@@ -20,6 +20,8 @@ export type ArchiveItem = 'Archive' | 'Dismiss job'
 /**
  * The Board page (#85): one column per stage (`<section aria-label="To do">`, …), one card per job
  * (`<article aria-label="<title>">`). Cards are addressed by their title, never by position.
+ * Inside a column, cards sit in week groups (`<div role="group" aria-label="Last week">`) whose
+ * header button folds them; a folded group renders no cards (#160).
  */
 export class BoardPage {
   readonly heading: Locator
@@ -27,12 +29,46 @@ export class BoardPage {
   /** The "Paste a posting link" box at the top of To do, and its Add button. */
   readonly linkInput: Locator
   readonly addButton: Locator
+  /** The search box and the source filter above the columns (#160). */
+  readonly search: Locator
+  readonly sourceFilter: Locator
 
   constructor(readonly page: Page) {
     this.heading = page.getByRole('heading', { name: 'Board', level: 2 })
     this.refreshButton = page.getByRole('button', { name: 'Refresh' })
     this.linkInput = this.column('todo').getByRole('textbox', { name: 'Paste a posting link' })
     this.addButton = this.column('todo').getByRole('button', { name: 'Add', exact: true })
+    this.search = page.getByRole('textbox', { name: 'Search the board' })
+    this.sourceFilter = page.getByRole('combobox', { name: 'Source', exact: true })
+  }
+
+  /** A week group of a column, by its label ("This week", "Last week", "Oct 5 – 11"). */
+  week(id: BoardColumnId, label: string): Locator {
+    return this.column(id).getByRole('group', { name: label, exact: true })
+  }
+
+  /** The header button that folds and opens a week group. */
+  weekToggle(id: BoardColumnId, label: string): Locator {
+    return this.week(id, label).getByRole('button').first()
+  }
+
+  /** Week labels of a column, top to bottom. */
+  async weeks(id: BoardColumnId): Promise<string[]> {
+    return this.column(id).getByRole('group').evaluateAll((gs) => gs.map((g) => g.getAttribute('aria-label') ?? ''))
+  }
+
+  /** Opens every folded week group of a column (of every column when none is named), so all its cards are on the page. */
+  async openAllWeeks(id?: BoardColumnId): Promise<void> {
+    const scope = id ? this.column(id) : this.page.getByRole('region')
+    const folded = scope.locator('button[aria-expanded="false"]')
+    while ((await folded.count()) > 0) await folded.first().click()
+  }
+
+  /** Picks sources in the source filter (on top of those already picked). */
+  async filterSources(...labels: string[]): Promise<void> {
+    await this.sourceFilter.click()
+    for (const label of labels) await this.page.getByRole('option', { name: label, exact: true }).click()
+    await this.page.keyboard.press('Escape')
   }
 
   column(id: BoardColumnId): Locator {
@@ -49,9 +85,13 @@ export class BoardPage {
     return this.page.getByRole('article', { name: title, exact: true })
   }
 
-  /** Waits until `title`'s card is in column `id`, and only there. */
+  /** Waits until `title`'s card is in column `id`, and only there; opens the column's folded weeks to look. */
   async expectIn(id: BoardColumnId, title: string): Promise<void> {
-    await expect(this.column(id).getByRole('article', { name: title, exact: true })).toHaveCount(1)
+    // A moved card can land in a folded week after the first look: open and look again until it is there.
+    await expect(async () => {
+      await this.openAllWeeks(id)
+      await expect(this.column(id).getByRole('article', { name: title, exact: true })).toHaveCount(1, { timeout: 1000 })
+    }).toPass()
     await expect(this.card(title)).toHaveCount(1)
   }
 
@@ -67,9 +107,18 @@ export class BoardPage {
   async moveTo(title: string, id: Exclude<BoardColumnId, 'archived'>): Promise<void>
   async moveTo(title: string, id: 'archived', item: ArchiveItem): Promise<void>
   async moveTo(title: string, id: BoardColumnId, item?: ArchiveItem): Promise<void> {
-    await this.card(title).getByRole('button', { name: /^Move / }).click()
+    await this.openMenu(title)
     await this.page.getByRole('menuitem', { name: id === 'archived' ? item : COLUMN[id], exact: true }).click()
     await this.expectIn(id, title)
+  }
+
+  /**
+   * Opens a card's Move to menu. The card is hovered first: a compact card of a past week (#160)
+   * becomes the full card on hover, which moves the button.
+   */
+  async openMenu(title: string): Promise<void> {
+    await this.card(title).hover()
+    await this.card(title).getByRole('button', { name: /^Move / }).click()
   }
 
   /** The card's own column in its open Move to menu: a disabled item named "<column> (current column)". */
@@ -82,7 +131,7 @@ export class BoardPage {
    * go to, then "Archive" / "Dismiss job". The current column's disabled item is left out.
    */
   async moveTargets(title: string): Promise<string[]> {
-    await this.card(title).getByRole('button', { name: /^Move / }).click()
+    await this.openMenu(title)
     const items = this.page.getByRole('menuitem')
     await expect(items.first()).toBeVisible()
     const names = await items.and(this.page.locator(':not([data-disabled])')).allInnerTexts()

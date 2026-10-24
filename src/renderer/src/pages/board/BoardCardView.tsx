@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ActionIcon, Button, Menu, Tooltip } from '@mantine/core'
 import {
   IconArchive,
@@ -37,19 +37,59 @@ interface Props {
   onApply(): void
   /** An Apply is starting (the page's `useApply` is busy): the Apply button waits. */
   applying?: boolean
+  /**
+   * A card of an older week (#160): one line with the company, the title and the score, and the
+   * full card while it is hovered or has focus. Its Move to menu stays on that line.
+   */
+  compact?: boolean
+}
+
+/** The nearest ancestor that scrolls vertically: the column's card list. */
+function scrollBox(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p
+  }
+  return null
 }
 
 /** One job on the Board (Figma Kanban card): company, role, Scent, where it stands, its next step and Move to. */
-export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDragEnd, onOpen, onMove, onTailor, onFollow, onApply, applying }: Props) {
+export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDragEnd, onOpen, onMove, onTailor, onFollow, onApply, applying, compact }: Props) {
   const targets = moveTargets(card)
   const company = companyOf(card)
   const meta = cardMeta(card)
   // Controls inside the card must not also open its drawer.
   const stop = (e: React.MouseEvent) => e.stopPropagation()
+  const self = useRef<HTMLElement>(null)
+  const face = useRef<HTMLDivElement>(null)
+  /**
+   * A compact card's full face opens upward when the column has no room for it below but has room
+   * above; otherwise downward, so its head (title, Move to) stays where the pointer is.
+   */
+  const [up, setUp] = useState(false)
+  // Measured on the frame after hover or focus, once the full face is laid out. On keyboard focus the
+  // column also scrolls it into view; on hover it does not, as that would move cards under the pointer.
+  const place = (reveal: boolean) => {
+    if (!compact) return
+    requestAnimationFrame(() => {
+      const el = self.current
+      const f = face.current
+      const box = el && scrollBox(el)
+      if (!el || !f || !box) return
+      const slot = el.getBoundingClientRect()
+      const b = box.getBoundingClientRect()
+      const height = f.getBoundingClientRect().height
+      const below = b.bottom - slot.top
+      const above = slot.bottom - b.top
+      setUp(height > below && height <= above)
+      if (reveal) requestAnimationFrame(() => f.scrollIntoView({ block: 'nearest' }))
+    })
+  }
   return (
     <article
+      ref={self}
       aria-label={card.title}
       className={classes.card}
+      data-compact={compact ? 'true' : undefined}
       tabIndex={0}
       draggable={targets.length > 0}
       onDragStart={(e) => {
@@ -65,30 +105,42 @@ export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDrag
           onOpen()
         }
       }}
+      onMouseEnter={() => place(false)}
+      onFocus={(e) => place(e.target.matches(':focus-visible'))}
       style={{ opacity: dragging ? 0.5 : 1 }}
     >
-      <div className={classes.cardHead}>
-        {company && <CompanyAvatar name={company} size="sm" className={classes.cardAvatar} />}
-        <div className={classes.cardHeadText}>
-          <h4 className={classes.cardTitle}>{card.title}</h4>
-          {card.subtitle && <div className={classes.cardSubtitle}>{card.subtitle}</div>}
-        </div>
-        {targets.length > 0 && (
-          <div onClick={stop}>
-            <MoveMenu card={card} targets={targets} onMove={onMove} />
+      {/* A full card is laid out as is; a compact one draws it over its one-line slot on hover or focus. */}
+      <div ref={face} className={classes.face} data-up={compact && up ? 'true' : undefined}>
+        <div className={classes.cardHead}>
+          {company && <CompanyAvatar name={company} size="sm" className={classes.cardAvatar} />}
+          <div className={classes.cardHeadText}>
+            <h4 className={classes.cardTitle}>{card.title}</h4>
+            {card.subtitle && <div className={classes.cardSubtitle}>{card.subtitle}</div>}
           </div>
-        )}
-      </div>
+          {compact && (
+            // Shown instead of the head text and the rest of the card until it is hovered or focused.
+            <div className={classes.compactLine} aria-hidden>
+              <span className={classes.compactText}>{[company, card.title].filter(Boolean).join(' · ')}</span>
+              {scent.mode === 'score' && <MonoLabel size="xs">{scent.value}</MonoLabel>}
+            </div>
+          )}
+          {targets.length > 0 && (
+            <div onClick={stop}>
+              <MoveMenu card={card} targets={targets} onMove={onMove} />
+            </div>
+          )}
+        </div>
 
-      <Pills card={card} />
+        <Pills card={card} />
 
-      <div className={classes.foot}>
-        <Ring scent={scent} />
-        <MonoLabel size="xs" className={classes.meta} title={meta}>
-          {meta}
-        </MonoLabel>
-        <div onClick={stop}>
-          <NextStep card={card} lead={lead} onTailor={onTailor} onFollow={onFollow} onApply={onApply} applying={applying} />
+        <div className={classes.foot}>
+          <Ring scent={scent} />
+          <MonoLabel size="xs" className={classes.meta} title={meta}>
+            {meta}
+          </MonoLabel>
+          <div onClick={stop}>
+            <NextStep card={card} lead={lead} onTailor={onTailor} onFollow={onFollow} onApply={onApply} applying={applying} />
+          </div>
         </div>
       </div>
     </article>
