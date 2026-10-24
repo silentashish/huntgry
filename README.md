@@ -218,6 +218,10 @@ add from Explore, or whose full description you fetch, links the employer's post
 Jobright page kept as its board link. You sign in on Jobright's own page, so Huntgry never sees
 your password. See [docs/changes/146-jobright-employer-link.md](docs/changes/146-jobright-employer-link.md).
 
+When the employer's link is only an application form, **Fetch full description** uses Jobright's
+summary of the job instead (summary, responsibilities, must have, nice to have), and the drawer
+says so. See [docs/changes/148-jobright-summary-fallback.md](docs/changes/148-jobright-summary-fallback.md).
+
 ## Browser
 
 **Open posting** (Jobs) and the posting links on the Dashboard open the job in the
