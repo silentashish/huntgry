@@ -1,3 +1,4 @@
+import type { MatchResult } from '@shared/match-score'
 import { describe, expect, it } from 'vitest'
 import type { Job } from '@shared/jobs-types'
 import { ago, jobFacts, jobMeta, scentDisplay, sponsorshipPill, workplacePill } from './labels'
@@ -22,6 +23,8 @@ const job = (over: Partial<Job> = {}): Job =>
     ...over
   }) as Job
 
+const NO_MATCH: MatchResult = { score: 0, matched: [], missing: [], gates: [], source: 'description' }
+
 describe('job labels', () => {
   it('ages a posting in days, then months', () => {
     const now = Date.parse('2026-10-11T12:00:00Z')
@@ -33,9 +36,9 @@ describe('job labels', () => {
   })
 
   it('tones a Scent score by its strength, and neutral with the reason when Relevant leaves the job out', () => {
-    expect(scentDisplay({ score: 92, reasons: [], matched: true })).toEqual({ tone: 'accent', label: 'Strong scent', excluded: null })
-    expect(scentDisplay({ score: 65, reasons: [], matched: true })).toEqual({ tone: 'warning', label: 'Fair scent', excluded: null })
-    expect(scentDisplay({ score: 92, reasons: [], matched: true, excluded: 'Says it does not sponsor visas' })).toEqual({
+    expect(scentDisplay({ score: 92, reasons: [], matched: true, match: NO_MATCH })).toEqual({ tone: 'accent', label: 'Strong scent', excluded: null })
+    expect(scentDisplay({ score: 65, reasons: [], matched: true, match: NO_MATCH })).toEqual({ tone: 'warning', label: 'Fair scent', excluded: null })
+    expect(scentDisplay({ score: 92, reasons: [], matched: true, match: NO_MATCH, excluded: 'Says it does not sponsor visas' })).toEqual({
       tone: 'neutral',
       label: 'Left out of Relevant',
       excluded: 'Says it does not sponsor visas'

@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { profileSignals, scoreJob, type ProfileSignals } from './job-relevance'
+import type { Job } from './jobs-types'
+import { emptyEducation, emptyExperience, emptyProfile, type MasterProfile } from './master-profile'
 import { GATE_CAP, matchScore, minimumYears, type JobrightSkill, type MatchJob, type MatchProfile } from './match-score'
 
 const NOW = new Date('2026-10-24T12:00:00Z')
@@ -237,5 +240,76 @@ describe('matchScore', () => {
       const r = matchScore(job('Kafka, Terraform, Rust and Python. We do not sponsor visas.'), profile({ needsSponsorship: true }))
       expect(r.score).toBe(25)
     })
+  })
+})
+
+describe('profileSignals → matchScore', () => {
+  function chemist(): MasterProfile {
+    const p = emptyProfile()
+    p.contact.headline = 'Software Engineer'
+    p.contact.workAuthorization = 'F-1 OPT, will need H-1B sponsorship'
+    p.skills = [{ category: 'Cloud', items: ['Python', 'AWS (EC2, S3)', 'Postgres'] }]
+    p.experience = [
+      {
+        ...emptyExperience(),
+        role: 'Software Engineer',
+        start: 'Jan 2023',
+        end: 'Present',
+        technologies: 'Python, Kubernetes',
+        highlights: ['Built data analysis pipelines.']
+      }
+    ]
+    p.education = [{ ...emptyEducation(), degree: 'Master of Science', field: 'Computer Science' }]
+    p.gaps = ['No Kafka experience']
+    return p
+  }
+
+  it('reads degrees and evidence from the profile, never its gaps', () => {
+    const s = profileSignals(chemist(), NOW)
+    expect(s.degrees).toEqual([{ degree: 'Master of Science', field: 'Computer Science' }])
+    expect(s.evidence).toContain('Built data analysis pipelines.')
+    expect(s.evidence).not.toContain('Kafka')
+    const r = matchScore(job('PostgreSQL, k8s, S3 and Kafka.'), s)
+    expect(names(r.matched).sort()).toEqual(['Kubernetes', 'PostgreSQL', 'S3'])
+    expect(names(r.missing)).toEqual(['Kafka'])
+    expect(r.score).toBe(75)
+  })
+})
+
+describe('Relevant uses the match score for its skills part', () => {
+  const s: ProfileSignals = {
+    skills: ['Python', 'Go', 'PostgreSQL', 'AWS', 'Docker'],
+    years: 4,
+    needsSponsorship: false,
+    titles: ['Backend Engineer'],
+    location: '',
+    remote: true
+  }
+  const saved = (description: string): Job => ({
+    id: 'pasted:x',
+    source: 'pasted',
+    sourceId: 'x',
+    title: 'Backend Engineer',
+    company: 'Acme',
+    location: '',
+    remote: true,
+    salary: '',
+    postedAt: '2026-10-23T00:00:00Z',
+    url: '',
+    boardUrl: null,
+    description,
+    descriptionComplete: true,
+    tags: [],
+    fetchedAt: '2026-10-23T00:00:00Z'
+  })
+
+  it('no longer gives full skill points for three shared skills among many asked for', () => {
+    const all = scoreJob(saved('Python, Go and PostgreSQL.'), s, NOW)
+    const half = scoreJob(saved('Python, Go, PostgreSQL, Kafka, Terraform and Rust.'), s, NOW)
+    expect(all.match.score).toBe(100)
+    expect(half.match.score).toBe(50)
+    // Half the 35 skill points, give or take the rounding of the total.
+    expect(Math.abs(all.score - half.score - 35 * 0.5)).toBeLessThanOrEqual(0.5)
+    expect(half.reasons).toContain('Skills: Go, PostgreSQL, Python')
   })
 })

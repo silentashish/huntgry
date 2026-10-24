@@ -2,18 +2,20 @@ import { matchesLocation, seniorityOf, sponsorshipOf } from './job-filters'
 import type { Job } from './jobs-types'
 import { buildKnowledgeGraph, interval, mergedYears } from './knowledge-graph'
 import type { MasterProfile } from './master-profile'
-import { mentions } from './skills'
+import { matchScore, type MatchProfile, type MatchResult, type ProfileDegree } from './match-score'
 
 /**
  * "Relevant" jobs (#73): how well a saved job fits the master profile, scored
  * locally and deterministically (no model call). The profile gives target
  * titles, skills, a location, years of experience and whether a visa is
- * needed; a job scores on title, skills, seniority, location and recency.
+ * needed; a job scores on title, skills, seniority, location and recency. The skills part is the job's
+ * match score (#149, `match-score.ts`): how much of what the job asks for the profile has.
  */
 
 export { sponsorshipFromText } from './job-filters'
 
-export interface ProfileSignals {
+/** What the profile says, for Relevant and for the match score (`MatchProfile`). */
+export interface ProfileSignals extends MatchProfile {
   /** Short target titles: the headline, then the two most recent roles. */
   titles: string[]
   /** Skill names the profile has evidence for (knowledge graph, gaps excluded). */
@@ -24,14 +26,17 @@ export interface ProfileSignals {
   needsSponsorship: boolean
   /** Years of experience, overlaps counted once. */
   years: number
+  /** The Education section's degrees, for the match score's degree gates. */
+  degrees?: ProfileDegree[]
+  /** The profile's own words without its gaps, for the match score's evidence (`MatchProfile.evidence`). */
+  evidence?: string
 }
 
 /** Score out of 100 and when a job is relevant. */
 export const RELEVANCE_THRESHOLD = 40
 
+/** The skills part is `skills × match score / 100`. */
 const WEIGHT = { title: 35, skills: 35, seniority: 10, location: 10, recency: 10 }
-/** Skills a job must share with the profile for the full skill score. */
-const SKILLS_FOR_FULL_SCORE = 3
 
 /** A headline as a search title: "Full-Stack Software Engineer | AI" → "Full-Stack Software Engineer". */
 export function shortTitle(text: string): string {
@@ -65,6 +70,21 @@ export function needsSponsorshipFrom(text: string): boolean {
   return clauses.some((c) => NEED.test(c))
 }
 
+/** The profile's words that count as evidence of a skill: everything but contact details and "Gaps & notes". */
+function evidenceText(p: MasterProfile): string {
+  return [
+    ...p.skills.flatMap((g) => g.items),
+    p.summary,
+    ...p.experience.flatMap((e) => [e.role, e.project, e.technologies, ...e.highlights]),
+    ...p.projects.flatMap((x) => [x.name, x.technologies, x.description, ...x.highlights]),
+    ...p.education.flatMap((e) => [e.field, ...e.highlights]),
+    ...p.certifications.map((c) => c.name),
+    ...p.publications.flatMap((x) => [x.title, x.description])
+  ]
+    .filter((t) => t && t.trim())
+    .join('\n')
+}
+
 export function profileSignals(profile: MasterProfile, now = new Date()): ProfileSignals {
   const dated = profile.experience
     .map((e, i) => ({ e, i, span: interval(e.start, e.end, now) }))
@@ -83,7 +103,11 @@ export function profileSignals(profile: MasterProfile, now = new Date()): Profil
     location: /^remote\b/i.test(location) ? '' : location,
     remote: /^remote\b/i.test(location),
     needsSponsorship: needsSponsorshipFrom([profile.contact.workAuthorization, ...profile.gaps].join('\n')),
-    years: Math.round(mergedYears(spans) * 10) / 10
+    years: Math.round(mergedYears(spans) * 10) / 10,
+    degrees: profile.education
+      .map((e) => ({ degree: e.degree.trim(), field: e.field.trim() }))
+      .filter((d) => d.degree || d.field),
+    evidence: evidenceText(profile)
   }
 }
 
@@ -151,6 +175,8 @@ export interface JobScore {
   excluded?: string
   /** The title has a specific word in common with a target title, or at least one skill matches. */
   matched: boolean
+  /** The match score (#149) behind the skills part: what the job asks for, what the profile has, failed gates. */
+  match: MatchResult
 }
 
 const DAY_MS = 86_400_000
@@ -166,8 +192,8 @@ export function scoreJob(job: Job, s: ProfileSignals, now = new Date()): JobScor
   }
   if (title.core) reasons.push(`Title: ${title.target}`)
 
-  const text = `${job.title}\n${job.description.slice(0, 20_000)}\n${job.tags.join(', ')}`
-  const skills = s.skills.filter((k) => mentions(text, k))
+  const match = matchScore(job, s)
+  const skills = match.matched.map((m) => m.skill)
   if (skills.length > 0) reasons.push(`Skills: ${skills.slice(0, 4).join(', ')}${skills.length > 4 ? ` +${skills.length - 4}` : ''}`)
 
   const asked = yearsAskedFor(job)
@@ -200,7 +226,7 @@ export function scoreJob(job: Job, s: ProfileSignals, now = new Date()): JobScor
 
   const score = Math.round(
     WEIGHT.title * title.cover +
-      WEIGHT.skills * Math.min(1, skills.length / SKILLS_FOR_FULL_SCORE) +
+      (WEIGHT.skills * match.score) / 100 +
       WEIGHT.seniority * seniority +
       WEIGHT.location * location +
       WEIGHT.recency * recency
@@ -210,7 +236,7 @@ export function scoreJob(job: Job, s: ProfileSignals, now = new Date()): JobScor
     : s.needsSponsorship && sponsors === false
       ? 'Says it does not sponsor visas'
       : undefined
-  return { score, reasons, excluded, matched: title.core || skills.length > 0 }
+  return { score, reasons, excluded, matched: title.core || skills.length > 0, match }
 }
 
 export interface ScoredJob {
