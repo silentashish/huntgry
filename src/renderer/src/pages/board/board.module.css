@@ -399,6 +399,11 @@
   transition: border-color 120ms;
 }
 
+/* No room below in the column: the full face grows upward from the slot instead. */
+.card[data-compact='true'] > .face[data-up='true'] {
+  inset: auto 0 0;
+}
+
 .card[data-compact='true']:is(:hover, :focus-within) > .face {
   z-index: 3;
   border-color: var(--hg-border-default);

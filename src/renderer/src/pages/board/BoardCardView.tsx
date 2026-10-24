@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ActionIcon, Button, Menu, Tooltip } from '@mantine/core'
 import {
   IconArchive,
@@ -44,6 +44,14 @@ interface Props {
   compact?: boolean
 }
 
+/** The nearest ancestor that scrolls vertically: the column's card list. */
+function scrollBox(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p
+  }
+  return null
+}
+
 /** One job on the Board (Figma Kanban card): company, role, Scent, where it stands, its next step and Move to. */
 export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDragEnd, onOpen, onMove, onTailor, onFollow, onApply, applying, compact }: Props) {
   const targets = moveTargets(card)
@@ -51,8 +59,34 @@ export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDrag
   const meta = cardMeta(card)
   // Controls inside the card must not also open its drawer.
   const stop = (e: React.MouseEvent) => e.stopPropagation()
+  const self = useRef<HTMLElement>(null)
+  const face = useRef<HTMLDivElement>(null)
+  /**
+   * A compact card's full face opens upward when the column has no room for it below but has room
+   * above; otherwise downward, so its head (title, Move to) stays where the pointer is.
+   */
+  const [up, setUp] = useState(false)
+  // Measured on the frame after hover or focus, once the full face is laid out. On keyboard focus the
+  // column also scrolls it into view; on hover it does not, as that would move cards under the pointer.
+  const place = (reveal: boolean) => {
+    if (!compact) return
+    requestAnimationFrame(() => {
+      const el = self.current
+      const f = face.current
+      const box = el && scrollBox(el)
+      if (!el || !f || !box) return
+      const slot = el.getBoundingClientRect()
+      const b = box.getBoundingClientRect()
+      const height = f.getBoundingClientRect().height
+      const below = b.bottom - slot.top
+      const above = slot.bottom - b.top
+      setUp(height > below && height <= above)
+      if (reveal) requestAnimationFrame(() => f.scrollIntoView({ block: 'nearest' }))
+    })
+  }
   return (
     <article
+      ref={self}
       aria-label={card.title}
       className={classes.card}
       data-compact={compact ? 'true' : undefined}
@@ -71,10 +105,12 @@ export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDrag
           onOpen()
         }
       }}
+      onMouseEnter={() => place(false)}
+      onFocus={(e) => place(e.target.matches(':focus-visible'))}
       style={{ opacity: dragging ? 0.5 : 1 }}
     >
       {/* A full card is laid out as is; a compact one draws it over its one-line slot on hover or focus. */}
-      <div className={classes.face}>
+      <div ref={face} className={classes.face} data-up={compact && up ? 'true' : undefined}>
         <div className={classes.cardHead}>
           {company && <CompanyAvatar name={company} size="sm" className={classes.cardAvatar} />}
           <div className={classes.cardHeadText}>

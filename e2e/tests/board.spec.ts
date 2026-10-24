@@ -362,6 +362,40 @@ test.describe('weeks, rails and search (#160)', () => {
     await expect.poll(async () => (await tracking(app.workspace!, backlogFolder(20))).status).toBe('offer')
   })
 
+  test("a compact card at the bottom of a column shows its whole card inside the column, on hover and on focus", async ({ app }) => {
+    // The window's minimum size: the least room a column has.
+    await app.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 600))
+    const page = await openBacklog(app)
+    await page.weekToggle('applied', 'This week').click()
+    await page.openAllWeeks('applied')
+    const last = page.card('Applied role 57')
+    await last.scrollIntoViewIfNeeded()
+
+    /** How far the card's full face (its foot included) sticks out of the column's scrolling list, in px. */
+    const clipped = () =>
+      last.evaluate((card) => {
+        let box = card.parentElement
+        while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement
+        const f = card.firstElementChild!.getBoundingClientRect()
+        const b = box!.getBoundingClientRect()
+        return Math.max(0, b.top - f.top) + Math.max(0, f.bottom - b.bottom)
+      })
+
+    await last.hover()
+    await expect(last.getByText('No report')).toBeVisible()
+    await expect.poll(clipped).toBe(0)
+
+    await app.window.mouse.move(2, 2)
+    await expect(last.getByText('No report')).toBeHidden()
+    // Keyboard focus: Tab from its week's header (the oldest week holds only this card).
+    await page.column('applied').getByRole('group').last().getByRole('button').first().focus()
+    await app.window.keyboard.press('Tab')
+    // Not toBeFocused: the test window need not be the OS's active window.
+    await expect.poll(() => app.window.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe('Applied role 57')
+    await expect(last.getByText('No report')).toBeVisible()
+    await expect.poll(clipped).toBe(0)
+  })
+
   test('search and the source filter narrow every column, and the counts follow', async ({ app }) => {
     const page = await openBacklog(app)
 
