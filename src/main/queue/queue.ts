@@ -948,13 +948,15 @@ export class TailorQueue {
       return
     }
     if (item.status !== 'preparing' || this.ws !== ws || this.stopped) return
+    // A retry requeues the item (attempts + 1) while this launch may still be starting its run.
+    const attempt = item.attempts
     let run: RunSummary
     try {
       this.lastSpawn = this.now()
       run = await this.deps.start(params, item.agent, ws)
     } catch (err) {
       // The user opened another workspace meanwhile: this item belongs to the old queue, which is gone.
-      if (this.ws !== ws) return
+      if (this.ws !== ws || item.attempts !== attempt) return
       // Starting fails before any agent process for reasons that are not about this job (agent
       // signed out, too old or missing, no skill): pause, so the other jobs wait for the fix
       // instead of failing one after another. Resume or Retry once it is fixed.
@@ -964,6 +966,11 @@ export class TailorQueue {
         this.fail(item, message(err))
         if (item.unattended) this.hooks?.onStartError(item, message(err))
       }
+      return
+    }
+    if (item.attempts !== attempt) {
+      // Cancelled and retried while the agent was starting: the newer launch owns the item.
+      this.deps.stopRun(run.id, ws)
       return
     }
     item.runId = run.id
