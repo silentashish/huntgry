@@ -11,16 +11,21 @@
 //   "STALL" -> after init, never answers (stays silent until killed)
 //   "PARTIAL_STALL" -> streams one request's assistant message (with its usage, twice, as Claude repeats it per block), then stalls
 //   "ASK" -> the turn ends with a question and nothing written
-//   "WRITE_NOTES" -> like WRITE_OUTPUT, plus review-notes.md in the documented format
+//   "WRITE_NOTES" -> like WRITE_OUTPUT, plus tailoring-notes.md v2 (resume-tailor notes v2)
+//   "WRITE_NOTES_V1" -> like WRITE_NOTES, but review-notes.md v1 (an unattended run before #158)
+//   "NOTES_FREEFORM" -> like WRITE_NOTES, but tailoring-notes.md without the v2 marker (a v4 skill ignoring the format)
 //   "VERIFY_FAIL" -> like WRITE_NOTES, but build-report.json says ok: false with a failed hard check
-//   "NO_NOTES" -> like WRITE_OUTPUT (resume.pdf + ok report) without review-notes.md
+//   "NO_NOTES" -> like WRITE_OUTPUT (resume.pdf + ok report) without any notes file
+// The first message names the saved job description ("Job description: saved at <path>", #158): like
+// the real agent, the fake reads it (its mode words count too) and, when it builds, copies it into the
+// application folder as job-description.md, as `build.py --jd` does.
 // Every mode is also honoured on a reply, so the second turn of a session can differ from the first
 // ("ASK" then "WRITE_NOTES" via the reply text); "SECOND:" in a reply is stripped, so a reply can say "SECOND:VERIFY_FAIL".
 // Closing stdin ends the process with code 0.
 // Like the real CLI, `total_cost_usd` and `modelUsage` are the session's running totals (a resumed
 // session continues them, kept in <cwd>/.fake-claude-<session>.json); `usage` is the turn's own.
 // FAKE_CLAUDE_UNKNOWN=--flag in the env: behaves like an older CLI that rejects that flag.
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const unknown = process.env.FAKE_CLAUDE_UNKNOWN
@@ -69,6 +74,8 @@ for await (const line of createInterface({ input: process.stdin })) {
   turn++
   // "SECOND:" marks the mode words meant for this turn (the rest of the reply is kept, e.g. WRITE_OUTPUT_AT).
   if (text.includes('SECOND:')) text = text.replace(/SECOND:/g, '')
+  const jdPath = /^Job description: saved at (.+?\.md)\./m.exec(text)?.[1]
+  if (jdPath && existsSync(jdPath)) text = `${text}\n${readFileSync(jdPath, 'utf8')}`
   if (text.includes('CRASH')) {
     process.stderr.write('boom: simulated failure\n')
     process.exit(3)
@@ -99,19 +106,27 @@ for await (const line of createInterface({ input: process.stdin })) {
     const at = /WRITE_OUTPUT_AT:([\w/-]+)/.exec(text)?.[1] ?? /Job id: ([\w-]+)/.exec(text)?.[1]?.replace(/^(.*)$/, 'software-engineer/acme/$1') ?? 'software-engineer/acme/42'
     const dir = `${process.cwd()}/${at}`
     mkdirSync(dir, { recursive: true })
+    if (jdPath && existsSync(jdPath)) copyFileSync(jdPath, `${dir}/job-description.md`)
     return dir
   }
-  const notes = (dir) =>
+  const notes = (dir) => {
+    if (text.includes('WRITE_NOTES_V1'))
+      return writeFileSync(
+        `${dir}/review-notes.md`,
+        `# Review notes\n<!-- huntgry-review v1 · run fake · unattended -->\n\n## Used standing approvals\nNone.\n\n## Proposed reframings (not used)\n### R1 · Kafka streaming\n- Source fact: Built an event pipeline on RabbitMQ\n- Proposed wording: Built event-streaming pipelines (RabbitMQ; Kafka-adjacent)\n- Why unsure: Kafka was never used\n\n## Open gaps\n- Go: nothing honest to say\n\n## Notes\nFake run.\n`
+      )
+    const marker = text.includes('NOTES_FREEFORM') ? '' : '<!-- resume-tailor notes v2 -->\n'
     writeFileSync(
-      `${dir}/review-notes.md`,
-      `# Review notes\n<!-- huntgry-review v1 · run fake · unattended -->\n\n## Used standing approvals\nNone.\n\n## Proposed reframings (not used)\n### R1 · Kafka streaming\n- Source fact: Built an event pipeline on RabbitMQ\n- Proposed wording: Built event-streaming pipelines (RabbitMQ; Kafka-adjacent)\n- Why unsure: Kafka was never used\n\n## Open gaps\n- Go: nothing honest to say\n\n## Notes\nFake run.\n`
+      `${dir}/tailoring-notes.md`,
+      `# Tailoring notes\n${marker}\n## Direct hits\n- Node: five years of Node\n\n## Reframings used\n### Kafka streaming\n- Source fact: Built an event pipeline on RabbitMQ\n- Wording: Built event-streaming pipelines (RabbitMQ; Kafka-adjacent)\n\n## Gaps left open\n- Go: nothing honest to say\n\n## Decisions\n- Right-aligned dates: fake run.\n`
     )
+  }
   if (text.includes('WRITE_OUTPUT') || text.includes('NO_NOTES')) {
     const dir = jobDir()
     writeFileSync(`${dir}/resume.pdf`, '%PDF-1.4 fake')
     writeFileSync(`${dir}/build-report.json`, '{"ok": true}')
   }
-  if (text.includes('WRITE_NOTES')) {
+  if (text.includes('WRITE_NOTES') || text.includes('NOTES_FREEFORM')) {
     const dir = jobDir()
     writeFileSync(`${dir}/resume.pdf`, '%PDF-1.4 fake')
     writeFileSync(`${dir}/build-report.json`, '{"ok": true, "verify": {"results": [{"check": "page_count", "passed": true, "hard": true}]}}')

@@ -10,7 +10,7 @@ import { adapterFor, agentOr } from './agents'
 import { agyModel } from './agents/antigravity'
 import { codexModel } from './agents/codex'
 import { skillStatus } from './agents/skills'
-import { buildSystemPrompt, requireStartParams, resolveRunPaths, texRootOf, type UnattendedPromptOptions } from './command'
+import { buildSystemPrompt, requireStartParams, resolveRunPaths, texRootOf, type CallerRules } from './command'
 import {
   buildChildEnv,
   claudeConfigDirChoice,
@@ -148,35 +148,36 @@ async function applyClaudeAccount(dir: string | null, fromDialog: boolean): Prom
   setClaudeConfigChoice(next)
 }
 
-/** The context to continue run `runId` of the open workspace with: always the run's own agent and prompt variant. */
+/**
+ * The context to continue run `runId` of the open workspace with: always the run's own agent. An
+ * older attended run continues with the one prompt every run gets now (#158).
+ */
 export async function contextForRun(runId: string, expectedWorkspace?: string): Promise<RunContext> {
   const workspace = await requireCurrentWorkspace()
   const run = await readRun(expectedWorkspace ?? workspace.path, runId)
-  return context(expectedWorkspace, run.agent, { unattended: run.unattended === true || run.params.unattended === true })
+  return context(expectedWorkspace, run.agent)
 }
 
-/** The standing approvals an unattended run gets in its prompt (newest first, capped). */
-async function unattendedPrompt(workspace: string): Promise<UnattendedPromptOptions> {
-  return { approvals: approvalsForPrompt(await loadApprovals(workspace)).sent }
+/**
+ * The caller rules every run gets (newest first, capped): standing approvals as preferred
+ * wordings. Wordings to avoid stay empty until Review stores rejections (#159).
+ */
+async function callerRules(workspace: string): Promise<CallerRules> {
+  return { preferred: approvalsForPrompt(await loadApprovals(workspace)).sent, avoid: [] }
 }
 
 /**
  * Everything a run of `agent` needs (default: the Settings default).
  * `expectedWorkspace`: refuse to build a context for any other workspace (the queue's jobs belong to one).
- * `opts.unattended`: the unattended prompt variant with the workspace's standing approvals (#31).
  */
-export async function context(
-  expectedWorkspace?: string,
-  agent?: AgentId,
-  opts: { unattended?: boolean } = {}
-): Promise<RunContext> {
+export async function context(expectedWorkspace?: string, agent?: AgentId): Promise<RunContext> {
   const workspace = await requireCurrentWorkspace()
   if (expectedWorkspace !== undefined && workspace.path !== expectedWorkspace) {
     throw new Error('Another workspace was opened while this job was starting.')
   }
-  const unattended = opts.unattended ? await unattendedPrompt(workspace.path) : undefined
+  const rules = await callerRules(workspace.path)
   const id = agent ?? (await defaultAgent())
-  if (id !== 'claude') return otherAgentContext(id, workspace, unattended)
+  if (id !== 'claude') return otherAgentContext(id, workspace, rules)
   // File checks only: the full preflight is for Settings and the Tailor form's warning.
   const env = await discoverRuntime()
   if (!env.claudePath) throw new Error('The claude CLI was not found. See Settings.')
@@ -215,7 +216,7 @@ export async function context(
       workspace: workspace.path,
       masterProfile: workspace.masterProfile,
       skillDir,
-      unattended
+      rules
     })
   }
 }
@@ -224,7 +225,7 @@ export async function context(
 async function otherAgentContext(
   agent: Exclude<AgentId, 'claude'>,
   workspace: { path: string; masterProfile: string },
-  unattended?: UnattendedPromptOptions
+  rules: CallerRules
 ): Promise<RunContext> {
   const adapter = adapterFor(agent)
   const label = AGENT_LABEL[agent]
@@ -255,7 +256,7 @@ async function otherAgentContext(
       ? { model: await codexModel(homedir()) }
       : // agy gets no --model: it runs the model of its own settings, read only to price the run (#44).
         { expectedModel: (await agyModel(homedir())) ?? null }),
-    systemPrompt: buildSystemPrompt({ workspace: workspace.path, masterProfile: workspace.masterProfile, skillDir, unattended })
+    systemPrompt: buildSystemPrompt({ workspace: workspace.path, masterProfile: workspace.masterProfile, skillDir, rules })
   }
 }
 
@@ -286,7 +287,7 @@ export async function startTailorRun(input: unknown, expectedWorkspace?: string)
   const params = requireStartParams(input)
   params.agent ??= await defaultAgent()
   // Checks the agent's CLI and skill before fetching anything.
-  const ctx = await context(expectedWorkspace, params.agent, { unattended: params.unattended === true })
+  const ctx = await context(expectedWorkspace, params.agent)
   if (!params.jobDescription?.trim() && params.jobUrl) {
     params.jobDescription = await fetchPostingText(params.jobUrl, pinnedFetch)
   }

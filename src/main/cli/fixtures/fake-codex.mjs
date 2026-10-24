@@ -11,7 +11,7 @@
 // The agent message echoes the prompt, the cwd and whether this was a resume.
 // Like the real CLI, `turn.completed.usage` is the thread's running total (a resume continues it):
 // kept in <cwd>/.fake-codex-<thread>.json between processes.
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 
 const argv = process.argv.slice(2)
 const resumeIdx = argv.indexOf('resume')
@@ -37,6 +37,9 @@ const completed = (input, output) => {
 let text = ''
 process.stdin.setEncoding('utf8')
 for await (const chunk of process.stdin) text += chunk
+// Like the real agent, reads the job description the first message names (#158); its mode words count too.
+const jdPath = /^Job description: saved at (.+?\.md)\./m.exec(text)?.[1]
+if (jdPath && existsSync(jdPath)) text = `${text}\n${readFileSync(jdPath, 'utf8')}`
 
 out({ type: 'thread.started', thread_id: thread })
 out({ type: 'turn.started' })

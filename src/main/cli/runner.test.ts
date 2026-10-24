@@ -71,7 +71,11 @@ describe('RunManager against a fake claude', () => {
     expect(events.some((e) => (e as { subtype?: string }).subtype === 'hook_started')).toBe(false)
     const t = buildTranscript(events)
     expect(t[0]).toMatchObject({ kind: 'user' })
-    expect((t[0] as { text: string }).text).toContain('Build APIs at Acme.')
+    // The job description was saved before the agent started; the first message names it (#158).
+    const jdPath = join(ws, '.huntgry', 'runs', started.id, 'job-description.md')
+    expect(await readFile(jdPath, 'utf8')).toBe(params.jobDescription)
+    expect((t[0] as { text: string }).text).toContain(`Job description: saved at ${jdPath}.`)
+    expect((t[0] as { text: string }).text).not.toContain('Build APIs at Acme.')
     expect(t.find((i) => i.kind === 'tool')).toMatchObject({ name: 'Read', status: 'ok' })
     expect(t.find((i) => i.kind === 'assistant')).toMatchObject({
       text: expect.stringContaining('echo: Follow the resume-tailor')
@@ -285,11 +289,12 @@ describe('RunManager against a fake claude', () => {
     expect(Date.parse(sent.lastOutputAt!)).toBeGreaterThan(Date.parse(waiting.lastOutputAt!))
   })
 
-  it('records an unattended run as such, so a resume keeps the variant', async () => {
+  it('records an unattended run as such and copies the saved job description into the folder', async () => {
     const { id, unattended } = await manager.start({ ...params, unattended: true, notes: 'WRITE_NOTES' }, ctx())
     expect(unattended).toBe(true)
-    const waiting = await until(id, (r) => r.status === 'waiting')
-    expect(waiting.outputFiles).toContain('review-notes.md')
+    const waiting = await until(id, (r) => r.status === 'waiting' && r.outputFiles.includes('tailoring-notes.md'))
+    expect(waiting.outputFiles).toEqual(['build-report.json', 'job-description.md', 'resume.pdf', 'tailoring-notes.md'])
+    expect(await readFile(join(ws, waiting.outputFolder!, 'job-description.md'), 'utf8')).toBe(params.jobDescription)
     manager.finish(id)
     await until(id, (r) => r.status === 'finished')
     expect((await readRun(ws, id)).unattended).toBe(true)

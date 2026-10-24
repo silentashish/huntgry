@@ -28,6 +28,17 @@ export function runDir(workspace: string, id: string): string {
   return join(runsDir(workspace), id)
 }
 
+/**
+ * The job description Huntgry saves for a run before it starts (#158): the agent reads it there and
+ * passes the path to `build.py --jd`, which copies it into the application folder, so the model
+ * never retypes the posting. Under `.huntgry/`, so the application scan never sees it.
+ */
+export const RUN_JOB_DESCRIPTION_FILE = 'job-description.md'
+
+export function runJobDescriptionPath(workspace: string, id: string): string {
+  return join(runDir(workspace, id), RUN_JOB_DESCRIPTION_FILE)
+}
+
 /** Sortable, filesystem-safe id: `20260929-013000-a1b2c3`. */
 export function newRunId(now = new Date()): string {
   const p = (n: number) => String(n).padStart(2, '0')
@@ -119,6 +130,7 @@ export const OUTPUT_FILES = [
   'resume_data.json',
   'cover_data.json',
   'resume.tex',
+  'tailoring-notes.md',
   'review-notes.md'
 ] as const
 
