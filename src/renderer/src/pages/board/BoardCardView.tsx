@@ -73,35 +73,38 @@ export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDrag
       }}
       style={{ opacity: dragging ? 0.5 : 1 }}
     >
-      <div className={classes.cardHead}>
-        {company && <CompanyAvatar name={company} size="sm" className={classes.cardAvatar} />}
-        <div className={classes.cardHeadText}>
-          <h4 className={classes.cardTitle}>{card.title}</h4>
-          {card.subtitle && <div className={classes.cardSubtitle}>{card.subtitle}</div>}
+      {/* A full card is laid out as is; a compact one draws it over its one-line slot on hover or focus. */}
+      <div className={classes.face}>
+        <div className={classes.cardHead}>
+          {company && <CompanyAvatar name={company} size="sm" className={classes.cardAvatar} />}
+          <div className={classes.cardHeadText}>
+            <h4 className={classes.cardTitle}>{card.title}</h4>
+            {card.subtitle && <div className={classes.cardSubtitle}>{card.subtitle}</div>}
+          </div>
+          {compact && (
+            // Shown instead of the head text and the rest of the card until it is hovered or focused.
+            <div className={classes.compactLine} aria-hidden>
+              <span className={classes.compactText}>{[company, card.title].filter(Boolean).join(' · ')}</span>
+              {scent.mode === 'score' && <MonoLabel size="xs">{scent.value}</MonoLabel>}
+            </div>
+          )}
+          {targets.length > 0 && (
+            <div onClick={stop}>
+              <MoveMenu card={card} targets={targets} onMove={onMove} />
+            </div>
+          )}
         </div>
-        {compact && (
-          // Shown instead of the head text and the rest of the card until it is hovered or focused.
-          <div className={classes.compactLine} aria-hidden>
-            <span className={classes.compactText}>{[company, card.title].filter(Boolean).join(' · ')}</span>
-            {scent.mode === 'score' && <MonoLabel size="xs">{scent.value}</MonoLabel>}
-          </div>
-        )}
-        {targets.length > 0 && (
+
+        <Pills card={card} />
+
+        <div className={classes.foot}>
+          <Ring scent={scent} />
+          <MonoLabel size="xs" className={classes.meta} title={meta}>
+            {meta}
+          </MonoLabel>
           <div onClick={stop}>
-            <MoveMenu card={card} targets={targets} onMove={onMove} />
+            <NextStep card={card} lead={lead} onTailor={onTailor} onFollow={onFollow} onApply={onApply} applying={applying} />
           </div>
-        )}
-      </div>
-
-      <Pills card={card} />
-
-      <div className={classes.foot}>
-        <Ring scent={scent} />
-        <MonoLabel size="xs" className={classes.meta} title={meta}>
-          {meta}
-        </MonoLabel>
-        <div onClick={stop}>
-          <NextStep card={card} lead={lead} onTailor={onTailor} onFollow={onFollow} onApply={onApply} applying={applying} />
         </div>
       </div>
     </article>

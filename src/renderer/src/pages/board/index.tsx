@@ -226,6 +226,8 @@ export function BoardPage() {
               clearable
               // Searchable keeps the input on the page (and named) once sources are picked.
               searchable
+              // A narrow typing field, so picked sources stay on one line with it.
+              styles={{ inputField: { minWidth: 24, flexBasis: 24 } }}
               comboboxProps={{ withinPortal: true }}
             />
             {isFilterActive(filter) && (

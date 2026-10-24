@@ -18,7 +18,7 @@
 }
 
 .sources {
-  flex: 0 1 260px;
+  flex: 0 1 320px;
   min-width: 0;
 }
 
@@ -367,8 +367,46 @@
   text-overflow: ellipsis;
 }
 
-/* One line until hovered or focused; then the full card. */
-.card[data-compact='true']:not(:hover, :focus-within) {
+/* A full card's face is only a wrapper. */
+.face {
+  display: contents;
+}
+
+/*
+ * A compact card keeps a one-line slot in the column. Its face lies over that slot, so the full card
+ * shown on hover or focus overlaps the cards below instead of pushing them (no layout shift, no flicker).
+ */
+.card[data-compact='true'] {
+  position: relative;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.card[data-compact='true'] > .face {
+  position: absolute;
+  inset: 0 0 auto;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid var(--hg-border-subtle);
+  border-radius: var(--hg-radius-lg);
+  background-color: var(--hg-bg-surface);
+  transition: border-color 120ms;
+}
+
+.card[data-compact='true']:is(:hover, :focus-within) > .face {
+  z-index: 3;
+  border-color: var(--hg-border-default);
+  box-shadow: var(--hg-shadow-float);
+}
+
+/* One line until hovered or focused. */
+.card[data-compact='true']:not(:hover, :focus-within) > .face {
   gap: 0;
   padding: 6px 10px;
 }
