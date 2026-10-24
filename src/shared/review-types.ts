@@ -1,12 +1,14 @@
 import type { BuildSummary } from './applications-types'
 
 /**
- * Review of unattended tailoring results (#31). An unattended run may use only
- * master-profile facts and standing approvals; everything else it leaves out
- * and lists in `review-notes.md`. The result stays **Unreviewed** (Apply is
- * blocked) until the user approves it here, on the desktop or, later, from the
- * phone (#42). Approved reframings become standing approvals that later
- * unattended runs may reuse, keyed by `sha256(sourceFact + "\n" + wording)`.
+ * Review of tailoring results (#31, #158). Every run goes to the end on its
+ * own: it uses the bridges it can make honestly and lists each one in
+ * `tailoring-notes.md` (resume-tailor notes v2). Results of older unattended
+ * runs list what they left out in `review-notes.md` (v1) instead; both parse.
+ * A result stays **Unreviewed** (Apply is blocked) until the user approves it
+ * here, on the desktop or from the phone (#42). Ticked reframings become
+ * standing approvals that later runs get as preferred wordings, keyed by
+ * `sha256(sourceFact + "\n" + wording)`.
  */
 
 export type ReviewState = 'unreviewed' | 'needs-attention' | 'approved' | 'discarded'
@@ -39,7 +41,10 @@ export interface StandingApproval {
   via: ReviewVia
 }
 
-/** A reframing an unattended run proposed but did not use (from `review-notes.md`). */
+/**
+ * A reframing with its source fact: one a v1 run proposed but did not use (`review-notes.md`), or
+ * one a v2 run used (`tailoring-notes.md` → Reframings used).
+ */
 export interface ProposedReframing {
   id: string
   requirement?: string
@@ -48,12 +53,26 @@ export interface ProposedReframing {
   reason?: string
 }
 
-/** `review-notes.md` parsed. */
+/** Which notes file a result carries: `review-notes.md` (v1, #31) or `tailoring-notes.md` (v2, #158). */
+export type NotesFormat = 'v1' | 'v2'
+
+/** `review-notes.md` (v1) or `tailoring-notes.md` (v2) parsed. */
 export interface ReviewNotes {
+  format: NotesFormat
   runId?: string
+  /** v1 only: standing approvals the run used. */
   usedApprovals: { sourceFact: string; wording: string }[]
+  /** v1 only: reframings the run left out. */
   proposed: ProposedReframing[]
+  /** v2 only: requirements the profile meets in the posting's own terms. */
+  directHits: string[]
+  /** v2 only: the bridges the run used, each with its source fact. */
+  reframingsUsed: ProposedReframing[]
+  /** v1 "Open gaps" / v2 "Gaps left open". */
   openGaps: string[]
+  /** v2 only: date style, cuts, judgement calls. */
+  decisions: string[]
+  /** v1 "Notes". */
   notes: string
   /** The file did not follow the format; nothing can be saved as a standing approval from it. */
   parseWarning?: string
@@ -80,12 +99,22 @@ export interface ReviewDetail {
   state: ReviewState
   reason?: string
   jobUrl: string | null
-  /** `review-notes.md` inline (≤ 16 KiB), else `null`. */
+  /** The notes inline (≤ 16 KiB): `tailoring-notes.md` v2, or `review-notes.md` v1 for older results; else `null`. */
   reviewNotes: string | null
+  /** Which notes the result carries (absent when it has none). Desktop only; the phone reads the same fields. */
+  notesFormat?: NotesFormat
   parseWarning?: string
   usedApprovals: { sourceFact: string; wording: string }[]
   openGaps: string[]
+  /**
+   * The reframings the user can tick (they become standing approvals): v1 the ones the run left
+   * out, v2 the ones it used ("Reframings used"). Same ids either way.
+   */
   proposedReframings: ProposedReframing[]
+  /** v2 only. */
+  directHits?: string[]
+  /** v2 only. */
+  decisions?: string[]
   verify: { ok: boolean; report: string }
   build: BuildSummary
   artifacts: { file: string; bytes: number; sha256: string }[]
@@ -153,10 +182,17 @@ export const REVIEW_CHANNELS = {
 /** Most standing approvals sent to an unattended run: newest first, then this many / this size. */
 export const APPROVALS_PROMPT_CAP = { entries: 150, bytes: 32 * 1024 } as const
 
-/** Longest `review-notes.md` sent inline in a `ReviewDetail`. */
+/** Longest notes file sent inline in a `ReviewDetail`. */
 export const REVIEW_NOTES_INLINE_BYTES = 16 * 1024
 
+/** v1 notes of an older unattended run (#31); also the name the phone asks for (#42). */
 export const REVIEW_NOTES_FILE = 'review-notes.md'
+
+/** v2 notes the resume-tailor skill (v5) writes and `build.py --notes` copies into the folder (#158). */
+export const TAILORING_NOTES_FILE = 'tailoring-notes.md'
+
+/** The line that marks `tailoring-notes.md` as v2 (older attended runs wrote free-form tailoring notes). */
+export const NOTES_V2_MARKER = '<!-- resume-tailor notes v2 -->'
 
 /** The reason an unattended result carries while its run still works on it (set by the pipeline). */
 export const IN_PROGRESS_REASON = 'Still being tailored unattended; not checked yet.'
