@@ -21,7 +21,7 @@ export const BOARD_SOURCE_LABEL: Record<BoardSource, string> = {
 }
 
 export interface BoardFilter {
-  /** Matched, case-insensitively, against company, role, title and notes. Blank matches all. */
+  /** Matched, case-insensitively, against company, role, title, job id and notes. Blank matches all. */
   text: string
   /** Empty = every source, and cards whose source is unknown. */
   sources: BoardSource[]
@@ -43,9 +43,9 @@ export function cardSource(card: BoardCard): BoardSource | null {
   return null
 }
 
-/** The text an application is searched by: company, role, job title and notes. */
+/** The text an application is searched by: the Dashboard table's fields, company, role, job title, job id and notes. */
 export function applicationSearchText(app: ApplicationRecord): string[] {
-  return [app.company, app.role, app.jobTitle, app.tracking.notes]
+  return [app.company, app.role, app.jobTitle, app.jobId, app.tracking.notes]
 }
 
 /** The text a card is searched by: its title and subtitle, plus its application's or job's fields. */

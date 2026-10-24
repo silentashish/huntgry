@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ApplicationRecord } from './applications-types'
 import { buildBoard, type BoardCard } from './board'
-import { cardSource, EMPTY_BOARD_FILTER, filterBoard, isFilterActive, matchesBoardFilter } from './board-filter'
+import { applicationSearchText, cardSearchText, cardSource, EMPTY_BOARD_FILTER, filterBoard, isFilterActive, matchesBoardFilter } from './board-filter'
 import type { Job } from './jobs-types'
 import type { QueueItem } from './queue-types'
 
@@ -88,6 +88,16 @@ describe('matchesBoardFilter', () => {
     expect(matchesBoardFilter(card('Globex'), { text: 'ana', sources: [] })).toBe(true)
     expect(matchesBoardFilter(card('Wayne'), { text: 'ana', sources: [] })).toBe(false)
     expect(matchesBoardFilter(card('Data Engineer'), { text: 'initech', sources: [] })).toBe(true)
+  })
+
+  it("searches an application's job id, as the Dashboard table does (#161 reuses this)", () => {
+    const req = app('Umbrella', { jobId: 'REQ-4711', jobTitle: 'Data Engineer', role: 'Data Engineer' })
+    const board = buildBoard({ jobs: [], applications: [req], queue: [], now: NOW })
+    const umbrella = board.columns.flatMap((c) => c.cards)[0]
+    // The id is in none of the other searched fields.
+    expect(cardSearchText(umbrella).filter((s) => s.includes('4711'))).toEqual(['REQ-4711'])
+    expect(matchesBoardFilter(umbrella, { text: 'req-4711', sources: [] })).toBe(true)
+    expect(applicationSearchText(req)).toContain('REQ-4711')
   })
 
   it('keeps only the chosen sources; a card with no known source is left out', () => {
