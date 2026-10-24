@@ -43,6 +43,8 @@ flowchart TD
   F -- no --> X[error: the employer page's failure]
 ```
 
+![The Jobs drawer with Jobright's summary and the note](assets/148-jobright-summary-drawer.png)
+
 ## Decisions and alternatives
 
 - **The summary counts as complete.** It is the most Huntgry can read without the user, and
