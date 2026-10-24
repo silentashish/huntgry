@@ -342,10 +342,6 @@ export function BoardPage() {
         jobs={tailorJobs}
         opened={tailorJob !== null}
         onClose={() => setTailorJob(null)}
-        onQueued={(res) => {
-          setTailorJob(null)
-          if (res.added === 0) setError(`Nothing was queued: ${[...new Set(res.skipped.map((s) => s.reason))].join(' ')}`)
-        }}
         onStarted={() => setTailorJob(null)}
       />
       <PasteModal

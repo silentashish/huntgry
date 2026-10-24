@@ -4,10 +4,8 @@ import {
   Anchor,
   Button,
   Group,
-  List,
   Modal,
   NumberInput,
-  SegmentedControl,
   Select,
   Stack,
   Switch,
@@ -15,7 +13,7 @@ import {
   Textarea,
   Tooltip
 } from '@mantine/core'
-import { IconAlertTriangle, IconCompass, IconCpu, IconSend, IconSparkles } from '@tabler/icons-react'
+import { IconAlertTriangle, IconCompass, IconCpu, IconSparkles } from '@tabler/icons-react'
 import type { Job } from '@shared/jobs-types'
 import {
   DEFAULT_STALL_MINUTES,
@@ -27,7 +25,7 @@ import {
   type PipelineStartInput,
   type PipelineState
 } from '@shared/pipeline-types'
-import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY, MAX_ENQUEUE, type EnqueueResult } from '@shared/queue-types'
+import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY, MAX_ENQUEUE } from '@shared/queue-types'
 import { AGENT_IDS, AGENT_LABEL, DEFAULT_AGENT, type AgentId, type RunnerEnvironment } from '@shared/runner-types'
 import { api, errorText } from '../../api'
 import { agentStatus } from '../../components/AgentPicker'
@@ -37,16 +35,11 @@ import { planSummary } from './pipeline-plan'
 import { selectionSummary } from './selection'
 import classes from './jobs.module.css'
 
-export type BulkMode = 'approve' | 'unattended'
-
 interface Props {
   jobs: Job[]
   opened: boolean
-  /** The mode the modal opens in (the selection bar's "Run unattended" opens it unattended). */
-  initialMode?: BulkMode
   onClose(): void
-  onQueued(result: EnqueueResult): void
-  /** An unattended pipeline started. */
+  /** The pipeline started. */
   onStarted(state: PipelineState): void
 }
 
@@ -56,14 +49,12 @@ const DATE_STYLES = [
 ]
 
 /**
- * "Tailor N jobs": options shared by every run, then one call queues them
- * all. Two modes: approve each run (the queue as before) or run unattended
- * (#31: a plan step, then a pipeline that never waits for a reply and leaves
- * every result Unreviewed). Figma Jobs — Tailor all (unattended plan).
+ * "Tailor N jobs": options shared by every run, a plan step, then the pipeline (#31) that runs
+ * every job to the end and leaves each result Unreviewed. There is no "approve each run" mode any
+ * more (#158): no run stops for approval. Figma Jobs — Tailor all (unattended plan).
  */
-export function BulkTailorModal({ jobs, opened, initialMode, onClose, onQueued, onStarted }: Props) {
+export function BulkTailorModal({ jobs, opened, onClose, onStarted }: Props) {
   const { navigate } = useNavigation()
-  const [mode, setMode] = useState<BulkMode>('approve')
   const [coverLetter, setCoverLetter] = useState(true)
   const [dateStyle, setDateStyle] = useState<'inline' | 'right'>('right')
   const [notes, setNotes] = useState('')
@@ -88,7 +79,6 @@ export function BulkTailorModal({ jobs, opened, initialMode, onClose, onQueued, 
     if (!opened) return
     let live = true
     concurrencyTouched.current = false
-    if (initialMode) setMode(initialMode)
     setError(null)
     setPlan(null)
     api.runner.environment().then(
@@ -103,12 +93,12 @@ export function BulkTailorModal({ jobs, opened, initialMode, onClose, onQueued, 
     return () => {
       live = false
     }
-  }, [opened, initialMode])
+  }, [opened])
 
   // The plan describes one set of choices: any change means planning again.
   useEffect(() => {
     setPlan(null)
-  }, [jobs, agent, fallback, concurrency, maxCostUsd, maxJobs, skipTailored, coverLetter, dateStyle, notes, stallMinutes, mode])
+  }, [jobs, agent, fallback, concurrency, maxCostUsd, maxJobs, skipTailored, coverLetter, dateStyle, notes, stallMinutes])
 
   const summary = selectionSummary(jobs)
   const status = agentStatus(environment, agent)
@@ -116,7 +106,6 @@ export function BulkTailorModal({ jobs, opened, initialMode, onClose, onQueued, 
   const problem = blocking ? status.problems[0] : environment?.sharedProblems[0]
   // The main process accepts at most MAX_ENQUEUE ids per request.
   const tooMany = jobs.length > MAX_ENQUEUE
-  const unattended = mode === 'unattended'
   const fallbackStatus = fallback ? agentStatus(environment, fallback) : null
   const fallbackBlocked = !!fallbackStatus && !fallbackStatus.ready
   const readyAgents = AGENT_IDS.filter((id) => id !== agent && (agentStatus(environment, id)?.ready ?? true))
@@ -153,17 +142,6 @@ export function BulkTailorModal({ jobs, opened, initialMode, onClose, onQueued, 
     }
   }
 
-  const confirm = () =>
-    run(async () => {
-      const result = await api.queue.enqueue({
-        jobIds: jobs.map((j) => j.id),
-        options: { coverLetter, dateStyle, notes: notes.trim() || undefined },
-        concurrency: Number(concurrency),
-        agent
-      })
-      onQueued(result)
-    })
-
   const planIt = () => run(async () => setPlan(await api.pipeline.plan(pipelineInput())))
   const startIt = () => run(async () => onStarted(await api.pipeline.start(pipelineInput())))
   const jobsWord = `job${summary.total === 1 ? '' : 's'}`
@@ -176,31 +154,6 @@ export function BulkTailorModal({ jobs, opened, initialMode, onClose, onQueued, 
           <Modal.Title className={classes.modalTitle}>
             Tailor {summary.total} {jobsWord}
           </Modal.Title>
-          <SegmentedControl
-            value={mode}
-            onChange={(v) => setMode(v as BulkMode)}
-            aria-label="How the runs go"
-            data={[
-              {
-                value: 'approve',
-                label: (
-                  <span className={classes.modeIcon}>
-                    <IconSend size={14} aria-hidden />
-                    Approve each run
-                  </span>
-                )
-              },
-              {
-                value: 'unattended',
-                label: (
-                  <span className={classes.modeIcon}>
-                    <IconCpu size={14} aria-hidden />
-                    Run unattended
-                  </span>
-                )
-              }
-            ]}
-          />
           <Modal.CloseButton aria-label="Close" />
         </Modal.Header>
         <Modal.Body className={classes.modalBody}>
@@ -209,11 +162,7 @@ export function BulkTailorModal({ jobs, opened, initialMode, onClose, onQueued, 
               <span className={classes.noticeIcon}>
                 <IconSparkles size={18} />
               </span>
-              <p>
-                {unattended
-                  ? `Huntgry starts one ${AGENT_LABEL[agent]} run per job, a few at a time, and nobody has to answer. ${UNATTENDED_EXPLANATION}`
-                  : `Huntgry starts one ${AGENT_LABEL[agent]} run per job, a few at a time, on the Tailor page. Each run stops after the gap analysis and waits for you to approve it there before the PDFs are built.`}
-              </p>
+              <p>{`Huntgry starts one ${AGENT_LABEL[agent]} run per job, a few at a time, and nobody has to answer. ${UNATTENDED_EXPLANATION}`}</p>
             </div>
 
             {environment && problem && (
@@ -226,26 +175,6 @@ export function BulkTailorModal({ jobs, opened, initialMode, onClose, onQueued, 
                 <Anchor component="button" size="sm" mt={4} onClick={() => navigate('settings')}>
                   Open Settings
                 </Anchor>
-              </Alert>
-            )}
-
-            {!unattended && (summary.summaryOnly > 0 || summary.alreadyTailored > 0) && (
-              <Alert color="info" variant="light">
-                <List size="sm" spacing={4}>
-                  {summary.summaryOnly > 0 && (
-                    <List.Item>
-                      {summary.summaryOnly} of {summary.total} have only the board's summary. Huntgry reads the employer's
-                      posting first and skips the job if it cannot
-                      {summary.unreadable > 0 ? ` (${summary.unreadable} from Indeed will be skipped: paste those instead)` : ''}.
-                    </List.Item>
-                  )}
-                  {summary.alreadyTailored > 0 && (
-                    <List.Item>
-                      {summary.alreadyTailored} {summary.alreadyTailored === 1 ? 'was' : 'were'} tailored before and will get
-                      a new run.
-                    </List.Item>
-                  )}
-                </List>
               </Alert>
             )}
 
@@ -287,89 +216,85 @@ export function BulkTailorModal({ jobs, opened, initialMode, onClose, onQueued, 
               <Switch label="Cover letters" checked={coverLetter} onChange={(e) => setCoverLetter(e.currentTarget.checked)} />
             </Group>
 
-            {unattended && (
-              <>
-                <Group gap={12} align="flex-start" wrap="nowrap">
-                  <Select
-                    style={{ flex: 1 }}
-                    label="Fallback agent"
-                    description={`Takes over jobs not started yet when ${AGENT_LABEL[agent]} hits its usage limit`}
-                    inputWrapperOrder={['label', 'input', 'description', 'error']}
-                    clearable
-                    placeholder="None (wait for the reset)"
-                    value={fallback}
-                    onChange={(v) => setFallback((v as AgentId) ?? null)}
-                    data={AGENT_IDS.filter((id) => id !== agent).map((id) => ({
-                      value: id,
-                      label: AGENT_LABEL[id],
-                      disabled: !readyAgents.includes(id)
-                    }))}
-                  />
-                  <NumberInput
-                    className={classes.mono}
-                    hideControls
-                    label="Max cost ($)"
-                    w={120}
-                    min={1}
-                    max={MAX_BUDGET_USD}
-                    decimalScale={2}
-                    placeholder="No cap"
-                    value={maxCostUsd}
-                    onChange={setMaxCostUsd}
-                  />
-                  <NumberInput
-                    className={classes.mono}
-                    hideControls
-                    label="Max jobs"
-                    w={100}
-                    min={1}
-                    max={MAX_ENQUEUE}
-                    allowDecimal={false}
-                    placeholder="No cap"
-                    value={maxJobs}
-                    onChange={setMaxJobs}
-                  />
-                  <NumberInput
-                    className={classes.mono}
-                    hideControls
-                    label="Stall (min)"
-                    w={100}
-                    min={MIN_STALL_MINUTES}
-                    max={MAX_STALL_MINUTES}
-                    allowDecimal={false}
-                    value={stallMinutes}
-                    onChange={setStallMinutes}
-                  />
-                </Group>
-                <p className={classes.hint}>
-                  Max cost {agent === 'claude' ? 'covers Claude runs only' : 'counts Claude runs only'}. Max jobs stops
-                  starting new jobs after that many. Stall kills and retries a run that has been silent that long.
-                </p>
-                <div className={classes.switches}>
-                  <Switch
-                    label="Resume after a restart"
-                    checked={resumeAfterRestart}
-                    onChange={(e) => setResumeAfterRestart(e.currentTarget.checked)}
-                  />
-                  <Switch
-                    label="Skip jobs tailored before"
-                    checked={skipTailored}
-                    onChange={(e) => setSkipTailored(e.currentTarget.checked)}
-                  />
-                </div>
-                {fallbackBlocked && fallbackStatus && (
-                  <Alert color="danger" variant="light" title={`${AGENT_LABEL[fallback!]} cannot be the fallback yet`}>
-                    <Text size="sm">{fallbackStatus.problems[0]}</Text>
-                  </Alert>
-                )}
-                <p className={classes.hint}>
-                  The Mac is kept awake while the pipeline has work (the display may sleep). On battery, closing the lid
-                  still puts it to sleep: keep it plugged in and open.
-                </p>
-              </>
+            <Group gap={12} align="flex-start" wrap="nowrap">
+              <Select
+                style={{ flex: 1 }}
+                label="Fallback agent"
+                description={`Takes over jobs not started yet when ${AGENT_LABEL[agent]} hits its usage limit`}
+                inputWrapperOrder={['label', 'input', 'description', 'error']}
+                clearable
+                placeholder="None (wait for the reset)"
+                value={fallback}
+                onChange={(v) => setFallback((v as AgentId) ?? null)}
+                data={AGENT_IDS.filter((id) => id !== agent).map((id) => ({
+                  value: id,
+                  label: AGENT_LABEL[id],
+                  disabled: !readyAgents.includes(id)
+                }))}
+              />
+              <NumberInput
+                className={classes.mono}
+                hideControls
+                label="Max cost ($)"
+                w={120}
+                min={1}
+                max={MAX_BUDGET_USD}
+                decimalScale={2}
+                placeholder="No cap"
+                value={maxCostUsd}
+                onChange={setMaxCostUsd}
+              />
+              <NumberInput
+                className={classes.mono}
+                hideControls
+                label="Max jobs"
+                w={100}
+                min={1}
+                max={MAX_ENQUEUE}
+                allowDecimal={false}
+                placeholder="No cap"
+                value={maxJobs}
+                onChange={setMaxJobs}
+              />
+              <NumberInput
+                className={classes.mono}
+                hideControls
+                label="Stall (min)"
+                w={100}
+                min={MIN_STALL_MINUTES}
+                max={MAX_STALL_MINUTES}
+                allowDecimal={false}
+                value={stallMinutes}
+                onChange={setStallMinutes}
+              />
+            </Group>
+            <p className={classes.hint}>
+              Max cost {agent === 'claude' ? 'covers Claude runs only' : 'counts Claude runs only'}. Max jobs stops
+              starting new jobs after that many. Stall kills and retries a run that has been silent that long.
+            </p>
+            <div className={classes.switches}>
+              <Switch
+                label="Resume after a restart"
+                checked={resumeAfterRestart}
+                onChange={(e) => setResumeAfterRestart(e.currentTarget.checked)}
+              />
+              <Switch
+                label="Skip jobs tailored before"
+                checked={skipTailored}
+                onChange={(e) => setSkipTailored(e.currentTarget.checked)}
+              />
+            </div>
+            {fallbackBlocked && fallbackStatus && (
+              <Alert color="danger" variant="light" title={`${AGENT_LABEL[fallback!]} cannot be the fallback yet`}>
+                <Text size="sm">{fallbackStatus.problems[0]}</Text>
+              </Alert>
             )}
+            <p className={classes.hint}>
+              The Mac is kept awake while the pipeline has work (the display may sleep). On battery, closing the lid
+              still puts it to sleep: keep it plugged in and open.
+            </p>
 
-            {unattended && plan && <PlanView plan={plan} onSettings={() => navigate('settings')} />}
+            {plan && <PlanView plan={plan} onSettings={() => navigate('settings')} />}
 
             {tooMany && (
               <Alert color="warning" variant="light">
@@ -385,22 +310,11 @@ export function BulkTailorModal({ jobs, opened, initialMode, onClose, onQueued, 
             )}
 
             <div className={classes.footer}>
-              <p className={classes.hint}>{!unattended && 'Each job’s agent can still be changed in the queue until it starts.'}</p>
+              <p className={classes.hint} />
               <Button variant="subtle" onClick={onClose}>
                 Cancel
               </Button>
-              {!unattended && (
-                <Button
-                  variant="primary"
-                  leftSection={<IconSparkles size={16} />}
-                  loading={busy}
-                  disabled={jobs.length === 0 || tooMany || blocking}
-                  onClick={confirm}
-                >
-                  Tailor {summary.total} {jobsWord}
-                </Button>
-              )}
-              {unattended && !plan && (
+              {!plan && (
                 <Button
                   variant="primary"
                   leftSection={<IconCompass size={16} />}
@@ -411,7 +325,7 @@ export function BulkTailorModal({ jobs, opened, initialMode, onClose, onQueued, 
                   Continue
                 </Button>
               )}
-              {unattended && plan && (
+              {plan && (
                 <Button
                   variant="primary"
                   loading={busy}
@@ -419,7 +333,7 @@ export function BulkTailorModal({ jobs, opened, initialMode, onClose, onQueued, 
                   disabled={plan.blockers.length > 0 || plan.ready.length === 0}
                   onClick={startIt}
                 >
-                  Start unattended ({plan.ready.length})
+                  Start tailoring ({plan.ready.length})
                 </Button>
               )}
             </div>
