@@ -212,6 +212,12 @@ minimum salary apply to any list and are kept in `<workspace>/.huntgry/jobs-pref
 Work authorization says you need a sponsor, Relevant leaves out postings that say they won't
 sponsor.
 
+The skills part of that score is the job's **match score**: the share of the skills the posting asks
+for (Jobright's extracted skills when a job has them, else the ones its description names) that your
+master profile has evidence for. Must-haves such as a degree in another field, years you don't have,
+a clearance or "no sponsorship" when you need it cap it at 40. Explore, re-scoring and Automation
+build on the same engine. See [docs/changes/149-match-score.md](docs/changes/149-match-score.md).
+
 **Explore** lists the daily new-grad software jobs from Jobright's public GitHub list
 ([jobright-ai/2026-Software-Engineer-New-Grad](https://github.com/jobright-ai/2026-Software-Engineer-New-Grad)),
 grouped by the day they were posted, today first. Huntgry fetches that one README from GitHub
