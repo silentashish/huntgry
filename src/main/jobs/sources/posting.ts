@@ -7,11 +7,15 @@ import { htmlToText } from '../text'
  * boards publish it for Google Jobs), otherwise the page's readable text.
  */
 
-/** Runs in the page: JSON-LD blocks, the title and the main text. */
+/**
+ * Runs in the page: JSON-LD blocks, the title, the main text and how much of that text is inside forms (an
+ * application form's labels are not a description, #148).
+ */
 export const POSTING_EXTRACT = `(() => {
   const ld = [...document.querySelectorAll('script[type="application/ld+json"]')].map((s) => s.textContent || '')
   const main = document.querySelector('main, article, [role=main]') || document.body
-  return JSON.stringify({ ld, title: document.title, text: main ? main.innerText.slice(0, 60000) : '', url: location.href })
+  const formText = main ? [...main.querySelectorAll('form')].reduce((n, f) => n + (f.innerText || '').length, 0) : 0
+  return JSON.stringify({ ld, title: document.title, text: main ? main.innerText.slice(0, 60000) : '', formText, url: location.href })
 })()`
 
 type Obj = Record<string, unknown>
@@ -95,6 +99,8 @@ export interface PageData {
   ld: string[]
   title: string
   text: string
+  /** Characters of `text` inside `<form>` elements; absent from pages read before #148. */
+  formText?: number
   url: string
 }
 
@@ -114,6 +120,9 @@ export function parsePosting(page: PageData, source: JobSourceId = 'url', now = 
   const posting = findJobPosting(page.ld)
   const url = page.url
   const text = page.text.replace(/\n{3,}/g, '\n\n').trim()
+  // The page's own prose: a page that is only an application form (an ATS apply step) has none (#148).
+  const formText = typeof page.formText === 'number' && page.formText > 0 ? page.formText : 0
+  const prose = text.length - formText
   if (posting) {
     const { location, remote } = locationOf(posting)
     const ldDescription = htmlToText(str(posting.description))
@@ -121,7 +130,7 @@ export function parsePosting(page: PageData, source: JobSourceId = 'url', now = 
     // Some pages ship JobPosting metadata with an empty or stub description; the page text is then the posting,
     // but only when it evidently is: it names the job and contains the JSON-LD description's opening words.
     const description =
-      ldDescription.length <= 200 && text.length >= 200 && pageTextIsPosting(text, title, ldDescription)
+      ldDescription.length <= 200 && prose >= 200 && pageTextIsPosting(text, title, ldDescription)
         ? text
         : ldDescription
     if (!title) return null
@@ -143,7 +152,7 @@ export function parsePosting(page: PageData, source: JobSourceId = 'url', now = 
       fetchedAt: now.toISOString()
     }
   }
-  if (text.length < 200) return null
+  if (prose < 200) return null
   const title = page.title.split(/\s[|–—-]\s/)[0].trim() || 'Job posting'
   return {
     id: `${source}:${urlJobId(url)}`,
