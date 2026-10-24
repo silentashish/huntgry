@@ -103,7 +103,7 @@ export function ReviewPage({ params }: { params: PageParams['review'] }) {
       subtitle={
         empty || items === null
           ? undefined
-          : 'Unattended runs use only your profile facts and standing approvals. Everything they left out is listed here. Approve to unlock Apply, re-run with your answers, or discard.'
+          : 'Every run goes to the end and lists the bridges it used and the gaps it left open. Check each result here: approve to unlock Apply, re-run with your answers, or discard.'
       }
       actions={
         <>
@@ -140,18 +140,18 @@ export function ReviewPage({ params }: { params: PageParams['review'] }) {
             tone="review"
             icon={<IconClipboardCheck size={36} stroke={1.5} />}
             title="Nothing to review"
-            description="Results of unattended pipelines land here until you approve them. The hound is sleeping with one ear up."
+            description="Every tailored result lands here until you approve it. The hound is sleeping with one ear up."
             actions={
               <>
                 <Button variant="primary" leftSection={<IconCpu size={16} />} onClick={() => navigate('jobs')}>
-                  Start an unattended run
+                  Find jobs to tailor
                 </Button>
                 <Button variant="default" rightSection={<IconArrowRight size={16} />} onClick={() => navigate('tailor', { view: 'queue' })}>
                   Tailoring queue
                 </Button>
               </>
             }
-            hint="On Jobs, pick the jobs, then Tailor all → Run unattended."
+            hint="On Jobs, pick the jobs, then Tailor all. Or paste one on the Tailor page."
           />
         </div>
       )}

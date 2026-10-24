@@ -18,9 +18,12 @@ interface Props {
 type Decision = 'approve' | 'rerun' | 'discard'
 
 /**
- * One unattended result (Figma Review — Detail): the header with its files and revision, verify,
- * the reframings to tick, the standing approvals used and the open gaps, the previews, and the
- * Decision card. Approve, re-run and discard all carry the revision that is on screen.
+ * One result (Figma Review — Detail): the header with its files and revision, verify, the
+ * reframings to tick, the previews, and the Decision card. A result's notes are
+ * tailoring-notes.md v2 (#158: the reframings the run used, the gaps left open, its decisions and
+ * direct hits) or, for an older unattended run, review-notes.md v1 (the reframings it left out, the
+ * standing approvals used and the open gaps). Approve, re-run and discard all carry the revision
+ * that is on screen.
  */
 export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
   const { navigate } = useNavigation()
@@ -38,6 +41,8 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
   const hasResume = d.artifacts.some((a) => a.file === 'resume.pdf')
   const hasCover = d.artifacts.some((a) => a.file === 'cover.pdf')
   const warnings = useMemo(() => buildWarnings(d.verify.report), [d.verify.report])
+  const v2 = d.notesFormat === 'v2'
+  const [showHits, setShowHits] = useState(false)
 
   async function decide(kind: Decision, call: () => Promise<ReviewOutcome>) {
     setBusy(kind)
@@ -193,11 +198,13 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
 
           <SectionCard
             padding="md"
-            title="Proposed reframings the run left out"
+            title={v2 ? 'Reframings used' : 'Proposed reframings the run left out'}
             description={
-              d.proposedReframings.length > 0
-                ? 'Tick the ones that are true. Ticked reframings become standing approvals: later unattended runs may use them as written, for any job.'
-                : undefined
+              d.proposedReframings.length === 0
+                ? undefined
+                : v2
+                  ? 'The bridges the run wrote into the resume, each with the profile fact behind it. Tick the ones to keep: later runs use them as preferred wordings. To drop one, re-run with your answers.'
+                  : 'Tick the ones that are true. Ticked reframings become standing approvals: later unattended runs may use them as written, for any job.'
             }
           >
             {d.parseWarning && (
@@ -207,19 +214,73 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
             )}
             {d.proposedReframings.length === 0 && !d.parseWarning && (
               <Text size="sm" c="dimmed">
-                None: everything in the resume is a direct hit or a standing approval.
+                {v2 ? 'None: everything in the resume is a direct hit.' : 'None: everything in the resume is a direct hit or a standing approval.'}
               </Text>
             )}
             {d.proposedReframings.length > 0 && (
               <div className={classes.reframings}>
                 {d.proposedReframings.map((r, i) => (
-                  <Reframing key={r.id} r={r} index={i} checked={ticked.has(r.id)} disabled={!decidable} onToggle={() => toggle(r.id)} />
+                  <Reframing key={r.id} r={r} index={i} used={v2} checked={ticked.has(r.id)} disabled={!decidable} onToggle={() => toggle(r.id)} />
                 ))}
               </div>
             )}
           </SectionCard>
 
-          {(d.usedApprovals.length > 0 || d.openGaps.length > 0) && (
+          {v2 && (d.openGaps.length > 0 || (d.decisions?.length ?? 0) > 0 || (d.directHits?.length ?? 0) > 0) && (
+            <SectionCard
+              padding="md"
+              title={d.openGaps.length > 0 ? 'Gaps left open' : (d.decisions?.length ?? 0) > 0 ? 'Decisions' : 'Direct hits'}
+            >
+              {d.openGaps.length > 0 && (
+                <div className={classes.gaps}>
+                  {d.openGaps.map((g) => (
+                    <StatusPill key={g} tone="warning" variant="outline" size="md">
+                      {g}
+                    </StatusPill>
+                  ))}
+                </div>
+              )}
+              {(d.decisions?.length ?? 0) > 0 && (
+                <>
+                  {d.openGaps.length > 0 && (
+                    <>
+                      <hr className={classes.divider} />
+                      <h3 className={classes.subTitle}>Decisions</h3>
+                    </>
+                  )}
+                  <ul className={classes.used}>
+                    {d.decisions!.map((x, i) => (
+                      <li key={i} className={classes.usedRow}>
+                        <span className={classes.usedWording}>{x}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {(d.directHits?.length ?? 0) > 0 && (
+                <>
+                  <hr className={classes.divider} />
+                  <Button variant="subtle" size="compact-sm" onClick={() => setShowHits((v) => !v)} aria-expanded={showHits}>
+                    {showHits ? 'Hide' : 'Show'} direct hits ({d.directHits!.length})
+                  </Button>
+                  <Collapse expanded={showHits}>
+                    <ul className={classes.used}>
+                      {d.directHits!.map((h, i) => (
+                        <li key={i} className={classes.usedRow}>
+                          <span className={classes.usedCheck} aria-hidden>
+                            <IconCheck size={12} stroke={2.5} />
+                          </span>
+                          <span className={classes.usedWording}>{h}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </Collapse>
+                </>
+              )}
+            </SectionCard>
+          )}
+
+          {!v2 && (d.usedApprovals.length > 0 || d.openGaps.length > 0) && (
             <SectionCard padding="md" title={d.usedApprovals.length > 0 ? 'Standing approvals used' : 'Open gaps'}>
               {d.usedApprovals.length > 0 && (
                 <ul className={classes.used}>
@@ -255,7 +316,7 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
           <SectionCard padding="md" aria-label="Previews">
             <Tabs defaultValue={d.resumePages.length > 0 ? 'resume' : 'notes'} keepMounted={false}>
               <Tabs.List>
-                <Tabs.Tab value="notes">Review notes</Tabs.Tab>
+                <Tabs.Tab value="notes">{v2 ? 'Tailoring notes' : 'Review notes'}</Tabs.Tab>
                 <Tabs.Tab value="resume" disabled={d.resumePages.length === 0}>
                   Resume ({d.resumePages.length})
                 </Tabs.Tab>
@@ -266,12 +327,12 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
               <Tabs.Panel value="notes" pt="md">
                 {d.reviewNotes ? (
                   <div className={classes.notes}>
-                    {/* The format marker (<!-- huntgry-review v1 … -->) is for the parser, not the reader. */}
+                    {/* The format marker (<!-- resume-tailor notes v2 --> / <!-- huntgry-review v1 … -->) is for the parser, not the reader. */}
                     <Markdown text={d.reviewNotes.replace(/<!--[\s\S]*?-->/g, '')} />
                   </div>
                 ) : (
                   <Text size="sm" c="dimmed">
-                    {d.parseWarning?.startsWith('This result has no') ? 'No review-notes.md in this folder.' : 'The notes are too long to show here; open the folder.'}
+                    {d.parseWarning?.startsWith('This result has no') ? 'No tailoring notes in this folder.' : 'The notes are too long to show here; open the folder.'}
                   </Text>
                 )}
               </Tabs.Panel>
@@ -368,10 +429,25 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
 }
 
 /** One proposed reframing: the whole box toggles its checkbox. */
-function Reframing({ r, index, checked, disabled, onToggle }: { r: ProposedReframing; index: number; checked: boolean; disabled: boolean; onToggle(): void }) {
+function Reframing({
+  r,
+  index,
+  used,
+  checked,
+  disabled,
+  onToggle
+}: {
+  r: ProposedReframing
+  index: number
+  /** A v2 reframing the run used (ticking keeps it as a preferred wording), not one it left out. */
+  used: boolean
+  checked: boolean
+  disabled: boolean
+  onToggle(): void
+}) {
   return (
     <label className={classes.reframing} data-checked={checked || undefined} data-disabled={disabled || undefined}>
-      <Checkbox mt={1} checked={checked} disabled={disabled} onChange={onToggle} aria-label={`Approve: ${r.wording}`} />
+      <Checkbox mt={1} checked={checked} disabled={disabled} onChange={onToggle} aria-label={`${used ? 'Keep' : 'Approve'}: ${r.wording}`} />
       <span className={classes.reframingBody}>
         <MonoLabel tone="muted">
           R{index + 1}
