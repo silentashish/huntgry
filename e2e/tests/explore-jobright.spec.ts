@@ -79,6 +79,51 @@ test('connect Jobright once in Settings; added jobs link the employer posting an
   expect(other.url).toBe(`${mock.origin}/jobs/info/e2e0000000000000000000a2`)
 })
 
+test("an employer page that is only an application form falls back to Jobright's summary (#148)", async ({ app, mock }, testInfo) => {
+  const shell = new Shell(app.window)
+  await shell.goTo('settings')
+  const settings = new SettingsPage(app.window)
+  const signIn = app.electronApp.waitForEvent('window')
+  await settings.jobrightButton('Connect Jobright').click()
+  const win = await signIn
+  await win.getByRole('link', { name: 'Sign in' }).click()
+  await win.getByRole('button', { name: 'Sign in' }).click()
+  await expect(settings.jobrightStatus('Connected')).toBeVisible({ timeout: 30_000 })
+
+  // Contoso's employer link is an ATS apply step: the form and nothing else.
+  await shell.goTo('explore')
+  const explore = new ExplorePage(app.window)
+  await explore.addButton('Embedded Software Engineer').click()
+  await expect(explore.addedButton('Embedded Software Engineer')).toBeVisible({ timeout: 30_000 })
+  const file = join(app.workspace!, '.huntgry/jobs', 'jobright-e2e0000000000000000000a3.json')
+  expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({
+    url: `${mock.altOrigin}/postings/apply-only`,
+    boardUrl: `${mock.origin}/jobs/info/e2e0000000000000000000a3`
+  })
+
+  await explore.addedButton('Embedded Software Engineer').click()
+  const jobs = new JobsPage(app.window)
+  await expect(jobs.drawer).toBeVisible()
+  const before = mock.requests.length
+  await jobs.drawerButton('Fetch full description').click()
+  await expect(jobs.drawer.getByText(/Jobright's summary: Contoso Robotics is looking for/)).toBeVisible({ timeout: 40_000 })
+  await expect(
+    jobs.drawer.getByText("Description from Jobright's summary; the employer's page had only the application form.")
+  ).toBeVisible()
+  await expect(jobs.drawer.getByText(/## Must have/)).toBeVisible()
+  // The employer's page was read first, then the Jobright page.
+  const loaded = mock.requests.slice(before).filter((r) => r === '/postings/apply-only' || r.startsWith('/jobs/info/e2e0000000000000000000a3'))
+  expect(loaded).toEqual(['/postings/apply-only', '/jobs/info/e2e0000000000000000000a3'])
+  const saved = JSON.parse(await readFile(file, 'utf8'))
+  expect(saved).toMatchObject({ descriptionComplete: true, descriptionSource: 'jobright-summary', url: `${mock.altOrigin}/postings/apply-only` })
+  expect(saved.description).not.toMatch(/First name/)
+  // Fetch full description stays offered: the employer's page may have the posting later.
+  await expect(jobs.drawerButton('Fetch full description')).toBeVisible()
+  const png = testInfo.outputPath('jobright-summary-drawer.png')
+  await app.window.screenshot({ path: png })
+  await testInfo.attach('jobright-summary-drawer', { path: png, contentType: 'image/png' })
+})
+
 test('Connect works from Settings before Explore was ever opened (the list is fetched for a posting)', async ({ app, mock }) => {
   const shell = new Shell(app.window)
   await shell.goTo('settings')

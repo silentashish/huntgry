@@ -7,11 +7,25 @@ import { htmlToText } from '../text'
  * boards publish it for Google Jobs), otherwise the page's readable text.
  */
 
-/** Runs in the page: JSON-LD blocks, the title and the main text. */
+/** What an application form is made of: its controls and their labels, plus text that is never shown. */
+const PROSE_EXCLUDED =
+  'label, legend, button, select, option, textarea, input, [role=button], [role=combobox], [role=listbox], script, style, noscript, template'
+
+/**
+ * Runs in the page: JSON-LD blocks, the title, the main text and its prose: the same text without form controls
+ * and their labels, whitespace collapsed (an application form's labels are not a description, #148). Prose is
+ * read from a copy of the page, so a description inside a `<form>` still counts, however long the form.
+ */
 export const POSTING_EXTRACT = `(() => {
   const ld = [...document.querySelectorAll('script[type="application/ld+json"]')].map((s) => s.textContent || '')
   const main = document.querySelector('main, article, [role=main]') || document.body
-  return JSON.stringify({ ld, title: document.title, text: main ? main.innerText.slice(0, 60000) : '', url: location.href })
+  let prose = ''
+  if (main) {
+    const copy = main.cloneNode(true)
+    copy.querySelectorAll('${PROSE_EXCLUDED}').forEach((e) => e.remove())
+    prose = (copy.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 60000)
+  }
+  return JSON.stringify({ ld, title: document.title, text: main ? main.innerText.slice(0, 60000) : '', prose, url: location.href })
 })()`
 
 type Obj = Record<string, unknown>
@@ -95,6 +109,8 @@ export interface PageData {
   ld: string[]
   title: string
   text: string
+  /** `text` without form controls and their labels, whitespace collapsed; absent from pages read before #148. */
+  prose?: string
   url: string
 }
 
@@ -114,6 +130,8 @@ export function parsePosting(page: PageData, source: JobSourceId = 'url', now = 
   const posting = findJobPosting(page.ld)
   const url = page.url
   const text = page.text.replace(/\n{3,}/g, '\n\n').trim()
+  // The page's own prose: a page that is only an application form (an ATS apply step) has none (#148).
+  const prose = typeof page.prose === 'string' ? page.prose.length : text.length
   if (posting) {
     const { location, remote } = locationOf(posting)
     const ldDescription = htmlToText(str(posting.description))
@@ -121,7 +139,7 @@ export function parsePosting(page: PageData, source: JobSourceId = 'url', now = 
     // Some pages ship JobPosting metadata with an empty or stub description; the page text is then the posting,
     // but only when it evidently is: it names the job and contains the JSON-LD description's opening words.
     const description =
-      ldDescription.length <= 200 && text.length >= 200 && pageTextIsPosting(text, title, ldDescription)
+      ldDescription.length <= 200 && prose >= 200 && pageTextIsPosting(text, title, ldDescription)
         ? text
         : ldDescription
     if (!title) return null
@@ -143,7 +161,7 @@ export function parsePosting(page: PageData, source: JobSourceId = 'url', now = 
       fetchedAt: now.toISOString()
     }
   }
-  if (text.length < 200) return null
+  if (prose < 200) return null
   const title = page.title.split(/\s[|–—-]\s/)[0].trim() || 'Job posting'
   return {
     id: `${source}:${urlJobId(url)}`,

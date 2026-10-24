@@ -39,6 +39,12 @@ export interface Job {
    */
   description: string
   descriptionComplete: boolean
+  /**
+   * Where a fetched description came from when it is not the posting itself: `jobright-summary` is
+   * Jobright's summary of it, used when the employer's page had only the application form (#148). Such a
+   * description counts as complete (it is what tailoring gets), but Fetch full description stays offered.
+   */
+  descriptionSource?: 'jobright-summary'
   /** Technologies the board extracted (hiring.cafe), if any. */
   tags: string[]
   fetchedAt: string
@@ -92,6 +98,10 @@ export const JOBS_CHANNELS = {
   setPrefs: 'jobs:set-prefs'
 } as const
 
+/** What the Jobs drawer and the tailor's job description say about a description from Jobright's summary (#148). */
+export const JOBRIGHT_SUMMARY_NOTE =
+  "Description from Jobright's summary; the employer's page had only the application form."
+
 /** Builds the job description handed to the resume tailor. */
 export function jobDescriptionFor(job: Job): string {
   const head = [
@@ -100,6 +110,7 @@ export function jobDescriptionFor(job: Job): string {
     [job.company, job.location, job.remote ? 'Remote' : '', job.salary].filter(Boolean).join(' · ')
   ]
   if (job.url) head.push('', `Posting: ${job.url}`)
+  if (job.descriptionSource === 'jobright-summary') head.push('', JOBRIGHT_SUMMARY_NOTE)
   // Pasted postings often start with their own title heading; do not repeat it.
   const lines = job.description.trim().split('\n')
   const same = (l: string) =>
@@ -118,6 +129,11 @@ export function jobDescriptionFor(job: Job): string {
  */
 export function canFetchDetails(job: Job): boolean {
   return !job.descriptionComplete && (job.source !== 'indeed' || (job.aliases?.length ?? 0) > 0)
+}
+
+/** Whether the drawer offers Fetch full description: also for Jobright's summary, to try the employer again. */
+export function canRefetchDetails(job: Job): boolean {
+  return canFetchDetails(job) || job.descriptionSource === 'jobright-summary'
 }
 
 /**

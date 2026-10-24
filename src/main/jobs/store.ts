@@ -39,15 +39,20 @@ export async function readJob(workspace: string, id: string): Promise<Job | null
 export function mergeJob(saved: Job | null, fresh: Job): Job {
   if (!saved) return fresh
   const keepDescription = saved.descriptionComplete && !fresh.descriptionComplete
-  return {
+  const fromSaved = keepDescription || !fresh.description
+  const merged: Job = {
     ...saved,
     ...fresh,
     description: keepDescription ? saved.description : fresh.description || saved.description,
     descriptionComplete: keepDescription || fresh.descriptionComplete,
+    // The marker goes with the description it describes (#148).
+    descriptionSource: fromSaved ? saved.descriptionSource : fresh.descriptionSource,
     tailoredAt: saved.tailoredAt,
     dismissed: saved.dismissed,
     dismissedAt: saved.dismissedAt
   }
+  if (!merged.descriptionSource) delete merged.descriptionSource
+  return merged
 }
 
 export async function saveJob(workspace: string, job: Job): Promise<Job> {
@@ -140,24 +145,29 @@ export function canonicalize(jobs: readonly Job[]): Job[] {
       out.push(first)
       continue
     }
+    // The posting itself beats Jobright's summary of it (#148).
     const fullest =
+      sorted.find((j) => j.descriptionComplete && !j.descriptionSource) ??
       sorted.find((j) => j.descriptionComplete) ??
       sorted.reduce((a, b) => (b.description.length > a.description.length ? b : a))
     const tailored = sorted
       .map((j) => j.tailoredAt)
       .filter((t): t is string => !!t)
       .sort()[0]
-    out.push({
+    const merged: Job = {
       ...first,
       description: fullest.description,
       descriptionComplete: fullest.descriptionComplete,
+      descriptionSource: fullest.descriptionSource,
       salary: first.salary || rest.find((j) => j.salary)?.salary || '',
       location: first.location || rest.find((j) => j.location)?.location || '',
       tags: [...new Set(sorted.flatMap((j) => j.tags))],
       tailoredAt: tailored,
       aliases: rest.map((j) => j.id),
       ...mergeFacts(sorted)
-    })
+    }
+    if (!merged.descriptionSource) delete merged.descriptionSource
+    out.push(merged)
   }
   return out
 }
