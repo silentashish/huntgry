@@ -127,7 +127,9 @@ test.describe('dashboard rows', () => {
     const after = utcDate()
     await expect.poll(() => tracking(app.workspace!, id)).toMatchObject({ status: 'applied', notes: '' })
     const written = await tracking(app.workspace!, id)
-    expect(Object.keys(written).sort()).toEqual(['appliedAt', 'notes', 'status'])
+    // statusChangedAt dates the move for the Board's week groups (#160).
+    expect(Object.keys(written).sort()).toEqual(['appliedAt', 'notes', 'status', 'statusChangedAt'])
+    expect(Math.abs(Date.now() - Date.parse(String(written.statusChangedAt)))).toBeLessThan(5 * 60_000)
     expect(written.appliedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/)
     expect([before, after]).toContain(written.appliedAt)
     const today = written.appliedAt as string
@@ -175,7 +177,9 @@ test.describe('application drawer', () => {
     await drawer.getByLabel('Notes').blur()
     await expect.poll(() => tracking(app.workspace!, id)).toEqual({
       status: 'interviewing',
-      notes: 'Recruiter: Dana. Take-home due Friday.'
+      notes: 'Recruiter: Dana. Take-home due Friday.',
+      // When the status changed, for the Board's week groups (#160).
+      statusChangedAt: expect.any(String)
     })
     // No appliedAt was stamped: the status never was "applied".
     expect(await tracking(app.workspace!, id)).not.toHaveProperty('appliedAt')
