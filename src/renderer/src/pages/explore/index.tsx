@@ -1,39 +1,74 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Loader, SegmentedControl, TextInput } from '@mantine/core'
-import { IconCheck, IconCompass, IconLink, IconPlus, IconRefresh, IconSearch } from '@tabler/icons-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Alert, Button, Loader, NumberInput, SegmentedControl, Select, TextInput } from '@mantine/core'
+import {
+  IconAlertTriangle,
+  IconCheck,
+  IconChevronRight,
+  IconCompass,
+  IconLink,
+  IconPlus,
+  IconRefresh,
+  IconSearch
+} from '@tabler/icons-react'
 import { WORK_MODELS, type ExploreJob, type ExploreList, type JobrightAccount } from '@shared/explore-types'
 import type { Job } from '@shared/jobs-types'
 import { api, errorText } from '../../api'
 import { CompanyAvatar, EmptyState, MonoLabel, PageHeader, StatusPill } from '../../components/ui'
 import { useNavigation } from '../../navigation'
-import { addedJobs, dayGroups, dayLabel, defaultDay, updatedAgo, visibleRows, type WorkModelFilter } from './view'
+import {
+  addedJobs,
+  CATEGORY_STORAGE_KEY,
+  categoryLabel,
+  categoryOptions,
+  dayGroups,
+  dayLabel,
+  defaultDay,
+  EARLIER_STORAGE_KEY,
+  effectiveFilters,
+  NO_FILTERS,
+  readCategory,
+  readFlag,
+  shortSalary,
+  sourceLabel,
+  splitDays,
+  updatedAgo,
+  visibleRows,
+  writePref,
+  type DayGroup,
+  type ExploreFilters,
+  type H1bFilter,
+  type WorkModelFilter
+} from './view'
 import classes from './explore.module.css'
 
 const WORK_TONE = { Remote: 'trail', Hybrid: 'neutral', 'On Site': 'neutral' } as const
+const H1B_TONE = { Yes: 'success', No: 'neutral', 'Not Sure': 'neutral' } as const
+
+const CATEGORY_OPTIONS = categoryOptions()
 
 /**
- * Explore (#142): Jobright's daily new-grad list from its public GitHub README, grouped by posted day
- * (today first), cached in the workspace. Any row can be added to the Jobs page in one click.
+ * Explore (#142, #169): Jobright's jobs of one category from the newgrad-jobs API (the GitHub README when the API
+ * fails), grouped by posted day (today first, days past the newest seven folded), cached in the workspace. Any row
+ * can be added to the Jobs page in one click.
  */
 export function ExplorePage() {
   const { navigate } = useNavigation()
+  const [category, setCategory] = useState(readCategory)
   const [list, setList] = useState<ExploreList | null>(null)
   const [saved, setSaved] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pickedDay, setDay] = useState<string | null>(null)
-  const [text, setText] = useState('')
-  const [workModel, setWorkModel] = useState<WorkModelFilter>('all')
+  const [filters, setFilters] = useState<ExploreFilters>(NO_FILTERS)
+  const [earlierOpen, setEarlierOpen] = useState(() => readFlag(EARLIER_STORAGE_KEY))
   const [adding, setAdding] = useState<Set<string>>(new Set())
   const [now, setNow] = useState(() => Date.now())
   const [account, setAccount] = useState<JobrightAccount | null>(null)
+  // The newest request wins: a slow answer for a category left meanwhile is dropped.
+  const request = useRef(0)
 
   useEffect(() => {
-    api.explore
-      .list()
-      .then(setList, (err) => setError(errorText(err)))
-      .finally(() => setLoading(false))
     api.jobs.list().then(setSaved, () => undefined)
     api.explore.account().then(setAccount, () => undefined)
     // "Updated … ago" stays true while the page is open.
@@ -41,15 +76,43 @@ export function ExplorePage() {
     return () => clearInterval(tick)
   }, [])
 
+  // The category's cached list; main fetches it only when the workspace has no copy yet.
+  useEffect(() => {
+    const id = ++request.current
+    setLoading(true)
+    setError(null)
+    api.explore
+      .list(category)
+      .then(
+        (l) => id === request.current && setList(l),
+        (err) => {
+          if (id !== request.current) return
+          setList(null)
+          setError(errorText(err))
+        }
+      )
+      .finally(() => id === request.current && setLoading(false))
+  }, [category])
+
+  function pickCategory(c: string | null) {
+    if (!c || c === category) return
+    writePref(CATEGORY_STORAGE_KEY, c)
+    setDay(null)
+    setCategory(c)
+  }
+
   async function refresh() {
+    const id = ++request.current
     setRefreshing(true)
     setError(null)
     try {
-      setList(await api.explore.refresh())
+      const l = await api.explore.refresh(category)
+      if (id !== request.current) return
+      setList(l)
       setNow(Date.now())
     } catch (err) {
       // The cached list stays on screen; the error says why it could not be refreshed.
-      setError(errorText(err))
+      if (id === request.current) setError(errorText(err))
     } finally {
       setRefreshing(false)
     }
@@ -59,7 +122,7 @@ export function ExplorePage() {
     setAdding((s) => new Set(s).add(row.id))
     setError(null)
     try {
-      const job = await api.explore.add(row.id)
+      const job = await api.explore.add(row.id, category)
       setSaved((cur) => [...cur.filter((j) => j.id !== job.id), job])
     } catch (err) {
       setError(errorText(err))
@@ -72,23 +135,44 @@ export function ExplorePage() {
     }
   }
 
-  const jobs = list?.jobs ?? []
+  function toggleEarlier() {
+    writePref(EARLIER_STORAGE_KEY, earlierOpen ? '0' : '1')
+    setEarlierOpen(!earlierOpen)
+  }
+
+  const set = <K extends keyof ExploreFilters>(key: K, value: ExploreFilters[K]) => setFilters((f) => ({ ...f, [key]: value }))
+
+  const shownList = list?.category === category ? list : null
+  const jobs = shownList?.jobs ?? []
+  const readme = shownList?.source === 'readme'
   const groups = useMemo(() => dayGroups(jobs), [jobs])
+  const { recent, older } = useMemo(() => splitDays(groups), [groups])
   const day = pickedDay && groups.some((g) => g.day === pickedDay) ? pickedDay : defaultDay(groups, new Date(now))
-  const rows = useMemo(() => visibleRows(jobs, { day, text, workModel }), [jobs, day, text, workModel])
+  const applied = effectiveFilters(filters, shownList?.source)
+  const rows = useMemo(() => visibleRows(jobs, { day, ...applied }), [jobs, day, applied.text, applied.workModel, applied.h1b, applied.minSalary])
   const added = useMemo(() => addedJobs(saved), [saved])
   const nowDate = new Date(now)
+  // A picked older day stays in view while "Earlier" is folded.
+  const showOlder = earlierOpen || older.some((g) => g.day === day)
+  const olderJobs = older.reduce((n, g) => n + g.count, 0)
+
+  const dayButton = (g: DayGroup) => (
+    <button key={g.day} type="button" className={classes.day} aria-pressed={g.day === day} onClick={() => setDay(g.day)}>
+      <span>{dayLabel(g.day, nowDate)}</span>
+      <span className={classes.dayCount}>{g.count}</span>
+    </button>
+  )
 
   return (
     <div className={classes.page}>
       <PageHeader
-        eyebrow={`Jobright new-grad list · ${jobs.length} jobs`}
+        eyebrow={`Jobright · ${categoryLabel(category)} · ${jobs.length.toLocaleString('en-US')} jobs`}
         title="Explore"
-        subtitle="Daily new-grad software jobs from Jobright's public GitHub list. Add any of them to Jobs."
+        subtitle="New-grad and internship jobs from Jobright's newgrad-jobs list. Add any of them to Jobs."
         actions={
           <>
             <MonoLabel size="sm" tone="muted">
-              {list ? updatedAgo(list.fetchedAt, now) : ''}
+              {shownList ? updatedAgo(shownList.fetchedAt, now) : ''}
             </MonoLabel>
             <Button variant="default" leftSection={<IconRefresh size={16} />} loading={refreshing} onClick={() => void refresh()}>
               Refresh
@@ -96,6 +180,37 @@ export function ExplorePage() {
           </>
         }
       />
+
+      <div className={classes.row}>
+        <Select
+          className={classes.category}
+          aria-label="Category"
+          data={CATEGORY_OPTIONS}
+          value={category}
+          onChange={pickCategory}
+          allowDeselect={false}
+          searchable
+          comboboxProps={{ withinPortal: true }}
+        />
+        {shownList && (
+          <MonoLabel size="sm" tone="secondary" component="p" className={classes.source}>
+            <span aria-label="List source">{sourceLabel(shownList)}</span>
+          </MonoLabel>
+        )}
+      </div>
+
+      {readme && (
+        <Alert
+          color="yellow"
+          variant="light"
+          icon={<IconAlertTriangle size={18} />}
+          title="Showing Jobright's GitHub list instead"
+          className={classes.connect}
+        >
+          The newgrad-jobs API could not be used{shownList?.fallbackReason ? `: ${shownList.fallbackReason}` : '.'} This list has
+          only the last few days of new-grad software jobs, without salary or H1B details. Refresh to try the API again.
+        </Alert>
+      )}
 
       {account && account.connected !== true && (
         <Alert
@@ -131,7 +246,7 @@ export function ExplorePage() {
           compact
           icon={<IconCompass size={22} />}
           title="No jobs to explore yet"
-          description="Huntgry reads Jobright's new-grad list from GitHub. Refresh to try again."
+          description="Huntgry reads Jobright's newgrad-jobs list. Refresh to try again."
           actions={
             <Button variant="default" leftSection={<IconRefresh size={16} />} loading={refreshing} onClick={() => void refresh()}>
               Refresh
@@ -141,33 +256,64 @@ export function ExplorePage() {
       ) : (
         <>
           <div className={classes.days} role="group" aria-label="Posted day">
-            {groups.map((g) => (
+            {recent.map(dayButton)}
+            {older.length > 0 && (
               <button
-                key={g.day}
                 type="button"
-                className={classes.day}
-                aria-pressed={g.day === day}
-                onClick={() => setDay(g.day)}
+                className={classes.earlier}
+                aria-expanded={showOlder}
+                aria-label={`Earlier, ${older.length} days, ${olderJobs} jobs`}
+                onClick={toggleEarlier}
               >
-                <span>{dayLabel(g.day, nowDate)}</span>
-                <span className={classes.dayCount}>{g.count}</span>
+                <IconChevronRight size={14} className={classes.earlierChevron} aria-hidden />
+                <span>Earlier</span>
+                <span className={classes.dayCount}>{olderJobs}</span>
               </button>
-            ))}
+            )}
+            {showOlder && older.map(dayButton)}
           </div>
           <div className={classes.row}>
             <TextInput
               className={classes.grow}
               leftSection={<IconSearch size={16} />}
-              placeholder="Filter by company, title or location"
+              placeholder="Filter by company, title, location or industry"
               aria-label="Filter Jobright jobs"
-              value={text}
-              onChange={(e) => setText(e.currentTarget.value)}
+              value={filters.text}
+              onChange={(e) => set('text', e.currentTarget.value)}
             />
             <SegmentedControl
               aria-label="Work model"
-              value={workModel}
-              onChange={(v) => setWorkModel(v as WorkModelFilter)}
+              value={filters.workModel}
+              onChange={(v) => set('workModel', v as WorkModelFilter)}
               data={[{ value: 'all', label: 'Any' }, ...WORK_MODELS.map((w) => ({ value: w, label: w }))]}
+            />
+            <Select
+              w={170}
+              aria-label="H1B sponsorship"
+              title={readme ? 'The GitHub list has no H1B details' : undefined}
+              disabled={readme}
+              data={[
+                { value: 'all', label: 'Any H1B' },
+                { value: 'yes', label: 'Sponsors H1B' },
+                { value: 'not-no', label: 'H1B not ruled out' }
+              ]}
+              value={filters.h1b}
+              onChange={(v) => set('h1b', (v ?? 'all') as H1bFilter)}
+              allowDeselect={false}
+            />
+            <NumberInput
+              w={170}
+              aria-label="Min. salary / year"
+              placeholder="Min. salary / year"
+              title={readme ? 'The GitHub list has no salaries' : undefined}
+              disabled={readme}
+              min={0}
+              step={10000}
+              thousandSeparator=","
+              prefix="$ "
+              hideControls
+              value={filters.minSalary ?? ''}
+              onChange={(v) => set('minSalary', typeof v === 'number' && v > 0 ? v : null)}
             />
           </div>
           <MonoLabel component="div">
@@ -192,8 +338,20 @@ export function ExplorePage() {
                         {r.title}
                       </button>
                       <p className={classes.meta}>{[r.company, r.location].filter(Boolean).join(' · ')}</p>
+                      {(r.salary || r.industry || r.companySize) && (
+                        <p className={classes.meta}>
+                          {[r.salary && shortSalary(r.salary), r.industry?.join(', '), r.companySize && `${r.companySize} people`]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </p>
+                      )}
                     </div>
                     <div className={classes.side}>
+                      {r.h1b && (
+                        <StatusPill tone={H1B_TONE[r.h1b]} title="H1B sponsorship, as Jobright reports it">
+                          H1B: {r.h1b}
+                        </StatusPill>
+                      )}
                       {r.workModel && <StatusPill tone={WORK_TONE[r.workModel]}>{r.workModel}</StatusPill>}
                       {savedJob ? (
                         <Button

@@ -1,4 +1,12 @@
-import type { ExploreJob, WorkModel } from '@shared/explore-types'
+import {
+  DEFAULT_EXPLORE_CATEGORY,
+  EXPLORE_CATEGORIES,
+  isExploreCategory,
+  type ExploreJob,
+  type ExploreList,
+  type WorkModel
+} from '@shared/explore-types'
+import { salaryRange } from '@shared/job-filters'
 import type { Job } from '@shared/jobs-types'
 
 /** One posted day of the list: `YYYY-MM-DD` and how many jobs went up that day. */
@@ -41,20 +49,107 @@ export function dayLabel(day: string, now = new Date()): string {
   return y === now.getFullYear() ? label : `${label}, ${y}`
 }
 
+/** Days shown before the rest are folded under "Earlier" (#169: the API list goes back weeks). */
+export const RECENT_DAYS = 7
+
+/** The newest `RECENT_DAYS` days, and the older ones that fold. */
+export function splitDays(groups: readonly DayGroup[]): { recent: DayGroup[]; older: DayGroup[] } {
+  return { recent: groups.slice(0, RECENT_DAYS), older: groups.slice(RECENT_DAYS) }
+}
+
 export type WorkModelFilter = WorkModel | 'all'
 
-/** The jobs of `day` that match the text (company, title, location) and the work model. */
-export function visibleRows(
-  jobs: readonly ExploreJob[],
-  { day, text, workModel }: { day: string | null; text: string; workModel: WorkModelFilter }
-): ExploreJob[] {
-  const words = text.toLowerCase().split(/\s+/).filter(Boolean)
+/** H1B sponsorship (#169): any, `Yes` only, or anything but `No`. */
+export type H1bFilter = 'all' | 'yes' | 'not-no'
+
+export interface ExploreFilters {
+  text: string
+  workModel: WorkModelFilter
+  h1b: H1bFilter
+  /** Yearly pay the top of the range must reach; `null` for none. */
+  minSalary: number | null
+}
+
+export const NO_FILTERS: ExploreFilters = { text: '', workModel: 'all', h1b: 'all', minSalary: null }
+
+/**
+ * The jobs of `day` that match the text (company, title, location, industry), the work model, the H1B choice and
+ * the minimum salary. A job with no H1B answer passes "not No"; one with no readable pay fails a minimum.
+ */
+export function visibleRows(jobs: readonly ExploreJob[], { day, ...f }: { day: string | null } & Partial<ExploreFilters>): ExploreJob[] {
+  const words = (f.text ?? '').toLowerCase().split(/\s+/).filter(Boolean)
   return jobs.filter((j) => {
     if (day && j.postedAt !== day) return false
-    if (workModel !== 'all' && j.workModel !== workModel) return false
-    const hay = `${j.company} ${j.title} ${j.location}`.toLowerCase()
+    if (f.workModel && f.workModel !== 'all' && j.workModel !== f.workModel) return false
+    if (f.h1b === 'yes' && j.h1b !== 'Yes') return false
+    if (f.h1b === 'not-no' && j.h1b === 'No') return false
+    if (f.minSalary) {
+      const pay = salaryRange({ salary: j.salary ?? '' })
+      if (!pay || pay.max < f.minSalary) return false
+    }
+    const hay = `${j.company} ${j.title} ${j.location} ${(j.industry ?? []).join(' ')}`.toLowerCase()
     return words.every((w) => hay.includes(w))
   })
+}
+
+/** Filters that only API rows can answer: off for a README list. */
+export function effectiveFilters(f: ExploreFilters, source: ExploreList['source'] | undefined): ExploreFilters {
+  return source === 'readme' ? { ...f, h1b: 'all', minSalary: null } : f
+}
+
+/** The remembered category and the "Earlier" days' fold, in localStorage like the Board's folds (#160). */
+export const CATEGORY_STORAGE_KEY = 'huntgry-explore-category'
+export const EARLIER_STORAGE_KEY = 'huntgry-explore-earlier-open'
+
+export function readCategory(storage: Pick<Storage, 'getItem'> | null = globalThis.localStorage): string {
+  try {
+    const c = storage?.getItem(CATEGORY_STORAGE_KEY)
+    return isExploreCategory(c) ? c : DEFAULT_EXPLORE_CATEGORY
+  } catch {
+    return DEFAULT_EXPLORE_CATEGORY
+  }
+}
+
+export function readFlag(key: string, storage: Pick<Storage, 'getItem'> | null = globalThis.localStorage): boolean {
+  try {
+    return storage?.getItem(key) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function writePref(key: string, value: string, storage: Pick<Storage, 'setItem'> | null = globalThis.localStorage): void {
+  try {
+    storage?.setItem(key, value)
+  } catch {
+    // Storage full or unavailable: the choice holds until the page is left.
+  }
+}
+
+/** "Software Engineering" of `newgrad:us:swe`. */
+export const categoryLabel = (id: string): string => EXPLORE_CATEGORIES.find((c) => c.id === id)?.label ?? id
+
+/** The category picker's options, grouped ("New grad · US", …). */
+export function categoryOptions(): { group: string; items: { value: string; label: string }[] }[] {
+  const groups = new Map<string, { value: string; label: string }[]>()
+  for (const c of EXPLORE_CATEGORIES) groups.set(c.group, [...(groups.get(c.group) ?? []), { value: c.id, label: c.label }])
+  return [...groups].map(([group, items]) => ({ group, items }))
+}
+
+const count = (n: number) => n.toLocaleString('en-US')
+
+/** Which source the list shows, and how much of it: "newgrad-jobs API · newest 1,000 of 2,116 jobs". */
+export function sourceLabel(list: Pick<ExploreList, 'source' | 'jobs' | 'total'>): string {
+  if (list.source === 'readme') return `Jobright's GitHub list (fallback) · ${count(list.jobs.length)} jobs`
+  const n = list.jobs.length
+  return list.total && list.total > n
+    ? `newgrad-jobs API · newest ${count(n)} of ${count(list.total)} jobs`
+    : `newgrad-jobs API · ${count(n)} jobs`
+}
+
+/** `$150000-$168000/yr` → `$150k–$168k/yr`; other pay text as it is. */
+export function shortSalary(salary: string): string {
+  return salary.replace(/\$(\d{4,})/g, (_, n: string) => `$${Math.round(Number(n) / 1000)}k`).replace(/-\$/g, '–$')
 }
 
 /** Saved job of each listed id already on the Jobs page (its own record, or merged into another board's copy). */
