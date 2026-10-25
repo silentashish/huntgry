@@ -2174,4 +2174,57 @@ describe('Automation prepare (#154)', () => {
     expect(service.busy()).toBe(true)
     await expect(service.prepare(ID)).rejects.toThrow(/apply session is open/)
   })
+
+  it('a form that needs no model call (AI answers off) is prepared at once, not after the timeout', async () => {
+    await unreviewed()
+    const { deps, calls } = counted()
+    const { service } = prepared(deps, { aiAnswers: async () => false })
+    const started = Date.now()
+    const result = await service.prepare(ID, { timeoutMs: 4000 })
+    expect(result.ok).toBe(true)
+    expect(Date.now() - started).toBeLessThan(2000)
+    expect(calls).toEqual({ map: 0, draft: 0 })
+  })
+
+  it('one deadline covers the model calls: a draft that never returns ends the prepare as a timeout, its tab closed', async () => {
+    await unreviewed()
+    const { deps } = counted()
+    deps.draft = () => new Promise(() => undefined)
+    const { service, closed } = prepared(deps)
+    const started = Date.now()
+    const result = await service.prepare(ID, { timeoutMs: 400 })
+    expect(result).toMatchObject({ ok: false, status: 'timeout' })
+    expect(Date.now() - started).toBeLessThan(1500)
+    expect(closed).toEqual(['tab-auto'])
+    expect(service.current()).toBeNull()
+    expect(service.busy()).toBe(false)
+  })
+
+  it('a page that opens a new tab ends the prepare: the new tab is closed too, nothing is followed', async () => {
+    await unreviewed()
+    const { deps } = counted()
+    const parent = new FakeTab('', `${POSTING}/apply`)
+    const child = new FakeTab('', `${POSTING}/apply`)
+    const closed: string[] = []
+    const popups = new Set<(opener: string, child: string) => void>()
+    const { service } = setup(parent, undefined, {
+      answers: deps,
+      openTab: async () => {
+        setTimeout(() => {
+          for (const l of popups) l('tab-auto', 'tab-child')
+          child.load(fixture('lever-form.html'), `${POSTING}/apply`)
+        }, 0)
+        return 'tab-auto'
+      },
+      closeTab: (id) => void closed.push(id),
+      onTabOpened: (l) => {
+        popups.add(l)
+        return () => popups.delete(l)
+      }
+    }, { 'tab-child': child })
+    const result = await service.prepare(ID, { timeoutMs: 3000 })
+    expect(result).toMatchObject({ ok: false, status: 'waiting', message: expect.stringMatching(/new tab/) })
+    expect(closed.sort()).toEqual(['tab-auto', 'tab-child'])
+    expect(child.sent).toEqual([])
+  })
 })

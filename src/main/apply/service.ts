@@ -291,6 +291,8 @@ export class ApplyService {
    */
   async prepare(applicationId: string, { timeoutMs = DEFAULT_PREPARE_TIMEOUT_MS }: { timeoutMs?: number } = {}): Promise<PrepareResult> {
     if (this.busy() || this.ctx) throw new Error('An apply session is open; Automation waits for it to end.')
+    // One deadline for the whole prepare: the page, the fill, the model calls and their refills.
+    const deadline = Date.now() + timeoutMs
     this.starting = true
     let session: ApplySession
     try {
@@ -303,9 +305,18 @@ export class ApplyService {
     if (!ctx) return { ok: false, status: 'closed', message: 'The apply session ended before the page loaded.' }
     const tabId = session.tabId
     try {
-      const end = await this.settle(ctx, timeoutMs)
+      const end = await this.settle(ctx, Math.max(0, deadline - Date.now()))
       if (end !== 'filled') return { ok: false, status: end, message: this.endMessage(end) }
-      await ctx.learning
+      // The mapping and the drafts (and their refills) within what is left of the deadline.
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const learned = await Promise.race([
+        (ctx.learning ?? Promise.resolve()).then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()))
+        })
+      ])
+      clearTimeout(timer)
+      if (!learned) return { ok: false, status: 'timeout', message: this.endMessage('timeout') }
       const live = this.context() === ctx
       if (!live || this.session?.status !== 'filled' || !this.session.report) {
         return { ok: false, status: live ? (this.session?.status ?? 'closed') : 'closed', message: this.endMessage('closed') }
@@ -469,7 +480,15 @@ export class ApplyService {
     if (this.deps.onTabOpened) {
       ctx.sessionUnsubscribe.push(
         this.deps.onTabOpened((opener, child) => {
-          if (this.ctx === ctx && opener === ctx.tabId) this.follow(ctx, child)
+          if (this.ctx !== ctx || opener !== ctx.tabId) return
+          if (ctx.deferUploads) {
+            // Automation's hidden fill (#154) never follows a page into a new tab: the tab is closed and the job is
+            // left to the user, so no tab outlives the prepare and none stays in front.
+            this.deps.closeTab?.(child)
+            this.update({ status: 'waiting', report: null, message: 'The page opened a new tab for its form. Automation leaves such pages to you.' })
+            return
+          }
+          this.follow(ctx, child)
         })
       )
     }
@@ -793,6 +812,8 @@ export class ApplyService {
         if (this.ctx === ctx && ctx.loadSeq !== seq && this.session?.status === 'filling') {
           this.update({ status: 'ready', message: 'Press Fill form to fill this page.' })
         }
+        // "Filled" was announced while the fill still held the page: a prepare waiting for it looks again now.
+        for (const watcher of [...this.watchers]) watcher()
       }
     }
   }
