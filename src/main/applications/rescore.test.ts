@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildPdf } from '../resume/test-fixtures'
-import { absentTerms, rescoreApplication } from './rescore'
+import { absentTerms, rescoreApplication, scoreApplication } from './rescore'
 import { normalizeMatch, normalizeTracking, readTracking, updateTracking } from './tracking'
 
 const FIXTURES = join(__dirname, '../../shared/fixtures')
@@ -231,6 +231,24 @@ describe('rescoreApplication', () => {
 
   it('refuses an application id outside the workspace', async () => {
     await expect(rescoreApplication(ws, '../x/y', { now: NOW })).rejects.toThrow(/Invalid application id/)
+  })
+})
+
+describe('scoreApplication', () => {
+  it('returns the match rescoreApplication stores, writes nothing, and exposes unbacked requirements (#152)', async () => {
+    // The resume claims Kafka, which the profile has no evidence for.
+    const data = JSON.parse(await readFile(join(FIXTURES, 'tailored-resume_data.json'), 'utf8'))
+    data.skills.push({ label: 'Streaming', items: 'Kafka' })
+    await writeFile(join(folder, 'resume_data.json'), JSON.stringify(data))
+    const score = await scoreApplication(ws, ID, { runId: 'run-1', now: NOW })
+    await expect(readFile(join(folder, 'huntgry.json'), 'utf8')).rejects.toThrow()
+    expect(score!.coverage.unbacked.map((r) => r.skill)).toEqual(['Kafka'])
+    expect(await rescoreApplication(ws, ID, { runId: 'run-1', now: NOW })).toEqual(score!.match)
+  })
+
+  it('is null when the resume cannot be scored', async () => {
+    await rm(join(folder, 'resume_data.json'))
+    expect(await scoreApplication(ws, ID, { now: NOW })).toBeNull()
   })
 })
 
