@@ -164,7 +164,8 @@ export class Automation {
 
   private ensureTimer(): void {
     if (this.timer || this.stopped) return
-    this.timer = setInterval(() => void this.tick().catch((err: unknown) => console.error('Automation tick failed:', err)), this.deps.tickMs ?? 60_000)
+    // No workspace open yet (the picker) is not worth a line every minute; the next tick tries again.
+    this.timer = setInterval(() => void this.tick().catch(() => undefined), this.deps.tickMs ?? 60_000)
     this.timer.unref?.()
   }
 
