@@ -221,8 +221,9 @@ export function flatten(sections: readonly PaletteSection[]): PaletteItem[] {
 // ---------------------------------------------------------------- entries
 
 const PAGE_KEYWORDS: Record<NavPage, string> = {
-  dashboard: 'home applications usage resumes',
-  board: 'kanban columns to do applied interviewing offer archived',
+  dashboard: 'home summary stats needs you usage',
+  // Applications are browsed on the Board since the Dashboard table went (#161).
+  board: 'kanban columns applications resumes to do applied interviewing offer archived',
   jobs: 'saved postings relevant scent',
   explore: 'jobright new grad daily list discover github',
   browser: 'tabs web posting apply',
@@ -336,11 +337,8 @@ export function paletteItems(data: PaletteData): PaletteItem[] {
       subtitle: join(inReview ? 'Waiting for review' : app.tracking.status, shortDate(app.createdAt)),
       keywords: join(app.jobTitle, app.tracking.notes),
       icon: 'application',
-      command: inReview
-        ? nav(locationOf('review', { applicationId: app.id }))
-        : withResume(app)
-          ? { kind: 'open-file', applicationId: app.id, file: 'resume.pdf' }
-          : { kind: 'reveal', applicationId: app.id },
+      // A result waiting for review opens on Review; any other, in its drawer on the Board (#161).
+      command: nav(inReview ? locationOf('review', { applicationId: app.id }) : locationOf('board', { applicationId: app.id })),
       actions
     }
     appItems.set(app.id, item)

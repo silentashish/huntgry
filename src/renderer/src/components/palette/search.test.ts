@@ -144,6 +144,15 @@ describe('palette search', () => {
     const graph = flatten(searchPalette(items, 'graph')).find((i) => i.id === 'view:graph')!
     expect(graph.command).toEqual({ kind: 'navigate', location: { page: 'profile', params: { view: 'graph' } } })
     expect(titles(flatten(searchPalette(items, 'kanban')))).toContain('Board')
+    // Applications are browsed on the Board, not the Dashboard (#161).
+    const pages = (q: string) => flatten(searchPalette(items, q)).filter((i) => i.group === 'goto').map((i) => i.title)
+    expect(pages('applications')).toContain('Board')
+    expect(pages('applications')).not.toContain('Dashboard')
+  })
+
+  it('opens an application in its drawer on the Board (#161)', () => {
+    const stripeApp = items.find((i) => i.group === 'applications')!
+    expect(stripeApp.command).toEqual({ kind: 'navigate', location: { page: 'board', params: { applicationId: 'Senior Backend Engineer/Stripe/1' } } })
   })
 
   it('opens a job without a URL on the Tailor form, and a waiting result on Review', () => {
