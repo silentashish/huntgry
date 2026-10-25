@@ -230,16 +230,23 @@ function descriptionRequirements(job: MatchJob, profileSkills: readonly string[]
 const YEARS =
   /\b(\d{1,2})\s*\+?\s*(?:(?:-|–|to)\s*\d{1,2}\s*\+?\s*)?years?['’]?\s+(?:of\s+)?(?:[\w/&+#.-]+\s+){0,5}?experience\b/gi
 
-/** Years a job asks for: the board's number, else the largest "N+ years … experience" in a required sentence. */
+/**
+ * Years a job asks for: the board's number, else the largest "N+ years … experience" among the required
+ * sentences. Within one sentence, minimums joined by "or" are alternative paths ("Bachelor's and 7+ years, or
+ * Master's and 3+ years"), so the sentence asks for the smallest; otherwise for the largest.
+ */
 export function minimumYears(job: MatchJob): number | null {
   if (typeof job.minYearsExperience === 'number') return job.minYearsExperience
   let most: number | null = null
   for (const { text, preferred } of sentences(job.description)) {
     if (preferred) continue
-    for (const m of text.matchAll(YEARS)) {
-      const n = Number(m[1])
-      if (n > 0 && n <= 20 && (most === null || n > most)) most = n
-    }
+    const found = [...text.matchAll(YEARS)]
+      .map((m) => ({ n: Number(m[1]), at: m.index, end: m.index + m[0].length }))
+      .filter((m) => m.n > 0 && m.n <= 20)
+    if (found.length === 0) continue
+    const alternatives = found.some((m, i) => i > 0 && /\bor\b/i.test(text.slice(found[i - 1].end, m.at)))
+    const asked = alternatives ? Math.min(...found.map((m) => m.n)) : Math.max(...found.map((m) => m.n))
+    if (most === null || asked > most) most = asked
   }
   return most
 }

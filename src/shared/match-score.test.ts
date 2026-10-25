@@ -256,6 +256,17 @@ describe('matchScore', () => {
       expect(minimumYears(job('Minimum of 4 years’ experience in backend development.'))).toBe(4)
       expect(minimumYears(job('8+ years of experience is a plus.'))).toBeNull()
       expect(minimumYears(job('Founded 20 years ago.'))).toBeNull()
+      // Cumulative minimums in one sentence: the largest.
+      expect(minimumYears(job('5+ years of experience and 2+ years of Python experience.'))).toBe(5)
+    })
+
+    it('reads minimums joined by "or" as alternative paths and gates on the easiest', () => {
+      const paths = job('Bachelor’s degree in Computer Science and 7+ years of experience, or Master’s degree and 3+ years of experience. Python.')
+      expect(minimumYears(paths)).toBe(3)
+      const r = matchScore(paths, profile({ years: 4 }))
+      expect(r.gates).toEqual([])
+      expect(r.score).toBe(100)
+      expect(matchScore(paths, profile({ years: 1 })).gates.map((g) => g.kind)).toEqual(['years'])
     })
 
     it('fails a clearance for someone who needs sponsorship, or an active clearance the profile does not hold', () => {
