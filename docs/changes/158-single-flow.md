@@ -65,7 +65,9 @@ warning); the verify gate, the Review service, the scan and the phone mapping al
 - *Tailor page* (`queue/tailor-job.ts`, `pages/tailor/*`): Start calls `queue:tailor`, which saves
   the job (a job sent from Jobs / Board is used as it is through `savedJobId`; pasted text goes
   through `addPasted`; a bare URL through `addByUrl`), queues it unattended and returns the item;
-  the page opens the run when the queue starts it. `runner:start` is gone, so nothing bypasses the
+  the page opens the run when the queue starts it. The submitted text travels with the queue item
+  (`QueueOptions.jobDescription`), so the run gets exactly that posting even when the pasted job is
+  merged with an older copy from another board. `runner:start` is gone, so nothing bypasses the
   queue. The form loses its Job id field.
 - *Bulk modal* (`pages/jobs/*`): "Approve each run" is gone; **Tailor all** is the plan + pipeline.
 - *Review* (`review/service.ts`, `pages/review/*`): a v2 result shows **Reframings used** (ticking
@@ -79,8 +81,9 @@ means a missing prerequisite after the one nudge. Follow-up replies on a finishe
 through the queue and bring the result back to Unreviewed.
 
 **Phone (#42)** (`src/main/remote/notes-file.ts`). No change in `src/shared/remote/*`. The phone
-asks for `review-notes.md`; when a folder has no v1 notes but v2 `tailoring-notes.md`, the desktop
-serves that file under the old name. The inline notes, gaps and reframings come from the Review
+asks for `review-notes.md`; the desktop serves the notes the Review detail reads, with the same
+precedence (`notesFileOf`: marked v2 `tailoring-notes.md` first, then v1), so a continued v1 folder
+holding both files gives the phone the v2 notes its gaps, reframings and revision describe. The inline notes, gaps and reframings come from the Review
 service. ADR-0001 has a note.
 
 **Settings** (`cli/skill-version.ts`, `environment.ts`, `pages/settings`). The skill row shows
