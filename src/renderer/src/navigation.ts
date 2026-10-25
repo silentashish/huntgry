@@ -82,6 +82,7 @@ export type SettingsSection =
   | 'jobright'
   | 'remote-control'
   | 'appearance'
+  | 'about'
 
 /** Tabs of the master profile editor, used to deep-link into a section. */
 export type ProfileSection =
@@ -139,7 +140,8 @@ export const SETTINGS_SECTION_LABEL: Record<SettingsSection, string> = {
   'skill-dependencies': 'Skill dependencies',
   jobright: 'Jobright',
   'remote-control': 'Remote control',
-  appearance: 'Appearance'
+  appearance: 'Appearance',
+  about: 'About'
 }
 
 /** Pages drawn edge to edge, without the shell's padding and max width. */

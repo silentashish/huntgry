@@ -106,6 +106,16 @@ test.describe('section nav and appearance', () => {
     await expect(settings.appearanceOption('System')).not.toBeChecked()
     expect(await scheme()).toBe('light')
   })
+
+  // Packaged, app.getVersion() reads the same package.json; this suite launches out/main/index.js, where Electron
+  // finds no package.json beside it and reports its own version instead, so the card is compared with the file.
+  test("About shows package.json's version, the release's own number (#167)", async ({ app }) => {
+    const settings = await openSettings(app)
+    await settings.sectionLink('About').click()
+    await expect(settings.cardHeading('About')).toBeInViewport()
+    const pkg = JSON.parse(await readFile(join(__dirname, '../../package.json'), 'utf8')) as { version: string }
+    await expect(settings.appVersion).toHaveText(pkg.version)
+  })
 })
 
 test.describe('with an old Claude Code', () => {

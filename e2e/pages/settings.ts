@@ -13,6 +13,7 @@ export type SettingsSection =
   | 'Jobright'
   | 'Remote control'
   | 'Appearance'
+  | 'About'
 
 /**
  * The Settings page: the banner, the Agents card (one row per agent with the
@@ -57,6 +58,11 @@ export class SettingsPage {
   /** A card's title (level 3). */
   cardHeading(title: string): Locator {
     return this.page.getByRole('heading', { name: title, level: 3, exact: true })
+  }
+
+  /** Settings → About's version readout (#167). */
+  get appVersion(): Locator {
+    return this.page.getByTestId('app-version')
   }
 
   /** The Jobright card's buttons (#146): Connect Jobright / Reconnect, Check sign-in, Disconnect. */
