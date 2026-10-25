@@ -311,9 +311,11 @@ After a restart the queue is paused until you press **Resume**.
 **Tailor all** plans the batch first and then runs it as a pipeline of up to 100 jobs. Every result,
 from **Tailor all** or the Tailor page, goes through a verify gate and lands as **Unreviewed** on the
 **Review** page, which shows the reframings the run used, the gaps it left open and its decisions (it
-cannot be applied until you approve it); ticking a reframing saves it as a standing approval, which
-later runs get as the preferred wording and which **Settings** lists. See
-[docs/changes/158-single-flow.md](docs/changes/158-single-flow.md). Review decisions and standing approvals are kept with the app's data
+cannot be applied until you approve it). Ticking a reframing keeps its wording; **Reject** (with a
+better wording if you have one) stops runs from using it, and **Re-run** redoes the result without it.
+Both are reframing rules that every later run gets, listed in **Settings → Reframing rules**. See
+[docs/changes/158-single-flow.md](docs/changes/158-single-flow.md) and
+[docs/changes/159-reject-reframings.md](docs/changes/159-reject-reframings.md). Review decisions and reframing rules are kept with the app's data
 (`~/Library/Application Support/Huntgry/review/`), outside the workspace, so an agent (which can write
 the workspace) can never approve its own result. The pipeline pauses on a usage limit until the
 agent's reset time (or switches the jobs that have not started to a fallback agent), retries transient failures and stalls with backoff, keeps the
