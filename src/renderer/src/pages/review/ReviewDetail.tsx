@@ -94,6 +94,14 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
     }
   }
 
+  const untick = (id: string) =>
+    setTicked((s) => {
+      if (!s.has(id)) return s
+      const next = new Set(s)
+      next.delete(id)
+      return next
+    })
+
   const toggle = (id: string) =>
     setTicked((s) => {
       const next = new Set(s)
@@ -257,9 +265,12 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
                     disabled={!decidable}
                     busy={busy !== null}
                     onToggle={() => toggle(r.id)}
-                    onReject={(betterWording) =>
-                      rule(() => api.review.reject({ applicationId: d.applicationId, revision: d.revision, reframingId: r.id, ...(betterWording ? { betterWording } : {}) }))
-                    }
+                    onReject={async (betterWording) => {
+                      const ok = await rule(() => api.review.reject({ applicationId: d.applicationId, revision: d.revision, reframingId: r.id, ...(betterWording ? { betterWording } : {}) }))
+                      // A rejected reframing is no longer kept: a later Approve or Re-run must not undo the rejection.
+                      if (ok) untick(r.id)
+                      return ok
+                    }}
                     onUndo={() => rule(() => api.review.removeRule(r.id).then(() => null))}
                   />
                 ))}

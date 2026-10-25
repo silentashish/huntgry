@@ -11,10 +11,10 @@
 
 import { LIMITS, truncateUtf8, utf8Bytes, type RemoteFile, type RemoteReframing, type ReviewDetail, type ReviewReframings } from '@huntgry/remote-protocol'
 import { router, useFocusEffect } from 'expo-router'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from 'react-native'
 import { fileKey, pageNumber, utf8Text } from '../remote/files'
-import { REVIEW_STATE, approvalGate, canReject, canRerun, canRerunWithoutAnswers, isDecidable, keepTicks, reframingsFor, requiredPreviews, shortRevision } from '../remote/review'
+import { REVIEW_STATE, approvalGate, canReject, dropNewlyRejected, canRerun, canRerunWithoutAnswers, isDecidable, keepTicks, reframingsFor, requiredPreviews, shortRevision } from '../remote/review'
 import { useModel, useRemote } from '../state/RemoteProvider'
 import { Alert } from '../ui/Alert'
 import { Badge } from '../ui/Badge'
@@ -286,6 +286,12 @@ export function ReviewScreen({ applicationId }: { applicationId: string }) {
   useEffect(() => {
     if (d) setTicked((t) => keepTicks(d, t))
   }, [revision]) // d changes with revision; ticks follow the revision only
+  // #159: a reframing rejected while ticked is no longer kept (Approve or Re-run would undo the rejection).
+  const lastReframings = useRef(r)
+  useEffect(() => {
+    setTicked((t) => dropNewlyRejected(t, lastReframings.current, r))
+    lastReframings.current = r
+  }, [r])
   const state = d?.state ? REVIEW_STATE[d.state] : REVIEW_STATE.unreviewed
   const toggle = (id: string) =>
     setTicked((t) => {

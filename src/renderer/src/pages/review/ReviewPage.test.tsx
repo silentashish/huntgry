@@ -218,6 +218,31 @@ describe('ReviewPage', () => {
     expect(review.rerun).toHaveBeenCalledWith({ applicationId: 'a', revision: 'rev-a', answers: '', approvedReframingIds: [] })
   })
 
+  it('a reframing ticked to keep and then rejected is no longer kept: Re-run does not send it (#159)', async () => {
+    const items = [item('a')]
+    const r1 = { id: 'f'.repeat(64), sourceFact: 'Built a RabbitMQ pipeline', wording: 'Built event-streaming pipelines' }
+    const r2 = { id: 'e'.repeat(64), sourceFact: 'Mentored two juniors', wording: 'Coached two engineers' }
+    const v2 = { ...detailOf(items[0]), notesFormat: 'v2' as const, proposedReframings: [r1, r2] }
+    review.list.mockResolvedValue(items)
+    review.get.mockResolvedValue(v2)
+    await renderPage(undefined)
+    const button = (name: string) => [...container.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === name || b.getAttribute('aria-label') === name)
+    const keep = (r: { wording: string }) => container.querySelector<HTMLInputElement>(`[aria-label="Keep: ${r.wording}"]`)!
+    await act(async () => keep(r1).click())
+    await act(async () => keep(r2).click())
+    expect(keep(r1).checked).toBe(true)
+
+    review.reject.mockResolvedValue({ ok: true, detail: { ...v2, proposedReframings: [{ ...r1, rule: { kind: 'rejected' } }, r2] } })
+    await act(async () => button('Reject R1')!.click())
+    await act(async () => button('Reject R1')!.click())
+    expect(keep(r1).checked).toBe(false)
+    expect(keep(r2).checked).toBe(true)
+
+    review.rerun.mockResolvedValue({ ok: true, detail: v2 })
+    await act(async () => button('Re-run')!.click())
+    expect(review.rerun).toHaveBeenCalledWith({ applicationId: 'a', revision: 'rev-a', answers: '', approvedReframingIds: [r2.id] })
+  })
+
   it('shows an older v1 result as before (AC-4)', async () => {
     const items = [item('a')]
     review.list.mockResolvedValue(items)

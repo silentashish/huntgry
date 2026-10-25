@@ -1,6 +1,6 @@
 import type { RemoteFile, ReviewDetail } from '@huntgry/remote-protocol'
 import { describe, expect, it } from 'vitest'
-import { REVIEW_COPY, approvalGate, approvalIds, canReject, canRerun, canRerunWithoutAnswers, keepTicks, reframingsFor, requiredPreviews } from './review'
+import { REVIEW_COPY, approvalGate, approvalIds, canReject, dropNewlyRejected, canRerun, canRerunWithoutAnswers, keepTicks, reframingsFor, requiredPreviews } from './review'
 
 const H = (c: string) => c.repeat(64)
 
@@ -79,6 +79,15 @@ describe('reframing rules (#159)', () => {
     expect(reframingsFor(DETAIL, { ...list, revision: H('8') })).toBeNull()
     expect(reframingsFor(DETAIL, { ...list, applicationId: 'other/app/1' })).toBeNull()
     expect(reframingsFor(DETAIL, undefined)).toBeNull()
+  })
+
+  it('a ticked reframing that becomes rejected is unticked; one ticked after its rejection stays (#159)', () => {
+    const [a, b] = list.reframings
+    const rejectedA = { ...list, reframings: [{ ...a, rule: 'rejected' as const }, b] }
+    expect(dropNewlyRejected(new Set([a.id, b.id]), list, rejectedA)).toEqual(new Set([b.id]))
+    // Ticked again after the rejection (to keep it): a refresh of the same list keeps the tick.
+    expect(dropNewlyRejected(new Set([a.id]), rejectedA, { ...rejectedA })).toEqual(new Set([a.id]))
+    expect(dropNewlyRejected(new Set([a.id]), null, null)).toEqual(new Set([a.id]))
   })
 
   it('rejects only reframings a run used and not rejected yet; re-runs without answers only on a Mac that knows the rules', () => {

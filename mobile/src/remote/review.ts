@@ -46,6 +46,17 @@ export function canReject(r: ReviewReframings, item: RemoteReframing): boolean {
 }
 
 /**
+ * The ticks left once the reframings list changed from `before` to `after`: a reframing that just
+ * became rejected is no longer kept, so a later Approve or Re-run cannot undo the rejection. A
+ * rejected reframing ticked afterwards (to keep it again) stays ticked.
+ */
+export function dropNewlyRejected(ticked: ReadonlySet<string>, before: ReviewReframings | null, after: ReviewReframings | null): Set<string> {
+  const was = new Set(before?.reframings.filter((x) => x.rule === 'rejected').map((x) => x.id) ?? [])
+  const now = after?.reframings.filter((x) => x.rule === 'rejected' && !was.has(x.id)).map((x) => x.id) ?? []
+  return new Set([...ticked].filter((id) => !now.includes(id)))
+}
+
+/**
  * Re-run without typed answers redoes the result with the reframing rules: only a Mac that
  * knows the rules (it answered `review.reframings`) takes empty answers.
  */
