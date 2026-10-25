@@ -76,6 +76,33 @@
   color: var(--hg-text-muted);
 }
 
+/* "Earlier" (#169): the days past the newest seven, folded like the Board's past weeks (#160). */
+.earlier {
+  composes: day;
+  color: var(--hg-text-muted);
+}
+
+.earlierChevron {
+  flex: 0 0 auto;
+  color: var(--hg-icon-muted);
+  transition: transform 120ms;
+}
+
+.earlier[aria-expanded='true'] .earlierChevron {
+  transform: rotate(90deg);
+}
+
+/* ---------- Category and source (#169) ---------- */
+
+.category {
+  flex: 0 1 300px;
+  min-width: 220px;
+}
+
+.source {
+  margin: 0;
+}
+
 /* ---------- Job list ---------- */
 
 .list {

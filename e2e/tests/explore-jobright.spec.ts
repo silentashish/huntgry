@@ -129,14 +129,15 @@ test('Connect works from Settings before Explore was ever opened (the list is fe
   await shell.goTo('settings')
   const settings = new SettingsPage(app.window)
   await expect(settings.jobrightStatus('Not connected')).toBeVisible()
-  expect(mock.requests).not.toContain('/jobright/README.md')
+  const listFetches = () => mock.requests.filter((r) => r.startsWith('/jobright/swan/mini-sites/list?') || r === '/jobright/README.md')
+  expect(listFetches()).toEqual([])
 
   const signIn = app.electronApp.waitForEvent('window')
   await settings.jobrightButton('Connect Jobright').click()
   const win = await signIn
-  // The list was fetched to find a posting, and the window opened on one.
+  // The list was fetched (from the API, #169) to find a posting, and the window opened on one.
   await expect.poll(() => win.url()).toContain('/jobs/info/')
-  expect(mock.requests).toContain('/jobright/README.md')
+  expect(listFetches()).toEqual(['/jobright/swan/mini-sites/list?position=0&count=500'])
   await win.getByRole('link', { name: 'Sign in' }).click()
   await win.getByRole('button', { name: 'Sign in' }).click()
   await expect(settings.jobrightStatus('Connected')).toBeVisible({ timeout: 30_000 })

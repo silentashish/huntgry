@@ -6,15 +6,18 @@ import { JobsPage } from '../pages/jobs'
 import { Shell } from '../pages/shell'
 
 /**
- * Explore (#142) against the mock Jobright list on 127.0.0.1 (`/jobright/README.md`, dated relative to today,
- * from `scripts/mock-ats/jobright.mjs`); the app is pointed there by `HUNTGRY_EXPLORE_SOURCE_URL`, so GitHub
- * and jobright.ai are never reached.
+ * Explore (#142, #169) against the mock Jobright on 127.0.0.1: the newgrad-jobs API
+ * (`POST /jobright/swan/mini-sites/list`) and its README fallback (`/jobright/README.md`), both dated relative to
+ * today, from `scripts/mock-ats/jobright.mjs`. The app is pointed there by `HUNTGRY_EXPLORE_API_URL` and
+ * `HUNTGRY_EXPLORE_SOURCE_URL`, so jobright.ai and GitHub are never reached.
  */
 test.use({ workspace: 'mocks' })
 
 const README = '/jobright/README.md'
+const API = '/jobright/swan/mini-sites/list'
 const readmeFetches = (requests: string[]) => requests.filter((r) => r === README).length
-const cacheFile = (workspace: string) => join(workspace, '.huntgry/explore/jobright.json')
+const apiFetches = (requests: string[]) => requests.filter((r) => r.startsWith(`${API}?`)).length
+const cacheFile = (workspace: string, category = 'newgrad.us.swe') => join(workspace, `.huntgry/explore/${category}.json`)
 const jobFile = (workspace: string, id: string) => join(workspace, '.huntgry/jobs', `jobright-${id}.json`)
 
 async function openExplore(window: import('@playwright/test').Page): Promise<ExplorePage> {
@@ -24,27 +27,35 @@ async function openExplore(window: import('@playwright/test').Page): Promise<Exp
   return explore
 }
 
-test.describe('Explore (#142)', () => {
-  test('lists today first, filters a day, adds a job and opens it on the Jobs page', async ({ app, mock }) => {
+test.describe('Explore (#142, #169)', () => {
+  test('lists from the API, today first, filters, adds a job and opens it on the Jobs page', async ({ app, mock }) => {
     const explore = await openExplore(app.window)
 
-    // Today's jobs are the default view; the malformed row (a link to another host) is dropped.
+    // The API list: today's jobs are the default view; its malformed entries (a bad id, no title) are dropped.
+    await expect(explore.source).toHaveText('newgrad-jobs API · 12 jobs')
+    await expect(explore.fallback).toHaveCount(0)
     await expect(explore.day('Today')).toHaveAttribute('aria-pressed', 'true')
     await expect(explore.day('Today')).toHaveAccessibleName(/^Today\s*3$/)
     await expect(explore.day('Yesterday')).toHaveAccessibleName(/^Yesterday\s*2$/)
-    await expect(explore.days.getByRole('button')).toHaveCount(3)
     await expect
       .poll(() => explore.listedTitles())
       .toEqual(['Software Engineer, New Grad', 'Backend Engineer I', 'Embedded Software Engineer'])
     await expect(app.window.getByText('Too good to be true')).toHaveCount(0)
-    // ↳ took the previous row's company.
-    await expect(explore.row('Backend Engineer I')).toContainText('Northwind Labs · Remote, United States')
+    await expect(app.window.getByText('No Title Inc')).toHaveCount(0)
+    // The API's fields are on the row.
+    await expect(explore.row('Software Engineer, New Grad')).toContainText('$120k–$145k/yr · Cloud Computing, Software · 1001-5000 people')
+    await expect(explore.row('Software Engineer, New Grad')).toContainText('H1B: Yes')
     await expect(app.window.getByText('Updated just now')).toBeVisible()
 
-    // The list was fetched once and cached in the workspace.
-    expect(readmeFetches(mock.requests)).toBe(1)
+    // Fetched once (one page: 12 rows is under the 500 asked for), never the README, and cached per category.
+    expect(apiFetches(mock.requests)).toBe(1)
+    expect(mock.requests).toContain(`${API}?position=0&count=500`)
+    expect(readmeFetches(mock.requests)).toBe(0)
     const cache = JSON.parse(await readFile(cacheFile(app.workspace!), 'utf8'))
-    expect(cache.jobs).toHaveLength(6)
+    expect(cache).toMatchObject({ category: 'newgrad:us:swe', source: 'api', total: 14 })
+    expect(cache.jobs).toHaveLength(12)
+    // Rows carry the qualifications (#150 scores from them).
+    expect(cache.jobs[0].qualifications).toMatch(/^1\. A degree in computer science/)
 
     // Another day, then the text and work-model filters.
     await explore.pickDay('Yesterday')
@@ -54,10 +65,24 @@ test.describe('Explore (#142)', () => {
     await explore.workModel('Any')
     await explore.filterInput.fill('associate')
     await expect.poll(() => explore.listedTitles()).toEqual(['Associate Data Engineer'])
+    await explore.filterInput.fill('fintech')
+    await expect.poll(() => explore.listedTitles()).toEqual(['Associate Data Engineer', 'Platform Engineer, Early Career'])
     await explore.filterInput.fill('')
     await explore.pickDay('Today')
 
-    // Add to Jobs: saved through the jobs store as a jobright job.
+    // H1B and minimum salary ($60/hr is $124,800 a year); filters never call the API.
+    await explore.filterH1b('Sponsors H1B')
+    await expect.poll(() => explore.listedTitles()).toEqual(['Software Engineer, New Grad'])
+    await explore.filterH1b('H1B not ruled out')
+    await expect.poll(() => explore.listedTitles()).toEqual(['Software Engineer, New Grad', 'Embedded Software Engineer'])
+    await explore.minSalary.fill('130000')
+    await expect.poll(() => explore.listedTitles()).toEqual(['Software Engineer, New Grad'])
+    await explore.minSalary.fill('')
+    await explore.filterH1b('Any H1B')
+    await expect.poll(() => explore.listedTitles()).toHaveLength(3)
+    expect(apiFetches(mock.requests)).toBe(1)
+
+    // Add to Jobs: saved through the jobs store as a jobright job, exactly as before (plus the API's pay).
     await explore.addButton('Backend Engineer I').click()
     await expect(explore.addedButton('Backend Engineer I')).toBeVisible()
     const saved = JSON.parse(await readFile(jobFile(app.workspace!, 'e2e0000000000000000000a2'), 'utf8'))
@@ -69,6 +94,7 @@ test.describe('Explore (#142)', () => {
       url: `${mock.origin}/jobs/info/e2e0000000000000000000a2`,
       boardUrl: `${mock.origin}/jobs/info/e2e0000000000000000000a2`,
       remote: true,
+      salary: '$95000-$110000/yr',
       descriptionComplete: false
     })
     expect(saved.postedAt).toMatch(/^\d{4}-\d{2}-\d{2}T12:00:00\.000Z$/)
@@ -92,26 +118,109 @@ test.describe('Explore (#142)', () => {
     // Reopening Explore is served from the cache; the row stays Added and adding is idempotent.
     await new Shell(app.window).goTo('explore')
     await expect(explore.addedButton('Backend Engineer I')).toBeVisible()
-    expect(readmeFetches(mock.requests)).toBe(1)
+    expect(apiFetches(mock.requests)).toBe(1)
     const files = (await readdir(join(app.workspace!, '.huntgry/jobs'))).filter((n) => n.startsWith('jobright-'))
     expect(files).toEqual(['jobright-e2e0000000000000000000a2.json'])
     const after = JSON.parse(await readFile(jobFile(app.workspace!, 'e2e0000000000000000000a2'), 'utf8'))
     expect(after.descriptionComplete).toBe(true)
   })
 
-  test('Refresh re-fetches, and a failed refresh is shown inline over the cached list', async ({ app, mock }) => {
+  test('days past the newest seven fold under Earlier, and the fold is remembered', async ({ app }) => {
+    const explore = await openExplore(app.window)
+    await expect(explore.earlier).toHaveAttribute('aria-expanded', 'false')
+    await expect(explore.earlier).toHaveAccessibleName('Earlier, 2 days, 2 jobs')
+    // Seven days, then Earlier.
+    await expect(explore.days.getByRole('button')).toHaveCount(8)
+    await explore.earlier.click()
+    await expect(explore.earlier).toHaveAttribute('aria-expanded', 'true')
+    await expect(explore.days.getByRole('button')).toHaveCount(10)
+    const oldest = explore.days.getByRole('button').last()
+    await oldest.click()
+    await expect.poll(() => explore.listedTitles()).toEqual(['Software Engineer I, Team 10'])
+
+    await new Shell(app.window).goTo('jobs')
+    await new Shell(app.window).goTo('explore')
+    await expect(explore.earlier).toHaveAttribute('aria-expanded', 'true')
+    await explore.earlier.click()
+    await expect(explore.days.getByRole('button')).toHaveCount(8)
+  })
+
+  test('the category picker lists another category, caches it on its own, and is remembered', async ({ app, mock }) => {
+    const explore = await openExplore(app.window)
+    await expect(explore.category).toHaveValue('Software Engineering')
+    await expect.poll(() => explore.listedTitles()).toHaveLength(3)
+
+    await explore.pickCategory('Data Analysis')
+    await expect.poll(() => explore.listedTitles()).toEqual(['Junior Data Analyst'])
+    await expect(explore.source).toHaveText('newgrad-jobs API · 1 job')
+    expect(apiFetches(mock.requests)).toBe(2)
+    expect(JSON.parse(await readFile(cacheFile(app.workspace!, 'newgrad.us.data_analysis'), 'utf8'))).toMatchObject({
+      category: 'newgrad:us:data_analysis',
+      source: 'api'
+    })
+    // A job of this category is added from its own list.
+    await explore.addButton('Junior Data Analyst').click()
+    await expect(explore.addedButton('Junior Data Analyst')).toBeVisible()
+
+    // Remembered when the page is opened again; both categories are served from their caches.
+    await new Shell(app.window).goTo('jobs')
+    await new Shell(app.window).goTo('explore')
+    await expect(explore.category).toHaveValue('Data Analysis')
+    await expect.poll(() => explore.listedTitles()).toEqual(['Junior Data Analyst'])
+    await explore.pickCategory('Software Engineering')
+    await expect.poll(() => explore.listedTitles()).toHaveLength(3)
+    expect(apiFetches(mock.requests)).toBe(2)
+  })
+
+  test('Refresh re-fetches; with the API down it shows the README and says so', async ({ app, mock }) => {
     const explore = await openExplore(app.window)
     await expect.poll(() => explore.listedTitles()).toHaveLength(3)
 
     await explore.refreshButton.click()
-    await expect.poll(() => readmeFetches(mock.requests)).toBe(2)
+    await expect.poll(() => apiFetches(mock.requests)).toBe(2)
 
+    // An HTTP 500: the README instead, the warning with the API's error, and no H1B / salary filters.
+    mock.jobright.api.status = 500
+    await explore.refreshButton.click()
+    await expect(explore.fallback).toContainText('The newgrad-jobs API answered HTTP 500 for the Jobright jobs.')
+    await expect(explore.source).toHaveText("Jobright's GitHub list (fallback) · 6 jobs")
+    expect(readmeFetches(mock.requests)).toBe(1)
+    await expect(explore.h1bFilter).toBeDisabled()
+    await expect(explore.minSalary).toBeDisabled()
+    await expect(explore.earlier).toHaveCount(0)
+    await expect.poll(() => explore.listedTitles()).toHaveLength(3)
+    // The README rows are the same jobs: Add to Jobs works on them too.
+    await explore.addButton('Software Engineer, New Grad').click()
+    await expect(explore.addedButton('Software Engineer, New Grad')).toBeVisible()
+
+    // Both down: the error is shown inline over the cached list.
     mock.jobright.status = 503
     await explore.refreshButton.click()
     await expect(explore.error).toContainText('GitHub answered HTTP 503')
-    // The cached list stays on screen.
     await expect.poll(() => explore.listedTitles()).toHaveLength(3)
+
+    // The API back: Refresh lists from it again.
+    mock.jobright.api.status = 200
+    await explore.refreshButton.click()
+    await expect(explore.source).toHaveText('newgrad-jobs API · 12 jobs')
+    await expect(explore.fallback).toHaveCount(0)
   })
+
+  for (const [mode, reason] of [
+    ['refuse', 'The newgrad-jobs API refused the request (error 50000).'],
+    ['malformed', 'The newgrad-jobs API sent no job Huntgry could read.']
+  ] as const) {
+    test(`falls back to the README when the API answers ${mode === 'refuse' ? 'success: false' : 'only malformed rows'}`, async ({ app, mock }) => {
+      mock.jobright.api.mode = mode
+      const explore = await openExplore(app.window)
+      await expect(explore.fallback).toContainText(reason)
+      await expect(explore.source).toHaveText("Jobright's GitHub list (fallback) · 6 jobs")
+      await expect
+        .poll(() => explore.listedTitles())
+        .toEqual(['Software Engineer, New Grad', 'Backend Engineer I', 'Embedded Software Engineer'])
+      expect(JSON.parse(await readFile(cacheFile(app.workspace!), 'utf8'))).toMatchObject({ source: 'readme', fallbackReason: reason })
+    })
+  }
 
   test('a Jobright page behind a human check says so, like Indeed', async ({ app, mock }) => {
     expect(mock.jobright.status).toBe(200)
@@ -142,13 +251,16 @@ test.describe('Explore (#142)', () => {
     await shell.expectActive('explore')
   })
 
-  test('with no cache and the list unreachable, the page shows the error, not a blank page', async ({ app, mock }) => {
+  test('with no cache and both sources unreachable, the page shows the error, not a blank page', async ({ app, mock }) => {
+    mock.jobright.api.status = 500
     mock.jobright.status = 500
     const explore = await openExplore(app.window)
+    await expect(explore.error).toContainText('The newgrad-jobs API answered HTTP 500')
     await expect(explore.error).toContainText('GitHub answered HTTP 500')
     await expect(app.window.getByRole('heading', { name: 'No jobs to explore yet' })).toBeVisible()
-    mock.jobright.status = 200
+    mock.jobright.api.status = 200
     await explore.refreshButton.click()
     await expect.poll(() => explore.listedTitles()).toHaveLength(3)
+    await expect(explore.source).toHaveText('newgrad-jobs API · 12 jobs')
   })
 })

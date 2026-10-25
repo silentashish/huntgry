@@ -1,10 +1,10 @@
 /**
- * A fictional Jobright new-grad list (#142) for the Explore e2e spec, in the shape of
- * jobright-ai/2026-Software-Engineer-New-Grad's README, plus the Jobright posting pages its rows link to.
+ * A fictional Jobright new-grad list for the Explore e2e specs: the newgrad-jobs API's answer
+ * (`POST /swan/mini-sites/list`, #169), the jobright-ai/2026-Software-Engineer-New-Grad README it falls back to
+ * (#142), and the Jobright posting pages their rows link to.
  *
- * The README's dates are relative to `now` (the list keeps the last few days and gives `Mon D` without a
- * year), so the page's "today" is always the run's today. Job links point at `<origin>/jobs/info/<id>`,
- * the host the app accepts besides jobright.ai when the README comes from the mock server.
+ * Dates are relative to `now`, so the page's "today" is always the run's today. Job links point at
+ * `<origin>/jobs/info/<id>`, the host the app accepts besides jobright.ai when the lists come from the mock server.
  */
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -12,15 +12,27 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 /**
  * Rows of the list: `daysAgo` 0 is today. `blocked` postings answer with a human check. `employer` is the path
  * of the employer's posting (on the mock's other origin) a signed-in posting page gives as `applyLink` (#146);
- * Contoso's is only an application form, so its description comes from Jobright's summary (#148).
+ * Contoso's is only an application form, so its description comes from Jobright's summary (#148). `api` holds the
+ * API's per-job fields (#169); `apiOnly` rows are older than the README's few days, so only the API lists them.
  */
 export const JOBRIGHT_JOBS = [
-  { id: 'e2e0000000000000000000a1', company: 'Northwind Labs', site: 'https://northwind.example.com', title: 'Software Engineer, New Grad', location: 'Seattle, WA, United States', work: 'On Site', daysAgo: 0, employer: '/postings/employer/101' },
-  { id: 'e2e0000000000000000000a2', company: '↳', title: 'Backend Engineer I', location: 'Remote, United States', work: 'Remote', daysAgo: 0 },
-  { id: 'e2e0000000000000000000a3', company: 'Contoso Robotics', site: 'https://contoso.example.com', title: 'Embedded Software Engineer', location: 'Austin, TX, United States', work: 'Hybrid', daysAgo: 0, employer: '/postings/apply-only' },
-  { id: 'e2e0000000000000000000b1', company: 'Fabrikam', site: 'https://fabrikam.example.com', title: 'Associate Data Engineer', location: 'Chicago, IL, United States', work: 'Remote', daysAgo: 1, blocked: true },
-  { id: 'e2e0000000000000000000b2', company: '↳', title: 'Platform Engineer, Early Career', location: 'Chicago, IL, United States', work: 'On Site', daysAgo: 1 },
-  { id: 'e2e0000000000000000000c1', company: 'Tailspin Toys', site: 'https://tailspin.example.com', title: 'Frontend Engineer, New Grad', location: 'Denver, CO, United States', work: 'Hybrid', daysAgo: 3 }
+  { id: 'e2e0000000000000000000a1', company: 'Northwind Labs', site: 'https://northwind.example.com', title: 'Software Engineer, New Grad', location: 'Seattle, WA, United States', work: 'On Site', daysAgo: 0, employer: '/postings/employer/101', api: { salary: '$120000-$145000/yr', h1bSponsored: 'Yes', industry: ['Cloud Computing', 'Software'], companySize: '1001-5000' } },
+  { id: 'e2e0000000000000000000a2', company: '↳', title: 'Backend Engineer I', location: 'Remote, United States', work: 'Remote', daysAgo: 0, api: { salary: '$95000-$110000/yr', h1bSponsored: 'No', industry: ['Cloud Computing'], companySize: '1001-5000' } },
+  { id: 'e2e0000000000000000000a3', company: 'Contoso Robotics', site: 'https://contoso.example.com', title: 'Embedded Software Engineer', location: 'Austin, TX, United States', work: 'Hybrid', daysAgo: 0, employer: '/postings/apply-only', api: { salary: '$48-$60/hr', h1bSponsored: 'Not Sure', industry: ['Robotics'], companySize: '51-200' } },
+  { id: 'e2e0000000000000000000b1', company: 'Fabrikam', site: 'https://fabrikam.example.com', title: 'Associate Data Engineer', location: 'Chicago, IL, United States', work: 'Remote', daysAgo: 1, blocked: true, api: { h1bSponsored: 'Yes', industry: ['FinTech'] } },
+  { id: 'e2e0000000000000000000b2', company: '↳', title: 'Platform Engineer, Early Career', location: 'Chicago, IL, United States', work: 'On Site', daysAgo: 1, api: { salary: '$100000-$125000/yr', h1bSponsored: 'Not Sure', industry: ['FinTech'] } },
+  { id: 'e2e0000000000000000000c1', company: 'Tailspin Toys', site: 'https://tailspin.example.com', title: 'Frontend Engineer, New Grad', location: 'Denver, CO, United States', work: 'Hybrid', daysAgo: 3, api: { salary: '$90000-$105000/yr', h1bSponsored: 'No', industry: ['Gaming'] } },
+  ...[4, 5, 6, 7, 8, 10].map((daysAgo) => ({
+    id: `e2e00000000000000000d0${String(daysAgo).padStart(2, '0')}`,
+    company: 'Woodgrove Bank',
+    site: 'https://woodgrove.example.com',
+    title: `Software Engineer I, Team ${daysAgo}`,
+    location: 'New York, NY, United States',
+    work: 'On Site',
+    daysAgo,
+    apiOnly: true,
+    api: { salary: '$110000-$130000/yr', h1bSponsored: 'Yes', industry: ['Banking'], companySize: '10000+' }
+  }))
 ]
 
 /**
@@ -34,11 +46,64 @@ const SUMMARY_QUALIFICATIONS = {
   }
 }
 
+/** The category the rows above are in; the mock's other category holds `JOBRIGHT_OTHER_JOBS`. */
+export const JOBRIGHT_CATEGORY = 'newgrad:us:swe'
+
+/** `newgrad:us:data_analysis` (#169's category picker): one job, API only. */
+export const JOBRIGHT_OTHER_JOBS = [
+  { id: 'e2e0000000000000000000e1', company: 'Litware', site: 'https://litware.example.com', title: 'Junior Data Analyst', location: 'Boston, MA, United States', work: 'Hybrid', daysAgo: 0, apiOnly: true, api: { salary: '$70000-$85000/yr', h1bSponsored: 'Not Sure', industry: ['Analytics'] } }
+]
+
+const ALL_JOBS = [...JOBRIGHT_JOBS, ...JOBRIGHT_OTHER_JOBS]
+
+/** The company of a row (`↳` is the previous row's). */
+function companyOf(list, job) {
+  if (job.company !== '↳') return job.company
+  return list.slice(0, list.indexOf(job)).reverse().find((j) => j.company !== '↳')?.company ?? ''
+}
+
+/**
+ * The newgrad-jobs API's answer for `body.category`, newest first, paged by `position` / `count` like the real
+ * one. The SWE category also sends two malformed entries (a bad id, no title) that the app must drop. An unknown
+ * category answers success with total 0.
+ */
+export function jobrightApi(body, position, count, now = new Date()) {
+  const list = body?.category === JOBRIGHT_CATEGORY ? JOBRIGHT_JOBS : body?.category === 'newgrad:us:data_analysis' ? JOBRIGHT_OTHER_JOBS : []
+  const entries = list.map((j) => ({
+    jobId: j.id,
+    tabCategory: [body.category],
+    // 00:30 local on the posted day: in the past (or minutes ahead, which the app allows) whatever the hour.
+    postedAt: new Date(now.getFullYear(), now.getMonth(), now.getDate() - j.daysAgo, 0, 30).getTime(),
+    properties: {
+      title: j.title,
+      company: companyOf(list, j),
+      location: j.location,
+      salary: null,
+      workModel: j.work,
+      industry: null,
+      companySize: null,
+      qualifications: `1. A degree in computer science or equivalent experience.\n2. Experience with ${j.title.includes('Data') ? 'SQL and Python' : 'Go or TypeScript'}.\n...`,
+      expLevel: null,
+      jobFunction: null,
+      h1bSponsored: null,
+      isNewGrad: true,
+      roleType: null,
+      ...j.api
+    }
+  }))
+  if (list === JOBRIGHT_JOBS) {
+    entries.splice(1, 0, { jobId: 'not a jobright id', tabCategory: [body.category], postedAt: now.getTime() - 60_000, properties: { title: 'Too good to be true', company: 'Phisher' } })
+    entries.splice(4, 0, { jobId: 'e2e0000000000000000000fe', tabCategory: [body.category], postedAt: now.getTime() - 60_000, properties: { company: 'No Title Inc' } })
+  }
+  entries.sort((a, b) => b.postedAt - a.postedAt)
+  return { success: true, errorCode: 10000, errorMsg: null, result: { jobList: entries.slice(position, position + count), total: entries.length } }
+}
+
 const mdDate = (d) => `${MONTHS[d.getMonth()]} ${d.getDate()}`
 
 /** The README, with one malformed row (a link to another host) that the app must drop. */
 export function jobrightReadme(origin, now = new Date()) {
-  const rows = JOBRIGHT_JOBS.map((j) => {
+  const rows = JOBRIGHT_JOBS.filter((j) => !j.apiOnly).map((j) => {
     const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - j.daysAgo)
     const company = j.company === '↳' ? '↳' : `**[${j.company}](${j.site})**`
     const link = `${origin}/jobs/info/${j.id}?utm_campaign=Software%20Engineering&utm_source=1103`
@@ -83,11 +148,10 @@ export function jobrightSignInPage(next) {
  * employer's posting on `employerOrigin` (#146). `null` for an unknown id.
  */
 export function jobrightPostingPage(id, { signedIn = false, employerOrigin = '' } = {}) {
-  const job = JOBRIGHT_JOBS.find((j) => j.id === id)
+  const job = ALL_JOBS.find((j) => j.id === id)
   if (!job) return null
   if (job.blocked) return { status: 403, html: BOT_WALL }
-  let company = job.company
-  if (company === '↳') company = JOBRIGHT_JOBS.slice(0, JOBRIGHT_JOBS.indexOf(job)).reverse().find((j) => j.company !== '↳')?.company ?? ''
+  const company = companyOf(ALL_JOBS, job)
   const description = `<p>${esc(company)} is hiring a ${esc(job.title)} to build reliable services in Go and TypeScript.</p>
 <ul><li>Write, test and ship production code with a mentor.</li><li>Own small features end to end, from design to on-call handover.</li></ul>
 <p>Requirements: a degree in computer science or equivalent experience, and curiosity about distributed systems.</p>`

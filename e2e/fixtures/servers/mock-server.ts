@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
   JOBRIGHT_SESSION_COOKIE,
+  jobrightApi,
   jobrightPostingPage,
   jobrightReadme,
   jobrightSignInPage
@@ -19,7 +20,8 @@ import { EMPLOYER_POSTINGS, postingPage } from './pages'
  * - `/bot-wall`            a 403 "Just a moment…" human check
  * - `/page/one`, `/page/two`, `/hang`  plain pages for the browser's history and Stop
  * - `/redirect/lever`      302 to the Lever form on the *other* loopback origin (a second 127.0.0.1 port)
- * - `/jobright/README.md`  a Jobright new-grad list dated relative to today (#142), `/jobs/info/:id` its posting pages
+ * - `POST /jobright/swan/mini-sites/list?position=&count=`  the newgrad-jobs API (#169), dated relative to today;
+ *   `/jobright/README.md`  the Jobright new-grad README it falls back to (#142); `/jobs/info/:id` their posting pages
  *   (signed in with the `/jobright/signin` cookie, they link the employer's posting on `altOrigin`, #146)
  * - `/greenhouse/`, `/lever/`, `/generic/`, `/generic-cover/` + `…/submit` + the thanks pages: the mock ATS
  *   (`scripts/mock-ats/server.mjs`, the same code as `node scripts/mock-ats.mjs`), with Greenhouse's hydration and
@@ -43,8 +45,11 @@ export interface MockServer {
   uploadsFile: string
   /** Every request path the server answered, in order. */
   requests: string[]
-  /** The mock Jobright list (#142): `status` other than 200 makes `/jobright/README.md` fail with it. */
-  jobright: { status: number }
+  /**
+   * The mock Jobright lists: `status` other than 200 makes `/jobright/README.md` fail with it (#142); `api.status`
+   * makes the API fail with it, `api.mode` makes it answer `success: false` (`refuse`) or only malformed rows (#169).
+   */
+  jobright: { status: number; api: { status: number; mode: 'ok' | 'refuse' | 'malformed' } }
   close(): Promise<void>
 }
 
@@ -73,7 +78,7 @@ export async function startMockServer(submissionFile: string): Promise<MockServe
   const hanging = new Set<ServerResponse>()
   let origin = ''
   let altOrigin = ''
-  const jobright = { status: 200 }
+  const jobright: MockServer['jobright'] = { status: 200, api: { status: 200, mode: 'ok' } }
   const ats: MockAts = createMockAts({
     fixturesDir: FIXTURES_DIR,
     submissionFile,
@@ -94,6 +99,31 @@ export async function startMockServer(submissionFile: string): Promise<MockServe
       if (jobright.status !== 200) return sendHtml(res, jobright.status, 'Unavailable')
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
       return void res.end(jobrightReadme(origin))
+    }
+    if (url.pathname === '/jobright/swan/mini-sites/list') {
+      if (req.method !== 'POST') return sendHtml(res, 405, 'Method not allowed')
+      let body = ''
+      req.on('data', (c) => (body += c))
+      req.on('end', () => {
+        if (jobright.api.status !== 200) return sendHtml(res, jobright.api.status, 'Unavailable')
+        let parsed: unknown = null
+        try {
+          parsed = JSON.parse(body)
+        } catch {
+          // Answered like an unknown category.
+        }
+        const position = Math.max(0, Number(url.searchParams.get('position')) || 0)
+        const count = Math.min(1000, Math.max(0, Number(url.searchParams.get('count')) || 0))
+        const answer =
+          jobright.api.mode === 'refuse'
+            ? { success: false, errorCode: 50000, errorMsg: 'Internal error', result: null }
+            : jobright.api.mode === 'malformed'
+              ? { success: true, errorCode: 10000, result: { total: 2, jobList: [{ jobId: 'bad id' }, { jobId: 'e2e0000000000000000000fd', properties: {} }] } }
+              : jobrightApi(parsed, position, count)
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+        res.end(JSON.stringify(answer))
+      })
+      return
     }
     if (url.pathname === '/jobright/signin') {
       // A mock Jobright sign-in (#146): POST sets the httpOnly session cookie and goes back to the posting.
