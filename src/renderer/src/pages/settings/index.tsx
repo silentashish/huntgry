@@ -16,6 +16,7 @@ import {
 import { api, errorText } from '../../api'
 import { MonoLabel, PageHeader, StatusPill, type UiTone } from '../../components/ui'
 import { useNavigation } from '../../navigation'
+import { AboutCard } from './AboutCard'
 import { AppearanceCard } from './AppearanceCard'
 import { JobrightCard } from './JobrightCard'
 import { PricingCard } from './PricingCard'
@@ -45,12 +46,12 @@ const ENV_SECTIONS: readonly SettingsSectionId[] = [
   'claude',
   'skill-dependencies'
 ]
-const ALWAYS_SECTIONS: readonly SettingsSectionId[] = ['jobright', 'remote-control', 'appearance']
+const ALWAYS_SECTIONS: readonly SettingsSectionId[] = ['jobright', 'remote-control', 'appearance', 'about']
 
 /**
  * Settings (#116, Figma "Settings"): a sticky section nav on the left and the cards on the right:
  * the agent CLIs, reframing rules, saved answers, pricing, the Claude CLI and the skill's
- * dependencies, the Jobright sign-in, remote control and appearance.
+ * dependencies, the Jobright sign-in, remote control, appearance and the app's version.
  */
 export function SettingsPage() {
   const [env, setEnv] = useState<RunnerEnvironment | null>(null)
@@ -366,6 +367,10 @@ brew install poppler`}</Code>
 
           <SettingsSection id="appearance">
             <AppearanceCard />
+          </SettingsSection>
+
+          <SettingsSection id="about">
+            <AboutCard />
           </SettingsSection>
         </div>
       </div>

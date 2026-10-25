@@ -291,7 +291,7 @@ export function paletteItems(data: PaletteData): PaletteItem[] {
       id: `settings:${section}`,
       group: 'goto',
       title: `Settings → ${label}`,
-      keywords: section === 'appearance' ? 'theme dark light' : undefined,
+      keywords: section === 'appearance' ? 'theme dark light' : section === 'about' ? 'version release update' : undefined,
       icon: 'settings-section',
       command: nav(locationOf('settings', { section }))
     })
