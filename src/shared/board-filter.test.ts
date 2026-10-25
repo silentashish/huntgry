@@ -90,7 +90,7 @@ describe('matchesBoardFilter', () => {
     expect(matchesBoardFilter(card('Data Engineer'), { text: 'initech', sources: [] })).toBe(true)
   })
 
-  it("searches an application's job id, as the Dashboard table does (#161 reuses this)", () => {
+  it("searches an application's job id, as the Dashboard table did (#161)", () => {
     const req = app('Umbrella', { jobId: 'REQ-4711', jobTitle: 'Data Engineer', role: 'Data Engineer' })
     const board = buildBoard({ jobs: [], applications: [req], queue: [], now: NOW })
     const umbrella = board.columns.flatMap((c) => c.cards)[0]
