@@ -23,6 +23,7 @@ import { IN_PROGRESS_REASON } from '@shared/review-types'
 import { AGENT_LABEL, type AgentId, type RunSummary } from '@shared/runner-types'
 import { summarizeBuild } from '../applications/scan'
 import { getReview, updateReview, type RecordedReview } from '../review/authority'
+import { NUDGE_TEXT } from '../cli/command'
 import { folderSlug, newRunId } from '../cli/runs'
 import { PASTE_HINT, type FailureDecision, type Settlement, type TailorQueue } from '../queue/queue'
 import { WorkspaceChangedError } from '../workspace/changed'
@@ -98,8 +99,6 @@ export interface PipelineDeps {
 }
 
 export const SUMMARY_FILE = 'pipeline-summary.json'
-export const NUDGE_TEXT =
-  'Nobody can answer. Follow the skill to the end now, in this turn: use the bridges you can make from master-profile facts and list each in tailoring-notes.md (never fabricate), build, verify, and end with the application folder.'
 const STALL_TEXT = (minutes: number) => `${STALL_PREFIX} ${minutes} minutes.`
 /** A rejected rate-limit event holds new launches this long while the failure itself is classified. */
 const REJECTED_HOLD_MS = 10 * 60_000
@@ -107,6 +106,7 @@ const ACTIVE = new Set<QueueItem['status']>(['queued', 'preparing', 'running'])
 /** Summary outcomes that are review states (the others are where the run ended). */
 const REVIEW_OUTCOMES = new Set<string>(['unreviewed', 'needs-attention', 'approved', 'discarded'])
 export { IN_PROGRESS_REASON } from '@shared/review-types'
+export { NUDGE_TEXT } from '../cli/command'
 
 /**
  * The run's output folder when it is this job's: `<role>/<company>/<job-id>` with the job id the

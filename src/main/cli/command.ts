@@ -231,6 +231,13 @@ export function buildSystemPrompt(opts: {
 }
 
 /**
+ * The one reply an unattended run that ended its turn without building gets (#158): the pipeline sends
+ * it once before asking the user, and the benchmark (#152) does the same so its runs match production.
+ */
+export const NUDGE_TEXT =
+  'Nobody can answer. Follow the skill to the end now, in this turn: use the bridges you can make from master-profile facts and list each in tailoring-notes.md (never fabricate), build, verify, and end with the application folder.'
+
+/**
  * The first message of a run: the job plus the user's choices, as the user would have typed them.
  * The job description is not in it: Huntgry saved it at `jobDescriptionPath` and the agent reads
  * it there (resume-tailor v5, step 1), so the model never retypes it.
