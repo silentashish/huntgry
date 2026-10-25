@@ -2024,3 +2024,154 @@ describe('application answers (#71)', () => {
     }, 60_000)
   })
 })
+
+describe('Automation prepare (#154)', () => {
+  const POSTING = 'https://jobs.lever.co/acme/00000000-0000-4000-8000-000000000154'
+  const LABEL = 'What interests you about this role?'
+  const RUN = '20261024-220000-aaaaaa'
+
+  /** Answers deps whose model calls are counted: the mapping and the drafts. */
+  function counted() {
+    const calls = { map: 0, draft: 0 }
+    const deps: AnswersDeps = {
+      load: async (workspace) => pageAnswers(await readAnswers(workspace), {}),
+      remember: async (workspace, a) => void (await rememberAnswer(workspace, a)),
+      rememberMappings: async (workspace, m) => void (await rememberMappings(workspace, m)),
+      map: async (_w, _id, questions) => {
+        calls.map++
+        return questions.map((q) => ({ id: q.id, fact: null }))
+      },
+      draft: async (_w, _id, questions) => {
+        calls.draft++
+        return questions.filter((q) => /interests you/.test(q.question)).map((q) => ({ id: q.id, answer: `Draft for ${q.question}` }))
+      }
+    }
+    return { deps, calls }
+  }
+
+  async function unreviewed(state: RecordedReview['state'] = 'unreviewed') {
+    await application({ 'job-description.md': `Engineer\n${POSTING}\n`, 'resume.pdf': '%PDF', 'huntgry.json': JSON.stringify({ status: 'generated' }) })
+    await updateReview(ws, ID, () => ({ state, runId: RUN, at: '2026-10-24T22:00:00.000Z' }))
+  }
+
+  /** The service with a tab that loads the Lever form as soon as it is opened. */
+  function prepared(answers: AnswersDeps, extra: Partial<ApplyDeps> = {}) {
+    const tab = new FakeTab('', `${POSTING}/apply`)
+    const openCalls: Array<{ url: string; options?: { activate?: boolean; background?: boolean } }> = []
+    const closed: string[] = []
+    const dbg = new FakeDebugger()
+    const { service, events } = setup(tab, dbg, {
+      answers,
+      openTab: async (url, options) => {
+        openCalls.push({ url, options })
+        setTimeout(() => tab.load(fixture('lever-form.html'), `${POSTING}/apply`), 0)
+        return 'tab-auto'
+      },
+      closeTab: (id) => void closed.push(id),
+      ...extra
+    })
+    return { service, events, tab, openCalls, closed, dbg }
+  }
+
+  it('fills an Unreviewed result in a background tab, attaches nothing, waits for the drafts, then closes the tab', async () => {
+    await unreviewed()
+    const { deps, calls } = counted()
+    const { service, events, tab, openCalls, closed, dbg } = prepared(deps)
+    const submit = vi.spyOn(tab.dom.window.HTMLFormElement.prototype, 'submit')
+    const result = await service.prepare(ID, { timeoutMs: 5000 })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // Not the active tab, and not throttled while hidden.
+    expect(openCalls).toEqual([{ url: `${POSTING}/apply`, options: { activate: false, background: true } }])
+    // The draft was waited for and is in the report and the snapshot.
+    expect(result.fill.report.fields.find((f) => f.label === LABEL)).toMatchObject({ outcome: 'filled', suggestedBy: 'draft', value: `Draft for ${LABEL}` })
+    expect(Object.values(result.fill.drafts)).toEqual([`Draft for ${LABEL}`])
+    expect(result.fill.draftedSteps).toHaveLength(1)
+    expect(result.fill.mappedSteps).toHaveLength(1)
+    expect(calls).toEqual({ map: 1, draft: 1 })
+    // No upload: the resume line waits for the user's open, and CDP was never attached.
+    expect(result.fill.report.fields.find((f) => f.key === 'resume')?.outcome).toBe('to-upload')
+    expect(dbg.log).toEqual([])
+    // The session is gone, its tab closed, and the renderer never saw it.
+    expect(service.current()).toBeNull()
+    expect(service.busy()).toBe(false)
+    expect(closed).toEqual(['tab-auto'])
+    expect(events).toEqual([])
+    expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('the user’s open of the prepared fill writes the same answers without a model call, and attaches the resume', async () => {
+    await unreviewed()
+    const first = counted()
+    const result = await prepared(first.deps).service.prepare(ID, { timeoutMs: 5000 })
+    if (!result.ok) throw new Error(result.message)
+    // The user approves, then opens it (the Review & submit click).
+    await updateReview(ws, ID, (c) => ({ ...c!, state: 'approved' }))
+    await updateReview(ws, ID, (c) => ({ ...c!, contentRevision: undefined }))
+    const revision = await contentRevisionOf(ws, ID)
+    await updateReview(ws, ID, (c) => ({ ...c!, contentRevision: revision }))
+    const again = counted()
+    const tab = new FakeTab('', `${POSTING}/apply`)
+    const dbg = new FakeDebugger()
+    const { service } = setup(tab, dbg, { answers: again.deps })
+    await service.start(ID, { drafts: result.fill.drafts, aiOnce: result.fill.aiOnce, mappedSteps: result.fill.mappedSteps, draftedSteps: result.fill.draftedSteps, asked: result.fill.asked })
+    tab.load(fixture('lever-form.html'), `${POSTING}/apply`)
+    await until(service, 'filled')
+    await new Promise((r) => setTimeout(r, 30))
+    const line = service.current()!.report!.fields.find((f) => f.label === LABEL)!
+    expect(line).toMatchObject({ outcome: 'filled', suggestedBy: 'draft', value: `Draft for ${LABEL}` })
+    expect((tab.dom.window.document.querySelector('textarea') as HTMLTextAreaElement).value).toBe(`Draft for ${LABEL}`)
+    expect(again.calls).toEqual({ map: 0, draft: 0 })
+    expect(service.current()!.report!.fields.find((f) => f.key === 'resume')?.outcome).toBe('uploaded')
+  })
+
+  it('refuses a result that needs attention, was discarded, or changed since its approval', async () => {
+    const { deps } = counted()
+    for (const state of ['needs-attention', 'discarded'] as const) {
+      await unreviewed(state)
+      await expect(prepared(deps).service.prepare(ID)).rejects.toThrow(state === 'discarded' ? /discarded/ : /needs attention/)
+    }
+    await unreviewed('approved')
+    await expect(prepared(deps).service.prepare(ID)).rejects.toThrow(/changed since you approved/)
+  })
+
+  it('a bot wall ends the prepare with the reason, and a page that never answers times out', async () => {
+    await unreviewed()
+    const { deps } = counted()
+    const wall = new FakeTab('', POSTING)
+    const { service } = setup(wall, undefined, {
+      answers: deps,
+      openTab: async () => {
+        const html = '<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><h1>Checking your browser before accessing the site.</h1></body></html>'
+        setTimeout(() => wall.load(html, `${POSTING}/apply`), 0)
+        return 'tab-x'
+      },
+      closeTab: () => undefined
+    })
+    expect(await service.prepare(ID, { timeoutMs: 3000 })).toMatchObject({ ok: false, status: 'blocked', message: expect.stringMatching(/human check/) })
+
+    const silent = new FakeTab('', POSTING)
+    const { service: s2 } = setup(silent, undefined, { answers: deps, openTab: async () => 'tab-y', closeTab: () => undefined })
+    const t = await s2.prepare(ID, { timeoutMs: 100 })
+    expect(t).toMatchObject({ ok: false, status: 'timeout', message: expect.stringMatching(/in time/) })
+    expect(s2.current()).toBeNull()
+  })
+
+  it('never runs over the user’s session: refused while one is open; the user’s start ends a prepare', async () => {
+    await unreviewed()
+    const { deps } = counted()
+    const tab = new FakeTab('', `${POSTING}/apply`)
+    const { service } = setup(tab, undefined, { answers: deps, openTab: async () => 'tab-1', closeTab: () => undefined })
+    const pending = service.prepare(ID, { timeoutMs: 5000 })
+    await vi.waitFor(() => expect(tab.loads.size).toBeGreaterThan(0))
+    expect(service.busy()).toBe(false)
+    // The user opens an application meanwhile (approved): Automation's session ends and says so.
+    await updateReview(ws, ID, (c) => ({ ...c!, state: 'approved', contentRevision: undefined }))
+    const revision = await contentRevisionOf(ws, ID)
+    await updateReview(ws, ID, (c) => ({ ...c!, contentRevision: revision }))
+    await service.start(ID)
+    expect(await pending).toMatchObject({ ok: false, status: 'closed' })
+    expect(service.busy()).toBe(true)
+    await expect(service.prepare(ID)).rejects.toThrow(/apply session is open/)
+  })
+})
