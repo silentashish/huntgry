@@ -3,7 +3,22 @@ import type { ApplicationRecord, ApplicationStatus } from '@shared/applications-
 import type { RunSummary } from '@shared/runner-types'
 import { summarizeUsage } from '@shared/usage'
 import { buildBadgeOf } from './BuildBadge'
-import { dayBars, dayKey, pipelineOutcome, usageHiddenFilters, firstNameOf, greetingFor, greetingLine, kpiSubs, listNames, needsYouLine, readyToApply } from './summary'
+import {
+  applyLocation,
+  countByStatus,
+  dayBars,
+  dayKey,
+  pipelineOutcome,
+  usageHiddenFilters,
+  firstNameOf,
+  greetingFor,
+  greetingLine,
+  kpiColumn,
+  kpiSubs,
+  listNames,
+  needsYouLine,
+  readyToApply
+} from './summary'
 
 const rec = (company: string, status: ApplicationStatus, extra: Partial<ApplicationRecord> = {}, appliedAt?: string): ApplicationRecord => ({
   id: `eng/${company.toLowerCase()}/1`,
@@ -57,6 +72,33 @@ describe('readyToApply', () => {
       rec('Stark', 'generated', { tracking: { status: 'generated', notes: '', review: { state: 'approved', runId: 'r', at: '' } } })
     ]
     expect(readyToApply(apps).map((a) => a.company)).toEqual(['Acme', 'Stark'])
+  })
+
+  it('lists the newest first', () => {
+    const apps = [rec('Acme', 'generated', { createdAt: '2026-09-01T00:00:00Z' }), rec('Stark', 'generated', { createdAt: '2026-09-03T00:00:00Z' })]
+    expect(readyToApply(apps).map((a) => a.company)).toEqual(['Stark', 'Acme'])
+  })
+})
+
+describe('the Board links (#161)', () => {
+  it('opens the Board on the column of a stat tile; Total opens the whole Board', () => {
+    expect(kpiColumn('total')).toBeUndefined()
+    expect(kpiColumn('generated')).toBe('ready')
+    expect(kpiColumn('applied')).toBe('applied')
+    expect(kpiColumn('interviewing')).toBe('interviewing')
+    expect(kpiColumn('offer')).toBe('offer')
+    expect(kpiColumn('rejected')).toBe('rejected')
+  })
+
+  it('sends "Apply" to the one result\'s drawer, or to Ready to apply when there are several', () => {
+    const one = rec('Acme', 'generated')
+    expect(applyLocation([one])).toEqual({ applicationId: one.id })
+    expect(applyLocation([one, rec('Stark', 'generated')])).toEqual({ column: 'ready' })
+  })
+
+  it('counts the applications per status', () => {
+    const apps = [rec('Acme', 'applied'), rec('Globex', 'generated'), rec('Initech', 'archived')]
+    expect(countByStatus(apps)).toEqual({ generated: 1, applied: 1, interviewing: 0, offer: 0, rejected: 0, archived: 1 })
   })
 })
 

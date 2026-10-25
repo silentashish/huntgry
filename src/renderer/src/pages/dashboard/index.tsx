@@ -1,20 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Button, Center, CloseButton, Loader, MultiSelect, Select, TextInput, VisuallyHidden } from '@mantine/core'
-import { IconArrowsSort, IconFilter, IconRefresh, IconSearch, IconSparkles } from '@tabler/icons-react'
-import {
-  APPLICATION_STATUSES,
-  type ApplicationRecord,
-  type ApplicationsList,
-  type ApplicationStatus,
-  type ApplicationTracking
-} from '@shared/applications-types'
+import { Alert, Button, Center, Loader, VisuallyHidden } from '@mantine/core'
+import { IconRefresh, IconSparkles } from '@tabler/icons-react'
+import type { ApplicationsList, ApplicationStatus } from '@shared/applications-types'
 import { isProfileEmpty } from '@shared/master-profile'
 import { api, errorText } from '../../api'
-import { useApply } from '../../components/apply/useApply'
-import { KpiTile, MonoLabel, PageHeader, StatusPill } from '../../components/ui'
+import { KpiTile, PageHeader } from '../../components/ui'
 import { useNavigation } from '../../navigation'
-import { ApplicationDrawer } from './ApplicationDrawer'
-import { ApplicationsTable } from './ApplicationsTable'
 import classes from './dashboard.module.css'
 import { FirstHunt } from './FirstHunt'
 import { LastPipelineCard } from './LastPipelineCard'
@@ -22,9 +13,8 @@ import { NeedsYouStrip, needsYouCount, useNeedsYou } from './NeedsYou'
 import { PROFILE_SAVED_EVENT, ProfileInsightsCard } from './ProfileInsightsCard'
 import { StrongestEvidenceCard } from './StrongestEvidenceCard'
 import { UsageCard } from './UsageCard'
-import { countByStatus, DEFAULT_FILTER, filterApplications, type Filter, type SortKey } from './filter'
 import { STATUS_META } from './status'
-import { eyebrowDate, greetingLine, kpiSubs, needsYouLine, readyToApply, type KpiKey } from './summary'
+import { applyLocation, countByStatus, eyebrowDate, greetingLine, kpiColumn, kpiSubs, needsYouLine, readyToApply, type KpiKey } from './summary'
 
 const SUMMARY: Exclude<ApplicationStatus, 'archived'>[] = ['generated', 'applied', 'interviewing', 'offer', 'rejected']
 
@@ -60,36 +50,31 @@ function useNow(): Date {
   return now
 }
 
-/** Every generated resume and cover letter in the workspace, with tracking, what needs the user, and usage (#109). */
+/**
+ * The summary of the hunt (#109): what needs the user, the applications by status, the last
+ * pipeline, the profile insights and usage. Applications themselves are browsed on the Board
+ * (#161): the stat tiles and "Ready to apply" open it.
+ */
 export function DashboardPage() {
   const { navigate } = useNavigation()
   const [list, setList] = useState<ApplicationsList | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [filter, setFilter] = useState<Filter>(DEFAULT_FILTER)
-  const [openId, setOpenId] = useState<string | null>(null)
-  const applier = useApply(setError)
   const needs = useNeedsYou()
   const profile = useProfileGlance()
   const now = useNow()
-  const tableRef = useRef<HTMLDivElement>(null)
-
-  // Bumped by every successful tracking update; a list() that started before it may hold stale tracking.
-  const generation = useRef(0)
 
   // Mount, focus and file-watch events can overlap; only the latest list call may update the page.
   const latestLoad = useRef(0)
   const load = useCallback(async () => {
     const request = ++latestLoad.current
-    const started = generation.current
     try {
       const next = await api.applications.list()
-      if (latestLoad.current !== request || generation.current !== started) return
+      if (latestLoad.current !== request) return
       setList(next)
       setError(null)
     } catch (err) {
-      // A newer load or a tracking update has superseded this request: its error is stale too.
-      if (latestLoad.current !== request || generation.current !== started) return
-      setError(errorText(err))
+      // A newer load has superseded this request: its error is stale too.
+      if (latestLoad.current === request) setError(errorText(err))
     }
   }, [])
 
@@ -106,51 +91,29 @@ export function DashboardPage() {
   }, [load])
 
   const apps = useMemo(() => list?.applications ?? [], [list])
-  const shown = useMemo(() => filterApplications(apps, filter), [apps, filter])
   const counts = useMemo(() => countByStatus(apps), [apps])
   const subs = useMemo(() => kpiSubs(apps, now), [apps, now])
-  const ready = useMemo(() => filterApplications(readyToApply(apps), DEFAULT_FILTER), [apps])
-  const open = apps.find((a) => a.id === openId) ?? null
+  const ready = useMemo(() => readyToApply(apps), [apps])
   const empty = list !== null && apps.length === 0
   const things = needsYouCount(needs, ready)
-
-  async function update(id: string, patch: Partial<ApplicationTracking>) {
-    const next = await api.applications.updateTracking(id, patch)
-    generation.current++
-    setList((l) => l && { ...l, applications: l.applications.map((a) => (a.id === id ? next : a)) })
-  }
-
-  async function act(fn: () => Promise<unknown>) {
-    try {
-      await fn()
-    } catch (err) {
-      setError(errorText(err))
-    }
-  }
 
   function refresh() {
     void load()
     needs.reload()
   }
 
-  /** "Apply" in the strip: one result opens its drawer; several narrow the table to exactly those. */
-  function goApply() {
-    if (ready.length === 1) {
-      setOpenId(ready[0].id)
-      return
-    }
-    setFilter({ ...DEFAULT_FILTER, sort: filter.sort, ready: true })
-    tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
+  /** "Apply" in the strip: one result opens its drawer on the Board; several, the Board's Ready to apply. */
+  const goApply = () => navigate('board', applyLocation(ready))
 
-  const tile = (key: KpiKey, label: string, value: number, selected: boolean, statuses: ApplicationStatus[]) => (
+  // A tile opens the Board on its column (Total: the whole Board, this week's cards open).
+  const tile = (key: KpiKey, label: string, value: number) => (
     <KpiTile
       key={key}
       label={label}
       value={<span data-testid="stat-value">{value}</span>}
       sub={subs[key]}
-      selected={selected}
-      onClick={() => setFilter({ ...filter, statuses, ready: false })}
+      aria-label={`${label}: ${value}${subs[key] ? `, ${subs[key]}` : ''}. Open on the Board`}
+      onClick={() => navigate('board', kpiColumn(key) ? { column: kpiColumn(key) } : undefined)}
     />
   )
 
@@ -222,97 +185,26 @@ export function DashboardPage() {
           />
 
           <div className={classes.kpis} role="group" aria-label="Applications by status">
-            {tile('total', 'Total', apps.length, !filter.ready && filter.statuses.length === 0, [])}
-            {SUMMARY.map((s) =>
-              tile(s, STATUS_META[s].label, counts[s], !filter.ready && filter.statuses.length === 1 && filter.statuses[0] === s, [s])
-            )}
+            {tile('total', 'Total', apps.length)}
+            {SUMMARY.map((s) => tile(s, STATUS_META[s].label, counts[s]))}
           </div>
 
-          <div className={classes.columns}>
-            <div className={classes.main} ref={tableRef}>
-              <div className={classes.toolbar}>
-                <TextInput
-                  className={classes.search}
-                  leftSection={<IconSearch size={16} />}
-                  aria-label="Search applications"
-                  placeholder="Search company, role, title, notes"
-                  value={filter.text}
-                  onChange={(e) => setFilter({ ...filter, text: e.currentTarget.value })}
-                />
-                <MultiSelect
-                  w={180}
-                  leftSection={<IconFilter size={16} />}
-                  aria-label="Filter by status"
-                  placeholder={filter.statuses.length ? undefined : 'All but archived'}
-                  data={APPLICATION_STATUSES.map((s) => ({ value: s, label: STATUS_META[s].label }))}
-                  value={filter.statuses}
-                  onChange={(v) => setFilter({ ...filter, statuses: v as ApplicationStatus[] })}
-                  clearable
-                />
-                <Select
-                  aria-label="Sort applications"
-                  w={156}
-                  leftSection={<IconArrowsSort size={16} />}
-                  data={[
-                    { value: 'newest', label: 'Newest first' },
-                    { value: 'oldest', label: 'Oldest first' },
-                    { value: 'company', label: 'Company' }
-                  ]}
-                  value={filter.sort}
-                  allowDeselect={false}
-                  onChange={(v) => v && setFilter({ ...filter, sort: v as SortKey })}
-                />
-                {filter.ready && (
-                  <StatusPill tone="accent" size="md">
-                    <span className={classes.filterChip}>
-                      Ready to apply
-                      <CloseButton size="xs" aria-label="Show all applications" onClick={() => setFilter({ ...filter, ready: false })} />
-                    </span>
-                  </StatusPill>
-                )}
-                <MonoLabel>
-                  {shown.length === apps.length ? `${apps.length}` : `${shown.length} of ${apps.length}`} application
-                  {apps.length === 1 ? '' : 's'}
-                </MonoLabel>
-              </div>
+          {list.truncated && (
+            <Alert color="yellow" variant="light">
+              The workspace is large; the scan stopped early and some applications may be missing.
+            </Alert>
+          )}
 
-              {list.truncated && (
-                <Alert color="yellow" variant="light">
-                  The workspace is large; the scan stopped early and some applications may be missing.
-                </Alert>
-              )}
-
-              <ApplicationsTable
-                apps={shown}
-                openId={openId}
-                onOpen={setOpenId}
-                onUpdate={(id, p) => act(() => update(id, p))}
-                onAct={act}
-                onApply={(a: ApplicationRecord) => applier.apply(a)}
-                applying={applier.busy}
-                onClearFilters={() => setFilter(DEFAULT_FILTER)}
-              />
-            </div>
-
-            <aside className={classes.side} aria-label="Pipeline and profile">
-              <LastPipelineCard />
-              <ProfileInsightsCard />
-              <StrongestEvidenceCard />
-            </aside>
+          <div className={classes.sideRow} aria-label="Pipeline and profile" role="complementary">
+            <LastPipelineCard />
+            <ProfileInsightsCard />
+            <StrongestEvidenceCard />
           </div>
 
           <UsageCard onOpenRun={(runId) => navigate('tailor', { runId })} />
         </>
       )}
 
-      <ApplicationDrawer
-        app={open}
-        onClose={() => setOpenId(null)}
-        onUpdate={(p) => update(open!.id, p)}
-        onApply={(a) => applier.apply(a)}
-        applying={applier.busy}
-      />
-      {applier.modal}
     </div>
   )
 }
