@@ -60,15 +60,34 @@ export function ReviewPage({ params }: { params: PageParams['review'] }) {
     }
   }, [])
 
+  // The re-score (#151) lands after a result's turn, often while it is open (a Re-run): refresh only
+  // its match. The rest stays as shown, pinned by its revision, and an open() since wins.
+  const shownId = useRef<string | null>(null)
+  shownId.current = detail?.applicationId ?? null
+  const refreshMatch = useCallback(async () => {
+    const ticket = request.current
+    const id = shownId.current
+    if (!id) return
+    const match = await api.applications.get(id).then(
+      (a) => a.tracking.match,
+      () => null
+    )
+    if (match === null || ticket !== request.current) return
+    setDetail((d) => (d && d.applicationId === id ? withMatch(d, match) : d))
+  }, [])
+
   // The filter as it is now, for decided() (which runs after awaits).
   const filterRef = useRef(filter)
   filterRef.current = filter
 
   useEffect(() => {
     void load()
-    const off = api.on('applications:changed', () => void load())
+    const off = api.on('applications:changed', () => {
+      void load()
+      void refreshMatch()
+    })
     return off
-  }, [load])
+  }, [load, refreshMatch])
 
   useEffect(() => {
     if (params?.applicationId) void open(params.applicationId)
@@ -231,4 +250,11 @@ function ReviewList({
       <p className={classes.listNote}>Approved and discarded results stay on the Dashboard.</p>
     </section>
   )
+}
+
+/** `d` with the stored match (none: without one); `d` itself when it already shows that match. */
+function withMatch(d: ReviewDetail, match: ReviewDetail['match']): ReviewDetail {
+  if (JSON.stringify(d.match) === JSON.stringify(match)) return d
+  const { match: _old, ...rest } = d
+  return match ? { ...rest, match } : rest
 }

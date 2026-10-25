@@ -213,4 +213,38 @@ describe('ReviewPage', () => {
     expect(box.textContent).toContain('Profile fit 82 · Resume 74 (90% surfaced)')
     expect(box.textContent).toContain('Kafka')
   })
+
+  it('refreshes the open result\'s match when main stores a new one, keeping the rest as shown (#151 review)', async () => {
+    const items = [item('a')]
+    review.list.mockResolvedValue(items)
+    review.get.mockResolvedValue(detailOf(items[0]))
+    const w = window as unknown as { huntgry: { on: unknown; applications: Record<string, unknown> } }
+    const listeners: Array<() => void> = []
+    const on = w.huntgry.on
+    w.huntgry.on = (channel: string, fn: () => void) => {
+      if (channel === 'applications:changed') listeners.push(fn)
+      return () => undefined
+    }
+    const match = { profileFit: 82, resumeCoverage: 74, surfaced: 90, requirements: 11, leftOut: ['Kafka'], resumeFrom: 'resume_data.json', source: 'description', at: '2026-10-24T12:00:00.000Z' }
+    const get = vi.fn(async () => ({ tracking: { status: 'generated', notes: '', match } }))
+    w.huntgry.applications.get = get
+    try {
+      await renderPage(undefined)
+      expect(container.querySelector('[data-testid="resume-match"]')).toBeNull()
+      // The re-run's turn ends and main writes the new match: the same result stays open.
+      await act(async () => listeners.forEach((fn) => fn()))
+      expect(get).toHaveBeenCalledWith('a')
+      expect(container.querySelector('[data-testid="resume-match"]')?.textContent).toContain('Profile fit 82 · Resume 74 (90% surfaced)')
+      // Only the match is fetched again: the revision-pinned detail is not reloaded.
+      expect(review.get).toHaveBeenCalledTimes(1)
+
+      // A later re-score that drops it (the resume is gone) clears it too.
+      get.mockResolvedValueOnce({ tracking: { status: 'generated', notes: '' } } as never)
+      await act(async () => listeners.forEach((fn) => fn()))
+      expect(container.querySelector('[data-testid="resume-match"]')).toBeNull()
+    } finally {
+      w.huntgry.on = on
+      delete w.huntgry.applications.get
+    }
+  })
 })
