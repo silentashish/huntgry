@@ -13,7 +13,8 @@ on:
   push:
     tags: ['v*']
 
-# One run per tag; a re-pushed tag waits for the previous run instead of racing it on the release.
+# One run per tag; a rerun or re-pushed tag waits for the previous run instead of racing it on the
+# release, then replaces the draft's files (see the release job).
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -139,7 +140,10 @@ jobs:
 
       # --generate-notes: GitHub lists the PRs merged since the previous tag (and new contributors).
       # --verify-tag: never let `gh` create a tag; the pushed one is the release.
-      - name: Create the draft release
+      # Rerunnable: when a draft for the tag already exists (a rerun, or a first run that created the
+      # release and then failed mid-upload), its files are replaced with this run's complete set and
+      # its notes are kept. A published release is never touched.
+      - name: Create or update the draft release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -147,9 +151,21 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
-          flags=(--draft --verify-tag --generate-notes --title "Huntgry $VERSION")
-          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
-          gh release create "$TAG" "${flags[@]}" dist/*
+          if draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>err.txt)"; then
+            if [ "$draft" != "true" ]; then
+              echo "::error title=Release already published::$TAG is already a published release; its files are not replaced. Cut a new version instead."
+              exit 1
+            fi
+            echo "A draft for $TAG exists: replacing its files."
+            gh release upload "$TAG" dist/* --clobber
+          elif grep -q "release not found" err.txt; then
+            flags=(--draft --verify-tag --generate-notes --title "Huntgry $VERSION")
+            if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+            gh release create "$TAG" "${flags[@]}" dist/*
+          else
+            cat err.txt >&2
+            exit 1
+          fi
           {
             echo "### Draft release $TAG"
             echo
