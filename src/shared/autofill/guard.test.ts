@@ -42,8 +42,16 @@ function pageSources(): string[] {
     join(ROOT, 'src/shared/apply-embeds.ts'),
     join(ROOT, 'src/preload/browser-page.ts'),
     join(ROOT, 'src/main/apply/service.ts'),
-    join(ROOT, 'src/main/apply/upload.ts')
+    join(ROOT, 'src/main/apply/upload.ts'),
+    // Automation (#154) drives the apply service unattended: it must never gain a way to submit either.
+    ...automationSources()
   ]
+}
+
+/** Automation's main-process modules (#154): they call `ApplyService.prepare` and must never press anything themselves. */
+function automationSources(): string[] {
+  const dir = join(ROOT, 'src/main/automation')
+  return (readdirSync(dir) as string[]).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts')).map((f) => join(dir, f))
 }
 
 describe('no-submit guard', () => {
