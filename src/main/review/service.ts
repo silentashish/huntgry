@@ -473,10 +473,15 @@ export function rerunReview(deps: ReviewDeps, input: RerunReviewInput, via: Revi
       if (!(await decide(workspace, input.applicationId, p.review, rerunning))) return STALE
       // The rules as they will stand once the ticks are saved; the rejections of this result spelled out.
       const rules = mergeRules(await loadRules(workspace), entriesFor(picked, detail, via, now))
+      const { preferred, avoid } = rulesForPrompt(rules)
+      // A better wording rejected since is not offered as "Use instead" (the caller rules avoid it).
+      const avoided = (fact: string, wording: string) => avoid.some((a) => a.sourceFact === normalizeText(fact) && a.wording === normalizeText(wording))
       const rejected = detail.proposedReframings
         .filter((p) => p.rule?.kind === 'rejected' && !ids.includes(p.id))
-        .map((p) => ({ sourceFact: p.sourceFact, wording: p.wording, ...(p.rule?.betterWording ? { betterWording: p.rule.betterWording } : {}) }))
-      const { preferred, avoid } = rulesForPrompt(rules)
+        .map((p) => {
+          const better = p.rule?.betterWording
+          return { sourceFact: p.sourceFact, wording: p.wording, ...(better && !avoided(p.sourceFact, better) ? { betterWording: better } : {}) }
+        })
       try {
         await deps.reply(detail.runId, rerunMessage(input.answers, picked, rejected, { preferred, avoid }), workspace)
       } catch (err) {

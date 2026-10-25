@@ -198,6 +198,32 @@ describe('rules for the prompt', () => {
     })
   })
 
+  it('never sends a wording as both preferred and avoided: a later rejection of a replacement wins (chained corrections)', () => {
+    const fact = { sourceFact: 'fact F' }
+    // Reject A with B; after the re-run, reject B with C.
+    const chained = mergeRules([], [
+      entry(1, { ...fact, kind: 'rejected', wording: 'A', betterWording: 'B' }),
+      entry(2, { ...fact, kind: 'rejected', wording: 'B', betterWording: 'C' })
+    ])
+    expect(rulesForPrompt(chained)).toEqual({
+      preferred: [{ sourceFact: 'fact F', wording: 'C' }],
+      avoid: [
+        { sourceFact: 'fact F', wording: 'B' },
+        { sourceFact: 'fact F', wording: 'A' }
+      ],
+      leftOut: 0
+    })
+    // Reject A with B, then reject B with no replacement: B is only avoided.
+    const dropped = mergeRules([], [entry(1, { ...fact, kind: 'rejected', wording: 'A', betterWording: 'B' }), entry(2, { ...fact, kind: 'rejected', wording: '  B ' })])
+    expect(rulesForPrompt(dropped)).toEqual({ preferred: [], avoid: [{ sourceFact: 'fact F', wording: 'B' }, { sourceFact: 'fact F', wording: 'A' }], leftOut: 0 })
+    // A newer kept wording wins over an older rejection's replacement of the same text, and the other way round.
+    const keptLater = mergeRules([], [entry(1, { ...fact, kind: 'rejected', wording: 'A', betterWording: 'B' }), entry(2, { ...fact, wording: 'B' })])
+    expect(rulesForPrompt(keptLater)).toEqual({ preferred: [{ sourceFact: 'fact F', wording: 'B' }], avoid: [{ sourceFact: 'fact F', wording: 'A' }], leftOut: 0 })
+    // The same wording for another fact is another pair.
+    const other = mergeRules([], [entry(1, { ...fact, kind: 'rejected', wording: 'A', betterWording: 'B' }), entry(2, { sourceFact: 'fact G', kind: 'rejected', wording: 'B' })])
+    expect(rulesForPrompt(other).preferred).toEqual([{ sourceFact: 'fact F', wording: 'B' }])
+  })
+
   it('caps what goes into the prompt: newest first, by count and by size', () => {
     const stamp = (i: number) => `2026-09-30T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}.000Z`
     const many = Array.from({ length: 200 }, (_, i) => ({ ...entry(i, { at: stamp(i) }), id: 'x'.repeat(64) }))
@@ -210,7 +236,7 @@ describe('rules for the prompt', () => {
     const two = rulesForPrompt(pairs)
     expect(two.avoid).toHaveLength(RULES_PROMPT_CAP.entries / 2)
     expect(two.preferred).toHaveLength(RULES_PROMPT_CAP.entries / 2)
-    const big = Array.from({ length: 20 }, (_, i) => ({ ...entry(i), id: 'x'.repeat(64), sourceFact: 'f'.repeat(3000), wording: 'w'.repeat(3000) }))
+    const big = Array.from({ length: 20 }, (_, i) => ({ ...entry(i), id: 'x'.repeat(64), sourceFact: `${'f'.repeat(3000)} ${i}`, wording: 'w'.repeat(3000) }))
     const capped = rulesForPrompt(big)
     expect(Buffer.byteLength(JSON.stringify(capped.preferred)) + Buffer.byteLength(JSON.stringify(capped.avoid))).toBeLessThanOrEqual(RULES_PROMPT_CAP.bytes)
     expect(capped.leftOut).toBeGreaterThan(0)

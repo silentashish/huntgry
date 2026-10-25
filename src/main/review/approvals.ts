@@ -155,30 +155,39 @@ export function removeAllRules(workspace: string): Promise<ReframingRule[]> {
 /**
  * The caller rules a run gets: newest first, capped by count and JSON size (preferred and avoid
  * together). A rejected rule sends its wording to `avoid` and its better wording, if any, to
- * `preferred` for the same fact. `leftOut` = how many older rules are not sent.
+ * `preferred` for the same fact. A wording is decided once, by the newest rule that names it, so
+ * it is never both preferred and avoided: rejecting A with B and later rejecting B (with C or
+ * nothing) sends B to `avoid` only. `leftOut` = how many older rules are not sent.
  */
 export function rulesForPrompt(list: readonly ReframingRule[]): CallerRules & { leftOut: number } {
   const sorted = [...list].sort(byNewest)
   const preferred: CallerWording[] = []
   const avoid: CallerWording[] = []
+  /** `fact \n wording` pairs a newer rule already decided. */
+  const decided = new Set<string>()
+  const keyOf = (w: CallerWording) => `${w.sourceFact}\n${w.wording}`
   let entries = 0
   let bytes = 4
   let sent = 0
   for (const r of sorted) {
     const sourceFact = normalizeText(r.sourceFact)
-    const pairs: [CallerWording[], CallerWording][] =
+    const candidates: [CallerWording[], CallerWording][] =
       r.kind === 'preferred'
         ? [[preferred, { sourceFact, wording: normalizeText(r.wording) }]]
         : [
             [avoid, { sourceFact, wording: normalizeText(r.wording) }],
             ...(r.betterWording ? [[preferred, { sourceFact, wording: normalizeText(r.betterWording) }] as [CallerWording[], CallerWording]] : [])
           ]
+    const pairs = candidates.filter(([, pair]) => !decided.has(keyOf(pair)))
     const size = pairs.reduce((n, [, pair]) => n + Buffer.byteLength(JSON.stringify(pair)) + 1, 0)
     if (entries + pairs.length > RULES_PROMPT_CAP.entries || bytes + size > RULES_PROMPT_CAP.bytes) break
     entries += pairs.length
     bytes += size
     sent++
-    for (const [into, pair] of pairs) into.push(pair)
+    for (const [into, pair] of pairs) {
+      into.push(pair)
+      decided.add(keyOf(pair))
+    }
   }
   return { preferred, avoid, leftOut: sorted.length - sent }
 }

@@ -559,6 +559,20 @@ describe('review service', () => {
     expect(await recorded()).toMatchObject({ state: 'unreviewed', reason: 'Re-running with your answers.' })
   })
 
+  it('re-run does not offer a better wording that was rejected since as "Use instead"', async () => {
+    await application(ID, { notes: null, tailoring: NOTES_V2 })
+    const d = await reviewDetail(ws, ID)
+    const [r1] = d.proposedReframings
+    await rejectReframing(deps, { applicationId: ID, revision: d.revision, reframingId: r1.id, betterWording: 'B wording' }, 'desktop')
+    // Later, on another result, "B wording" itself was rejected for the same fact.
+    await addRules(ws, [{ kind: 'rejected', sourceFact: r1.sourceFact, wording: 'B wording', at: '2026-09-30T03:00:00.000Z', applicationId: 'x/y/z', runId: RUN, via: 'desktop' }])
+    await rerunReview(deps, { applicationId: ID, revision: d.revision, answers: '' }, 'desktop')
+    const text = replies[0].text
+    expect(text).toContain(`Rejected wording: ${r1.wording}`)
+    expect(text).not.toContain('Use instead: B wording')
+    expect(text).toContain('PREFERRED WORDINGS (JSON, newest first): []')
+  })
+
   it('a reframing ticked to keep on a re-run is preferred again, not avoided', async () => {
     await application(ID, { notes: null, tailoring: NOTES_V2 })
     const d = await reviewDetail(ws, ID)
