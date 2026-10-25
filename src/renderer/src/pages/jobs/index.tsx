@@ -10,7 +10,7 @@ import { api, errorText } from '../../api'
 import { useQueue } from '../../components/queue/useQueue'
 import { EmptyState, MonoLabel, PageHeader } from '../../components/ui'
 import { useNavigation } from '../../navigation'
-import { BulkTailorModal, type BulkMode } from './BulkTailorModal'
+import { BulkTailorModal } from './BulkTailorModal'
 import { JobDrawer } from './JobDrawer'
 import { JobFiltersBar } from './JobFiltersBar'
 import { JobRow } from './JobRow'
@@ -47,7 +47,7 @@ export function JobsPage({ openId: initialOpenId }: { openId?: string } = {}) {
   /** Jobs ticked for "Tailor all". */
   const [selection, setSelection] = useState<Set<string>>(new Set())
   /** The Tailor all modal, and the mode it opens in. */
-  const [bulk, setBulk] = useState<BulkMode | null>(null)
+  const [bulk, setBulk] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [queue] = useQueue()
 
@@ -121,7 +121,7 @@ export function JobsPage({ openId: initialOpenId }: { openId?: string } = {}) {
   }
 
   const afterBulk = () => {
-    setBulk(null)
+    setBulk(false)
     setSelection(new Set())
     navigate('tailor', { view: 'queue' })
   }
@@ -146,7 +146,7 @@ export function JobsPage({ openId: initialOpenId }: { openId?: string } = {}) {
               leftSection={<IconSparkles size={16} />}
               disabled={selected.length === 0}
               title={selected.length === 0 ? 'Tick the jobs to tailor first' : undefined}
-              onClick={() => setBulk('approve')}
+              onClick={() => setBulk(true)}
             >
               {selected.length > 0 ? `Tailor all (${selected.length})` : 'Tailor all'}
             </Button>
@@ -283,24 +283,14 @@ export function JobsPage({ openId: initialOpenId }: { openId?: string } = {}) {
       <SelectionBar
         count={selected.length}
         dismissing={dismissing}
-        onTailor={() => setBulk('approve')}
-        onUnattended={() => setBulk('unattended')}
+        onTailor={() => setBulk(true)}
         onDismiss={() => void dismissSelected()}
         onClear={() => setSelection(new Set())}
       />
       <BulkTailorModal
         jobs={selected}
-        opened={bulk !== null}
-        initialMode={bulk ?? undefined}
-        onClose={() => setBulk(null)}
-        onQueued={(res) => {
-          if (res.added === 0) {
-            setBulk(null)
-            setError(`Nothing was queued: ${[...new Set(res.skipped.map((s) => s.reason))].join(' ')}`)
-            return
-          }
-          afterBulk()
-        }}
+        opened={bulk}
+        onClose={() => setBulk(false)}
         onStarted={afterBulk}
       />
       <JobDrawer

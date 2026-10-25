@@ -46,10 +46,10 @@ describe('pipeline plan helpers', () => {
 
   it('summarises a plan', () => {
     expect(planSummary(plan)).toEqual({
-      ready: '3 jobs will run unattended, 2 at a time.',
+      ready: '3 jobs will run to the end, 2 at a time.',
       skipped: '1 skipped:',
       estimate: 'About 1 h 15 min.',
-      cost: 'Roughly $2.40 (median of your recent unattended Claude runs).'
+      cost: 'Roughly $2.40 (median of your recent Claude runs).'
     })
     expect(planSummary({ ...plan, ready: [], estimateCostUsd: null }).ready).toBe('No job can run.')
     expect(planSummary({ ...plan, estimateCostUsd: null }).cost).toMatch(/No cost estimate yet/)

@@ -9,19 +9,21 @@
 // app's real discovery, version gate, sign-in check and runner drive this script exactly
 // as they would drive the real CLI. Nothing in src/ knows about it.
 //
-// What the "skill" does, whichever agent is asked:
-//   turn 1 (the job)      gap analysis, one Read of the master profile, then a question → the
-//                         run waits for the user ("Needs your reply")
-//   a reply saying "approve" (any case) builds: one Bash step, then resume.pdf,
-//                         resume_data.json, build-report.json and job-description.md under
+// What the "skill" does, whichever agent is asked (the single flow, #158):
+//   turn 1 (the job)      gap analysis, one Read of the master profile, then it builds without
+//                         asking: one Bash step, then resume.pdf, resume_data.json,
+//                         build-report.json, job-description.md (copied from the file the first
+//                         message names, as `build.py --jd` does) and tailoring-notes.md v2 under
 //                         <CV_HOME or cwd>/<role>/<company>/<job-id>/ (role, company and job id
 //                         come from the first message, as the real skill reads them)
-//   any other reply       a short answer and the question again
+//   any later reply       a follow-up ("make it shorter", a Review re-run): rebuilds the folder
 // Resuming (`--resume <id>`, `exec resume <id>`, `--conversation <id>`) reuses that session id.
 //
 // Behaviour switches, read from `$FAKE_AGENT_HOME/config.json` and overridden by the environment:
 //   FAKE_AGENT_SCRIPT   normal (default) · slow (a pause before every event, `slowMs`)
 //                       · fail (stderr + exit 3 after the first message) · exit-early (exit 0 after init)
+//                       · ask (a missing prerequisite: turn 1 and the pipeline's nudge end with a
+//                         question; the user's answer then builds)
 //   FAKE_AGENT_SLOW_MS  the pause of `slow`, default 1500
 //   claudeVersion / codexVersion / agyVersion in config.json: what `--version` prints
 //
@@ -310,15 +312,18 @@ const slug = (s) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
 
-/** Role, company and job id as the first message states them (see buildFirstPrompt in src/main/cli/command.ts). */
+/**
+ * Role, company and job id as the first message states them, and the job description Huntgry saved
+ * (the first message names the file: see buildFirstPrompt in src/main/cli/command.ts).
+ */
 function parseJob(text) {
   const pick = (label) => new RegExp(`^${label}:\\s*(.+?)\\s*$`, 'm').exec(text)?.[1] ?? ''
-  const description = /<job_description>\n?([\s\S]*?)\n?<\/job_description>/.exec(text)?.[1] ?? ''
+  const jdPath = /^Job description: saved at (.+?\.md)\./m.exec(text)?.[1] ?? null
   return {
     role: slug(pick('Role')) || 'software-engineer',
     company: slug(pick('Company')) || 'acme',
     jobId: slug(pick('Job id')) || 'job',
-    description
+    jdPath
   }
 }
 
@@ -383,8 +388,58 @@ function build(j) {
     join(dir, 'build-report.json'),
     `${JSON.stringify({ ok: true, verify: { results: [{ check: 'one_page', passed: true, hard: true }], warnings: 0 }, render: { pages: 1 }, style_warnings: [] }, null, 2)}\n`
   )
-  writeFileSync(join(dir, 'job-description.md'), `${j.description || `# ${j.role} at ${j.company}\n`}\n`)
+  // build.py --jd <saved path> copies the posting into the folder; the model never retypes it.
+  writeFileSync(join(dir, 'job-description.md'), j.jdPath && existsSync(j.jdPath) ? readFileSync(j.jdPath) : `# ${j.role} at ${j.company}\n`)
+  // build.py --notes tailoring-notes.md: the notes Review reads (resume-tailor notes v2).
+  writeFileSync(
+    join(dir, 'tailoring-notes.md'),
+    [
+      '# Tailoring notes',
+      '<!-- resume-tailor notes v2 -->',
+      '',
+      '## Direct hits',
+      '- TypeScript: five years of TypeScript in the master profile',
+      '',
+      '## Reframings used',
+      '### Platform ownership',
+      '- Source fact: Led the migration of the billing service to Go',
+      `- Wording: Owned the platform migration of billing to Go for ${j.company}`,
+      '',
+      '## Gaps left open',
+      '- Kubernetes: nothing in the profile',
+      '',
+      '## Decisions',
+      '- Right-aligned dates: a human reads it first.',
+      ''
+    ].join('\n')
+  )
   return dir
+}
+
+const FILES = 'resume.pdf, resume_data.json, build-report.json, job-description.md, tailoring-notes.md'
+
+/** The build step: one Bash call, the folder, the closing message with its path. */
+async function buildTurn(started, opening) {
+  protocol.text(opening)
+  await pause()
+  protocol.tool(
+    'Bash',
+    { command: `python3 ${skillDir()}/scripts/build.py resume_data.json --jd ${job.jdPath ?? 'job-description.md'} --notes tailoring-notes.md`, description: 'Build the resume PDF' },
+    'build.py: resume.pdf written (1 page)'
+  )
+  const dir = build(job)
+  await pause()
+  protocol.text(`Done. The application folder is ${dir} and it contains ${FILES}.`)
+  mark({ event: 'turn-end', turn })
+  protocol.result(`Built ${dir}`, Date.now() - started)
+}
+
+/** A missing prerequisite (`ask`): the turn ends with a question. */
+function askTurn(started) {
+  const question = 'I cannot find the job requirements I need in the saved posting. Which role should I tailor for?'
+  protocol.text(question)
+  mark({ event: 'turn-end', turn })
+  protocol.result(question, Date.now() - started)
 }
 
 async function runTurn(text) {
@@ -396,39 +451,21 @@ async function runTurn(text) {
     rememberJob(job)
   }
   await pause()
-  // The first message of a fresh session is the job (Antigravity's carries Huntgry's context, which mentions
-  // approval); only a reply counts as one.
-  if ((turn > 1 || resume) && /\bapprove/i.test(text)) {
-    protocol.text('Approved. Building the application folder now.')
-    await pause()
-    protocol.tool(
-      'Bash',
-      { command: `python3 ${skillDir()}/scripts/build.py resume_data.json`, description: 'Build the resume PDF' },
-      'build.py: resume.pdf written (1 page)'
-    )
-    const dir = build(job)
-    await pause()
-    const files = 'resume.pdf, resume_data.json, build-report.json, job-description.md'
-    protocol.text(`Done. The application folder is ${dir} and it contains ${files}.`)
-    mark({ event: 'turn-end', turn })
-    protocol.result(`Built ${dir}`, Date.now() - started)
-    return
-  }
   if (turn === 1 && !resume) {
     protocol.text(`Gap analysis for ${job.role} at ${job.company} (job ${job.jobId}): reading the master profile first.`)
     if (script === 'fail') protocol.fail()
     await pause()
     protocol.tool('Read', { file_path: join(process.cwd(), 'master-profile.md') }, 'profile text')
     await pause()
-  } else {
-    protocol.text(`Noted: ${text.slice(0, 80)}`)
-    if (script === 'fail') protocol.fail()
-    await pause()
+    if (script === 'ask') return askTurn(started)
+    return buildTurn(started, 'Bridges chosen and listed in tailoring-notes.md. Building the application folder now.')
   }
-  const question = 'Proposed reframings: lead with the platform work, keep the honest scope. Do you approve these bullets, or do you want changes?'
-  protocol.text(question)
-  mark({ event: 'turn-end', turn })
-  protocol.result(question, Date.now() - started)
+  protocol.text(`Noted: ${text.slice(0, 80)}`)
+  if (script === 'fail') protocol.fail()
+  await pause()
+  // The pipeline's one nudge gets the same question; the user's own answer builds.
+  if (script === 'ask' && /^Nobody can answer/.test(text)) return askTurn(started)
+  return buildTurn(started, 'Rebuilding the application folder with that change.')
 }
 
 /** Where the app told the agent the skill is (only for the Bash step's command line). */

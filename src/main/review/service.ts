@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
+import { appendFile, mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ApplicationRecord } from '@shared/applications-types'
 import {
-  REVIEW_NOTES_FILE,
   REVIEW_NOTES_INLINE_BYTES,
+  TAILORING_NOTES_FILE,
   type ApprovalsSummary,
   type ApproveReviewInput,
   type DiscardReviewInput,
@@ -27,10 +27,10 @@ import { RERUN_REASON } from '@shared/review-types'
 import { HUNTGRY_DIR } from '../workspace/constants'
 import { getReview, sameReview, updateReview, type RecordedReview } from './authority'
 import { addApprovals, approvalsForPrompt, loadApprovals, removeAllApprovals, removeApproval } from './approvals'
-import { parseReviewNotes } from './notes'
+import { boundedText, MAX_NOTES_BYTES, parseResultNotes, readResultNotes } from './notes-file'
 
 /**
- * Review of unattended results (#31): what the Review page shows and does.
+ * Review of tailoring results (#31, #158): what the Review page shows and does.
  * Electron-free; `review/ipc.ts` calls it for the desktop and #42's gateway
  * will call it for the phone. Every decision is bound to the `revision` the
  * caller was shown: a result that changed on disk meanwhile is refused
@@ -128,21 +128,22 @@ export async function listReviews(workspace: string): Promise<ReviewItem[]> {
 }
 
 /**
- * Open gaps listed in a result's review-notes.md (the phone's list badge, #42); 0 when the file is
- * missing, unreadable or too large. Reads the notes only, never hashes the PDFs.
+ * Open gaps listed in a result's notes (the phone's list badge, #42): v2 "Gaps left open" or v1
+ * "Open gaps"; 0 when the notes are missing, unreadable or too large. Reads the notes only, never
+ * hashes the PDFs.
  */
 export async function openGapCount(workspace: string, applicationId: string): Promise<number> {
   try {
     const folder = await resolveApplicationFolder(workspace, applicationId)
-    const notes = await boundedText(join(folder, REVIEW_NOTES_FILE), MAX_NOTES_BYTES)
-    return notes && 'text' in notes ? parseReviewNotes(notes.text).openGaps.length : 0
+    const notes = await readResultNotes(folder)
+    return notes && notes.text !== null ? parseResultNotes(notes).openGaps.length : 0
   } catch {
     return 0
   }
 }
 
-/** Largest review-notes.md / build-report.json read; bigger ones are reported, not parsed. */
-export const MAX_NOTES_BYTES = 256 * 1024
+/** Largest notes file (see `notes-file.ts`) / build-report.json read; bigger ones are reported, not parsed. */
+export { MAX_NOTES_BYTES }
 export const MAX_REPORT_BYTES = 1024 * 1024
 /** Most page images per document hashed into a revision. */
 const MAX_PAGES = 30
@@ -171,15 +172,6 @@ async function fileInfo(folder: string, file: string): Promise<{ file: string; b
   }
 }
 
-/** A text file read only when it is at most `max` bytes: `{ text }`, `{ tooLarge }` or `null` when missing. */
-async function boundedText(path: string, max: number): Promise<{ text: string } | { tooLarge: number } | null> {
-  const s = await stat(path).catch(() => null)
-  if (!s || !s.isFile()) return null
-  if (s.size > max) return { tooLarge: s.size }
-  const text = await readFile(path, 'utf8').catch(() => null)
-  return text === null ? null : { text }
-}
-
 const kib = (n: number) => `${Math.round(n / 1024)} KiB`
 
 /** Everything the review screen shows, pinned by `revision`. */
@@ -199,13 +191,15 @@ async function detailWithRecord(
   const recorded = await getReview(workspace, applicationId)
   const warnings: string[] = []
 
-  const notes = record.files.includes(REVIEW_NOTES_FILE) ? await boundedText(join(folder, REVIEW_NOTES_FILE), MAX_NOTES_BYTES) : null
-  const notesText = notes && 'text' in notes ? notes.text : null
-  if (notes && 'tooLarge' in notes) warnings.push(`review-notes.md is too large to read (${kib(notes.tooLarge)}; at most ${kib(MAX_NOTES_BYTES)}).`)
-  const parsed = parseReviewNotes(notesText ?? '')
-  const proposed = parsed.proposed.slice(0, MAX_LIST)
+  // tailoring-notes.md v2, or review-notes.md v1 for an older result (same slot in the revision).
+  const notes = await readResultNotes(folder, record.files)
+  const notesText = notes?.text ?? null
+  if (notes?.tooLarge !== undefined) warnings.push(`${notes.file} is too large to read (${kib(notes.tooLarge)}; at most ${kib(MAX_NOTES_BYTES)}).`)
+  const parsed = notes ? parseResultNotes(notes) : parseResultNotes({ format: 'v1', text: '' })
+  // v2: the reframings the run used are the ones the user can tick (same ids as v1's proposed ones).
+  const proposed = (parsed.format === 'v2' ? parsed.reframingsUsed : parsed.proposed).slice(0, MAX_LIST)
   const openGaps = parsed.openGaps.slice(0, MAX_LIST)
-  if (parsed.proposed.length > MAX_LIST || parsed.openGaps.length > MAX_LIST) warnings.push(`Only the first ${MAX_LIST} reframings and gaps are shown.`)
+  if (Math.max(parsed.proposed.length, parsed.reframingsUsed.length, parsed.openGaps.length) > MAX_LIST) warnings.push(`Only the first ${MAX_LIST} reframings and gaps are shown.`)
 
   const reportFile = record.files.includes('build-report.json') ? await boundedText(join(folder, 'build-report.json'), MAX_REPORT_BYTES) : null
   if (reportFile && 'tooLarge' in reportFile) warnings.push(`build-report.json is too large to read (${kib(reportFile.tooLarge)}).`)
@@ -220,7 +214,7 @@ async function detailWithRecord(
     const info = await fileInfo(folder, f)
     if (info) artifacts.push(info)
   }
-  const notesHash = notes && 'tooLarge' in notes ? await hashFile(join(folder, REVIEW_NOTES_FILE)).catch(() => '') : ''
+  const notesHash = notes?.tooLarge !== undefined ? await hashFile(join(folder, notes.file)).catch(() => '') : ''
   const ids = proposed.map((p) => p.id)
   // The files only (what an approval vouches for)...
   const contentRevision = sha256(
@@ -229,7 +223,7 @@ async function detailWithRecord(
   // ...and the review state: a decision made on what was shown before a re-run, an approval or a
   // new run is stale even when the files did not change (yet).
   const revision = sha256(JSON.stringify([[review.state, review.runId, review.at], contentRevision]))
-  const parseWarning = [notesText === null && !notes ? 'This result has no review-notes.md.' : parsed.parseWarning, ...warnings]
+  const parseWarning = [!notes ? `This result has no tailoring notes (${TAILORING_NOTES_FILE}).` : notes.text !== null ? parsed.parseWarning : undefined, ...warnings]
     .filter(Boolean)
     .join(' ')
   return {
@@ -243,10 +237,12 @@ async function detailWithRecord(
       reason: review.reason,
       jobUrl: record.jobUrl,
       reviewNotes: notesText !== null && Buffer.byteLength(notesText) <= REVIEW_NOTES_INLINE_BYTES ? notesText : null,
+      ...(notes ? { notesFormat: notes.format } : {}),
       ...(parseWarning ? { parseWarning } : {}),
       usedApprovals: parsed.usedApprovals.slice(0, MAX_LIST),
       openGaps,
       proposedReframings: proposed,
+      ...(parsed.format === 'v2' ? { directHits: parsed.directHits.slice(0, MAX_LIST), decisions: parsed.decisions.slice(0, MAX_LIST) } : {}),
       verify,
       build: record.build,
       artifacts,
@@ -403,15 +399,15 @@ export function approveReview(deps: ReviewDeps, input: ApproveReviewInput, via: 
 /** Shared with the renderer (#109): the Dashboard counts results to review with the same rule. */
 export { isSettledReview, RERUN_REASON } from '@shared/review-types'
 
-/** What the agent is told on a re-run: the user's decisions, plus the ticked reframings as approved. */
+/** What the agent is told on a re-run: the user's decisions, plus the ticked reframings as preferred wordings. */
 export function rerunMessage(answers: string, approved: { sourceFact: string; wording: string }[]): string {
   const lines = ['The user reviewed the notes.']
   if (approved.length > 0) {
-    lines.push('Approved reframings (use them as written):')
+    lines.push('Preferred wordings (use them as written):')
     for (const a of approved) lines.push(`- Source fact: ${a.sourceFact}\n  Wording: ${a.wording}`)
   }
   if (answers) lines.push(`Decisions: ${answers}`)
-  lines.push(`Apply them, rebuild, verify, and update ${REVIEW_NOTES_FILE}. Everything else in your instructions still applies: never stop to ask.`)
+  lines.push(`Apply them, rebuild, verify, and update ${TAILORING_NOTES_FILE} (pass it to build.py with --notes). Everything else in your instructions still applies: never stop to ask.`)
   return lines.join('\n')
 }
 

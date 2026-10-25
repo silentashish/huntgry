@@ -6,7 +6,7 @@ import { api, errorText } from '../../api'
 import { MonoLabel } from '../../components/ui'
 import { SettingsCard, TableFrame } from './SettingsCard'
 
-/** The reframings approved on the Review page, which unattended runs may reuse; remove any of them here. */
+/** The reframings kept on the Review page, which every run gets as preferred wordings (#158); remove any of them here. */
 export function StandingApprovalsCard() {
   const [data, setData] = useState<ApprovalsSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -37,7 +37,7 @@ export function StandingApprovalsCard() {
   return (
     <SettingsCard
       title="Standing approvals"
-      description="Reframings you approved on the Review page. Unattended runs may use each one as written (same fact, same wording) without asking. Stored with the app's data, outside the workspace, so an agent can never add one."
+      description="Reframings you ticked on the Review page. Every run uses each one as the preferred wording when it uses that fact. Stored with the app's data, outside the workspace, so an agent can never add one."
       actions={
         list.length === 0 ? null : confirmAll ? (
           <Group gap="xs" wrap="nowrap">
@@ -69,7 +69,7 @@ export function StandingApprovalsCard() {
         )}
         {data && data.leftOut > 0 && (
           <Alert color="yellow" variant="light" icon={<IconAlertTriangle size={18} />}>
-            {data.leftOut} older approval{data.leftOut === 1 ? ' is' : 's are'} not sent to unattended runs (the prompt
+            {data.leftOut} older approval{data.leftOut === 1 ? ' is' : 's are'} not sent to runs (the prompt
             carries the newest {APPROVALS_PROMPT_CAP.entries}, at most {Math.round(APPROVALS_PROMPT_CAP.bytes / 1024)}{' '}
             KB). Remove ones you no longer stand behind.
           </Alert>

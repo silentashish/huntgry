@@ -5,7 +5,7 @@
 //   "CRASH" -> prints to stderr and exits 2
 //   "USAGE_LIMIT" -> like QUOTA, with a relative reset ("Resets in 0h1m0s")
 // Closing stdin ends the process with code 0.
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const convIdx = process.argv.indexOf('--conversation')
@@ -27,7 +27,10 @@ for await (const line of createInterface({ input: process.stdin })) {
     process.stderr.write('error: stream input message is missing the "event" field\n')
     process.exit(1)
   }
-  const text = String(msg.message?.content ?? '')
+  let text = String(msg.message?.content ?? '')
+  // Like the real agent, reads the job description the first message names (#158); its mode words count too.
+  const jdPath = /^Job description: saved at (.+?\.md)\./m.exec(text)?.[1]
+  if (jdPath && existsSync(jdPath)) text = `${text}\n${readFileSync(jdPath, 'utf8')}`
   step({ step_index: index++, state: 'DONE', step_type: 'user_input' })
   if (text.includes('CRASH')) {
     process.stderr.write('panic: simulated agy failure\n')

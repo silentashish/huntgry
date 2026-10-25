@@ -5,12 +5,12 @@ import { join } from 'node:path'
 import { AGENT_IDS, type AgentStatus } from '@shared/runner-types'
 import { REMOTE_CHANNELS, type RemoteApi, type RemoteCommandTtl, type RemoteState } from '@shared/remote-types'
 import { COMMAND_TTL_SECONDS, RELAY_PATHS, requireCreateRoomResponse } from '@shared/remote'
-import { resolveApplicationFile } from '../applications/safe-path'
 import { adapterFor } from '../cli/agents'
 import { skillStatus } from '../cli/agents/skills'
 import { findClaude, findCli, findSkillDir } from '../cli/env'
 import { runsForRemote } from '../cli/ipc'
 import { defaultAgent } from '../cli/start'
+import { resolveRemoteFile } from './notes-file'
 import { requireCurrentWorkspace, settingsFile } from '../current-workspace'
 import { emit, onEvent } from '../events'
 import { loadAndExtract } from '../jobs/loader'
@@ -304,7 +304,7 @@ async function init(): Promise<void> {
     queue: queueForRemote,
     runs: runsForRemote,
     jobs: { list: listJobs, addUrl: (ws, url) => addByUrl(ws, url, loadAndExtract) },
-    files: { resolve: resolveApplicationFile },
+    files: { resolve: resolveRemoteFile },
     pipeline: pipelineForRemote,
     review: reviewForRemote,
     transcripts: () => transcriptsOn,

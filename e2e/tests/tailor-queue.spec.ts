@@ -5,10 +5,12 @@ import { Shell } from '../pages/shell'
 import { TailorPage } from '../pages/tailor'
 
 /**
- * The bulk tailoring queue against the scripted agents: what "Tailor all" on
- * the Jobs page leaves behind (`.huntgry/jobs`, `.huntgry/queue.json`) is
- * seeded before launch, so the queue opens paused, the way it does after any
- * restart. Every job stops at the approval step, which frees its slot.
+ * The tailoring queue against the scripted agents: what the Jobs page or the
+ * Tailor page leaves behind (`.huntgry/jobs`, `.huntgry/queue.json`) is seeded
+ * before launch, so the queue opens paused, the way it does after any restart.
+ * Since #158 every queued job is unattended: it runs to the end, goes through
+ * the verify gate and lands Unreviewed. An attended item saved before #158
+ * still loads and waits for a reply.
  */
 
 const ONE = savedJob({ id: 'pasted:e2e-one', title: 'Platform Engineer', company: 'Initech' })
@@ -18,13 +20,13 @@ const SNIPPET = boardOnlyJob({ id: 'indeed:e2e-snippet', title: 'Backend Develop
 
 const label = (job: { title: string; company: string }) => `${job.title} · ${job.company}`
 
-/** Fakes plus the seeded jobs and queue. */
-function queued(items: SeedQueueItem[], concurrency: number, fakes: FakeAgentOptions = {}): Preparer {
+/** Fakes plus the seeded jobs and queue: unattended items, as every enqueue makes them, unless `attended` (pre-#158). */
+function queued(items: SeedQueueItem[], concurrency: number, fakes: FakeAgentOptions = {}, attended = false): Preparer {
   return {
     async prepare({ sandbox, workspace }) {
       const env = await installFakeAgents(sandbox, fakes)
       await seedJobs(workspace!, [...new Set(items.map((i) => i.job))])
-      await seedQueue(workspace!, items, concurrency)
+      await seedQueue(workspace!, attended ? items : items.map((i) => ({ ...i, unattended: true as const })), concurrency)
       return env
     }
   }
@@ -40,7 +42,7 @@ async function openTailor(window: import('@playwright/test').Page): Promise<Tail
 test.describe('two queued jobs', () => {
   test.use({ workspace: 'demo', prepare: queued([{ job: ONE }, { job: TWO }], 2) })
 
-  test('start after Resume, both stop at the approval step, and a reply opens the run', async ({ app }) => {
+  test('start after Resume, both run to the end without a reply, and land Unreviewed in Review (#158)', async ({ app }) => {
     const fakes = fakeAgents(app)
     const tailor = await openTailor(app.window)
     await expect(tailor.queueCount('2 queued')).toBeVisible()
@@ -49,23 +51,38 @@ test.describe('two queued jobs', () => {
     expect(await fakes.runs()).toEqual([])
 
     await tailor.queueResumeButton.click()
-    await expect(tailor.queueCount('2 needs your reply')).toBeVisible({ timeout: 20_000 })
+    await expect(tailor.queueCount('2 done')).toBeVisible({ timeout: 30_000 })
     await expect(tailor.queuePausedNote).toHaveCount(0)
     expect((await fakes.runs()).map((r) => r.agent)).toEqual(['claude', 'claude'])
-    await expect(tailor.waitingNote).toHaveText('2 runs waiting for your reply')
-
-    // "Reply" on a row opens its run; the approval builds and the row shows it.
-    await tailor.queueRow(label(ONE)).getByRole('button', { name: 'Reply' }).click()
-    await tailor.expectStatus('Waiting for you')
-    await expect(tailor.runTitle(label(ONE))).toBeVisible()
-    await tailor.reply('Approved')
-    await expect(tailor.outputLine('platform-engineer/initech/e2e-one')).toBeVisible()
-    await expect(tailor.queueRow(label(ONE)).getByText('Resume built')).toBeVisible()
-    // The job's posting URL is recorded with the application, for the dashboard.
+    await expect(tailor.waitingNote).toHaveCount(0)
+    await expect(tailor.queueRow(label(ONE)).getByText('Unreviewed', { exact: true })).toBeVisible()
     const { items } = await readQueue(app.workspace!)
-    expect(items.map((i) => i.status)).toEqual(['needs-reply', 'needs-reply'])
-    expect(items[0].built).toBe(true)
-    expect(items.every((i) => i.runId)).toBe(true)
+    expect(items.map((i) => [i.status, i.outcome, i.applicationId])).toEqual([
+      ['done', 'unreviewed', 'platform-engineer/initech/e2e-one'],
+      ['done', 'unreviewed', 'data-engineer/globex/e2e-two']
+    ])
+
+    // "Review" on a row opens the result: the run's v2 notes, Apply locked until approved.
+    await tailor.queueRow(label(ONE)).getByRole('button', { name: 'Review', exact: true }).click()
+    await expect(app.window.getByText('Reframings used', { exact: true }).first()).toBeVisible()
+    await expect(app.window.getByText('Owned the platform migration of billing to Go for initech').first()).toBeVisible()
+    await expect(app.window.getByText('Gaps left open', { exact: true }).first()).toBeVisible()
+    await expect(app.window.getByText('Kubernetes: nothing in the profile').first()).toBeVisible()
+    await expect(app.window.getByText('Decisions', { exact: true }).first()).toBeVisible()
+  })
+})
+
+test.describe('an attended item saved before #158', () => {
+  test.use({ workspace: 'demo', prepare: queued([{ job: ONE }], 1, {}, true) })
+
+  test('still loads and runs; its run waits for a reply as before', async ({ app }) => {
+    const tailor = await openTailor(app.window)
+    await tailor.queueResumeButton.click()
+    await expect(tailor.queueCount('1 needs your reply')).toBeVisible({ timeout: 20_000 })
+    await expect(tailor.queueRow(label(ONE)).getByText('Resume built')).toBeVisible()
+    const { items } = await readQueue(app.workspace!)
+    expect(items[0]).toMatchObject({ status: 'needs-reply', built: true })
+    expect(items[0].unattended).toBeUndefined()
   })
 })
 
@@ -77,7 +94,7 @@ test.describe('concurrency', () => {
     const tailor = await openTailor(app.window)
     await expect(tailor.queueCount('3 queued')).toBeVisible()
     await tailor.queueResumeButton.click()
-    await expect(tailor.queueCount('3 needs your reply')).toBeVisible({ timeout: 45_000 })
+    await expect(tailor.queueCount('3 done')).toBeVisible({ timeout: 60_000 })
 
     const turns = (await fakes.turns()).sort((a, b) => a.start - b.start)
     expect(turns).toHaveLength(3)
@@ -87,7 +104,7 @@ test.describe('concurrency', () => {
       const active = turns.filter((o) => o.start <= t.start && o.end! > t.start)
       expect(active.length).toBeLessThanOrEqual(2)
     }
-    // Each slow turn takes ≥ 3 pauses (7.5 s); the third job began only after one of the first two ended,
+    // Each slow turn takes ≥ 5 pauses (12.5 s); the third job began only after one of the first two ended,
     // later than the 2 s spawn gap alone would have allowed.
     const firstEnd = Math.min(turns[0].end!, turns[1].end!)
     expect(turns[2].start).toBeGreaterThanOrEqual(firstEnd - 50)
@@ -107,7 +124,7 @@ test.describe('a job with only the board summary', () => {
     await expect(row).toContainText('Indeed shows full job descriptions only after a human check.')
     await expect(row).toContainText('Open the posting, add its description with "Paste a job" on the Jobs page, and tailor that job.')
     await expect(row.getByRole('button', { name: 'Retry' })).toBeVisible()
-    await expect(tailor.queueRow(label(TWO)).getByText('Needs your reply', { exact: true })).toBeVisible({ timeout: 20_000 })
+    await expect(tailor.queueRow(label(TWO)).getByText('Unreviewed', { exact: true })).toBeVisible({ timeout: 20_000 })
     // Only one agent was ever started, for the job with a description.
     expect((await fakes.runs()).map((r) => r.agent)).toEqual(['claude'])
     const { items } = await readQueue(app.workspace!)
@@ -125,7 +142,7 @@ test.describe('per-job agent', () => {
     await expect.poll(async () => (await readQueue(app.workspace!)).items.map((i) => i.agent)).toEqual(['claude', 'codex'])
 
     await tailor.queueResumeButton.click()
-    await expect(tailor.queueCount('2 needs your reply')).toBeVisible({ timeout: 20_000 })
+    await expect(tailor.queueCount('2 done')).toBeVisible({ timeout: 30_000 })
     // Started jobs show their agent as a badge, not a select.
     await expect(tailor.queueAgentSelect(label(TWO))).toHaveCount(0)
     await expect(tailor.queueRow(label(TWO)).getByText('Codex', { exact: true })).toBeVisible()
@@ -137,7 +154,7 @@ test.describe('per-job agent', () => {
 test.describe('after a relaunch', () => {
   test.use({ workspace: 'demo', prepare: queued([{ job: ONE }, { job: TWO }], 1, { script: 'slow', slowMs: 3000 }) })
 
-  test('the queue is paused, the interrupted job is marked, and Resume starts the rest', async ({ app }) => {
+  test('the queue is paused, the interrupted job is requeued, and Resume runs both', async ({ app }) => {
     const fakes = fakeAgents(app)
     let tailor = await openTailor(app.window)
     await tailor.queueResumeButton.click()
@@ -149,20 +166,18 @@ test.describe('after a relaunch', () => {
     await app.relaunch()
     tailor = await openTailor(app.window)
     await expect(tailor.queuePausedNote).toBeVisible()
+    // An unattended item interrupted by the quit is queued again (once), not failed.
     const interrupted = tailor.queueRow(label(ONE))
-    await expect(interrupted.getByText('Failed', { exact: true })).toBeVisible()
-    await expect(interrupted).toContainText('Huntgry was closed while this job was starting or running. Retry it.')
+    await expect(interrupted.getByText('Queued', { exact: true })).toBeVisible()
+    await expect(interrupted).toContainText('requeued after a restart')
     await expect(tailor.queueRow(label(TWO)).getByText('Queued', { exact: true })).toBeVisible()
     // Nothing started on its own.
     expect((await fakes.runs()).length).toBe(1)
 
     await fakes.setScript('normal')
     await tailor.queueResumeButton.click()
-    await expect(tailor.queueRow(label(TWO)).getByText('Needs your reply', { exact: true })).toBeVisible({ timeout: 20_000 })
-    expect((await fakes.runs()).length).toBe(2)
-    // The interrupted job can be retried; it starts a new run.
-    await interrupted.getByRole('button', { name: 'Retry' }).click()
-    await expect(tailor.queueRow(label(ONE)).getByText('Needs your reply', { exact: true })).toBeVisible({ timeout: 20_000 })
+    await expect(tailor.queueCount('2 done')).toBeVisible({ timeout: 30_000 })
+    await expect(interrupted.getByText('Unreviewed', { exact: true })).toBeVisible()
     expect((await fakes.runs()).length).toBe(3)
   })
 })

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import type { Page } from '@playwright/test'
 
 /**
  * Unattended results (#31) as the pipeline leaves them: the application folder
@@ -30,4 +31,19 @@ export async function seedReviews(userData: string, workspace: string, reviews: 
   const at = '2026-10-05T06:00:00.000Z'
   const out = Object.fromEntries(Object.entries(reviews).map(([folder, r]) => [folder, { ...r, at }]))
   await writeFile(join(dir, 'reviews.json'), JSON.stringify({ version: 1, reviews: out }, null, 2))
+}
+
+/**
+ * Approves a result through the app's own Review API (the revision it was shown, as the Review page
+ * does), so main records the approval with its content revision and Apply opens. Every run's result
+ * is Unreviewed since #158, Tailor-page runs included.
+ */
+export async function approveResult(page: Page, applicationId: string): Promise<void> {
+  type Review = { get(id: string): Promise<{ revision: string }>; approve(i: { applicationId: string; revision: string }): Promise<{ ok: boolean; message?: string }> }
+  const out = await page.evaluate(async (id) => {
+    const review = (window as unknown as { huntgry: { review: Review } }).huntgry.review
+    const { revision } = await review.get(id)
+    return review.approve({ applicationId: id, revision })
+  }, applicationId)
+  if (!out.ok) throw new Error(`Approving ${applicationId} failed: ${out.message}`)
 }

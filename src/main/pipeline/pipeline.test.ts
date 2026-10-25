@@ -243,7 +243,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
       expect(manager.isLive(i.runId!)).toBe(false)
       const run = await readRun(ws, i.runId!)
       expect(run.status).toBe('finished')
-      expect(run.outputFiles).toContain('review-notes.md')
+      expect(run.outputFiles).toContain('tailoring-notes.md')
       expect((await getReview(ws, i.applicationId!))).toMatchObject({ state: 'unreviewed', runId: i.runId })
     }
     expect(awake[awake.length - 1]).toBe(false)
@@ -271,7 +271,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     await until((p) => p?.status === 'finished' && p.counts.needsAttention === 1 && finished.length === 2)
     const nonotes = queue.state().items[1]
     expect(nonotes).toMatchObject({ status: 'done', outcome: 'needs-attention' })
-    expect(nonotes.error).toMatch(/No review notes/)
+    expect(nonotes.error).toMatch(/No tailoring notes/)
 
     await pipeline.start(input(['url:ask'], { options: { ...options, notes: 'ASK' }, concurrency: 1 }))
     const p = await until((p) => p?.status === 'finished' && p.counts.needsReply === 1 && finished.length === 3)
@@ -292,6 +292,26 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     expect(finished.at(-1)!.items[0].outcome).toBe('needs-reply')
     // ASK writes nothing, so there is no folder to mark; a run that built still gets the verify gate.
     expect(ask.applicationId).toBeUndefined()
+  })
+
+  it('the verify gate takes tailoring-notes.md v2 or review-notes.md v1, and sends free-form tailoring notes to Needs attention (#158)', async () => {
+    jobs.set('url:v1', job('url:v1'))
+    jobs.set('url:free', job('url:free'))
+    await pipeline.start(input(['url:v1'], { options: { ...options, notes: 'WRITE_NOTES_V1' }, concurrency: 1 }))
+    await until((p) => p?.status === 'finished' && finished.length === 1)
+    expect(queue.state().items[0]).toMatchObject({ status: 'done', outcome: 'unreviewed' })
+
+    await pipeline.start(input(['url:free'], { options: { ...options, notes: 'NOTES_FREEFORM' }, concurrency: 1 }))
+    await until((p) => p?.status === 'finished' && finished.length === 2)
+    const free = queue.state().items[1]
+    expect(free).toMatchObject({ status: 'done', outcome: 'needs-attention' })
+    expect(free.error).toMatch(/not in the v2 format/)
+  })
+
+  it('nudges without any approval rule', () => {
+    expect(NUDGE_TEXT).not.toMatch(/approv/i)
+    expect(NUDGE_TEXT).toMatch(/tailoring-notes\.md/)
+    expect(NUDGE_TEXT).toMatch(/never fabricate/)
   })
 
   it('marks an unattended run\'s folder Unreviewed as soon as the run records it, before the verify gate', async () => {
@@ -797,6 +817,19 @@ describe('Pipeline', { timeout: 30_000 }, () => {
     await until((_p, q) => q.items[0].status === 'done' && !q.items[0].pendingReply)
     const events = await readEvents(ws, runId)
     expect(events.some((e) => (e as { text?: string }).text === 'Once more.')).toBe(true)
+  })
+
+  it('settles an unattended item queued without a pipeline (Jobs, Tailor page, phone; #158) through the verify gate', async () => {
+    jobs.set('url:a', job('url:a', { description: 'WRITE_NOTES' }))
+    await queue.enqueue({ jobIds: ['url:a'], options, unattended: true, concurrency: 1 })
+    await until((_p, q) => q.items[0]?.status === 'done')
+    const item = queue.state().items[0]
+    expect(item).toMatchObject({ unattended: true, outcome: 'unreviewed' })
+    expect(item.pipelineId).toBeUndefined()
+    expect(await getReview(ws, item.applicationId!)).toMatchObject({ state: 'unreviewed', runId: item.runId })
+    const run = await readRun(ws, item.runId!)
+    expect(run.unattended).toBe(true)
+    expect(run.outputFiles).toEqual(expect.arrayContaining(['job-description.md', 'tailoring-notes.md', 'resume.pdf', 'build-report.json']))
   })
 
   it('takes a re-run of a result whose queue item was removed back into the queue: slot, policy and verify gate', async () => {

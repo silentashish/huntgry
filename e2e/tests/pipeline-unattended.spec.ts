@@ -10,10 +10,11 @@ import { JobsPage } from '../pages/jobs'
 import { Shell } from '../pages/shell'
 
 /**
- * #134: jobs selected on the Jobs page and started through "Run unattended" must actually start
- * (the pipeline card said "Running" while every item stayed "Queued" and no agent was spawned).
- * Each test drives the real flow (selection bar → modal → Continue → Start unattended) against the
- * scripted agents and checks that items leave "queued" and the fake agent records turns.
+ * #134: jobs selected on the Jobs page and started through "Tailor all" (the pipeline, the only bulk
+ * mode since #158) must actually start (the pipeline card said "Running" while every item stayed
+ * "Queued" and no agent was spawned). Each test drives the real flow (selection bar → modal →
+ * Continue → Start tailoring) against the scripted agents and checks that items leave "queued" and
+ * the fake agent records turns.
  */
 
 const COMPANIES = ['Initech', 'Globex', 'Umbrella', 'Hooli', 'Vandelay', 'Soylent', 'Tyrell', 'Cyberdyne']
@@ -36,28 +37,26 @@ type QueueState = { paused: boolean; concurrency: number; items: Array<{ status:
 type PipelineState = { id: string; status: string; counts: Record<string, number> } | null
 type Api = {
   huntgry: {
-    queue: { state(): Promise<QueueState> }
     pipeline: { state(): Promise<PipelineState>; stop(): Promise<PipelineState> }
-    runner: { start(p: unknown): Promise<{ id: string }> }
+    queue: { state(): Promise<QueueState>; tailor(p: unknown): Promise<{ itemId: string }> }
   }
 }
 
 const queueState = (page: Page) => page.evaluate(() => (window as unknown as Api).huntgry.queue.state())
 const pipelineState = (page: Page) => page.evaluate(() => (window as unknown as Api).huntgry.pipeline.state())
 
-/** Selection bar → "Run unattended" → Continue → "Start unattended (n)", with the modal's defaults (2 at a time, cover letter, skip tailored). */
+/** Selection bar → "Tailor all" → Continue → "Start tailoring (n)", with the modal's defaults (2 at a time, cover letter, skip tailored). */
 async function startUnattended(app: AppFixture, jobs: Job[]): Promise<void> {
   await new Shell(app.window).goTo('jobs')
   const page = new JobsPage(app.window)
   await page.show('All')
   for (const job of jobs) await page.select(job.title).check()
   await expect(page.selectionBar).toContainText(`${jobs.length} selected`)
-  await page.selectionBar.getByRole('button', { name: 'Run unattended' }).click()
+  await page.tailorAllButton.click()
   const modal = app.window.getByRole('dialog', { name: `Tailor ${jobs.length} jobs` })
   await expect(modal).toBeVisible()
-  await expect(modal.getByRole('radio', { name: 'Run unattended' })).toBeChecked()
   await modal.getByRole('button', { name: 'Continue' }).click()
-  const start = modal.getByRole('button', { name: `Start unattended (${jobs.length})` })
+  const start = modal.getByRole('button', { name: `Start tailoring (${jobs.length})` })
   await expect(start).toBeEnabled({ timeout: 15_000 })
   await start.click()
   await expect(modal).toBeHidden()
@@ -118,24 +117,23 @@ test.describe('Run unattended from the Jobs page (#134)', () => {
       await stopAndDrain(app)
     })
 
-    test('with two Tailor-page runs waiting for a reply: the runs start', async ({ app }) => {
+    test('with two Tailor-page jobs in the queue (#158): they share the slots, then the pipeline runs start', async ({ app }) => {
       for (const n of [1, 2]) {
         await app.window.evaluate(
           (n) =>
-            (window as unknown as Api).huntgry.runner.start({
-              jobDescription: 'Acme is hiring a Backend Engineer. Requirements: Go.',
+            (window as unknown as Api).huntgry.queue.tailor({
+              jobDescription: `Acme is hiring a Backend Engineer (${n}). Requirements: Go, five years of experience.`,
               company: 'Acme',
               role: `Backend Engineer ${n}`,
-              jobId: `manual-${n}`,
               coverLetter: false,
-              dateStyle: 'right',
-              source: 'manual'
+              dateStyle: 'right'
             }),
           n
         )
       }
-      // Both wait for their reply with their process alive (they hold both slots).
-      await expect.poll(async () => (await fakeAgents(app).turns()).filter((t) => t.end !== null).length, { timeout: 20_000 }).toBe(2)
+      // Both run as unattended queue items (they hold both slots) and finish their turn.
+      await expect.poll(async () => (await fakeAgents(app).turns()).filter((t) => t.end !== null).length, { timeout: 30_000 }).toBe(2)
+      expect((await queueState(app.window)).items.every((i) => !i.pipelineId)).toBe(true)
       const turns = (await fakeAgents(app).turns()).length
       await startUnattended(app, JOBS)
       const p = await pipelineState(app.window)

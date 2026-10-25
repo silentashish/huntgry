@@ -190,6 +190,21 @@ describe('review.list and review.get (#42)', () => {
     expect(JSON.stringify(list)).not.toContain(ws)
   })
 
+  it('builds ReviewDetail from tailoring-notes.md v2 with the same fields: notes inline, gaps left open, reframings used (#158)', async () => {
+    const folder = await application(A)
+    await rm(join(folder, 'review-notes.md'))
+    const v2 = `# Tailoring notes\n<!-- resume-tailor notes v2 -->\n\n## Direct hits\n- Node: yes\n\n## Reframings used\n### Kafka\n- Source fact: ${R1[0]}\n- Wording: ${R1[1]}\n\n## Gaps left open\n- Go: never used\n\n## Decisions\n- Right-aligned dates.\n`
+    await writeFile(join(folder, 'tailoring-notes.md'), v2)
+    const d = await get()
+    expect(d.reviewNotes).toBe(v2)
+    expect(d.openGaps).toEqual(['Go: never used'])
+    expect(d.proposedReframings).toEqual([{ id: sha256(`${R1[0]}\n${R1[1]}`), sourceFact: R1[0], wording: R1[1] }])
+    expect(d.parseWarning).toBeUndefined()
+    // Desktop-only fields stay on the desktop.
+    expect(d).not.toHaveProperty('directHits')
+    expect(d).not.toHaveProperty('notesFormat')
+  })
+
   it('builds ReviewDetail from disk: notes inline, gaps, reframing ids sha256(sourceFact + "\\n" + wording), verify, artifacts with bytes and sha256', async () => {
     const folder = await application(A)
     const d = await get()

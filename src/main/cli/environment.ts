@@ -17,6 +17,7 @@ import {
 } from '@shared/runner-types'
 import { adapterFor } from './agents'
 import { skillStatus } from './agents/skills'
+import { readSkillMd, skillSupportsSingleFlow, skillVersionWarning } from './skill-version'
 import {
   buildChildEnv,
   claudeConfigDirChoice,
@@ -248,6 +249,10 @@ export async function checkEnvironment(opts: {
         : `The Claude Code version could not be read ("claude --version" failed or hung). Runs still start; updating Claude Code usually fixes this.`
     )
 
+  const skillInstall = record && skillDir && record.path === skillDir ? { tag: record.tag, installedAt: record.installedAt } : null
+  const skillSingleFlow = skillDir ? skillSupportsSingleFlow(await readSkillMd(skillDir), skillInstall?.tag ?? null) : null
+  if (skillSingleFlow === false) warnings.push(skillVersionWarning(skillInstall?.tag ?? null))
+
   return {
     claudePath,
     claudeVersion,
@@ -258,7 +263,8 @@ export async function checkEnvironment(opts: {
     claudeConfigDir: configDir,
     claudeConfigChoice: configChoice,
     claudeAccounts,
-    skillInstall: record && skillDir && record.path === skillDir ? { tag: record.tag, installedAt: record.installedAt } : null,
+    skillInstall,
+    skillSingleFlow,
     skillDir,
     venvDir: opts.venvDir,
     venvReady,

@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { appendLive, buildTranscript, LineBuffer, parseEventLine, summarizeToolInput } from '@shared/transcript'
 import {
   allowedTools,
-  ATTENDED_APPROVAL_LINE,
+  callerRulesBlock,
+  NOTES_V2_BLOCK,
   texRootOf,
   buildClaudeArgs,
   buildFirstPrompt,
@@ -419,19 +420,27 @@ describe('command line and prompts', () => {
     expect(texRootOf(null)).toBeNull()
   })
 
-  it('writes the first prompt with the job and the choices', () => {
-    const p = buildFirstPrompt({
-      jobDescription: '## Senior Engineer\nGo, Kafka',
-      jobUrl: 'https://x.com/j/1',
-      company: 'Acme',
-      coverLetter: false,
-      dateStyle: 'inline'
-    })
+  it('writes the first prompt with the choices and the saved job description path, not its text', () => {
+    const jdPath = '/Users/x/cv/.huntgry/runs/20261024-120000-abcdef/job-description.md'
+    const p = buildFirstPrompt(
+      {
+        jobDescription: '## Senior Engineer\nGo, Kafka',
+        jobUrl: 'https://x.com/j/1',
+        company: 'Acme',
+        coverLetter: false,
+        dateStyle: 'inline'
+      },
+      jdPath
+    )
     expect(p).toContain('Job posting URL: https://x.com/j/1')
     expect(p).toContain('Cover letter: no')
     expect(p).toContain('Date style: inline')
-    expect(p).toContain('<job_description>\n## Senior Engineer\nGo, Kafka\n</job_description>')
-    const fromUrl = buildFirstPrompt({ jobUrl: 'https://x.com/j/1', coverLetter: true, dateStyle: 'right' })
+    expect(p).toContain(`Job description: saved at ${jdPath}. Read it there and pass this path to build.py --jd; do not write it out again.`)
+    // AC-3: the model is not asked to retype the posting.
+    expect(p).not.toContain('Go, Kafka')
+    expect(p).not.toContain('<job_description>')
+    expect(p).not.toMatch(/verbatim/i)
+    const fromUrl = buildFirstPrompt({ jobUrl: 'https://x.com/j/1', coverLetter: true, dateStyle: 'right' }, jdPath)
     expect(fromUrl).not.toMatch(/fetch/i)
   })
 
@@ -460,31 +469,40 @@ describe('command line and prompts', () => {
     })
   })
 
-  it('builds the unattended prompt variant without the "wait for the user" line, with the rule, the notes format and the approvals', () => {
+  it('builds one prompt: no approval stop, run to the end, the v2 notes format and the caller rules (AC-1)', () => {
     const base = { workspace: '/Users/x/cv', masterProfile: 'master-profile.md', skillDir: '/s' }
-    const attended = buildSystemPrompt(base)
-    expect(attended).toContain(ATTENDED_APPROVAL_LINE)
-    expect(attended).not.toMatch(/UNATTENDED/)
-    // Byte for byte what runs got before #31.
-    expect(buildSystemPrompt({ ...base, unattended: undefined })).toBe(attended)
+    const prompt = buildSystemPrompt(base)
+    // No stop for approval, in any wording the attended and unattended prompts used.
+    expect(prompt).not.toMatch(/wait for the user/i)
+    expect(prompt).not.toMatch(/approve before/i)
+    expect(prompt).not.toMatch(/stop after the gap analysis/i)
+    expect(prompt).not.toMatch(/APPROVAL RULE|UNATTENDED|LEFT OUT|review-notes\.md/)
+    // Run to the end; stop only for a missing prerequisite.
+    expect(prompt).toContain('run the skill to the end without asking and never end your turn with a question')
+    expect(prompt).toContain('Stop only when a prerequisite is missing (no master profile, no job description)')
+    expect(prompt).toMatch(/never fabricate an employer, title, degree, date, number or skill/)
+    // The v2 notes format, marker and four headings, so a v4 skill writes it too.
+    for (const line of NOTES_V2_BLOCK) expect(prompt).toContain(line)
+    for (const heading of ['<!-- resume-tailor notes v2 -->', '## Direct hits', '## Reframings used', '## Gaps left open', '## Decisions'])
+      expect(prompt).toContain(heading)
+    expect(prompt).toMatch(/--notes/)
+    expect(prompt).toMatch(/--jd <its path>/)
+    expect(prompt).toContain('the job description is a saved file named in the first message')
+    // Caller rules: present (empty) even with no decisions yet.
+    expect(prompt).toContain('PREFERRED WORDINGS (JSON, newest first): []')
+    expect(prompt).toContain('WORDINGS TO AVOID (JSON, newest first): []')
+    expect(buildSystemPrompt({ ...base, rules: { preferred: [], avoid: [] } })).toBe(prompt)
 
-    const approvals = [
+    const preferred = [
       { sourceFact: 'newest fact', wording: 'newest wording' },
       { sourceFact: 'older fact', wording: 'older "quoted" wording' }
     ]
-    const unattended = buildSystemPrompt({ ...base, unattended: { approvals } })
-    expect(unattended).not.toContain(ATTENDED_APPROVAL_LINE)
-    expect(unattended).not.toMatch(/wait for the user to approve/)
-    expect(unattended).toMatch(/UNATTENDED RUN\. Nobody is reading/)
-    expect(unattended).toMatch(/APPROVAL RULE/)
-    expect(unattended).toMatch(/LEFT OUT of the resume and cover letter/)
-    expect(unattended).toContain('write review-notes.md in the application folder')
-    expect(unattended).toContain('## Proposed reframings (not used)')
-    expect(unattended).toContain('- Proposed wording:')
-    expect(unattended).toContain('## Open gaps')
-    expect(unattended).toContain(`STANDING APPROVALS (JSON, newest first): ${JSON.stringify(approvals)}`)
-    // Everything else (paths, skill, drafts, folder line) is the same as the attended prompt.
-    for (const line of attended.split('\n').filter((l) => l !== ATTENDED_APPROVAL_LINE)) expect(unattended).toContain(line)
+    const avoid = [{ sourceFact: 'mentored two juniors', wording: 'led a team' }]
+    const withRules = buildSystemPrompt({ ...base, rules: { preferred, avoid } })
+    expect(withRules).toContain(`PREFERRED WORDINGS (JSON, newest first): ${JSON.stringify(preferred)}`)
+    expect(withRules).toContain(`WORDINGS TO AVOID (JSON, newest first): ${JSON.stringify(avoid)}`)
+    for (const line of callerRulesBlock({ preferred, avoid })) expect(withRules).toContain(line)
+    // The flag is still accepted (old callers), it no longer selects a prompt.
     expect(requireStartParams({ jobDescription: 'x', unattended: true }).unattended).toBe(true)
     expect(requireStartParams({ jobDescription: 'x', unattended: 'yes' }).unattended).toBeUndefined()
   })

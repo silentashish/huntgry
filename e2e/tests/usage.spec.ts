@@ -19,8 +19,7 @@ import { UsagePage } from '../pages/usage'
 const JOB = {
   description: '# Staff Engineer\n\nAcme Corp is hiring a Staff Engineer for its platform team. Go, PostgreSQL, Kubernetes.',
   company: 'Acme Corp',
-  role: 'Staff Engineer',
-  jobId: 'A-42'
+  role: 'Staff Engineer'
 }
 
 test.describe('run observability', () => {
@@ -33,19 +32,19 @@ test.describe('run observability', () => {
     await shell.goTo('tailor')
     await tailor.start(JOB)
 
-    // First turn: the strip and the turn's footer read the same figures.
-    await expect(tailor.turnResults).toHaveCount(1)
-    await tailor.expectStatus('Waiting for you')
+    // First turn (it builds without asking, #158): the strip and the turn's footer read the same figures.
+    await expect(tailor.turnResults).toHaveCount(1, { timeout: 20_000 })
+    await tailor.expectStatus('Finished', 30_000)
     await expect(usage.runMetric('model')).toHaveText('claude-haiku-4-5-20251001')
     await expect(usage.runMetric('tokens')).toHaveText('4.3k')
     await expect(usage.runMetric('cost')).toHaveText('$0.01')
     await expect(tailor.turnResults.first()).toContainText('2.3k in · 2.0k out · $0.01')
     await expect(usage.runMetric('active')).toHaveText(/^\d+s$/)
 
-    // Second turn: the running total is split per turn, not added up again.
-    await tailor.reply('Approved')
-    await expect(tailor.turnResults).toHaveCount(2)
-    await tailor.expectStatus('Waiting for you')
+    // Second turn, a follow-up on the finished run: the running total is split per turn, not added up again.
+    await tailor.reply('Make it shorter.')
+    await expect(tailor.turnResults).toHaveCount(2, { timeout: 20_000 })
+    await tailor.expectStatus('Finished', 30_000)
     await expect(usage.runMetric('tokens')).toHaveText('8.6k')
     await expect(usage.runMetric('cost')).toHaveText('$0.02')
     await usage.perTurnToggle.click()

@@ -19,7 +19,7 @@ import {
   type PipelineSummary
 } from '@shared/pipeline-types'
 import type { QueueItem, QueueItemOutcome } from '@shared/queue-types'
-import { IN_PROGRESS_REASON, REVIEW_NOTES_FILE } from '@shared/review-types'
+import { IN_PROGRESS_REASON } from '@shared/review-types'
 import { AGENT_LABEL, type AgentId, type RunSummary } from '@shared/runner-types'
 import { summarizeBuild } from '../applications/scan'
 import { getReview, updateReview, type RecordedReview } from '../review/authority'
@@ -27,6 +27,7 @@ import { folderSlug, newRunId } from '../cli/runs'
 import { PASTE_HINT, type FailureDecision, type Settlement, type TailorQueue } from '../queue/queue'
 import { WorkspaceChangedError } from '../workspace/changed'
 import { HUNTGRY_DIR } from '../workspace/constants'
+import { hasNotesV2, notesFileOf } from '../review/notes-file'
 import {
   backoffDelay,
   classifyFailure,
@@ -51,7 +52,8 @@ import type { NotificationCategory } from './notify'
  *   rejected rate limit.
  * - `settle`: the verify gate on an ended turn (built + verified + notes →
  *   Unreviewed, else Needs attention), one nudge when the agent stopped
- *   without building, then needs-reply.
+ *   without building, then needs-reply (a missing prerequisite). It applies to
+ *   every unattended item, so Tailor-page runs (#158) go through it too.
  * - `onFailure`: usage limit → wait until the parsed reset (+ 2 min) or switch
  *   the remaining jobs to the fallback agent; transient, burst and stall →
  *   backoff 30 s / 120 s, at most twice; permanent → failed.
@@ -91,7 +93,7 @@ export interface PipelineDeps {
 
 export const SUMMARY_FILE = 'pipeline-summary.json'
 export const NUDGE_TEXT =
-  'Nobody can answer. Apply the unattended approval rule from your instructions (use only master-profile facts and the standing approvals, leave everything else out and list it in review-notes.md) and continue to the build now, in this turn.'
+  'Nobody can answer. Follow the skill to the end now, in this turn: use the bridges you can make from master-profile facts and list each in tailoring-notes.md (never fabricate), build, verify, and end with the application folder.'
 const STALL_TEXT = (minutes: number) => `${STALL_PREFIX} ${minutes} minutes.`
 /** A rejected rate-limit event holds new launches this long while the failure itself is classified. */
 const REJECTED_HOLD_MS = 10 * 60_000
@@ -709,7 +711,11 @@ export class Pipeline {
       verify = { ok: v.ok, report: v.report.slice(0, 8000) }
       if (!ok) reasons.push(`No build report and verify.py did not pass: ${v.report.split('\n')[0]}`)
     }
-    if (!files.includes(REVIEW_NOTES_FILE)) reasons.push('No review notes (review-notes.md) were written.')
+    // tailoring-notes.md v2, or review-notes.md v1 (an older run settled again after a restart).
+    const notes = await notesFileOf(dir, files)
+    if (!notes) reasons.push('No tailoring notes (tailoring-notes.md v2) were written.')
+    else if (notes.format === 'v2' && !(await hasNotesV2(dir)))
+      reasons.push('tailoring-notes.md is not in the v2 format (resume-tailor notes v2); check it before you approve.')
     // Built, then the turn failed (an error result, a crash, the stall watchdog): what is on disk is
     // recorded, not rebuilt, but it needs a look.
     if (run.error) reasons.push(`The last turn ended with an error: ${run.error.split('\n')[0]}`)

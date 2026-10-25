@@ -261,7 +261,7 @@ export function RunView({ run, events, heldReply = false }: Props) {
             aria-label={`Reply to ${agent}`}
             placeholder={
               run.status === 'waiting'
-                ? `Reply to ${agent}, e.g. "Approved" or what to change…`
+                ? `Reply to ${agent}, e.g. the missing detail it asked for…`
                 : run.live
                   ? `${agent} is working; you can reply when it asks.`
                   : run.sessionId

@@ -104,11 +104,10 @@ test.describe('demo workspace', () => {
       description:
         '# Staff Platform Engineer\n\nAcme Corp is hiring a Staff Platform Engineer to lead its developer platform: Go, PostgreSQL, AWS, Terraform and Kubernetes.',
       company: 'Acme Corp',
-      role: 'Staff Platform Engineer',
-      jobId: 'A-42'
+      role: 'Staff Platform Engineer'
     })
-    await expect(tailor.runTitle('Staff Platform Engineer · Acme Corp')).toBeVisible()
-    await expect(tailor.waitingNote).toHaveText('1 run waiting for your reply', { timeout: 30_000 })
+    await expect(tailor.runTitle('Staff Platform Engineer · Acme Corp')).toBeVisible({ timeout: 30_000 })
+    await tailor.expectStatus('Finished', 30_000)
     // The page scrolls to the newest message; bring its heading back into the frame.
     await tailor.heading.evaluate((el) => el.scrollIntoView({ block: 'end' }))
     await shoot(page, 'tailor')

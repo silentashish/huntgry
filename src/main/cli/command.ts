@@ -1,5 +1,6 @@
 import { realpath } from 'node:fs/promises'
 import { isAgentId, JOB_SOURCE_TAGS, type JobSourceTag, type StartRunParams } from '@shared/runner-types'
+import { NOTES_V2_MARKER, TAILORING_NOTES_FILE } from '@shared/review-types'
 
 /**
  * The `claude` command line and prompts for a tailoring run. Main builds all
@@ -151,79 +152,90 @@ export function buildClaudeArgs(opts: ClaudeArgsOptions): string[] {
   return args
 }
 
-/** The step-3 sentence of an attended run: the agent stops and waits for the user. */
-export const ATTENDED_APPROVAL_LINE =
-  'Follow the skill exactly, including its honesty rule and step 3: stop after the gap analysis, show the proposed reframings and bullets, and wait for the user to approve before writing resume_data.json.'
-
-export const REVIEW_NOTES_FILE = 'review-notes.md'
-
-/** What an unattended run needs beyond the attended prompt (see `unattendedBlock`). */
-export interface UnattendedPromptOptions {
-  /** Standing approvals the run may use as they are (newest first, already capped). */
-  approvals: { sourceFact: string; wording: string }[]
+/** A wording with the master-profile fact it is about (a caller rule, see `CallerRules`). */
+export interface CallerWording {
+  sourceFact: string
+  wording: string
 }
 
 /**
- * The lines that replace `ATTENDED_APPROVAL_LINE` in an unattended run (#31).
- * Nobody answers, so the user's standing decision stands in for step 3: use
- * only direct hits from the master profile and the listed standing approvals,
- * leave every other reframing out and write it to `review-notes.md` for the
- * user to review afterwards. The skill itself is unchanged.
+ * The user's earlier decisions, passed to every run as the skill's caller rules (#158):
+ * `preferred` are standing approvals (use as written), `avoid` are reframings the user rejected
+ * (never use them or a close paraphrase). Both newest first and already capped.
  */
-export function unattendedBlock(opts: UnattendedPromptOptions): string[] {
-  const approvals = JSON.stringify(opts.approvals)
+export interface CallerRules {
+  preferred: CallerWording[]
+  /** Filled once Review stores rejections (#159). */
+  avoid: CallerWording[]
+}
+
+/** The notes file a run writes for Review (resume-tailor notes v2), described so a v4 skill writes it too. */
+export const NOTES_V2_BLOCK = [
+  `TAILORING NOTES. Before the payload, write ${TAILORING_NOTES_FILE} in the drafts folder in exactly this format (one line per entry, "None." under a section that has nothing), and pass it to build.py with --notes:`,
+  '```markdown',
+  '# Tailoring notes',
+  NOTES_V2_MARKER,
+  '',
+  '## Direct hits',
+  '- <requirement>: <profile evidence>',
+  '',
+  '## Reframings used',
+  '### <requirement from the posting>',
+  '- Source fact: <verbatim sentence or bullet from the master profile>',
+  '- Wording: <as written in the resume>',
+  '',
+  '## Gaps left open',
+  '- <requirement>: <why nothing honest fits>',
+  '',
+  '## Decisions',
+  '- <date style and why, bullets cut or trimmed, judgement calls on honesty>',
+  '```'
+]
+
+/** The caller-rules lines of the system prompt (the skill's "Caller rules"). */
+export function callerRulesBlock(rules: CallerRules): string[] {
   return [
-    'UNATTENDED RUN. Nobody is reading this conversation and nobody will answer a question, so never stop to ask and never end your turn with a question. Follow the skill, including its honesty rule, with one change: do steps 1 and 2, then apply the approval rule below instead of step 3, then steps 4 to 7 in this same turn, and end with the absolute path of the application folder.',
-    'APPROVAL RULE (the user\'s standing decision for this run). Without asking, you may use: (a) direct hits: facts the master profile states in the job description\'s own terms; (b) standing approvals from the list below: a reframing whose source fact and wording match one of them (same fact, same or shorter wording, no new number or claim). Everything else, every bridgeable reframing you would normally propose in step 3 and anything you are unsure about, is LEFT OUT of the resume and cover letter: not softened, not invented, not hinted at. The honesty rule still outranks everything.',
-    `REVIEW NOTES. Right after the gap analysis and before the build, write ${REVIEW_NOTES_FILE} in the application folder (it exists since step 1) in exactly this format, and update it if anything changes later:`,
-    '```markdown',
-    '# Review notes',
-    '<!-- huntgry-review v1 · run <run id> · unattended -->',
-    '',
-    '## Used standing approvals',
-    '- Source fact: <verbatim>',
-    '  Wording: <as written in the resume>',
-    '',
-    '## Proposed reframings (not used)',
-    '### R1 · <requirement from the job description>',
-    '- Source fact: <verbatim sentence or bullet from the master profile>',
-    '- Proposed wording: <the bullet you would have written, at most 120 characters>',
-    '- Why unsure: <one line>',
-    '',
-    '## Open gaps',
-    '- <requirement>: nothing honest to say',
-    '',
-    '## Notes',
-    '<anything else the user should know, e.g. the cover letter angle>',
-    '```',
-    'List every reframing you did NOT use (with the verbatim source fact and the exact wording you would have written), every genuine gap left open, and every standing approval you did use. Write "None." under a section that has nothing.',
-    'BUILD AND VERIFY as usual (steps 5 and 6): run build.py, read build-report.json, look at the page images, fix hard failures and rebuild. If a hard check still fails after two rebuilds, stop and say which check fails.',
-    `STANDING APPROVALS (JSON, newest first): ${approvals}`
+    "CALLER RULES (the user's earlier decisions). Preferred wordings: use each as written when its source fact is used. Wordings to avoid: never use them, or a close paraphrase of them, for that fact.",
+    `PREFERRED WORDINGS (JSON, newest first): ${JSON.stringify(rules.preferred)}`,
+    `WORDINGS TO AVOID (JSON, newest first): ${JSON.stringify(rules.avoid)}`
   ]
 }
 
-/** Context every run gets on top of Claude Code's own system prompt; `unattended` swaps the step-3 line for the unattended block. */
+/**
+ * Context every run gets on top of the agent's own system prompt. One flow (#158): nobody answers
+ * during a run, so it follows the skill to the end, uses the bridges it can make honestly, lists
+ * them in tailoring-notes.md v2, and the user checks the result on the Review page.
+ */
 export function buildSystemPrompt(opts: {
   workspace: string
   masterProfile: string
   skillDir: string
-  unattended?: UnattendedPromptOptions
+  rules?: CallerRules
 }): string {
+  const drafts = `${opts.workspace}/.huntgry/drafts/<role>-<company>-<job-id>/`
   return [
     'You are running inside Huntgry, a desktop app around the resume-tailor skill.',
-    'The user reads your messages in a chat panel and answers there; they cannot see tool output unless you summarise it.',
+    'The user reads your messages in a chat panel and may send a follow-up after the run; they cannot see tool output unless you summarise it.',
     `CV_HOME is already set in the environment to the workspace: ${opts.workspace}`,
     `The master profile is ${opts.workspace}/${opts.masterProfile}. It is the only source of facts about the user.`,
-    `The resume-tailor skill is at ${opts.skillDir}: read ${opts.skillDir}/SKILL.md first and follow it (its references/ and assets/ are there too). Run its scripts only as \`python3 ${opts.skillDir}/scripts/<script>.py …\` with that absolute path, from the workspace, one command per call (no cd, no &&, no environment-variable prefixes). python3, pdflatex and poppler are on PATH. Other shell commands, inline Python, file access outside the workspace and web access are blocked; the job description is in the first message.`,
-    ...(opts.unattended ? unattendedBlock(opts.unattended) : [ATTENDED_APPROVAL_LINE]),
+    `The resume-tailor skill is at ${opts.skillDir}: read ${opts.skillDir}/SKILL.md first and follow it (its references/ and assets/ are there too). Run its scripts only as \`python3 ${opts.skillDir}/scripts/<script>.py …\` with that absolute path, from the workspace, one command per call (no cd, no &&, no environment-variable prefixes). python3, pdflatex and poppler are on PATH. Other shell commands, inline Python, file access outside the workspace and web access are blocked; the job description is a saved file named in the first message.`,
+    'Nobody answers during the run: run the skill to the end without asking and never end your turn with a question. Stop only when a prerequisite is missing (no master profile, no job description), and say which in one message.',
+    'Follow the skill\'s honesty rule: use the bridges you can make from master-profile facts and list each one with its source fact; never fabricate an employer, title, degree, date, number or skill.',
+    ...NOTES_V2_BLOCK,
+    ...callerRulesBlock(opts.rules ?? { preferred: [], avoid: [] }),
     'Keep role, company and job-id as short lowercase slugs so the output lands in CV_HOME/<role>/<company>/<job-id>/.',
-    `Write draft payloads (resume_data.json, cover_data.json) under ${opts.workspace}/.huntgry/drafts/<role>-<company>-<job-id>/, not elsewhere in the workspace; build.py copies what it needs into the application folder.`,
+    `Write draft files (resume_data.json, cover_data.json, ${TAILORING_NOTES_FILE}) under ${drafts}, not elsewhere in the workspace; pass the saved job description to build.py with --jd <its path> and the notes with --notes, and build.py copies what it needs into the application folder.`,
+    'If a hard check still fails after two rebuilds, stop and say which check fails.',
     'When the build is done, end your message with the absolute path of the application folder and the files it contains.'
   ].join('\n')
 }
 
-/** The first message of a run: the job plus the user's choices, as the user would have typed them. */
-export function buildFirstPrompt(params: StartRunParams): string {
+/**
+ * The first message of a run: the job plus the user's choices, as the user would have typed them.
+ * The job description is not in it: Huntgry saved it at `jobDescriptionPath` and the agent reads
+ * it there (resume-tailor v5, step 1), so the model never retypes it.
+ */
+export function buildFirstPrompt(params: StartRunParams, jobDescriptionPath: string): string {
   const lines = ['Follow the resume-tailor skill (SKILL.md) to tailor my resume and cover letter for this job.', '']
   if (params.jobUrl) lines.push(`Job posting URL: ${params.jobUrl}`)
   if (params.company) lines.push(`Company: ${params.company}`)
@@ -233,17 +245,8 @@ export function buildFirstPrompt(params: StartRunParams): string {
   lines.push(
     `Date style: ${params.dateStyle} (${params.dateStyle === 'inline' ? 'large-company ATS first' : 'a human reads it first'})`
   )
+  lines.push(`Job description: saved at ${jobDescriptionPath}. Read it there and pass this path to build.py --jd; do not write it out again.`)
   if (params.notes?.trim()) lines.push('', 'Notes from me:', params.notes.trim())
-  if (params.jobDescription?.trim()) {
-    lines.push(
-      '',
-      'Job description (save it verbatim as job-description.md):',
-      '',
-      '<job_description>',
-      params.jobDescription.trim(),
-      '</job_description>'
-    )
-  }
   return lines.join('\n')
 }
 
@@ -294,6 +297,7 @@ export function requireStartParams(input: unknown): StartRunParams {
     if (!isAgentId(p.agent)) throw new Error('Unknown agent.')
     params.agent = p.agent
   }
+  // Every run is unattended now (#158); the flag is still recorded so older readers keep working.
   if (p.unattended === true) params.unattended = true
   if (typeof p.batchId === 'string' && /^b-[\w-]{1,80}$/.test(p.batchId)) params.batchId = p.batchId
   if (params.jobUrl && !/^https?:\/\//i.test(params.jobUrl))

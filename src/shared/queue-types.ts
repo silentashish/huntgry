@@ -14,7 +14,10 @@ export type QueueItemStatus =
   | 'preparing'
   /** The agent is working on a turn (takes a slot). */
   | 'running'
-  /** The run stopped at the approval step (or any other question) and waits for the user; the slot is free. */
+  /**
+   * The run stopped with a question and waits for the user; the slot is free. Since #158 only when a
+   * prerequisite is missing (after the pipeline's one nudge), or an older attended item.
+   */
   | 'needs-reply'
   /** The user ended the run. */
   | 'done'
@@ -30,6 +33,12 @@ export interface QueueOptions {
   coverLetter: boolean
   dateStyle: DateStyle
   notes?: string
+  /**
+   * The posting exactly as the user submitted it on the Tailor page (#158), formatted like
+   * `jobDescriptionFor`. It wins over the saved job's description, which a cross-board merge may
+   * take from an older copy. Main only: `requireEnqueueInput` never passes it through.
+   */
+  jobDescription?: string
 }
 
 /** The review state of a done unattended item (the same values as the review store's `ReviewState`). */
@@ -61,7 +70,10 @@ export interface QueueItem {
   notBefore?: string
   createdAt: string
   updatedAt: string
-  /** Unattended pipeline item (#31): unattended prompt, auto-finished, retried with backoff, result Unreviewed. */
+  /**
+   * Unattended item (#31): auto-finished, retried with backoff, result Unreviewed after the verify
+   * gate. Every new item since #158 (Jobs, Tailor page, phone, pipeline); older items may lack it.
+   */
   unattended?: true
   pipelineId?: string
   /** Automatic retries used (≤ 2); `attempts` keeps counting every start. */
@@ -100,7 +112,7 @@ export interface EnqueueInput {
   concurrency?: number
   /** Agent for every job of this request (each item can be changed until it starts); the default agent when absent. */
   agent?: QueueAgent
-  /** Unattended pipeline items (main only; the pipeline sets both). */
+  /** Unattended items (main only: every IPC and phone enqueue sets it, #158; the pipeline also sets `pipelineId`). */
   unattended?: true
   pipelineId?: string
 }
@@ -128,8 +140,35 @@ export const MAX_ENQUEUE = 100
 /** Items that hold (or wait for) an agent process and are not finished. */
 export const ACTIVE_STATUSES: readonly QueueItemStatus[] = ['queued', 'preparing', 'running', 'needs-reply']
 
+/**
+ * The Tailor page's Start (#158): a job given by the form becomes a saved job (Jobs) and one
+ * unattended queue item, like any other. `savedJobId` names a job sent from Jobs / Board as it is;
+ * otherwise the pasted description (or, without one, the URL) is saved as a new job.
+ */
+export interface TailorJobInput {
+  savedJobId?: string
+  jobDescription?: string
+  jobUrl?: string
+  company?: string
+  role?: string
+  notes?: string
+  coverLetter: boolean
+  dateStyle: 'inline' | 'right'
+  agent?: QueueAgent
+}
+
+export interface TailorJobResult {
+  state: QueueState
+  /** The queue item of the job (a new one, or the one already in the queue). */
+  itemId: string
+  /** The saved job's id. */
+  jobId: string
+}
+
 export interface QueueApi {
   state(): Promise<QueueState>
+  /** The Tailor page's Start: saves the job (when it is not saved yet) and queues it (#158). */
+  tailor(input: TailorJobInput): Promise<TailorJobResult>
   /** Queues the jobs (one IPC call for the whole selection) and resumes the queue. */
   enqueue(input: EnqueueInput): Promise<EnqueueResult>
   /** A queued item is dropped before it starts; a started one has its agent process stopped. */
@@ -157,7 +196,8 @@ export const QUEUE_CHANNELS = {
   clearFinished: 'queue:clear-finished',
   setConcurrency: 'queue:set-concurrency',
   setPaused: 'queue:set-paused',
-  setAgent: 'queue:set-agent'
+  setAgent: 'queue:set-agent',
+  tailor: 'queue:tailor'
 } as const
 
 export interface QueueEvents {

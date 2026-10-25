@@ -24,16 +24,18 @@ import { WorkspaceChangedError } from '../workspace/changed'
 import { HUNTGRY_DIR } from '../workspace/constants'
 
 /**
- * Bulk tailoring queue: starts one tailoring run per queued job, each with its
+ * Tailoring queue: starts one tailoring run per queued job, each with its
  * own agent, at most `concurrency` of them working at once and `spawnGapMs`
- * apart (Claude's server limits bursts of new sessions). A run that stops at the approval
- * step frees its slot; the user answers it on the Tailor page. Electron-free:
- * the app passes the workspace, the job store and the run starter in.
+ * apart (Claude's server limits bursts of new sessions). Electron-free: the
+ * app passes the workspace, the job store and the run starter in.
  *
- * Unattended items (#31) are the same items with `unattended` set: the queue
- * is still the one executor, but the policy (what a turn's end means, what a
- * failure means, whether a job may start now) comes from the pipeline through
- * `UnattendedHooks`. The pipeline's record is persisted here, in `queue.json`.
+ * Every new item is unattended (#31, #158: Jobs, the Tailor page, the phone and
+ * the pipeline all enqueue that way): the queue is the one executor, the policy
+ * (what a turn's end means, what a failure means, whether a job may start now)
+ * comes from the pipeline through `UnattendedHooks`, so every result goes
+ * through the verify gate to Review. The pipeline's record is persisted here,
+ * in `queue.json`. Older attended items (no `unattended`) still load: a run of
+ * theirs that waits for an answer frees its slot as `needs-reply`.
  */
 
 export interface QueueDeps {
@@ -171,7 +173,7 @@ export function requireEnqueueInput(
 export function paramsForJob(job: Job, options: QueueOptions, unattended = false): StartRunParams {
   const prefill = tailorPrefillFor(job)
   return {
-    jobDescription: prefill.jobDescription,
+    jobDescription: options.jobDescription ?? prefill.jobDescription,
     jobUrl: prefill.jobUrl,
     company: prefill.company,
     role: prefill.role,
@@ -948,13 +950,15 @@ export class TailorQueue {
       return
     }
     if (item.status !== 'preparing' || this.ws !== ws || this.stopped) return
+    // A retry requeues the item (attempts + 1) while this launch may still be starting its run.
+    const attempt = item.attempts
     let run: RunSummary
     try {
       this.lastSpawn = this.now()
       run = await this.deps.start(params, item.agent, ws)
     } catch (err) {
       // The user opened another workspace meanwhile: this item belongs to the old queue, which is gone.
-      if (this.ws !== ws) return
+      if (this.ws !== ws || item.attempts !== attempt) return
       // Starting fails before any agent process for reasons that are not about this job (agent
       // signed out, too old or missing, no skill): pause, so the other jobs wait for the fix
       // instead of failing one after another. Resume or Retry once it is fixed.
@@ -964,6 +968,11 @@ export class TailorQueue {
         this.fail(item, message(err))
         if (item.unattended) this.hooks?.onStartError(item, message(err))
       }
+      return
+    }
+    if (item.attempts !== attempt) {
+      // Cancelled and retried while the agent was starting: the newer launch owns the item.
+      this.deps.stopRun(run.id, ws)
       return
     }
     item.runId = run.id
@@ -984,7 +993,8 @@ export class TailorQueue {
   private async resolve(ws: string, item: QueueItem): Promise<StartRunParams> {
     let job = await this.deps.findJob(ws, item.jobId)
     if (!job) throw new Error('This job is no longer saved.')
-    if (!job.descriptionComplete) {
+    // A posting submitted with the item (Tailor page) needs no fetch.
+    if (!job.descriptionComplete && !item.options.jobDescription) {
       if (!canFetchDetails(job)) {
         throw new Error(`Indeed shows full job descriptions only after a human check. ${PASTE_HINT}`)
       }

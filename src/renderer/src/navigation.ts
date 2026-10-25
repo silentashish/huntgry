@@ -38,6 +38,8 @@ export interface PageParams {
         agent?: AgentId
         /** Open this run (from the Dashboard's usage figures). */
         runId?: string
+        /** The saved job the form was filled from (#158): Start queues that job instead of saving a new one. */
+        savedJobId?: string
       }
     | undefined
   /** Unattended results to review (#31); opens on one application when given. */

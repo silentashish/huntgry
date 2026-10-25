@@ -571,7 +571,8 @@ export class Gateway {
       case 'queue.enqueue': {
         // The package guard bounded jobIds, notes (≤ LIMITS.textBytes) and the enums; the queue's own validator runs too.
         if (command.args.options.notes !== undefined && command.args.options.notes.length > MAX_TEXT) throw new ProtocolError('invalid', 'The notes are too long.')
-        const input = requireEnqueueInput(command.args, await s.defaultAgent())
+        // One flow (#158): the protocol is unchanged, the items run to the end and land in Review.
+        const input = { ...requireEnqueueInput(command.args, await s.defaultAgent()), unattended: true as const }
         const result = await s.queue.enqueue(ws, input)
         // At most half the budget for the skipped list (100 jobs × long reasons would not fit); the queue gets the rest.
         const skipped: { jobId: string; reason: string }[] = []

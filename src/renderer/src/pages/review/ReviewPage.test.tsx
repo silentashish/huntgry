@@ -154,4 +154,50 @@ describe('ReviewPage', () => {
     expect(review.get.mock.calls.map((c) => c[0])).toEqual(['d'])
     expect(shownTitle()).toBe('Role d')
   })
+
+  it('shows a v2 result as Reframings used, Gaps left open and Decisions, with direct hits folded (#158)', async () => {
+    const items = [item('a')]
+    review.list.mockResolvedValue(items)
+    review.get.mockResolvedValue({
+      ...detailOf(items[0]),
+      notesFormat: 'v2',
+      reviewNotes: '# Tailoring notes\n<!-- resume-tailor notes v2 -->\n',
+      proposedReframings: [{ id: 'f'.repeat(64), requirement: 'Kafka', sourceFact: 'Built a RabbitMQ pipeline', wording: 'Built event-streaming pipelines' }],
+      openGaps: ['Go: never used'],
+      decisions: ['Right-aligned dates.'],
+      directHits: ['Node: five years']
+    })
+    await renderPage(undefined)
+    const text = container.textContent ?? ''
+    expect(text).toContain('Reframings used')
+    expect(text).toContain('preferred wordings')
+    expect(text).toContain('Gaps left open')
+    expect(text).toContain('Go: never used')
+    expect(text).toContain('Decisions')
+    expect(text).toContain('Right-aligned dates.')
+    expect(text).toContain('Show direct hits (1)')
+    expect(text).toContain('Tailoring notes')
+    expect(text).not.toContain('left out')
+    expect(container.querySelector('[aria-label="Keep: Built event-streaming pipelines"]')).not.toBeNull()
+    // The page itself no longer speaks of unattended runs or a "Run unattended" mode.
+    expect(text).not.toMatch(/Run unattended|Unattended runs use only/)
+  })
+
+  it('shows an older v1 result as before (AC-4)', async () => {
+    const items = [item('a')]
+    review.list.mockResolvedValue(items)
+    review.get.mockResolvedValue({
+      ...detailOf(items[0]),
+      notesFormat: 'v1',
+      proposedReframings: [{ id: 'e'.repeat(64), sourceFact: 'Mentored two juniors', wording: 'Led a team of two', reason: 'mentoring is not leading' }],
+      openGaps: ['Rust: nothing honest to say']
+    })
+    await renderPage(undefined)
+    const text = container.textContent ?? ''
+    expect(text).toContain('Proposed reframings the run left out')
+    expect(text).toContain('Open gaps')
+    expect(text).toContain('Why unsure')
+    expect(text).toContain('Review notes')
+    expect(container.querySelector('[aria-label="Approve: Led a team of two"]')).not.toBeNull()
+  })
 })

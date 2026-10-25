@@ -199,6 +199,22 @@ describe('StartForm', () => {
     expect(out).toContain('(9 words)')
   })
 
+  it('says every run goes to the end and lands in Review, with no approval stop (#158)', () => {
+    const props = { environment: null, busy: false, onStart: () => undefined, onEnvironmentChange: () => undefined }
+    const out = html(<StartForm prefill={undefined} {...props} />)
+    expect(out).toContain('to the end, without stopping to ask')
+    expect(out).toContain('Review page')
+    expect(out).not.toMatch(/approve the wording|gap analysis/)
+    // A pasted job is saved with its role and company; there is no job-id override any more.
+    expect(out).toContain('Company')
+    expect(out).not.toContain('Job id')
+    // A saved job brings its own role and company.
+    const saved = html(
+      <StartForm prefill={{ jobDescription: 'Acme is hiring a Staff Engineer. Go and Postgres.', role: 'Staff Engineer', company: 'Acme', savedJobId: 'url:acme-1' }} {...props} />
+    )
+    expect(saved).not.toContain('>Company')
+  })
+
   it('shows no prefill note for a job board summary or an empty form', () => {
     const props = { environment: null, busy: false, onStart: () => undefined, onEnvironmentChange: () => undefined }
     expect(html(<StartForm prefill={undefined} {...props} />)).not.toContain('Prefilled from')

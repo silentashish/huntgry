@@ -460,12 +460,6 @@
   flex: 1 1 auto;
 }
 
-.modeIcon {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .mono input {
   font-family: var(--hg-font-mono);
 }

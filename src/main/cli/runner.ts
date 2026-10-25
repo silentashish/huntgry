@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { writeFile } from 'node:fs/promises'
 import { join, sep } from 'node:path'
 import { MODEL_PRICES, runTotals, type ModelPrice } from '@shared/pricing'
 import { AGENT_LABEL, DEFAULT_AGENT, type AgentId, type RunSummary, type StartRunParams } from '@shared/runner-types'
@@ -8,7 +9,7 @@ import { recordJobSource } from '../applications/tracking'
 import { adapterFor, type AgentAdapter } from './agents'
 import { reportsUsage, type PartialUsage } from './agents/types'
 import { backfillMetrics, legacyFields, partialShare, turnMetrics, turnModel, turnShare } from './metrics'
-import { appendEvent, findOutputFolder, newRunId, readEvents, readRun, saveRun } from './runs'
+import { appendEvent, findOutputFolder, newRunId, readEvents, readRun, runJobDescriptionPath, saveRun } from './runs'
 
 /**
  * Owns the agent child processes of tailoring runs (see `agents/` for what
@@ -157,11 +158,15 @@ export class RunManager {
       metrics: [],
       totals: runTotals([]),
       live: true,
+      // Every new run is unattended (#158: the queue sets it on every item); older records may lack it.
       ...(params.unattended ? { unattended: true as const } : {})
     }
     await saveRun(ctx.workspace, run)
+    // Saved before the agent starts: the first message points at it instead of carrying the text.
+    const jobDescriptionPath = runJobDescriptionPath(ctx.workspace, run.id)
+    await writeFile(jobDescriptionPath, params.jobDescription ?? '', 'utf8')
     this.spawnFor(run, ctx, null, 0, 0)
-    const prompt = buildFirstPrompt(params)
+    const prompt = buildFirstPrompt(params, jobDescriptionPath)
     await this.send(run.id, prompt, adapterFor(run.agent).firstMessage(prompt, ctx.systemPrompt))
     return { ...run }
   }

@@ -6,12 +6,13 @@ import {
   type ApplicationsList,
   type BuildSummary
 } from '@shared/applications-types'
-import { REVIEW_NOTES_FILE } from '@shared/review-types'
+import { REVIEW_NOTES_FILE, TAILORING_NOTES_FILE } from '@shared/review-types'
 import { APPLICATION_DEPTH, APPLICATION_MARKERS, IGNORED_ENTRIES, MAX_SCAN_ENTRIES } from '../workspace/constants'
 import { getReview } from '../review/authority'
+import { hasNotesV2 } from '../review/notes-file'
 import { readTracking, TRACKING_FILE } from './tracking'
 
-export const UNCHECKED_REASON = 'Unattended result that was never checked (review-notes.md without a review state).'
+export const UNCHECKED_REASON = 'Result that was never checked (tailoring notes without a review state).'
 export const NOT_RECORDED_REASON = 'huntgry.json carries a review state Huntgry did not record (an agent may have written it): check this result on the Review page.'
 
 /**
@@ -31,6 +32,7 @@ export const KNOWN_FILES = [
   'cover_data.json',
   'resume.tex',
   'cover.tex',
+  'tailoring-notes.md',
   'review-notes.md'
 ] as const
 
@@ -123,8 +125,9 @@ export async function readApplication(workspace: string, folder: string): Promis
   // The review state (#31) comes only from main's authority store (outside the workspace, which
   // agents can write), never from huntgry.json. It fails closed:
   // - a `review` in huntgry.json that main did not record (an agent wrote it) reads as Needs attention;
-  // - review-notes.md without a recorded state (an unattended run stopped, crashed or still in its
-  //   turn: it writes the notes before it builds) reads as Unreviewed.
+  // - review-notes.md (v1), or tailoring-notes.md carrying the v2 marker, without a recorded state
+  //   (a run stopped, crashed or is still in its turn) reads as Unreviewed. Not tailoring-notes.md by
+  //   name alone: older attended runs wrote free-form ones and were never meant for Review.
   // Neither is persisted: the Review page decides.
   const recorded = await getReview(workspace, id)
   const at = new Date(updated || created || 0).toISOString()
@@ -132,7 +135,8 @@ export async function readApplication(workspace: string, folder: string): Promis
     const { contentRevision: _c, verify: _v, ...review } = recorded
     tracking.review = review
   } else if (tracking.review) tracking.review = { state: 'needs-attention', runId: '', at, reason: NOT_RECORDED_REASON }
-  else if (names.includes(REVIEW_NOTES_FILE)) tracking.review = { state: 'unreviewed', runId: '', at, reason: UNCHECKED_REASON }
+  else if (names.includes(REVIEW_NOTES_FILE) || (names.includes(TAILORING_NOTES_FILE) && (await hasNotesV2(folder))))
+    tracking.review = { state: 'unreviewed', runId: '', at, reason: UNCHECKED_REASON }
 
   return {
     id,

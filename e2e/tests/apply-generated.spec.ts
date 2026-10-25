@@ -7,7 +7,8 @@ import { expect, test, type MockServer } from '../fixtures/servers/fixture'
 import { clickLinkInTab, evaluateInTab, expectInTab, expectTabLoaded, listTabs, pressSubmitInTab } from '../fixtures/tabs'
 import { BrowserPage } from '../pages/browser'
 import { Shell } from '../pages/shell'
-import { TailorPage } from '../pages/tailor'
+import { pastedFolder, TailorPage } from '../pages/tailor'
+import { approveResult } from '../fixtures/review'
 
 /**
  * #63: Apply on a GENERATED resume reaches the application form, attaches that
@@ -96,17 +97,19 @@ async function expectLeverFilled(app: { electronApp: Parameters<typeof evaluateI
   }
 }
 
-/** One Tailor run with the fake agent, approved, so the run has its own fresh resume.pdf. */
-async function generate(page: Page, job: { jobUrl: string; company: string; role: string; jobId: string }, folder: string) {
+/** One Tailor run with the fake agent, approved on Review (#158), so the run has its own fresh resume.pdf. */
+async function generate(page: Page, job: { jobUrl: string; company: string; role: string }): Promise<{ tailor: TailorPage; folder: string }> {
   await new Shell(page).goTo('tailor')
   const tailor = new TailorPage(page)
-  await tailor.start({ ...job, description: `# ${job.role}\n\n${job.company} is hiring a ${job.role}. Go, PostgreSQL.` })
-  await tailor.expectStatus('Waiting for you')
-  await tailor.reply('Approved')
+  const pasted = { ...job, description: `# ${job.role}\n\n${job.company} is hiring a ${job.role}. Go, PostgreSQL.` }
+  const folder = pastedFolder(pasted)
+  await tailor.start(pasted)
+  await tailor.expectStatus('Finished', 30_000)
   await expect(tailor.outputLine(folder)).toBeVisible()
+  await approveResult(page, folder)
   await expect(tailor.outputButton('Apply')).toBeEnabled()
   await expect(tailor.applyReason).toHaveCount(0)
-  return tailor
+  return { tailor, folder }
 }
 
 const SITES = [
@@ -114,8 +117,7 @@ const SITES = [
     site: 'greenhouse',
     path: '/greenhouse/',
     title: 'Job Application for Software Engineer at Acme',
-    job: { company: 'Hydrate Co', role: 'Platform Engineer', jobId: 'GH-63' },
-    folder: 'platform-engineer/hydrate-co/gh-63',
+    job: { company: 'Hydrate Co', role: 'Platform Engineer' },
     expectFilled: (app: { electronApp: Parameters<typeof evaluateInTab>[0] }) => expectGreenhouseFilled(app, '/greenhouse/'),
     answers: {} as Record<string, string>,
     thanks: '/greenhouse/confirmation',
@@ -125,8 +127,7 @@ const SITES = [
     site: 'lever',
     path: '/lever/',
     title: 'Acme - Software Engineer',
-    job: { company: 'Parse Co', role: 'Backend Engineer', jobId: 'LV-63' },
-    folder: 'backend-engineer/parse-co/lv-63',
+    job: { company: 'Parse Co', role: 'Backend Engineer' },
     expectFilled: expectLeverFilled,
     answers: { 'textarea[required]': 'Yes, remote from Portland.', 'input[name="location"]': 'Portland, OR' },
     thanks: '/lever/thanks',
@@ -140,7 +141,7 @@ test.describe('apply with the generated resume', () => {
       app,
       mock
     }) => {
-      const tailor = await generate(app.window, { jobUrl: `${mock.origin}${s.path}`, ...s.job }, s.folder)
+      const { tailor, folder } = await generate(app.window, { jobUrl: `${mock.origin}${s.path}`, ...s.job })
       await tailor.outputButton('Apply').click()
       await new Shell(app.window).expectActive('browser')
       const browser = new BrowserPage(app.window)
@@ -153,7 +154,7 @@ test.describe('apply with the generated resume', () => {
       // The file the site received is exactly this run's resume.pdf.
       const [upload] = (await uploads(mock)).filter((u) => u.site === s.site)
       expect(upload).toMatchObject({ file: 'resume.pdf' })
-      expect(upload.sha256).toBe(await sha256(join(app.workspace!, s.folder, 'resume.pdf')))
+      expect(upload.sha256).toBe(await sha256(join(app.workspace!, folder, 'resume.pdf')))
       expect(await exists(mock.submissionFile)).toBe(false)
 
       // The test presses the site's Submit; the payload carries the contact values and the uploaded resume.
@@ -234,15 +235,11 @@ test.describe('apply with the generated resume', () => {
   test('a run whose application has no posting URL shows why Apply is disabled', async ({ app }) => {
     await new Shell(app.window).goTo('tailor')
     const tailor = new TailorPage(app.window)
-    await tailor.start({
-      description: '# Data Engineer\n\nNo Link Co is hiring. Python.',
-      company: 'No Link Co',
-      role: 'Data Engineer',
-      jobId: 'NL-1'
-    })
-    await tailor.expectStatus('Waiting for you')
-    await tailor.reply('Approved')
-    await expect(tailor.outputLine('data-engineer/no-link-co/nl-1')).toBeVisible()
+    const job = { description: '# Data Engineer\n\nNo Link Co is hiring a Data Engineer for its analytics team. Python, SQL.', company: 'No Link Co', role: 'Data Engineer' }
+    await tailor.start(job)
+    await tailor.expectStatus('Finished', 30_000)
+    await expect(tailor.outputLine(pastedFolder(job))).toBeVisible()
+    await approveResult(app.window, pastedFolder(job))
     await expect(tailor.outputButton('Apply')).toBeDisabled()
     await expect(tailor.applyReason).toHaveText('Apply: No posting URL: add it in the application drawer first.')
     expect(await listTabs(app.electronApp)).toEqual([])

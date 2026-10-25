@@ -1,7 +1,7 @@
 import type { PipelinePlan, PipelineState, PipelineStatus } from '@shared/pipeline-types'
 import { AGENT_LABEL } from '@shared/runner-types'
 
-/** Pure helpers for the unattended mode of the bulk modal and the pipeline panel (unit-tested). */
+/** Pure helpers for the bulk modal's plan step and the pipeline panel (unit-tested). */
 
 export function formatMinutes(minutes: number): string {
   if (minutes < 1) return 'under a minute'
@@ -27,14 +27,14 @@ export function formatUntil(iso: string, now = new Date()): string {
 /** What the plan step says: how many run, how many are skipped, how long and how much. */
 export function planSummary(plan: PipelinePlan): { ready: string; skipped: string | null; estimate: string; cost: string | null } {
   const n = plan.ready.length
-  const ready = n === 0 ? 'No job can run.' : `${n} job${n === 1 ? '' : 's'} will run unattended, ${plan.concurrency} at a time.`
+  const ready = n === 0 ? 'No job can run.' : `${n} job${n === 1 ? '' : 's'} will run to the end, ${plan.concurrency} at a time.`
   const skipped = plan.skipped.length ? `${plan.skipped.length} skipped:` : null
   const estimate = n === 0 ? '' : `About ${formatMinutes(plan.estimateMinutes ?? 0)}.`
   const cost =
     plan.estimateCostUsd !== null
-      ? `Roughly $${plan.estimateCostUsd.toFixed(2)} (median of your recent unattended ${AGENT_LABEL[plan.agent]} runs).`
+      ? `Roughly $${plan.estimateCostUsd.toFixed(2)} (median of your recent ${AGENT_LABEL[plan.agent]} runs).`
       : plan.agent === 'claude' && n > 0
-        ? 'No cost estimate yet (no finished unattended Claude runs).'
+        ? 'No cost estimate yet (no finished Claude runs).'
         : null
   return { ready, skipped, estimate, cost }
 }

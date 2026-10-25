@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { expect, type ElectronApplication, type Locator, type Page } from '@playwright/test'
 
 /** Status badge texts of a run (src/renderer/src/pages/tailor/status.ts). */
@@ -16,7 +17,6 @@ export class TailorPage {
   readonly jobDescription: Locator
   readonly company: Locator
   readonly role: Locator
-  readonly jobId: Locator
   readonly notes: Locator
   readonly startButton: Locator
   // Run list.
@@ -40,7 +40,6 @@ export class TailorPage {
     this.jobDescription = page.getByLabel('Job description')
     this.company = page.getByLabel('Company')
     this.role = page.getByLabel('Role')
-    this.jobId = page.getByLabel('Job id')
     this.notes = page.getByLabel(/^Notes for /)
     this.startButton = page.getByRole('button', { name: 'Start tailoring' })
     this.newRunButton = page.getByRole('button', { name: 'New run' })
@@ -73,13 +72,15 @@ export class TailorPage {
     await expect(this.agentChoice(label)).toBeChecked()
   }
 
-  /** Fills the form with a pasted description and the folder-naming fields, then starts. */
-  async start(job: { description: string; company?: string; role?: string; jobId?: string; jobUrl?: string }): Promise<void> {
+  /**
+   * Fills the form with a pasted description, role and company, then starts. Since #158 the job is
+   * saved (Jobs) and queued; the run opens here once the queue starts it.
+   */
+  async start(job: PastedJob): Promise<void> {
     if (job.jobUrl !== undefined) await this.jobUrl.fill(job.jobUrl)
     await this.jobDescription.fill(job.description)
     if (job.company !== undefined) await this.company.fill(job.company)
     if (job.role !== undefined) await this.role.fill(job.role)
-    if (job.jobId !== undefined) await this.jobId.fill(job.jobId)
     await expect(this.startButton).toBeEnabled()
     await this.startButton.click()
   }
@@ -186,6 +187,30 @@ export class TailorPage {
   queueCount(text: string): Locator {
     return this.queuePanel.getByText(text, { exact: true })
   }
+}
+
+export interface PastedJob {
+  description: string
+  company?: string
+  role?: string
+  jobUrl?: string
+}
+
+const slug = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+
+/**
+ * The application folder a job pasted on the Tailor page lands in (#158): it is saved as a pasted
+ * job (`addPasted`: id `pasted:<sha256(url || text)[0..16]>`), and the folder's job id is that hash
+ * (`jobIdFor`), role and company as typed.
+ */
+export function pastedFolder(job: PastedJob): string {
+  const url = job.jobUrl && /^https?:\/\//i.test(job.jobUrl.trim()) ? job.jobUrl.trim() : ''
+  const hash = createHash('sha256').update(url || job.description.trim()).digest('hex').slice(0, 16)
+  return `${slug(job.role ?? '') || 'software-engineer'}/${slug(job.company ?? '') || 'acme'}/${hash}`
 }
 
 /**

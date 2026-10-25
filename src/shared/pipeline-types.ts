@@ -215,7 +215,7 @@ export const PIPELINE_STATUS_LABEL: Record<PipelineStatus, { label: string; colo
 
 /** The wording shown wherever the unattended mode is explained. */
 export const UNATTENDED_EXPLANATION =
-  'Unattended runs use only your master-profile facts and your standing approvals. Every other reframing is left out and listed for your review. Results stay Unreviewed and cannot be auto-applied until you approve them on the Review page.'
+  'Each run goes to the end without asking: it uses the bridges it can make from your master profile (never invented ones) and lists every one for your review. Results stay Unreviewed and cannot be applied until you approve them on the Review page.'
 
 export const BATTERY_WARNING =
   'On battery: closing the lid still puts the Mac to sleep. Keep it plugged in and open, or run "caffeinate -s" in a terminal.'

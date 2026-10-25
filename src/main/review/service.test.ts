@@ -52,13 +52,32 @@ None.
 Fake.
 `
 
+/** What a run writes since #158 (resume-tailor notes v2). */
+const NOTES_V2 = `# Tailoring notes
+<!-- resume-tailor notes v2 -->
+
+## Direct hits
+- Node: five years of Node at Acme
+
+## Reframings used
+### Kafka streaming
+- Source fact: Built an event pipeline on RabbitMQ
+- Wording: Built event-streaming pipelines (RabbitMQ; Kafka-adjacent)
+
+## Gaps left open
+- Go: never used
+
+## Decisions
+- Right-aligned dates: a startup.
+`
+
 let ws: string
 let replies: { runId: string; text: string }[]
 let deps: ReviewDeps
 
 async function application(
   id = ID,
-  over: { notes?: string | null; review?: Record<string, unknown> | null; report?: string } = {}
+  over: { notes?: string | null; tailoring?: string; review?: Record<string, unknown> | null; report?: string } = {}
 ): Promise<string> {
   const dir = join(ws, ...id.split('/'))
   await mkdir(dir, { recursive: true })
@@ -67,6 +86,7 @@ async function application(
   await writeFile(join(dir, 'resume-page-1.jpg'), 'jpg')
   await writeFile(join(dir, 'build-report.json'), over.report ?? '{"ok": true}')
   if (over.notes !== null) await writeFile(join(dir, 'review-notes.md'), over.notes ?? NOTES)
+  if (over.tailoring !== undefined) await writeFile(join(dir, 'tailoring-notes.md'), over.tailoring)
   const review = over.review === undefined ? { state: 'unreviewed', runId: RUN, at: '2026-09-30T01:00:00.000Z' } : over.review
   await writeFile(join(dir, 'huntgry.json'), JSON.stringify({ status: 'generated', notes: '' }))
   // The review state is main's (the authority store), as the pipeline records it.
@@ -132,9 +152,50 @@ describe('review service', () => {
     expect((await reviewDetail(ws, ID)).revision).not.toBe(d.revision)
   })
 
+  it('keeps a v1 result as it was: format v1, no v2 fields, same ids (AC-4)', async () => {
+    await application()
+    const d = await reviewDetail(ws, ID)
+    expect(d.notesFormat).toBe('v1')
+    expect(d).not.toHaveProperty('directHits')
+    expect(d).not.toHaveProperty('decisions')
+    expect(d.parseWarning).toBeUndefined()
+    // Free-form tailoring notes of an older attended run next to it do not replace the v1 notes.
+    await writeFile(join(ws, ID, 'tailoring-notes.md'), '# Tailoring notes\n\nKept dates right-aligned.\n')
+    expect((await reviewDetail(ws, ID)).revision).toBe(d.revision)
+  })
+
+  it('reads tailoring-notes.md v2: reframings used are the tickable ones, with gaps, hits and decisions (#158)', async () => {
+    await application(ID, { notes: null, tailoring: NOTES_V2 })
+    const d = await reviewDetail(ws, ID)
+    expect(d.notesFormat).toBe('v2')
+    expect(d.reviewNotes).toBe(NOTES_V2)
+    expect(d.parseWarning).toBeUndefined()
+    expect(d.proposedReframings).toEqual([
+      {
+        id: reframingId('Built an event pipeline on RabbitMQ', 'Built event-streaming pipelines (RabbitMQ; Kafka-adjacent)'),
+        requirement: 'Kafka streaming',
+        sourceFact: 'Built an event pipeline on RabbitMQ',
+        wording: 'Built event-streaming pipelines (RabbitMQ; Kafka-adjacent)'
+      }
+    ])
+    expect(d.openGaps).toEqual(['Go: never used'])
+    expect(d.directHits).toEqual(['Node: five years of Node at Acme'])
+    expect(d.decisions).toEqual(['Right-aligned dates: a startup.'])
+    // Ticking a used reframing keeps it as a preferred wording for later runs.
+    const out = await approveReview(deps, { applicationId: ID, revision: d.revision, approvedReframingIds: [d.proposedReframings[0].id] }, 'desktop')
+    expect(out.ok).toBe(true)
+    expect((await loadApprovals(ws)).map((a) => a.wording)).toEqual(['Built event-streaming pipelines (RabbitMQ; Kafka-adjacent)'])
+  })
+
+  it('lists a v2 result without a recorded state as Unreviewed, but not an older attended one with free-form notes', async () => {
+    await application('a/b/v2', { notes: null, tailoring: NOTES_V2, review: null })
+    await application('a/b/old', { notes: null, tailoring: '# Tailoring notes\n\nFree-form notes.\n', review: null })
+    expect((await listReviews(ws)).map((r) => [r.applicationId, r.state])).toEqual([['a/b/v2', 'unreviewed']])
+  })
+
   it('shows a warning instead of reframings when the notes are missing or unparsable', async () => {
     await application(ID, { notes: null })
-    expect((await reviewDetail(ws, ID)).parseWarning).toMatch(/no review-notes\.md/)
+    expect((await reviewDetail(ws, ID)).parseWarning).toMatch(/no tailoring notes \(tailoring-notes\.md\)/)
     await application('a/b/x', { notes: 'free prose' })
     const d = await reviewDetail(ws, 'a/b/x')
     expect(d.proposedReframings).toEqual([])
@@ -367,7 +428,9 @@ describe('review service', () => {
     )
     expect(replies[0].text).toContain('Decisions: Drop R2. Mention the on-call work.')
     expect(replies[0].text).toContain('Wording: Built event-streaming pipelines (RabbitMQ; Kafka-adjacent)')
-    expect(replies[0].text).toContain('update review-notes.md')
+    expect(replies[0].text).toContain('update tailoring-notes.md')
+    expect(replies[0].text).toContain('Preferred wordings (use them as written):')
+    expect(replies[0].text).not.toMatch(/approv/i)
     expect((await loadApprovals(ws)).map((a) => a.id)).toEqual([r1.id])
     expect(await recorded()).toMatchObject({ state: 'unreviewed', runId: RUN, reason: 'Re-running with your answers.' })
     expect((await recorded())?.at).toBe('2026-09-30T02:00:00.000Z')

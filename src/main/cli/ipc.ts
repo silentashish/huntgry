@@ -17,7 +17,7 @@ import { listRuns, OUTPUT_FILES, readEvents, readRun, requireRunId } from './run
 import { replyThroughQueue } from '../queue/ipc'
 import { WorkspaceChangedError } from '../workspace/changed'
 import { fetchSyncedPrices } from './price-sync'
-import { contextForRun, defaultAgent, loadCliChoices, manager, setClaudeAccount, setCliPath, setDefaultAgent, startTailorRun, venvDir } from './start'
+import { contextForRun, defaultAgent, loadCliChoices, manager, setClaudeAccount, setCliPath, setDefaultAgent, venvDir } from './start'
 import { clearSyncedPrices, loadPrices, pricingState, syncPrices, removePrice, requireUsageFilter, resetPrices, setPrice, usageSummary, withMetrics, withPrices } from './usage'
 
 /** Which skill release Huntgry installed (see `install-skill.ts`). */
@@ -216,8 +216,6 @@ export function registerRunnerIpc(): void {
     await manager.flush(runId)
     return { run: await currentRun(runId), events: await readEvents(workspace.path, runId) }
   })
-
-  ipcMain.handle(RUNNER_CHANNELS.start, (_e, input: unknown) => startTailorRun(input))
 
   ipcMain.handle(RUNNER_CHANNELS.reply, async (_e, id: unknown, text: unknown) => {
     if (typeof text !== 'string' || !text.trim() || text.length > MAX_TEXT) throw new Error('Type a reply first.')
