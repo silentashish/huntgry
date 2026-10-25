@@ -153,7 +153,7 @@ test.describe('Explore (#142, #169)', () => {
     await app.window.keyboard.press('Tab')
     await expect(explore.matchBadge('Software Engineer, New Grad')).toBeFocused()
     await expect(explore.tooltip).toContainText('Missing: Java, Kubernetes, React')
-    await app.window.keyboard.press('Tab')
+    await explore.matchBadge('Software Engineer, New Grad').blur()
     await expect(explore.tooltip).toHaveCount(0)
 
     // Best match first; Match ≥ N; both on top of the work-model filter and the day.
