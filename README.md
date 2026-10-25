@@ -246,12 +246,18 @@ your profile has that the resume left out. The resume selects from the profile a
 it, so the resume can't beat the fit; the score is kept in the application's `huntgry.json`. See
 [docs/changes/151-rescore-after-tailoring.md](docs/changes/151-rescore-after-tailoring.md).
 
-**Explore** lists the daily new-grad software jobs from Jobright's public GitHub list
-([jobright-ai/2026-Software-Engineer-New-Grad](https://github.com/jobright-ai/2026-Software-Engineer-New-Grad)),
-grouped by the day they were posted, today first. Huntgry fetches that one README from GitHub
-when the page first opens and when you click **Refresh**, and keeps a copy in
-`<workspace>/.huntgry/explore/jobright.json`. **Add to Jobs** saves a row as a `jobright` job.
-See [docs/changes/142-explore.md](docs/changes/142-explore.md).
+**Explore** lists Jobright's new-grad and internship jobs from the API behind
+[newgrad-jobs.com](https://www.newgrad-jobs.com), one category at a time (New grad · US · Software
+Engineering by default, remembered), grouped by the day they were posted, today first, with days
+past the newest seven folded under **Earlier**. Rows show pay, industry, company size and H1B
+sponsorship, and filter by text, work model, H1B and minimum salary. Huntgry asks for a category
+only when the workspace has no copy of it and when you click **Refresh**: at most 1,000 rows, in two
+requests. It keeps a copy per category in `<workspace>/.huntgry/explore/`. That API is undocumented
+and Jobright's own: when it fails, Explore shows Jobright's public GitHub list
+([jobright-ai/2026-Software-Engineer-New-Grad](https://github.com/jobright-ai/2026-Software-Engineer-New-Grad))
+instead and says so. **Add to Jobs** saves a row as a `jobright` job. See
+[docs/changes/142-explore.md](docs/changes/142-explore.md) and
+[docs/changes/169-explore-newgrad-api.md](docs/changes/169-explore-newgrad-api.md).
 
 Jobright shows the employer's own posting link only to signed-in users. Sign in once under
 **Settings → Jobright → Connect Jobright** (Explore links there until you do). After that, a job you

@@ -2,6 +2,10 @@
 
 Issue: [silentashish/huntgry#142](https://github.com/silentashish/huntgry/issues/142) · Builds on #10 (jobs store), #78 (no board search), #108 (shell), #111 (Jobs redesign)
 
+> **Since #169** Explore lists from the newgrad-jobs API, one category at a time, cached per category in
+> `.huntgry/explore/<category>.json`; the README described here is its fallback when the API fails. See
+> [169-explore-newgrad-api.md](169-explore-newgrad-api.md).
+
 ## Context & problem
 
 Huntgry stopped searching job boards in #78: jobs come in by URL or pasted text. New grads

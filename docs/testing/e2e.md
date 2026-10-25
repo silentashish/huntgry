@@ -233,10 +233,13 @@ Routes: `/postings/employer/<id>`
 employer pages with a JSON-LD `JobPosting` and a full description; `/postings/lever-style` and
 `/postings/ashby-style` (the latter without JSON-LD, for the text fallback); `/bot-wall` (403,
 "Just a moment…"); `/page/one`, `/page/two`, `/hang` for the browser's history and Stop;
-`/redirect/lever` (302 to the Lever form on `altOrigin`, the second port); `/jobright/README.md`, a Jobright
-new-grad list dated relative to today, and `/jobs/info/<id>`, its posting pages (one behind a bot wall), from
-`scripts/mock-ats/jobright.mjs` (#142: the fixture sets `HUNTGRY_EXPLORE_SOURCE_URL` to it, and
-`mock.jobright.status` makes it fail). The posting pages carry Next.js data like jobright.ai's; after
+`/redirect/lever` (302 to the Lever form on `altOrigin`, the second port); `POST /jobright/swan/mini-sites/list`,
+the newgrad-jobs API in its own shape, paged, dated relative to today, with two malformed entries, nine posted
+days and a second category (#169: the fixture sets `HUNTGRY_EXPLORE_API_URL` to it; `mock.jobright.api.status`
+makes it fail and `mock.jobright.api.mode` makes it answer `success: false` or only malformed rows);
+`/jobright/README.md`, the Jobright new-grad README it falls back to (#142: `HUNTGRY_EXPLORE_SOURCE_URL`,
+`mock.jobright.status` makes it fail); and `/jobs/info/<id>`, their posting pages (one behind a bot wall), from
+`scripts/mock-ats/jobright.mjs`. The posting pages carry Next.js data like jobright.ai's; after
 `/jobright/signin` sets its httpOnly `jr_session` cookie, they render signed in, with the employer's posting
 on `altOrigin` as `applyLink` (#146). Then there is the mock ATS at `/greenhouse/`,
 `/lever/`, `/generic/`, `/generic-cover/` (+ `…/submit`, the thanks pages). The ATS routes are
