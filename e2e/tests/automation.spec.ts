@@ -37,6 +37,11 @@ const WALLED = savedJob({
 
 const exists = (path: string) => access(path).then(() => true, () => false)
 
+/** `HUNTGRY_DOC_SHOTS=1` saves the page at a few points for docs/changes/154-images (the PR's screenshots). */
+const shot = async (page: Page, name: string) => {
+  if (process.env.HUNTGRY_DOC_SHOTS) await page.screenshot({ path: join(__dirname, '../../docs/changes/154-images', `${name}.png`), fullPage: true })
+}
+
 interface AutomationFile {
   candidates: Record<string, { step: string; failedStep?: string; error?: string; applicationId?: string; reasons: string[] }>
 }
@@ -107,6 +112,7 @@ test('prepares a high-match Explore job up to Submit, skips thin matches, and le
   await expect(automation.row(/Backend Engineer I/)).toBeVisible()
   await expect(automation.reason(/Backend Engineer I/)).toContainText(/requirement|below 80/)
   await automation.expectStep(/Backend Engineer I/, 'Skipped')
+  await shot(app.window, 'automation-page')
 
   // On disk: the state, one log line per step start and end, the prepared fill; nothing submitted, nothing applied.
   const state = await readState(ws)
@@ -146,6 +152,7 @@ test('prepares a high-match Explore job up to Submit, skips thin matches, and le
   await shell.goTo('board')
   const board = new BoardPage(app.window)
   await expect(board.column('submit')).toContainText(CONTOSO)
+  await shot(app.window, 'board-ready-to-submit')
   await shell.goTo('automation')
   await expect(automation.heading).toBeVisible()
 
@@ -166,6 +173,7 @@ test('prepares a high-match Explore job up to Submit, skips thin matches, and le
     .poll(() => evaluateInTab<string>(app.electronApp, '/postings/apply-only', `document.querySelector('#cv').files[0]?.name ?? ''`), { timeout: 20_000 })
     .toBe('resume.pdf')
   expect((await draftCalls()).length).toBe(drafts)
+  await shot(app.window, 'review-and-submit')
   expect(await exists(mock.submissionFile)).toBe(false)
 
   await pressSubmitInTab(app.electronApp, '/postings/apply-only')
