@@ -4,10 +4,12 @@ import { createRoot, type Root } from 'react-dom/client'
 import { MantineProvider } from '@mantine/core'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ExploreJob, ExploreList } from '@shared/explore-types'
+import { emptyProfile } from '@shared/master-profile'
 
 /**
  * The Explore page in a DOM (#169): list and Refresh requests that overlap. The newest one wins, and when it
- * settles the loader and the Refresh spinner both go, whichever request started them.
+ * settles the loader and the Refresh spinner both go, whichever request started them. And the rows' match score
+ * badges (#150): exact from the qualifications, "≈" from the title, details on focus, Match ≥ N and the sort.
  */
 
 interface Deferred<T> {
@@ -27,9 +29,25 @@ const deferred = <T,>(): Deferred<T> => {
 
 const calls = { list: [] as { category: string; d: Deferred<ExploreList> }[], refresh: [] as { category: string; d: Deferred<ExploreList> }[] }
 
+/** A master profile: a Backend Engineer with these skills. */
+const profileWith = (skills: string[]) => {
+  const p = emptyProfile()
+  p.contact.headline = 'Backend Engineer'
+  p.skills = [{ category: 'Languages', items: skills }]
+  return p
+}
+/** What `api.profile.read` answers (Go and Python unless a test edits it), and how often it was read. */
+const profileState = { profile: profileWith(['Go', 'Python']), reads: 0 }
+
 vi.mock('../../api', () => ({
   api: {
     jobs: { list: async () => [] },
+    profile: {
+      read: async () => {
+        profileState.reads++
+        return { profile: profileState.profile }
+      }
+    },
     explore: {
       account: async () => ({ connected: true, checkedAt: null }),
       list: (category: string) => {
@@ -57,7 +75,7 @@ const today = (() => {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 })()
-const job = (title: string): ExploreJob => ({
+const job = (title: string, qualifications?: string): ExploreJob => ({
   id: `aaaaaa${title.length}${title.charCodeAt(0)}`,
   company: 'Northwind',
   companyUrl: null,
@@ -65,10 +83,11 @@ const job = (title: string): ExploreJob => ({
   url: `https://jobright.ai/jobs/info/aaaaaa${title.length}${title.charCodeAt(0)}`,
   location: 'Seattle',
   workModel: 'Remote',
-  postedAt: today
+  postedAt: today,
+  ...(qualifications !== undefined ? { qualifications } : {})
 })
 const listOf = (category: string, ...titles: string[]): ExploreList => ({
-  jobs: titles.map(job),
+  jobs: titles.map((t) => job(t)),
   fetchedAt: new Date().toISOString(),
   category,
   source: 'api'
@@ -91,6 +110,8 @@ let root: Root
 beforeEach(() => {
   calls.list.length = 0
   calls.refresh.length = 0
+  profileState.profile = profileWith(['Go', 'Python'])
+  profileState.reads = 0
   localStorage.clear()
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -178,6 +199,130 @@ describe('Explore requests that overlap', () => {
 /** Picks a category in the Mantine Select (its options render in a portal on `document.body`). */
 async function pick(label: string) {
   const input = container.querySelector<HTMLInputElement>('input[aria-label="Category"]')!
+  await settle(() => input.click())
+  const option = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.trim() === label)
+  if (!option) throw new Error(`No option ${label}`)
+  await settle(() => (option as HTMLElement).click())
+}
+
+describe('Match score badges (#150)', () => {
+  const badges = () => [...container.querySelectorAll('[aria-label="Jobright jobs"] li [role="img"]')].map((b) => b.getAttribute('aria-label'))
+  const scored: ExploreList = {
+    jobs: [
+      job('Frontend Developer', '1. Experience with Go, Java and React.'),
+      job('Backend Engineer I', '1. Experience with Go and Python.'),
+      job('Data Wrangler', '1. Experience with Python, Java, Kotlin and Scala.')
+    ],
+    fetchedAt: new Date().toISOString(),
+    category: 'newgrad:us:swe',
+    source: 'api'
+  }
+  const typeMinMatch = async (value: string) => {
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Min. match"]')!
+    await settle(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+
+  it('shows the exact score of each API row, and its matched and missing skills on focus', async () => {
+    await settle(() => calls.list[0].d.resolve(scored))
+    expect(badges()).toEqual(['Match 33 of 100', 'Match 100 of 100', 'Match 25 of 100'])
+    expect(container.textContent).not.toContain('≈')
+    const badge = container.querySelector<HTMLElement>('[aria-label="Match 33 of 100"]')!
+    await act(async () => {
+      badge.focus()
+      await new Promise((r) => setTimeout(r, 250))
+    })
+    const tip = document.body.textContent ?? ''
+    expect(tip).toContain('You have: Go')
+    expect(tip).toContain('Missing: Java, React')
+  })
+
+  it('gives a README row a title-only "≈" estimate and says so', async () => {
+    await settle(() => calls.list[0].d.resolve({ ...listOf('newgrad:us:swe', 'Backend Engineer'), source: 'readme' }))
+    const [label] = badges()
+    expect(label).toMatch(/^Match about \d+ of 100, a title-only estimate$/)
+    expect(container.querySelector('[data-kind="estimate"]')?.textContent).toMatch(/^≈\d+/)
+    const badge = container.querySelector<HTMLElement>('[data-kind="estimate"]')!
+    await act(async () => {
+      badge.focus()
+      await new Promise((r) => setTimeout(r, 250))
+    })
+    expect(document.body.textContent).toContain('a title-only estimate')
+    expect(document.body.textContent).toContain('Title: Backend Engineer')
+  })
+
+  it('sorts by match and filters by Match ≥ N, on top of the day and text filters', async () => {
+    await settle(() => calls.list[0].d.resolve(scored))
+    await typeMinMatch('30')
+    expect(titles()).toEqual(['Frontend Developer at Northwind', 'Backend Engineer I at Northwind'])
+    await pickOption('Sort', 'Best match')
+    expect(titles()).toEqual(['Backend Engineer I at Northwind', 'Frontend Developer at Northwind'])
+    await typeMinMatch('')
+    expect(titles()).toEqual(['Backend Engineer I at Northwind', 'Frontend Developer at Northwind', 'Data Wrangler at Northwind'])
+  })
+})
+
+describe('Match scores follow the master profile (#150)', () => {
+  const badges = () => [...container.querySelectorAll('[aria-label="Jobright jobs"] li [role="img"]')].map((b) => b.getAttribute('aria-label'))
+  const cached: ExploreList = {
+    jobs: [job('Frontend Developer', '1. Experience with Go, Java and React.'), job('Data Wrangler', '1. Experience with Python, Java, Kotlin and Scala.')],
+    fetchedAt: new Date().toISOString(),
+    category: 'newgrad:us:swe',
+    source: 'api'
+  }
+  const remount = () =>
+    act(() => {
+      root.unmount()
+      root = createRoot(container)
+      root.render(
+        <MantineProvider env="test">
+          <ExplorePage />
+        </MantineProvider>
+      )
+    })
+
+  it('re-scores the same cached rows after the profile is edited and Explore is opened again', async () => {
+    await settle(() => calls.list[0].d.resolve(cached))
+    expect(badges()).toEqual(['Match 33 of 100', 'Match 25 of 100'])
+    await pickOption('Sort', 'Best match')
+    expect(titles()).toEqual(['Frontend Developer at Northwind', 'Data Wrangler at Northwind'])
+
+    // The profile gains Java, Kotlin and Scala (edited on the Profile page; leaving Explore unmounts it).
+    profileState.profile = profileWith(['Go', 'Python', 'Java', 'Kotlin', 'Scala'])
+    remount()
+    expect(calls.list).toHaveLength(2)
+    await settle(() => calls.list[1].d.resolve(cached))
+    expect(profileState.reads).toBe(2)
+    // Only the list read from the cache and the profile: no refresh, nothing else per row.
+    expect(calls.refresh).toHaveLength(0)
+    expect(badges()).toEqual(['Match 67 of 100', 'Match 100 of 100'])
+
+    const badge = container.querySelector<HTMLElement>('[aria-label="Match 100 of 100"]')!
+    await act(async () => {
+      badge.focus()
+      await new Promise((r) => setTimeout(r, 250))
+    })
+    expect(document.body.textContent).toContain('You have: Java, Kotlin, Python, Scala')
+    await act(async () => badge.blur())
+
+    // Best match and Match ≥ N use the new scores.
+    await pickOption('Sort', 'Best match')
+    expect(titles()).toEqual(['Data Wrangler at Northwind', 'Frontend Developer at Northwind'])
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Min. match"]')!
+    await settle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '70')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(titles()).toEqual(['Data Wrangler at Northwind'])
+  })
+})
+
+/** Picks an option of the Mantine Select labelled `aria` (its options render in a portal on `document.body`). */
+async function pickOption(aria: string, label: string) {
+  const input = container.querySelector<HTMLInputElement>(`input[aria-label="${aria}"]`)!
   await settle(() => input.click())
   const option = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.trim() === label)
   if (!option) throw new Error(`No option ${label}`)

@@ -259,6 +259,14 @@ instead and says so. **Add to Jobs** saves a row as a `jobright` job. See
 [docs/changes/142-explore.md](docs/changes/142-explore.md) and
 [docs/changes/169-explore-newgrad-api.md](docs/changes/169-explore-newgrad-api.md).
 
+Every Explore row shows its **match score** against your master profile, read from the
+qualifications Jobright lists for it. Hover or focus the score to see the skills you have, the ones
+you're missing and any must-have you don't meet. Rows from the GitHub fallback have no
+qualifications, so they show a title-only estimate marked "≈". Sort by **Best match** or keep only
+rows with **Match ≥ N**. Nothing is loaded to score a row, and a job you add keeps the
+qualifications, so Jobs and Automation score it the same way. See
+[docs/changes/150-explore-match-score.md](docs/changes/150-explore-match-score.md).
+
 Jobright shows the employer's own posting link only to signed-in users. Sign in once under
 **Settings → Jobright → Connect Jobright** (Explore links there until you do). After that, a job you
 add from Explore, or whose full description you fetch, links the employer's posting, with the

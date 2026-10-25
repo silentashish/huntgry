@@ -235,6 +235,21 @@ function escapeRegExp(s: string): string {
  * matched case-sensitively so ordinary words ("go live") do not count.
  */
 export function mentionPatterns(display: string): RegExp[] {
+  let patterns = PATTERNS.get(display)
+  if (!patterns) {
+    patterns = buildPatterns(display)
+    PATTERNS.set(display, patterns)
+  }
+  return patterns
+}
+
+/**
+ * `mentionPatterns` by display name: building them scans every alias, and the match score asks for the same few
+ * hundred names once per job (an Explore list scores up to a thousand rows, #150). Callers reset `lastIndex`.
+ */
+const PATTERNS = new Map<string, RegExp[]>()
+
+function buildPatterns(display: string): RegExp[] {
   const key = skillKey(display)
   const spellings = new Set([
     display,

@@ -181,38 +181,48 @@ export interface JobScore {
 
 const DAY_MS = 86_400_000
 
-export function scoreJob(job: Job, s: ProfileSignals, now = new Date()): JobScore {
-  const reasons: string[] = []
-  const sponsors = sponsorshipOf(job)
-
+/** The best of the profile's target titles for a job title: how much of it the job covers, and whether a specific word matched. */
+function bestTitle(job: Pick<Job, 'title'>, s: Pick<ProfileSignals, 'titles'>): { cover: number; core: boolean; target: string } {
   let title = { cover: 0, core: false, target: '' }
   for (const target of s.titles) {
     const m = titleMatch(job.title, target)
     if (m.cover > title.cover) title = { ...m, target }
   }
+  return title
+}
+
+/** Seniority part (0–1): the years the job asks for against the profile's; 0.5 when unknown. */
+function seniorityFit(job: Job, s: Pick<ProfileSignals, 'years'>): number {
+  const asked = yearsAskedFor(job)
+  if (asked === null) return 0.5
+  const entry = asked === 0
+  if (s.years >= asked) return entry && s.years >= 6 ? 0.5 : 1
+  return asked - s.years <= 2 ? 0.5 : 0
+}
+
+/** Location part (0–1) and its reason: remote, or near the profile's location; 0.5 when the profile names none. */
+function locationFit(job: Job, s: Pick<ProfileSignals, 'remote' | 'location'>): { fit: number; reason?: string } {
+  if (job.remote) return { fit: 1, reason: 'Remote' }
+  if (!s.remote && !s.location) return { fit: 0.5 }
+  if (!s.remote && job.location && matchesLocation(job, s.location)) return { fit: 1, reason: `Near ${s.location.split(',')[0].trim()}` }
+  return { fit: 0 }
+}
+
+export function scoreJob(job: Job, s: ProfileSignals, now = new Date()): JobScore {
+  const reasons: string[] = []
+  const sponsors = sponsorshipOf(job)
+
+  const title = bestTitle(job, s)
   if (title.core) reasons.push(`Title: ${title.target}`)
 
   const match = matchScore(job, s)
   const skills = match.matched.map((m) => m.skill)
   if (skills.length > 0) reasons.push(`Skills: ${skills.slice(0, 4).join(', ')}${skills.length > 4 ? ` +${skills.length - 4}` : ''}`)
 
-  const asked = yearsAskedFor(job)
-  let seniority = 0.5
-  if (asked !== null) {
-    const entry = asked === 0
-    if (s.years >= asked) seniority = entry && s.years >= 6 ? 0.5 : 1
-    else seniority = asked - s.years <= 2 ? 0.5 : 0
-  }
+  const seniority = seniorityFit(job, s)
 
-  let location = 0
-  if (job.remote) {
-    location = 1
-    reasons.push('Remote')
-  } else if (!s.remote && !s.location) location = 0.5
-  else if (!s.remote && job.location && matchesLocation(job, s.location)) {
-    location = 1
-    reasons.push(`Near ${s.location.split(',')[0].trim()}`)
-  }
+  const { fit: location, reason: near } = locationFit(job, s)
+  if (near) reasons.push(near)
 
   let recency = 0.3
   const posted = job.postedAt ? Date.parse(job.postedAt) : NaN
@@ -237,6 +247,30 @@ export function scoreJob(job: Job, s: ProfileSignals, now = new Date()): JobScor
       ? 'Says it does not sponsor visas'
       : undefined
   return { score, reasons, excluded, matched: title.core || skills.length > 0, match }
+}
+
+/** A title-only estimate (#150): Relevant's title, seniority and location parts, out of 100, with their reasons. */
+export interface TitleEstimate {
+  score: number
+  reasons: string[]
+}
+
+/**
+ * How well a job fits from its title, seniority and location alone, for a job that names no requirement to
+ * match (an Explore row from the GitHub README, #150): `scoreJob`'s title, seniority and location parts,
+ * rescaled to 0–100. Skills and recency are left out: there are none to read, and recency is not fit.
+ */
+export function titleEstimate(job: Job, s: Pick<ProfileSignals, 'titles' | 'years' | 'remote' | 'location'>): TitleEstimate {
+  const title = bestTitle(job, s)
+  const seniority = seniorityFit(job, s)
+  const location = locationFit(job, s)
+  const reasons = [
+    title.core ? `Title: ${title.target}` : 'No target title in common',
+    ...(location.reason ? [location.reason] : [])
+  ]
+  const max = WEIGHT.title + WEIGHT.seniority + WEIGHT.location
+  const score = Math.round(((WEIGHT.title * title.cover + WEIGHT.seniority * seniority + WEIGHT.location * location.fit) / max) * 100)
+  return { score, reasons }
 }
 
 export interface ScoredJob {

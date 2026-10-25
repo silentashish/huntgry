@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { RowScore } from '@shared/explore-score'
 import type { ExploreJob } from '@shared/explore-types'
 import type { Job } from '@shared/jobs-types'
 import {
@@ -10,6 +11,7 @@ import {
   dayLabel,
   defaultDay,
   effectiveFilters,
+  matchRows,
   NO_FILTERS,
   readCategory,
   readFlag,
@@ -160,3 +162,45 @@ describe('Explore view', () => {
     expect(shortSalary('$40-$55/hr')).toBe('$40–$55/hr')
   })
 })
+
+describe('matchRows (#150)', () => {
+  const exact = (score: number): RowScore => ({ kind: 'exact', score, matched: [], missing: [], gates: [] })
+  const estimate = (score: number): RowScore => ({ kind: 'estimate', score, reasons: [] })
+  const rows = ['a', 'b', 'c', 'd', 'e'].map((id) => row(id, '2026-10-21'))
+  const scores = new Map<string, RowScore>([
+    ['a', exact(40)],
+    ['b', exact(90)],
+    ['c', estimate(60)],
+    ['d', exact(40)],
+    ['e', exact(10)]
+  ])
+  const ids = (list: ExploreJob[]) => list.map((r) => r.id)
+
+  it('keeps the listed order when sorted by newest', () => {
+    expect(ids(matchRows(rows, scores, { sort: 'newest', minMatch: null }))).toEqual(['a', 'b', 'c', 'd', 'e'])
+  })
+
+  it('sorts by match, best first, ties in the listed order; a "≈" estimate sorts by its number', () => {
+    expect(ids(matchRows(rows, scores, { sort: 'match', minMatch: null }))).toEqual(['b', 'c', 'a', 'd', 'e'])
+  })
+
+  it('keeps the rows at or above Match ≥ N, estimates included', () => {
+    expect(ids(matchRows(rows, scores, { sort: 'newest', minMatch: 40 }))).toEqual(['a', 'b', 'c', 'd'])
+    expect(ids(matchRows(rows, scores, { sort: 'match', minMatch: 60 }))).toEqual(['b', 'c'])
+    expect(ids(matchRows(rows, scores, { sort: 'newest', minMatch: 91 }))).toEqual([])
+  })
+
+  it('composes with the day and text filters, and counts a row not scored yet as 0', () => {
+    const shown = visibleRows([...rows, row('f', '2026-10-20')], { day: '2026-10-21', text: '' })
+    expect(ids(matchRows(shown, scores, { sort: 'match', minMatch: 50 }))).toEqual(['b', 'c'])
+    expect(ids(matchRows(rows, new Map(), { sort: 'match', minMatch: 1 }))).toEqual([])
+    expect(ids(matchRows(rows, new Map(), { sort: 'match', minMatch: null }))).toEqual(['a', 'b', 'c', 'd', 'e'])
+  })
+
+  it('does not change the rows it is given', () => {
+    const copy = [...rows]
+    matchRows(rows, scores, { sort: 'match', minMatch: null })
+    expect(rows).toEqual(copy)
+  })
+})
+

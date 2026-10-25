@@ -1,4 +1,4 @@
-import { readFile, readdir } from 'node:fs/promises'
+import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, test } from '../fixtures/servers/fixture'
 import { ExplorePage } from '../pages/explore'
@@ -19,6 +19,11 @@ const readmeFetches = (requests: string[]) => requests.filter((r) => r === READM
 const apiFetches = (requests: string[]) => requests.filter((r) => r.startsWith(`${API}?`)).length
 const cacheFile = (workspace: string, category = 'newgrad.us.swe') => join(workspace, `.huntgry/explore/${category}.json`)
 const jobFile = (workspace: string, id: string) => join(workspace, '.huntgry/jobs', `jobright-${id}.json`)
+
+/** `HUNTGRY_DOC_SHOTS=1` saves the page at a few points for docs/changes/150-images (the PR's screenshots). */
+const shot = async (page: import('@playwright/test').Page, name: string) => {
+  if (process.env.HUNTGRY_DOC_SHOTS) await page.screenshot({ path: join(__dirname, '../../docs/changes/150-images', `${name}.png`) })
+}
 
 async function openExplore(window: import('@playwright/test').Page): Promise<ExplorePage> {
   await new Shell(window).goTo('explore')
@@ -125,6 +130,94 @@ test.describe('Explore (#142, #169)', () => {
     expect(after.descriptionComplete).toBe(true)
   })
 
+  test('every row shows its match score from the qualifications; sort by match and Match ≥ N (#150)', async ({ app, mock }) => {
+    const explore = await openExplore(app.window)
+    // The mock's qualifications against the mocks profile (Go, Python, TypeScript, SQL, AWS, Terraform, Docker, PostgreSQL).
+    await expect(explore.matchBadge('Software Engineer, New Grad')).toHaveAccessibleName('Match 25 of 100')
+    await expect(explore.matchBadge('Backend Engineer I')).toHaveAccessibleName('Match 80 of 100')
+    await expect(explore.matchBadge('Embedded Software Engineer')).toHaveAccessibleName('Match 100 of 100')
+    // API rows are exact, never "≈".
+    await expect(explore.list).not.toContainText('≈')
+
+    // Hover shows what the score is made of; so does keyboard focus.
+    await explore.matchBadge('Backend Engineer I').hover()
+    await expect(explore.tooltip).toContainText('Match 80 of 100')
+    await expect(explore.tooltip).toContainText('You have: Go, Python')
+    await expect(explore.tooltip).toContainText('Missing: Kafka')
+    await shot(app.window, 'explore-match-tooltip')
+    await app.window.mouse.move(0, 0)
+    await expect(explore.tooltip).toHaveCount(0)
+    // From the keyboard: Tab back onto the badge (a focus the tooltip counts as keyboard focus).
+    await explore.matchBadge('Software Engineer, New Grad').focus()
+    await app.window.keyboard.press('Shift+Tab')
+    await app.window.keyboard.press('Tab')
+    await expect(explore.matchBadge('Software Engineer, New Grad')).toBeFocused()
+    await expect(explore.tooltip).toContainText('Missing: Java, Kubernetes, React')
+    await explore.matchBadge('Software Engineer, New Grad').blur()
+    await expect(explore.tooltip).toHaveCount(0)
+
+    // Best match first; Match ≥ N; both on top of the work-model filter and the day.
+    await explore.sortBy('Best match')
+    await expect
+      .poll(() => explore.listedTitles())
+      .toEqual(['Embedded Software Engineer', 'Backend Engineer I', 'Software Engineer, New Grad'])
+    await explore.minMatch.fill('50')
+    await expect.poll(() => explore.listedTitles()).toEqual(['Embedded Software Engineer', 'Backend Engineer I'])
+    await shot(app.window, 'explore-best-match-filter')
+    await explore.workModel('Remote')
+    await expect.poll(() => explore.listedTitles()).toEqual(['Backend Engineer I'])
+    await explore.workModel('Any')
+    await explore.minMatch.fill('')
+    await explore.sortBy('Newest first')
+    await expect
+      .poll(() => explore.listedTitles())
+      .toEqual(['Software Engineer, New Grad', 'Backend Engineer I', 'Embedded Software Engineer'])
+    // Other days' rows are scored too.
+    await explore.pickDay('Yesterday')
+    await expect(explore.matchBadge('Platform Engineer, Early Career')).toHaveAccessibleName('Match 100 of 100')
+
+    // Scoring loaded nothing: one API fetch, no posting page.
+    expect(apiFetches(mock.requests)).toBe(1)
+    expect(mock.requests.filter((r) => r.startsWith('/jobs/info/'))).toEqual([])
+
+    // An added job keeps the qualifications as its description, so Jobs and Automation score it the same way.
+    await explore.pickDay('Today')
+    await explore.addButton('Backend Engineer I').click()
+    await expect(explore.addedButton('Backend Engineer I')).toBeVisible()
+    const saved = JSON.parse(await readFile(jobFile(app.workspace!, 'e2e0000000000000000000a2'), 'utf8'))
+    const cache = JSON.parse(await readFile(cacheFile(app.workspace!), 'utf8'))
+    const row = cache.jobs.find((j: { id: string }) => j.id === 'e2e0000000000000000000a2')
+    expect(saved.description).toBe(row.qualifications)
+    expect(saved.descriptionComplete).toBe(false)
+
+    // Reopening Explore scores again from the cache, without fetching anything.
+    await new Shell(app.window).goTo('jobs')
+    await new Shell(app.window).goTo('explore')
+    await expect(explore.matchBadge('Backend Engineer I')).toHaveAccessibleName('Match 80 of 100')
+    expect(apiFetches(mock.requests)).toBe(1)
+    expect(mock.requests.filter((r) => r.startsWith('/jobs/info/'))).toEqual([])
+
+    // The master profile gains Kafka: opened again, the same cached rows score against it.
+    const profileFile = join(app.workspace!, 'master-profile.md')
+    const profile = await readFile(profileFile, 'utf8')
+    expect(profile).toContain('- Languages: Go, Python, TypeScript, SQL')
+    await writeFile(profileFile, profile.replace('- Languages: Go, Python, TypeScript, SQL', '- Languages: Go, Python, TypeScript, SQL, Kafka'))
+    await new Shell(app.window).goTo('jobs')
+    await new Shell(app.window).goTo('explore')
+    await expect(explore.matchBadge('Backend Engineer I')).toHaveAccessibleName('Match 100 of 100')
+    await expect(explore.matchBadge('Software Engineer, New Grad')).toHaveAccessibleName('Match 25 of 100')
+    await explore.matchBadge('Backend Engineer I').hover()
+    await expect(explore.tooltip).toContainText('You have: Go, Python, Kafka')
+    await expect(explore.tooltip).not.toContainText('Missing')
+    await app.window.mouse.move(0, 0)
+    await explore.sortBy('Best match')
+    await explore.minMatch.fill('90')
+    // Backend Engineer I (now 100) ties Contoso and keeps its listed place before it.
+    await expect.poll(() => explore.listedTitles()).toEqual(['Backend Engineer I', 'Embedded Software Engineer'])
+    expect(apiFetches(mock.requests)).toBe(1)
+    expect(mock.requests.filter((r) => r.startsWith('/jobs/info/'))).toEqual([])
+  })
+
   test('days past the newest seven fold under Earlier, and the fold is remembered', async ({ app }) => {
     const explore = await openExplore(app.window)
     await expect(explore.earlier).toHaveAttribute('aria-expanded', 'false')
@@ -219,6 +312,19 @@ test.describe('Explore (#142, #169)', () => {
         .poll(() => explore.listedTitles())
         .toEqual(['Software Engineer, New Grad', 'Backend Engineer I', 'Embedded Software Engineer'])
       expect(JSON.parse(await readFile(cacheFile(app.workspace!), 'utf8'))).toMatchObject({ source: 'readme', fallbackReason: reason })
+      // README rows have no qualifications: a title-only "≈" estimate (#150), which says so on hover.
+      const badge = explore.matchBadge('Backend Engineer I')
+      await expect(badge).toHaveAccessibleName(/^Match about \d+ of 100, a title-only estimate$/)
+      await expect(badge).toHaveText(/^≈\d+/)
+      await badge.hover()
+      await expect(explore.tooltip).toContainText('a title-only estimate')
+      await expect(explore.tooltip).toContainText('Title: Backend Engineer')
+      if (mode === 'refuse') await shot(app.window, 'explore-readme-estimate')
+      // The estimate sorts and filters like a score.
+      await explore.minMatch.fill('100')
+      await expect.poll(() => explore.listedTitles()).toEqual([])
+      await explore.minMatch.fill('1')
+      await expect.poll(() => explore.listedTitles()).toHaveLength(3)
     })
   }
 

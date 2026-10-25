@@ -38,4 +38,13 @@ describe('exploreCandidates', () => {
     expect(inputs[1]).toMatchObject({ key: `jobright:${rows[1].id}`, savedJobId: `jobright:${rows[1].id}`, scoreable: true })
     expect(inputs[2]).toMatchObject({ key: 'url:merged', savedJobId: 'url:merged', scoreable: true })
   })
+
+  it('offers a row with qualifications as scoreable, its description the qualifications (#150)', async () => {
+    const withQ = { ...row(1), qualifications: '1. Go and AWS.\n2. Kafka is a plus.' }
+    const source = exploreCandidates({ rows: async () => [row(0), withQ], toJob, savedJobs: async () => [], add: async () => { throw new Error('not here') } })
+    const [plain, scored] = await source.list('/ws')
+    expect(plain).toMatchObject({ scoreable: false })
+    expect(scored).toMatchObject({ key: `explore:${withQ.id}`, scoreable: true })
+    expect(scored.job.description).toBe('1. Go and AWS.\n2. Kafka is a plus.')
+  })
 })

@@ -5,9 +5,9 @@ import type { Job } from '@shared/jobs-types'
 /**
  * Where Automation's candidates come from (#154). A source lists jobs as `CandidateInput`s and turns one into a
  * saved job when a run picks it. Today: saved Jobs, and the Explore cache as it is (never refreshed on a timer).
- * Explore rows have no description yet, so they cannot be scored until their posting is read; once a source can
- * give a row's requirements (#169's qualifications, #150's skills), it sets `job.description` and `scoreable`,
- * and selection scores it like a saved job. Only the source changes, never the selection.
+ * An Explore row's job carries the row's qualifications as its description (#150, `toJob`), so it is `scoreable`
+ * and selection scores it like a saved job; a README row has none and is scored once its posting is read. Only
+ * the source changes, never the selection.
  */
 export interface CandidateSource {
   id: string

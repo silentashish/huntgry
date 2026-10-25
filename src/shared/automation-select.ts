@@ -16,8 +16,9 @@ import type { MatchResult } from './match-score'
  * Automation's candidate selection (#154), pure: which jobs a run picks, in what order, and why each other
  * one is skipped. A candidate must pass Relevant's rules (not dismissed, not "does not sponsor" for someone who
  * needs it, title or skills in common), the user's saved Jobs filters, and, when it can be scored now, the
- * match score's threshold, minimum requirements and gates (#149). Explore rows have no description yet: they
- * pass on the title and Relevant rules, and the service scores them once their posting is read. Caps: at most
+ * match score's threshold, minimum requirements and gates (#149). An Explore row is scored from its
+ * qualifications (#150, its saved job's description); one without (a README row) passes on the title and
+ * Relevant rules, and the service scores it once its posting is read. Caps: at most
  * `perCompany` per company (ready, in flight, applied in the last 30 days) and `perDay` jobs entering tailoring
  * per local day.
  */

@@ -10,15 +10,27 @@
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 /**
+ * The API's `qualifications` of today's rows (#150): against the mocks workspace's profile (Go, Python, TypeScript,
+ * SQL, AWS, Terraform, Docker, PostgreSQL) they score 25 (Northwind: Go of Go, Java, Kubernetes, React), 80
+ * (Backend Engineer I: Go and Python, Kafka only a plus) and 100 (Contoso: everything, so Automation's e2e picks
+ * it from the list, #154). Other rows get the generic list below.
+ */
+const QUALIFICATIONS = {
+  a1: '1. A degree in computer science or equivalent experience.\n2. Experience with Java, Kubernetes and Go.\n3. Familiarity with React.',
+  a2: '1. A degree in computer science or equivalent experience.\n2. Experience with Go and Python.\n3. Kafka is a plus.',
+  a3: '1. A degree in computer science or equivalent experience.\n2. Go and Python services on AWS.\n3. PostgreSQL and Docker.\n4. Terraform is a plus.'
+}
+
+/**
  * Rows of the list: `daysAgo` 0 is today. `blocked` postings answer with a human check. `employer` is the path
  * of the employer's posting (on the mock's other origin) a signed-in posting page gives as `applyLink` (#146);
  * Contoso's is only an application form, so its description comes from Jobright's summary (#148). `api` holds the
  * API's per-job fields (#169); `apiOnly` rows are older than the README's few days, so only the API lists them.
  */
 export const JOBRIGHT_JOBS = [
-  { id: 'e2e0000000000000000000a1', company: 'Northwind Labs', site: 'https://northwind.example.com', title: 'Software Engineer, New Grad', location: 'Seattle, WA, United States', work: 'On Site', daysAgo: 0, employer: '/postings/employer/101', api: { salary: '$120000-$145000/yr', h1bSponsored: 'Yes', industry: ['Cloud Computing', 'Software'], companySize: '1001-5000' } },
-  { id: 'e2e0000000000000000000a2', company: '↳', title: 'Backend Engineer I', location: 'Remote, United States', work: 'Remote', daysAgo: 0, api: { salary: '$95000-$110000/yr', h1bSponsored: 'No', industry: ['Cloud Computing'], companySize: '1001-5000' } },
-  { id: 'e2e0000000000000000000a3', company: 'Contoso Robotics', site: 'https://contoso.example.com', title: 'Embedded Software Engineer', location: 'Austin, TX, United States', work: 'Hybrid', daysAgo: 0, employer: '/postings/apply-only', api: { salary: '$48-$60/hr', h1bSponsored: 'Not Sure', industry: ['Robotics'], companySize: '51-200' } },
+  { id: 'e2e0000000000000000000a1', company: 'Northwind Labs', site: 'https://northwind.example.com', title: 'Software Engineer, New Grad', location: 'Seattle, WA, United States', work: 'On Site', daysAgo: 0, employer: '/postings/employer/101', api: { salary: '$120000-$145000/yr', h1bSponsored: 'Yes', industry: ['Cloud Computing', 'Software'], companySize: '1001-5000', qualifications: QUALIFICATIONS.a1 } },
+  { id: 'e2e0000000000000000000a2', company: '↳', title: 'Backend Engineer I', location: 'Remote, United States', work: 'Remote', daysAgo: 0, api: { salary: '$95000-$110000/yr', h1bSponsored: 'No', industry: ['Cloud Computing'], companySize: '1001-5000', qualifications: QUALIFICATIONS.a2 } },
+  { id: 'e2e0000000000000000000a3', company: 'Contoso Robotics', site: 'https://contoso.example.com', title: 'Embedded Software Engineer', location: 'Austin, TX, United States', work: 'Hybrid', daysAgo: 0, employer: '/postings/apply-only', api: { salary: '$48-$60/hr', h1bSponsored: 'Not Sure', industry: ['Robotics'], companySize: '51-200', qualifications: QUALIFICATIONS.a3 } },
   { id: 'e2e0000000000000000000b1', company: 'Fabrikam', site: 'https://fabrikam.example.com', title: 'Associate Data Engineer', location: 'Chicago, IL, United States', work: 'Remote', daysAgo: 1, blocked: true, api: { h1bSponsored: 'Yes', industry: ['FinTech'] } },
   { id: 'e2e0000000000000000000b2', company: '↳', title: 'Platform Engineer, Early Career', location: 'Chicago, IL, United States', work: 'On Site', daysAgo: 1, api: { salary: '$100000-$125000/yr', h1bSponsored: 'Not Sure', industry: ['FinTech'] } },
   { id: 'e2e0000000000000000000c1', company: 'Tailspin Toys', site: 'https://tailspin.example.com', title: 'Frontend Engineer, New Grad', location: 'Denver, CO, United States', work: 'Hybrid', daysAgo: 3, api: { salary: '$90000-$105000/yr', h1bSponsored: 'No', industry: ['Gaming'] } },
