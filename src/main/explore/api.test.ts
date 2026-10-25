@@ -6,6 +6,9 @@ import { DEFAULT_EXPLORE_CATEGORY as CAT, EXPLORE_MAX_ROWS } from '@shared/explo
 import { apiRow, fetchApiList, JOBRIGHT_API_URL, PAGE_SIZE, pageUrl, parseApiPage } from './api'
 import { JOBRIGHT_NEW_GRAD_README } from './parse'
 import { addExplore, cachePath, listExplore, readCache, refreshExplore, type ExploreDeps } from './service'
+import { scoreRow } from '@shared/explore-score'
+import { profileSignals, scoreJob } from '@shared/job-relevance'
+import { emptyProfile } from '@shared/master-profile'
 
 const NOW = new Date(2026, 9, 24, 10, 0)
 const AT = new Date(2026, 9, 23, 18, 30).getTime()
@@ -295,5 +298,21 @@ describe('Explore service, API source (#169)', () => {
     })
     // Another category's cache does not list it.
     await expect(addExplore(ws, id(1), 'newgrad:us:sales', deps())).rejects.toThrow(/no longer on the Jobright list/)
+  })
+
+  it('keeps the qualifications as the added job\'s description, so it scores as its row did (#150)', async () => {
+    api = () => answer([entry(1, { qualifications: '1. Kotlin and Android.\n2. Go services are a plus.' })])
+    const list = await listExplore(ws, CAT, deps())
+    const job = await addExplore(ws, id(1), CAT, deps())
+    expect(job.description).toBe('1. Kotlin and Android.\n2. Go services are a plus.')
+    expect(job.descriptionComplete).toBe(false)
+    const p = emptyProfile()
+    p.contact.headline = 'Android Engineer'
+    p.skills = [{ category: 'Languages', items: ['Kotlin', 'Go'] }]
+    const s = profileSignals(p, NOW)
+    const row = scoreRow(list.jobs[0], s, NOW)
+    expect(row.kind).toBe('exact')
+    expect(scoreJob(job, s, NOW).match.score).toBe(row.score)
+    expect(row.score).toBeGreaterThan(0)
   })
 })

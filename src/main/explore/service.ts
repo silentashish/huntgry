@@ -11,7 +11,8 @@ import {
   type ExploreList,
   type ExploreSource
 } from '@shared/explore-types'
-import type { Job, WorkplaceType } from '@shared/jobs-types'
+import { toJob } from '@shared/explore-score'
+import type { Job } from '@shared/jobs-types'
 import { HUNTGRY_DIR } from '../workspace/constants'
 import { findCanonical, readJob, saveJob } from '../jobs/store'
 import { fetchApiList } from './api'
@@ -19,6 +20,7 @@ import { resolveEmployerLink, type LinkDeps } from './employer-link'
 import { JOBRIGHT_HOSTS, jobrightId, parseReadme } from './parse'
 
 export { fetchReadme, postJson } from './fetch'
+export { toJob } from '@shared/explore-score'
 
 /**
  * Explore (#142, #169): Jobright's jobs of one category, from the newgrad-jobs API, fetched only when the
@@ -185,35 +187,6 @@ export async function refreshExplore(workspace: string, category: string, deps: 
   await writeCache(workspace, list)
   const { sourceUrl: _, ...shown } = list
   return shown
-}
-
-const WORKPLACE: Record<NonNullable<ExploreJob['workModel']>, WorkplaceType> = {
-  Remote: 'Remote',
-  Hybrid: 'Hybrid',
-  'On Site': 'Onsite'
-}
-
-/** The saved job for a listed one: the Jobright page is its URL until the full posting is fetched. */
-export function toJob(e: ExploreJob, now: Date): Job {
-  return {
-    id: savedJobId(e.id),
-    source: 'jobright',
-    sourceId: e.id,
-    title: e.title,
-    company: e.company,
-    location: e.location,
-    remote: e.workModel === 'Remote',
-    salary: e.salary ?? '',
-    // Noon UTC: the posted day reads the same in every time zone.
-    postedAt: `${e.postedAt}T12:00:00.000Z`,
-    url: e.url,
-    boardUrl: e.url,
-    description: '',
-    descriptionComplete: false,
-    tags: [],
-    fetchedAt: now.toISOString(),
-    ...(e.workModel ? { workplaceType: WORKPLACE[e.workModel] } : {})
-  }
 }
 
 /**
