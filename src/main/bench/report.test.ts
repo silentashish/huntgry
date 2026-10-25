@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { countBuilds } from './measure'
-import { benchReport, compareBench, median, verdict } from './report'
+import { benchReport, compareBench, median, passed, verdict } from './report'
 import { loadBenchSet } from './set'
 import type { BenchResults, BenchRow } from './types'
 
@@ -135,6 +135,37 @@ describe('compareBench', () => {
     const md = compareBench(BASE, cand)
     expect(md).toContain('> **Warning**: the two runs used different bench sets (set hashes differ); the medians are not comparable.')
     expect(md).toContain('> **Warning**: the two runs used different master profiles; quality numbers are not comparable.')
+  })
+})
+
+describe('passed and comparability (review of #177)', () => {
+  it('needs a finished run with a passing build report', () => {
+    expect(passed(row('a'))).toBe(true)
+    // No or an unreadable build-report.json proves nothing.
+    expect(passed(row('a', { buildOk: null }))).toBe(false)
+    // A run that timed out after writing a PDF.
+    expect(passed(row('a', { status: 'failed' }))).toBe(false)
+    expect(passed(row('a', { status: 'stopped' }))).toBe(false)
+  })
+
+  it('does not call a candidate that skipped verification faster at equal quality', () => {
+    const cand = results('fast', BASE.rows.map((r) => ({ ...r, activeMs: 1000, buildOk: null })))
+    expect(verdict(BASE, cand).regressions).toEqual(['pass rate 100% → 0%'])
+    const timedOut = results('fast', [...BASE.rows.slice(0, 2).map((r) => ({ ...r, activeMs: 1000 })), row('c', { activeMs: 1000, status: 'failed' })])
+    expect(verdict(BASE, timedOut).regressions).toEqual(['pass rate 100% → 67%'])
+  })
+
+  it('gives no verdict and no deltas when the runs share no job, or one is empty', () => {
+    const disjoint = results('cand', [row('x', { activeMs: 1000 })])
+    const v = verdict(BASE, disjoint)
+    expect(v).toMatchObject({ comparable: false, faster: false, regressions: [] })
+    expect(v.text).toBe('**Not comparable**: the two runs share no job (base: a, b, c; candidate: x), so there is no verdict on time or quality. Run both on the same jobs.')
+    const md = compareBench(BASE, disjoint)
+    expect(md).not.toContain('## Medians')
+    expect(md).not.toContain('## Per job')
+    expect(md).not.toContain('Faster')
+    expect(md).toContain('- Base only: a, b, c\n- Candidate only: x')
+    expect(verdict(results('empty', []), results('empty', [])).text).toMatch(/^\*\*Not comparable\*\*: .*base: none; candidate: none/)
   })
 })
 

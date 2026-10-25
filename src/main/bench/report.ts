@@ -16,9 +16,12 @@ export function median(values: readonly number[]): number | null {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2
 }
 
-/** Built, verify passed and no hard check failed. */
+/**
+ * The run finished, built a resume, and its `build-report.json` says `ok` with no failed hard check. A missing or
+ * unreadable report proves nothing, and a failed (timed-out) run does not pass even if it left a PDF.
+ */
 export function passed(row: BenchRow): boolean {
-  return row.built && row.buildOk !== false && row.hardFailures.length === 0
+  return row.status === 'finished' && row.built && row.buildOk === true && row.hardFailures.length === 0
 }
 
 /** One metric of the report: how to read it from a row and how to print it. */
@@ -106,6 +109,8 @@ function delta(base: number | null, cand: number | null, format: (v: number) => 
 }
 
 export interface Verdict {
+  /** The runs share at least one job; without one there is no verdict on time or quality. */
+  comparable: boolean
   /** The candidate's median time is lower than the base's. */
   faster: boolean
   /** Why the candidate is not better, empty when quality held. */
@@ -115,12 +120,11 @@ export interface Verdict {
 
 /**
  * The two runs' rows of the jobs both ran: medians of different job mixes would compare the jobs, not the
- * versions. Each run's own rows when they share none.
+ * versions. Empty when they share none (or either has no run): then nothing is compared.
  */
 export function sharedRows(base: BenchResults, cand: BenchResults): { base: BenchRow[]; cand: BenchRow[]; shared: string[] } {
   const ids = new Set(cand.rows.map((r) => r.jobId))
   const shared = [...new Set(base.rows.map((r) => r.jobId))].filter((id) => ids.has(id)).sort()
-  if (shared.length === 0) return { base: base.rows, cand: cand.rows, shared }
   const keep = (rows: BenchRow[]) => rows.filter((r) => shared.includes(r.jobId))
   return { base: keep(base.rows), cand: keep(cand.rows), shared }
 }
@@ -131,6 +135,15 @@ export function sharedRows(base: BenchResults, cand: BenchResults): { base: Benc
  */
 export function verdict(baseRun: BenchResults, candRun: BenchResults, tolerance = DEFAULT_TOLERANCE): Verdict {
   const rows = sharedRows(baseRun, candRun)
+  if (rows.shared.length === 0) {
+    const ids = (r: BenchResults) => [...new Set(r.rows.map((x) => x.jobId))].join(', ') || 'none'
+    return {
+      comparable: false,
+      faster: false,
+      regressions: [],
+      text: `**Not comparable**: the two runs share no job (base: ${ids(baseRun)}; candidate: ${ids(candRun)}), so there is no verdict on time or quality. Run both on the same jobs.`
+    }
+  }
   const base = { rows: rows.base }
   const cand = { rows: rows.cand }
   const regressions: string[] = []
@@ -161,7 +174,7 @@ export function verdict(baseRun: BenchResults, candRun: BenchResults, tolerance 
   else if (faster) text = `**Faster at equal quality**: ${time}${cost}.`
   else if (bt !== null && ct !== null && ct > bt) text = `**Slower**, quality held: ${time}${cost}.`
   else text = `**No faster**, quality held: ${time}${cost}.`
-  return { faster, regressions, text }
+  return { comparable: true, faster, regressions, text }
 }
 
 /** Per-job value: the median over a job's repeats. */
@@ -185,41 +198,41 @@ export function compareBench(base: BenchResults, cand: BenchResults, opts: { tol
   lines.push(`**Verdict**: ${v.text}`, '')
 
   const rows = sharedRows(base, cand)
-  const scope =
-    rows.shared.length > 0
-      ? `Over the ${rows.shared.length} job${rows.shared.length === 1 ? '' : 's'} both runs ran (${rows.base.length} and ${rows.cand.length} runs).`
-      : 'The two runs share no job: every run of each is counted.'
-  lines.push('## Medians', '', scope, '', '| Metric | Base | Candidate | Δ | Δ % |', '| --- | ---: | ---: | ---: | ---: |')
-  for (const m of METRICS) {
-    const b = medianOf(rows.base, m.of)
-    const c = medianOf(rows.cand, m.of)
-    const d = delta(b, c, m.format)
-    lines.push(`| ${m.label} | ${cell(b, m.format)} | ${cell(c, m.format)} | ${d.abs} | ${d.rel} |`)
-  }
-  const bp = passRate(rows.base)
-  const cp = passRate(rows.cand)
-  const dp = delta(bp, cp, pct)
-  lines.push(`| Pass rate | ${cell(bp, pct)} | ${cell(cp, pct)} | ${dp.abs} | – |`, '')
-
   const b = byJob(base.rows)
   const c = byJob(cand.rows)
-  const shared = [...b.keys()].filter((id) => c.has(id)).sort()
-  const pair = (rows: BenchRow[] | undefined, of: (r: BenchRow) => number | null, format: (v: number) => string) =>
-    cell(rows ? medianOf(rows, of) : null, format)
-  lines.push(
-    '## Per job',
-    '',
-    '| Job | Time | Cost | Coverage | Surfaced | Untraceable | Hard fails |',
-    '| --- | --- | --- | --- | --- | --- | --- |'
-  )
-  for (const id of shared) {
-    const x = b.get(id)
-    const y = c.get(id)
-    const side = (of: (r: BenchRow) => number | null, format: (v: number) => string) => `${pair(x, of, format)} → ${pair(y, of, format)}`
-    const fails = (rows: BenchRow[] | undefined) => [...new Set((rows ?? []).flatMap((r) => r.hardFailures))].join(', ') || '–'
+  // Without a shared job there is nothing to put side by side: no medians, no deltas.
+  if (v.comparable) {
+    const scope = `Over the ${rows.shared.length} job${rows.shared.length === 1 ? '' : 's'} both runs ran (${rows.base.length} and ${rows.cand.length} runs).`
+    lines.push('## Medians', '', scope, '', '| Metric | Base | Candidate | Δ | Δ % |', '| --- | ---: | ---: | ---: | ---: |')
+    for (const m of METRICS) {
+      const bm = medianOf(rows.base, m.of)
+      const cm = medianOf(rows.cand, m.of)
+      const d = delta(bm, cm, m.format)
+      lines.push(`| ${m.label} | ${cell(bm, m.format)} | ${cell(cm, m.format)} | ${d.abs} | ${d.rel} |`)
+    }
+    const bp = passRate(rows.base)
+    const cp = passRate(rows.cand)
+    const dp = delta(bp, cp, pct)
+    lines.push(`| Pass rate | ${cell(bp, pct)} | ${cell(cp, pct)} | ${dp.abs} | – |`, '')
+
+    const shared = [...b.keys()].filter((id) => c.has(id)).sort()
+    const pair = (rows: BenchRow[] | undefined, of: (r: BenchRow) => number | null, format: (v: number) => string) =>
+      cell(rows ? medianOf(rows, of) : null, format)
     lines.push(
-      `| ${id} | ${side((r) => r.activeMs, secs)} | ${side((r) => r.costUsd, usd)} | ${side((r) => r.resumeCoverage, plain)} | ${side((r) => r.surfaced, plain)} | ${side((r) => r.untraceable?.count ?? null, plain)} | ${fails(x)} → ${fails(y)} |`
+      '## Per job',
+      '',
+      '| Job | Time | Cost | Coverage | Surfaced | Untraceable | Hard fails |',
+      '| --- | --- | --- | --- | --- | --- | --- |'
     )
+    for (const id of shared) {
+      const x = b.get(id)
+      const y = c.get(id)
+      const side = (of: (r: BenchRow) => number | null, format: (v: number) => string) => `${pair(x, of, format)} → ${pair(y, of, format)}`
+      const fails = (rows: BenchRow[] | undefined) => [...new Set((rows ?? []).flatMap((r) => r.hardFailures))].join(', ') || '–'
+      lines.push(
+        `| ${id} | ${side((r) => r.activeMs, secs)} | ${side((r) => r.costUsd, usd)} | ${side((r) => r.resumeCoverage, plain)} | ${side((r) => r.surfaced, plain)} | ${side((r) => r.untraceable?.count ?? null, plain)} | ${fails(x)} → ${fails(y)} |`
+      )
+    }
   }
   const onlyBase = [...b.keys()].filter((id) => !c.has(id)).sort()
   const onlyCand = [...c.keys()].filter((id) => !b.has(id)).sort()
