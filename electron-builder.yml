@@ -1,5 +1,7 @@
-# Packaged builds: `npm run dist` → release/. The bundle is named Huntgry and
-# uses resources/icon.icns (macOS) / resources/icon.png (Linux, Windows).
+# Packaged builds: `npm run dist` → release/ (the host's OS and arch). The release workflow
+# (.github/workflows/release.yml) builds every OS from a `v*` tag, see docs/install.md.
+# The bundle is named Huntgry and uses resources/icon.icns (macOS) / resources/icon.png
+# (Linux, Windows).
 appId: com.silentashish.huntgry
 productName: Huntgry
 directories:
@@ -9,12 +11,23 @@ files:
   - out/**
   - resources/icon.png # window/dock/About icon, loaded by the main process at runtime
   - package.json
+# One name per OS and arch, so every file of a release can sit side by side in one folder:
+# Huntgry-0.2.0-mac-arm64.dmg, Huntgry-0.2.0-win-x64.exe, Huntgry-0.2.0-linux-x86_64.AppImage…
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 mac:
   category: public.app-category.productivity
   icon: resources/icon.icns
   target: [dmg, zip]
+  # No Apple Developer ID yet (#168): sign ad hoc. Unsigned, the arm64 bundle keeps Electron's
+  # linker signature, which no longer matches once Info.plist is rewritten, and a downloaded copy
+  # is then reported as "damaged" with no way to open it. Ad hoc, it gets the usual Gatekeeper
+  # "Open Anyway" path. Hardened runtime only matters for notarization; with an ad-hoc signature
+  # it would reject Electron's own frameworks (library validation), so it is off until #168.
+  identity: '-'
+  hardenedRuntime: false
 win:
   icon: resources/icon.png
+  target: nsis
 linux:
   icon: resources/icon.png
   target: AppImage
