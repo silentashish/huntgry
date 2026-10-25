@@ -71,6 +71,11 @@ export interface BoardInput {
   applications: readonly ApplicationRecord[]
   queue: readonly QueueItem[]
   now?: Date
+  /**
+   * Keep every archived card, however old (the Board's "Show older" in Archived, #161: the
+   * Dashboard table's Archived filter used to list them all). `hiddenArchived` is then 0.
+   */
+  keepArchived?: boolean
 }
 
 const STATUS_COLUMN: Record<ApplicationStatus, BoardColumnId> = {
@@ -156,7 +161,7 @@ function applicationCard(app: ApplicationRecord, job: Job | null): BoardCard {
  * item, then the saved job itself. A saved job is matched to its application by posting URL, or by
  * the folder's job id together with the company; to a queue item by its id or an alias.
  */
-export function buildBoard({ jobs, applications, queue, now = new Date() }: BoardInput): Board {
+export function buildBoard({ jobs, applications, queue, now = new Date(), keepArchived = false }: BoardInput): Board {
   const jobOf = new Map<string, Job>()
   for (const j of jobs) for (const id of [j.id, ...(j.aliases ?? [])]) jobOf.set(id, j)
 
@@ -204,7 +209,7 @@ export function buildBoard({ jobs, applications, queue, now = new Date() }: Boar
   for (const card of cards) {
     if (card.column === 'archived') {
       const at = archivedAt(card)
-      if (Date.parse(at) <= cutoff) {
+      if (!keepArchived && Date.parse(at) <= cutoff) {
         hiddenArchived++
         continue
       }

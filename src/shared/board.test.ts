@@ -194,6 +194,27 @@ describe('buildBoard', () => {
     // An archived card is dated by when it was archived.
     expect(card(board, 'app:software-engineer/acme/fresh').at).toBe(archived(1))
   })
+
+  it('keeps every archived card, however old, with keepArchived (#161: what the Dashboard table listed)', () => {
+    const daysAgo = (days: number) => new Date(NOW.getTime() - days * 24 * 60 * 60 * 1000).toISOString()
+    const input = {
+      jobs: [job('j-stale', { dismissed: true, dismissedAt: daysAgo(30) })],
+      queue: [],
+      applications: [
+        app('fresh', { status: 'archived' as const, archivedAt: daysAgo(1) }),
+        app('stale', { status: 'archived' as const, archivedAt: daysAgo(90) })
+      ],
+      now: NOW
+    }
+    expect(buildBoard(input).hiddenArchived).toBe(2)
+    const all = buildBoard({ ...input, keepArchived: true })
+    expect(all.hiddenArchived).toBe(0)
+    expect(layout(all)).toEqual({
+      archived: ['app:software-engineer/acme/fresh', 'job:url:j-stale', 'app:software-engineer/acme/stale']
+    })
+    // Dated by when they were archived, like the recent ones.
+    expect(card(all, 'app:software-engineer/acme/stale').at).toBe(daysAgo(90))
+  })
 })
 
 describe('moveFor', () => {
