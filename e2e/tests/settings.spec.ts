@@ -111,8 +111,13 @@ test.describe('section nav and appearance', () => {
   // finds no package.json beside it and reports its own version instead, so the card is compared with the file.
   test("About shows package.json's version, the release's own number (#167)", async ({ app }) => {
     const settings = await openSettings(app)
-    await settings.sectionLink('About').click()
-    await expect(settings.cardHeading('About')).toBeInViewport()
+    await expect(settings.readyBanner).toBeVisible()
+    // The skill-update check (it asks GitHub) re-renders the cards above About whenever it returns, which can cut
+    // a smooth scroll short; a second click then lands, as it would for the user.
+    await expect(async () => {
+      await settings.sectionLink('About').click()
+      await expect(settings.cardHeading('About')).toBeInViewport({ timeout: 3000 })
+    }).toPass({ timeout: 20_000 })
     const pkg = JSON.parse(await readFile(join(__dirname, '../../package.json'), 'utf8')) as { version: string }
     await expect(settings.appVersion).toHaveText(pkg.version)
   })
