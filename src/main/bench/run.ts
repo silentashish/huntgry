@@ -251,7 +251,11 @@ export async function runBench(opts: BenchOptions): Promise<{ dir: string; resul
     outer: for (let r = 1; r <= repeat; r++) {
       for (const job of jobs) {
         if (opts.signal?.aborted) break outer
-        if (results.rows.length > 0) await sleep(opts.gapMs ?? DEFAULT_GAP_MS)
+        if (results.rows.length > 0) {
+          await sleep(opts.gapMs ?? DEFAULT_GAP_MS)
+          // A Ctrl-C during the pause found no run to stop: never start the next (paid) one after it.
+          if (opts.signal?.aborted) break outer
+        }
         log(`${job.id}${repeat > 1 ? ` (run ${r}/${repeat})` : ''}: running…`)
         const row = await runOne(manager, ctx, job, r, repeat, timeoutMs)
         results.rows.push(row)

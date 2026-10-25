@@ -236,4 +236,19 @@ describe('runBench safety (review of #177)', () => {
     expect(JSON.parse(await readFile(join(first.dir, RESULTS_FILE), 'utf8')).rows).toHaveLength(1)
   }, 30_000)
 
+  it('does not start the next run after a Ctrl-C during the pause between runs', async () => {
+    const abort = new AbortController()
+    const { results } = await runBench(
+      await options({
+        gapMs: 1500,
+        signal: abort.signal,
+        log: (line) => {
+          if (line.startsWith('backend: finished')) setTimeout(() => abort.abort(), 100)
+        }
+      })
+    )
+    expect(results.interrupted).toBe(true)
+    expect(results.rows.map((r) => r.jobId)).toEqual(['backend'])
+  }, 30_000)
+
 })
