@@ -4,6 +4,8 @@ Issue: [silentashish/huntgry#109](https://github.com/silentashish/huntgry/issues
 (tokens, theme, shared parts) · Figma `zhNccc831dRnOhj2tmqqkc`: Dashboard `5:2`, Application drawer `16:2`, Evidence modal
 `16:735`, Empty (first hunt) `18:2`, and their App · Light twins.
 
+> Since #161 the applications table described below is gone: the Board lists applications and the stat tiles open it. See [161-board-replaces-dashboard-list.md](161-board-replaces-dashboard-list.md).
+
 ## What changed
 
 | Part | Files | Notes |

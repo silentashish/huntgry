@@ -98,4 +98,6 @@ flowchart LR
 ## Follow-ups
 
 - #161: the Dashboard table goes; the Board takes over its search (done here), its Archived filter
-  (a `BoardFilter` field) and its per-row actions on the card or its drawer.
+  and its per-row actions on the card or its drawer. Done in
+  [161-board-replaces-dashboard-list.md](161-board-replaces-dashboard-list.md); the Archived filter
+  became `buildBoard`'s `keepArchived`, not a `BoardFilter` field.
