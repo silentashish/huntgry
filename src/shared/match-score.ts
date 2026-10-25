@@ -170,18 +170,35 @@ const PREFERRED =
 /** Sentence ends, except after an abbreviation's period: "Ph.D. in Computer Science required" is one sentence. */
 const SENTENCE_END = /(?<=[.!?;])(?<!\b(?:Ph\.D|B\.Sc?|M\.Sc?|B\.A|M\.A|B\.E|M\.E|e\.g|i\.e|U\.S|vs)\.)\s+/
 
-/** A description as sentences, each marked preferred when it or its section says so. Headings are dropped. */
-function sentences(description: string): { text: string; preferred: boolean }[] {
-  const out: { text: string; preferred: boolean }[] = []
-  let section = false
+/** A heading over must-haves: "Requirements", "Minimum qualifications", "Must have", "What you need". */
+const REQUIRED_HEADING = /\b(?:requirements?|required|minimum|basic|must[\s-]haves?|qualifications|what you(?:['’]ll)? need)\b/i
+
+interface Sentence {
+  text: string
+  /** It or its section says it is a preference. */
+  preferred: boolean
+  /** Its section's heading names must-haves ("Minimum qualifications:"). */
+  required: boolean
+  /** Which section it is in (0 before the first heading), to read a bullet against its siblings. */
+  section: number
+}
+
+/** A description as sentences, each marked with its section's kind. Headings are dropped. */
+function sentences(description: string): Sentence[] {
+  const out: Sentence[] = []
+  let preferredSection = false
+  let requiredSection = false
+  let section = 0
   for (const line of description.split('\n')) {
     if (!line.trim()) continue
     if (HEADING.test(line)) {
-      section = PREFERRED.test(line)
+      preferredSection = PREFERRED.test(line)
+      requiredSection = !preferredSection && REQUIRED_HEADING.test(line)
+      section++
       continue
     }
     for (const text of line.split(SENTENCE_END)) {
-      if (text.trim()) out.push({ text, preferred: section || PREFERRED.test(text) })
+      if (text.trim()) out.push({ text, preferred: preferredSection || PREFERRED.test(text), required: requiredSection, section })
     }
   }
   return out
@@ -249,7 +266,10 @@ const EQUIVALENT = /\bor\s+(?:an?\s+)?(?:\w+\s+){0,2}?(?:equivalent|comparable)\
 /** How far after the degree word its field is read: "Bachelor's degree in Chemistry, Biology or a related field". */
 const FIELD_WINDOW = 160
 const PHD = /\b(?:Ph\.?\s?D|[Dd]octorate)(?![A-Za-z])/
-/** A PhD the sentence itself requires; a PhD in a list of degree options ("- Ph.D. in CS") is one way to qualify. */
+/**
+ * A PhD the sentence itself requires. Under a must-have heading a bullet naming only a PhD is required too,
+ * unless a sibling bullet names another degree: then the PhD is one of the options ("- M.S. in CS", "- Ph.D. in CS").
+ */
 const PHD_REQUIRED = /^\W*(?:requirements?|required|minimum qualifications?)\b|\brequired\b|\bmust\s+(?:have|hold)\b|\brequires?\b/i
 
 function areasOf(text: string): string[] {
@@ -262,15 +282,18 @@ function degreeGates(job: MatchJob, degrees: readonly ProfileDegree[]): MatchGat
   const held = new Set(degrees.flatMap((d) => areasOf(`${d.field} ${d.degree}`)))
   const phd = degrees.some((d) => PHD.test(d.degree) || /\bdoctor/i.test(d.degree))
   const gates: MatchGate[] = []
-  for (const { text, preferred } of sentences(job.description)) {
+  const all = sentences(job.description)
+  const otherLevel = (t: string) => /\b(?:[Bb]achelor|[Mm]aster)|\b(?:B\.?S|M\.?S|B\.A|MD)\b/.test(t)
+  for (const { text, preferred, required, section } of all) {
     const at = text.search(DEGREE)
     if (preferred || at < 0 || EQUIVALENT.test(text)) continue
     const asked = areasOf(text.slice(at, at + FIELD_WINDOW))
     if (held.size > 0 && asked.length > 0 && !asked.some((a) => held.has(a)) && !gates.some((g) => g.kind === 'degree')) {
       gates.push({ kind: 'degree', reason: `Asks for a degree in ${asked.join(' / ')}` })
     }
-    const otherLevel = /\b(?:[Bb]achelor|[Mm]aster)|\b(?:B\.?S|M\.?S|B\.A|MD)\b/.test(text)
-    if (!phd && !otherLevel && PHD.test(text) && PHD_REQUIRED.test(text) && !gates.some((g) => g.reason === 'Asks for a PhD')) {
+    const mustHave =
+      PHD_REQUIRED.test(text) || (required && !all.some((o) => o.section === section && !o.preferred && otherLevel(o.text)))
+    if (!phd && !otherLevel(text) && PHD.test(text) && mustHave && !gates.some((g) => g.reason === 'Asks for a PhD')) {
       gates.push({ kind: 'degree', reason: 'Asks for a PhD' })
     }
   }

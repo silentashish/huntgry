@@ -213,6 +213,16 @@ describe('matchScore', () => {
       expect(matchScore(job('PhD required.'), profile({ degrees: [{ degree: 'PhD', field: 'Physics' }] })).gates).toEqual([])
     })
 
+    it('fails a PhD that a must-have section lists alone, not one among degree options or under a preference', () => {
+      expect(matchScore(job('Minimum Qualifications:\n- PhD in Computer Science\n- Python'), profile()).gates).toEqual([
+        { kind: 'degree', reason: 'Asks for a PhD' }
+      ])
+      const options = 'Minimum Qualifications:\n- M.S. in Computer Science\n- Ph.D. in Computer Science\n- Python'
+      expect(matchScore(job(options), profile()).gates).toEqual([])
+      expect(matchScore(job('Preferred Qualifications:\n- PhD in Computer Science\n- Python'), profile()).gates).toEqual([])
+      expect(matchScore(job('About us:\n- Our founders hold a PhD in physics.\n- Python'), profile()).gates).toEqual([])
+    })
+
     it('reads a dotted degree as one sentence with what follows it', () => {
       expect(matchScore(job('Ph.D. in Computer Science required. Python.'), profile()).gates).toEqual([
         { kind: 'degree', reason: 'Asks for a PhD' }
