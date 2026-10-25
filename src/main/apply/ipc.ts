@@ -167,7 +167,19 @@ const service = new ApplyService({
   answers,
   pickWidgets: pickSetting,
   aiAnswers: aiAnswersSetting,
-  openTab: (url) => browserManager().openTab(url),
+  openTab: async (url, options) => {
+    const tabId = await browserManager().openTab(url, options?.activate ?? true)
+    // Automation's hidden tab (#154): a hidden page is throttled, and its fill would stall.
+    if (options?.background) browserManager().getWebContents(tabId).setBackgroundThrottling(false)
+    return tabId
+  },
+  closeTab: (tabId) => {
+    try {
+      browserManager().close(tabId)
+    } catch {
+      // The window (and its tabs) may be gone already.
+    }
+  },
   navigate: (tabId, url) => browserManager().navigate(tabId, url),
   page: (tabId) => pageOf(browserManager().getWebContents(tabId)),
   attachDebugger: (tabId) => browserManager().attachDebugger(tabId),
@@ -196,6 +208,17 @@ function requireForgetTarget(v: unknown): { fact: FactKey } | { question: string
   const o = (typeof v === 'object' && v !== null ? v : {}) as Record<string, unknown>
   if (isFactKey(o.fact)) return { fact: o.fact }
   return { question: requireText(o.question, 'question', 300) }
+}
+
+/**
+ * Automation's view of the apply service (#154), main only: whether a session is open, the unattended
+ * `prepare`, and the user's open of a prepared fill. Nothing here is exposed over IPC.
+ */
+export const applyForAutomation = {
+  busy: (): boolean => service.busy(),
+  prepare: (applicationId: string, options?: { timeoutMs?: number }) => service.prepare(applicationId, options),
+  start: (applicationId: string, seed?: Parameters<ApplyService['start']>[1]) => service.start(applicationId, seed),
+  current: () => service.current()
 }
 
 /** Ends any apply session (app quit). */
