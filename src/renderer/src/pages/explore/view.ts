@@ -7,6 +7,7 @@ import {
   type ExploreList,
   type WorkModel
 } from '@shared/explore-types'
+import type { RowScore } from '@shared/explore-score'
 import { salaryRange } from '@shared/job-filters'
 import type { Job } from '@shared/jobs-types'
 
@@ -91,6 +92,26 @@ export function visibleRows(jobs: readonly ExploreJob[], { day, ...f }: { day: s
     const hay = `${j.company} ${j.title} ${j.location} ${(j.industry ?? []).join(' ')}`.toLowerCase()
     return words.every((w) => hay.includes(w))
   })
+}
+
+/** The list's order: as listed (newest first), or best match first (#150). */
+export type ExploreSort = 'newest' | 'match'
+
+/**
+ * The rows whose match score reaches `minMatch`, in `sort` order (#150): best match first keeps the listed order
+ * among equal scores. A README row's "≈" estimate sorts and filters like an exact score: it is the only number the
+ * row has, and leaving such rows out of "Match ≥ N" would empty the fallback list. A row not scored yet (the
+ * profile still loading) counts as 0.
+ */
+export function matchRows(
+  rows: readonly ExploreJob[],
+  scores: ReadonlyMap<string, RowScore>,
+  { sort, minMatch }: { sort: ExploreSort; minMatch: number | null }
+): ExploreJob[] {
+  const scoreOf = (r: ExploreJob) => scores.get(r.id)?.score ?? 0
+  const kept = minMatch ? rows.filter((r) => scoreOf(r) >= minMatch) : [...rows]
+  // Array.prototype.sort is stable: equal scores keep the listed order.
+  return sort === 'match' ? kept.sort((a, b) => scoreOf(b) - scoreOf(a)) : kept
 }
 
 /** Filters that only API rows can answer: off for a README list. */

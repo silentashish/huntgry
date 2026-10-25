@@ -10,8 +10,11 @@ import {
   IconRefresh,
   IconSearch
 } from '@tabler/icons-react'
+import { scoreRows } from '@shared/explore-score'
 import { WORK_MODELS, type ExploreJob, type ExploreList, type JobrightAccount } from '@shared/explore-types'
+import { profileSignals, type ProfileSignals } from '@shared/job-relevance'
 import type { Job } from '@shared/jobs-types'
+import { emptyProfile } from '@shared/master-profile'
 import { api, errorText } from '../../api'
 import { CompanyAvatar, EmptyState, MonoLabel, PageHeader, StatusPill } from '../../components/ui'
 import { useNavigation } from '../../navigation'
@@ -25,6 +28,7 @@ import {
   defaultDay,
   EARLIER_STORAGE_KEY,
   effectiveFilters,
+  matchRows,
   NO_FILTERS,
   readCategory,
   readFlag,
@@ -36,9 +40,11 @@ import {
   writePref,
   type DayGroup,
   type ExploreFilters,
+  type ExploreSort,
   type H1bFilter,
   type WorkModelFilter
 } from './view'
+import { MatchBadge } from './MatchBadge'
 import classes from './explore.module.css'
 
 const WORK_TONE = { Remote: 'trail', Hybrid: 'neutral', 'On Site': 'neutral' } as const
@@ -48,8 +54,8 @@ const CATEGORY_OPTIONS = categoryOptions()
 
 /**
  * Explore (#142, #169): Jobright's jobs of one category from the newgrad-jobs API (the GitHub README when the API
- * fails), grouped by posted day (today first, days past the newest seven folded), cached in the workspace. Any row
- * can be added to the Jobs page in one click.
+ * fails), grouped by posted day (today first, days past the newest seven folded), cached in the workspace. Every row
+ * shows its match score against the master profile (#150), and can be added to the Jobs page in one click.
  */
 export function ExplorePage() {
   const { navigate } = useNavigation()
@@ -65,12 +71,21 @@ export function ExplorePage() {
   const [adding, setAdding] = useState<Set<string>>(new Set())
   const [now, setNow] = useState(() => Date.now())
   const [account, setAccount] = useState<JobrightAccount | null>(null)
+  /** What the master profile says to score rows on; `null` while loading (an unreadable profile gives no signals). */
+  const [signals, setSignals] = useState<ProfileSignals | null>(null)
+  const [sort, setSort] = useState<ExploreSort>('newest')
+  const [minMatch, setMinMatch] = useState<number | null>(null)
   // The newest request wins: a slow answer for a category left meanwhile is dropped.
   const request = useRef(0)
 
   useEffect(() => {
     api.jobs.list().then(setSaved, () => undefined)
     api.explore.account().then(setAccount, () => undefined)
+    // Read on every visit: the page is left to edit the profile, so the scores follow its latest version.
+    api.profile.read().then(
+      (doc) => setSignals(profileSignals(doc.profile)),
+      () => setSignals(profileSignals(emptyProfile()))
+    )
     // "Updated … ago" stays true while the page is open.
     const tick = setInterval(() => setNow(Date.now()), 60_000)
     return () => clearInterval(tick)
@@ -163,7 +178,10 @@ export function ExplorePage() {
   const { recent, older } = useMemo(() => splitDays(groups), [groups])
   const day = pickedDay && groups.some((g) => g.day === pickedDay) ? pickedDay : defaultDay(groups, new Date(now))
   const applied = effectiveFilters(filters, shownList?.source)
-  const rows = useMemo(() => visibleRows(jobs, { day, ...applied }), [jobs, day, applied.text, applied.workModel, applied.h1b, applied.minSalary])
+  // Once per list and profile, never per render: filtering, sorting and the day picker reuse it.
+  const scores = useMemo(() => (signals ? scoreRows(jobs, signals) : new Map()), [jobs, signals])
+  const dayRows = useMemo(() => visibleRows(jobs, { day, ...applied }), [jobs, day, applied.text, applied.workModel, applied.h1b, applied.minSalary])
+  const rows = useMemo(() => matchRows(dayRows, scores, { sort, minMatch }), [dayRows, scores, sort, minMatch])
   const added = useMemo(() => addedJobs(saved), [saved])
   const nowDate = new Date(now)
   // A picked older day stays in view while "Earlier" is folded.
@@ -329,6 +347,31 @@ export function ExplorePage() {
               value={filters.minSalary ?? ''}
               onChange={(v) => set('minSalary', typeof v === 'number' && v > 0 ? v : null)}
             />
+            <NumberInput
+              w={130}
+              aria-label="Min. match"
+              placeholder="Match ≥ …"
+              title="Rows whose match score reaches this (a ≈ estimate counts as its number)"
+              min={0}
+              max={100}
+              clampBehavior="strict"
+              allowDecimal={false}
+              prefix="Match ≥ "
+              hideControls
+              value={minMatch ?? ''}
+              onChange={(v) => setMinMatch(typeof v === 'number' && v > 0 ? v : null)}
+            />
+            <Select
+              w={150}
+              aria-label="Sort"
+              data={[
+                { value: 'newest', label: 'Newest first' },
+                { value: 'match', label: 'Best match' }
+              ]}
+              value={sort}
+              onChange={(v) => setSort((v ?? 'newest') as ExploreSort)}
+              allowDeselect={false}
+            />
           </div>
           <MonoLabel component="div">
             {rows.length} of {groups.find((g) => g.day === day)?.count ?? 0} jobs · {day ? dayLabel(day, nowDate) : ''}
@@ -341,7 +384,7 @@ export function ExplorePage() {
                 const savedJob = added.get(r.id)
                 return (
                   <li key={r.id} className={classes.job} aria-label={`${r.title} at ${r.company}`}>
-                    <CompanyAvatar name={r.company} />
+                    {scores.get(r.id) ? <MatchBadge score={scores.get(r.id)!} /> : <CompanyAvatar name={r.company} />}
                     <div className={classes.body}>
                       <button
                         type="button"
