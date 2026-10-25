@@ -20,7 +20,8 @@ import { Shell } from '../pages/shell'
  *   pipeline, and its form filled in a hidden tab with an AI draft, nothing attached and nothing submitted:
  *   Ready to submit. "Review & submit" approves it and opens the filled form; the test presses Submit and the
  *   confirmation records it as applied.
- * - The other Explore rows that share a title with the profile are read and skipped for too few requirements.
+ * - The other Explore rows that share a title with the profile are scored from their qualifications (#150) and
+ *   skipped for too few requirements or a match below 80, without loading their postings.
  * - A saved job whose apply link is a posting page (Huntgry never presses its Apply link) is tailored once,
  *   filled once, and lands in Needs you; another run does not touch it.
  */
@@ -108,7 +109,7 @@ test('prepares a high-match Explore job up to Submit, skips thin matches, and le
   await expect(walled).toContainText('Filling the form')
   await expect.poll(async () => (await readState(ws)).candidates[WALLED.id]?.step).toBe('needs-you')
 
-  // Thin matches: read, scored and skipped with the reason.
+  // Thin matches: scored from their qualifications and skipped with the reason.
   await expect(automation.row(/Backend Engineer I/)).toBeVisible()
   await expect(automation.reason(/Backend Engineer I/)).toContainText(/requirement|below 80/)
   await automation.expectStep(/Backend Engineer I/, 'Skipped')

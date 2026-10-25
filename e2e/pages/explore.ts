@@ -2,7 +2,8 @@ import { expect, type Locator, type Page } from '@playwright/test'
 
 /**
  * The Explore page (#142, #169): Jobright's list of one category, its posted-day buttons (older days under
- * "Earlier"), filters, the source it shows, and per-row Add to Jobs.
+ * "Earlier"), filters, the source it shows, per-row Add to Jobs, and each row's match score (#150) with its sort and
+ * "Match ≥ N" filter.
  */
 export class ExplorePage {
   readonly heading: Locator
@@ -23,6 +24,12 @@ export class ExplorePage {
   readonly earlier: Locator
   readonly h1bFilter: Locator
   readonly minSalary: Locator
+  /** "Match ≥ N" (#150). */
+  readonly minMatch: Locator
+  /** Newest first / Best match (#150), a Mantine Select. */
+  readonly sort: Locator
+  /** The open tooltip of a match badge. */
+  readonly tooltip: Locator
 
   constructor(readonly page: Page) {
     this.heading = page.getByRole('heading', { name: 'Explore', level: 2 })
@@ -38,6 +45,9 @@ export class ExplorePage {
     this.earlier = this.days.getByRole('button', { name: /^Earlier, / })
     this.h1bFilter = page.getByRole('combobox', { name: 'H1B sponsorship' })
     this.minSalary = page.getByRole('textbox', { name: 'Min. salary / year' })
+    this.minMatch = page.getByRole('textbox', { name: 'Min. match' })
+    this.sort = page.getByRole('combobox', { name: 'Sort' })
+    this.tooltip = page.getByRole('tooltip')
   }
 
   /** Picks a category by its label ("Data Analysis"; the first one with that label is New grad · US). */
@@ -51,6 +61,17 @@ export class ExplorePage {
     await this.h1bFilter.click()
     await this.page.getByRole('option', { name: option, exact: true }).click()
     await expect(this.h1bFilter).toHaveValue(option)
+  }
+
+  async sortBy(option: 'Newest first' | 'Best match'): Promise<void> {
+    await this.sort.click()
+    await this.page.getByRole('option', { name: option, exact: true }).click()
+    await expect(this.sort).toHaveValue(option)
+  }
+
+  /** A row's match badge: named "Match 80 of 100", or "Match about 73 of 100, a title-only estimate". */
+  matchBadge(title: string): Locator {
+    return this.row(title).getByRole('img', { name: /^Match / })
   }
 
   /** A posted-day button, by its label ("Today", "Yesterday", "Oct 18"); its name ends with the day's count. */
