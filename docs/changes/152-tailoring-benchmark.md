@@ -28,7 +28,7 @@ writing it faster. The benchmark has to show whether that cost any quality.
 | Area | Files | Why |
 | --- | --- | --- |
 | Runner | `src/main/bench/run.ts` | `runBench(options)` runs each job of a bench set unattended, one after the other, with a given agent binary, model, skill folder and venv. Each run gets what an unattended Tailor run gets: `buildSystemPrompt` (with **no** reframing rules), the #151 re-score after every turn (the same `afterOutput` hook as `start.ts`), and the pipeline's one `NUDGE_TEXT` reply when a turn ends without a resume. Then the run is finished. A run over `--timeout-min` is aborted and recorded as `failed`. A failed run is recorded and the bench moves on. Ctrl-C stops the current run and keeps the results so far. |
-| Isolation | `src/main/bench/run.ts` (`assertBenchOut`) | Runs go to `<out>/<bench-id>/workspace/`, a fresh workspace holding a **copy** of the master profile (and `cover-letter.md` if there is one) and nothing else. An `--out` equal to, or inside, the real workspace, the profile's folder or the set's folder is refused, compared by real path so a symlink can't get around it. The real workspace is only read, and only for the profile. |
+| Isolation | `src/main/bench/run.ts` (`assertBenchOut`) | Runs go to `<out>/<bench-id>/workspace/`, a fresh workspace holding a **copy** of the master profile (and `cover-letter.md` if there is one) and nothing else. An `--out` equal to, or inside, the real workspace, the profile's folder (as given and, for a symlinked profile, its real folder) or the set's folder is refused. The check compares real paths segment by segment, so neither a symlink nor a child named `..bench` gets around it. The bench folder is created exclusively: a taken name, whether a planted symlink or an earlier bench of the same label and second, gets `-2`, `-3`, …. The workspace is checked again by real path before the profile is copied in, and copies refuse an existing destination. The real workspace is only read, and only for the profile. |
 | Metrics | `src/main/bench/measure.ts` | `benchRow` reads one row from what the run left on disk: `run.json` totals and metrics, `events.jsonl` (`build.py` calls), `build-report.json` (through `summarizeBuild`, plus `render.fill` / `target_pages`) and `huntgry.json` → `match`. |
 | Honesty | `src/main/bench/honesty.ts` | `untraceableClaims` counts claims the master profile doesn't back (see below). |
 | Re-score | `src/main/applications/rescore.ts` | `scoreApplication` is split out of `rescoreApplication`. It is the read-only half and returns `{ match, coverage }`, so the bench gets `coverage.unbacked` without scoring anything a second way. `rescoreApplication` keeps its signature, storage and tests. |
@@ -80,7 +80,7 @@ One row per run in `results.json` → `rows[]` (`BenchRow`, `src/main/bench/type
 | `untraceable` | `{ count, byKind, items }`: claims the profile doesn't back (below). `items` keeps the first 20 for spot checks; it is in `results.json`, not in the report. |
 | `outputChars` | Characters of `resume_data.json`, `tailoring-notes.md` and `cover_data.json`, the agent's biggest writes. |
 
-The report adds a **pass rate**: the share of runs that built a resume with `ok` and no failed hard check.
+The report adds a **pass rate**: the share of runs that **finished**, built a resume, and whose `build-report.json` says `ok` with no failed hard check. A missing or unreadable report doesn't count as a pass, and neither does a run that timed out after writing a PDF.
 
 ### Honesty: untraceable claims
 
@@ -123,7 +123,7 @@ holds the user's own jobs, which are personal data, so it lives in the workspace
 
 Only `description` (inline) or `descriptionFile` (relative to the set folder, and inside it) is
 required. `id` defaults to the file name, `role` / `company` / `jobId` are lowercase slugs (the
-application folder), `coverLetter` defaults to `true` and `dateStyle` to `right`. `url` becomes the
+application folder, and must differ between jobs, because all runs share one workspace; a set where two jobs would build into the same folder is refused), `coverLetter` defaults to `true` and `dateStyle` to `right`. `url` becomes the
 application's `jobUrl`. `seniority` and `stack` are labels for reading the report and are never
 sent to the agent. `src/main/bench/fixtures/` holds the synthetic set CI uses.
 
@@ -173,11 +173,13 @@ Each bench run writes `<out>/<bench-id>/results.json` (after every run), `report
 - **No caller rules.** The user's standing reframing rules (#159) change what a run may write.
   A bench with empty rules gives the same input on both sides, whatever the user decided in between.
 - **One workspace per bench run, not per job.** The runs then share a profile copy and one place to
-  inspect. A 1.5 s gap between runs keeps the runner's output-folder scan (folders changed since a
-  second before the turn started) from picking up the previous run's folder.
+  inspect, so every job must build its own application folder, which the set loader checks. A 1.5 s gap between runs keeps the runner's output-folder scan (folders changed since a
+  second before the turn started) from picking up the previous run's folder. A Ctrl-C during that
+  pause ends the bench before the next run starts.
 - **Medians, and only over shared jobs.** Model output varies, so the report compares medians and
   `--repeat` adds samples. A candidate run on part of the set (`--jobs`) is compared on the jobs both
-  ran. Medians over different job mixes would compare the jobs, not the versions.
+  ran. Medians over different job mixes would compare the jobs, not the versions. Two runs with no
+  job in common (or an empty run) get **Not comparable**, with no medians, deltas or verdict.
 - **The verdict is quality-first.** "Faster" is only reported when median coverage and surfaced
   dropped by at most the tolerance (2 points), the mean untraceable count per run didn't rise, and
   the pass rate didn't drop. Otherwise the verdict reports a quality regression, whatever the time.
@@ -193,8 +195,11 @@ Each bench run writes `<out>/<bench-id>/results.json` (after every run), `report
 
 - `npx vitest run src/main/bench src/main/applications/rescore.test.ts src/main/cli src/main/pipeline`.
   `bench.test.ts` runs the bench end to end with the fake agent: isolation (the source workspace is
-  byte-for-byte unchanged, and `--out` inside it is refused, including through a symlink), every row
-  metric, the nudge, the timeout, Ctrl-C, `--repeat` / `--jobs`, and a comparison of two runs.
+  byte-for-byte unchanged; `--out` inside it is refused, including through a symlink, a `..bench` child
+  and a symlinked profile; a planted bench-folder symlink is never followed), every row
+  metric, the nudge, the timeout, Ctrl-C (also during the pause between runs), `--repeat` / `--jobs`,
+  duplicate application folders, and a comparison of two runs. `report.test.ts` covers the pass rule
+  and the "Not comparable" verdict.
 - The CLI without spending anything. Put a wrapper around the fake agent in a scratch folder; it
   answers `--version` and `auth status` itself:
 
