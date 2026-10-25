@@ -24,6 +24,8 @@
     "screenshots": "electron-vite build && playwright test -c e2e/screenshots.config.ts",
     "check:lockfiles": "node scripts/check-lockfiles.mjs",
     "check:docs": "node scripts/check-doc-links.mjs README.md docs/install.md",
+    "bench:tailor": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/bench-tailor.mjs run",
+    "bench:compare": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/bench-tailor.mjs compare",
     "typecheck": "npm run typecheck:node && npm run typecheck:web && npm run typecheck:page && npm run typecheck:remote && npm run typecheck:e2e && npm run typecheck:relay && npm run typecheck:mobile",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
