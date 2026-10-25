@@ -2,6 +2,7 @@ import { contextBridge } from 'electron'
 import type { HuntgryApi } from '@shared/api'
 import { applications } from './applications'
 import { apply } from './apply'
+import { automation } from './automation'
 import { browser } from './browser'
 import { on } from './events'
 import { explore } from './explore'
@@ -32,6 +33,7 @@ const api: HuntgryApi = {
   apply,
   review,
   pipeline,
+  automation,
   remote,
   on
 }

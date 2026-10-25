@@ -1,5 +1,6 @@
 import type { ApplicationsApi } from './applications-types'
 import type { ApplyApi } from './apply-types'
+import type { AutomationApi } from './automation-types'
 import type { BrowserApi } from './browser-types'
 import type { Subscribe } from './events'
 import type { ExploreApi } from './explore-types'
@@ -42,6 +43,8 @@ export interface HuntgryApi {
   review: ReviewApi
   /** Unattended pipeline over the queue: plan, start, pause, resume, stop, state, last summary. */
   pipeline: PipelineApi
+  /** Automation (#154): prepares high-match applications unattended and stops before Submit. */
+  automation: AutomationApi
   /** Remote control: the relay session, its credentials and paired phones (ADR-0001). */
   remote: RemoteApi
   /** Main → renderer events, restricted to `EVENT_CHANNELS`. */

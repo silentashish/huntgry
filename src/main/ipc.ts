@@ -1,5 +1,6 @@
 import { registerApplicationsIpc } from './applications/ipc'
 import { registerApplyIpc } from './apply/ipc'
+import { registerAutomationIpc } from './automation/ipc'
 import { registerBrowserIpc } from './browser/ipc'
 import { registerExploreIpc } from './explore/ipc'
 import { registerRunnerIpc } from './cli/ipc'
@@ -31,5 +32,6 @@ export function registerIpcHandlers(): void {
   registerApplyIpc()
   registerReviewIpc()
   registerPipelineIpc()
+  registerAutomationIpc()
   registerRemoteIpc()
 }
