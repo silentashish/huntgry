@@ -238,6 +238,16 @@ describe('selectCandidates: the caps', () => {
     expect(keys(same.picked)).toEqual([a.id])
   })
 
+  it('per company: an automated submission older than 30 days no longer holds a place', () => {
+    const settings = { ...DEFAULT_AUTOMATION_SETTINGS, perCompany: 2 }
+    const fresh = job({ description: ALL, company: 'Hooli' })
+    const old = (k: string, at: string) => candidate({ key: k, step: 'submitted', company: 'Hooli', applicationId: `x/hooli/${k}`, updatedAt: at })
+    const aged = { s1: old('s1', '2026-09-01T00:00:00Z'), s2: old('s2', '2026-09-02T00:00:00Z') }
+    expect(keys(selectCandidates([input(fresh)], ctx({ settings, candidates: aged })).picked)).toEqual([fresh.id])
+    const recent = { s1: old('s1', '2026-10-10T00:00:00Z'), s2: old('s2', '2026-10-11T00:00:00Z') }
+    expect(reasonOf(selectCandidates([input(fresh)], ctx({ settings, candidates: recent })).skipped, fresh.id)).toBe('Cap: 2 per company.')
+  })
+
   it('per day: at most perDay scored jobs, counting jobs started earlier today, reset the next local day', () => {
     const settings = { ...DEFAULT_AUTOMATION_SETTINGS, perDay: 10 }
     const jobs = Array.from({ length: 4 }, () => job({ description: ALL }))

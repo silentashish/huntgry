@@ -22,6 +22,8 @@ export interface PipelineTailorDeps {
   options(coverLetter: boolean): QueueOptions
   listRuns(workspace: string): Promise<RunSummary[]>
   readRun(workspace: string, runId: string): Promise<RunSummary | null>
+  /** How often a wait looks at the queue besides its events; 2 s by default. */
+  pollMs?: number
 }
 
 const ACTIVE = new Set<QueueItem['status']>(['queued', 'preparing', 'running'])
@@ -60,7 +62,7 @@ export function pipelineTailor(deps: PipelineTailorDeps): TailorDeps {
         return 'Waiting: the tailoring queue is paused with jobs in it (starting would unpause them). Resume or clear it on the Tailor page.'
       return null
     },
-    start: async (ws, jobId, { automationRunId, coverLetter }) => {
+    start: async (ws, jobId, { automationRunId, coverLetter, retry }) => {
       const state = await deps.pipeline.start(
         {
           jobIds: [jobId],
@@ -69,7 +71,8 @@ export function pipelineTailor(deps: PipelineTailorDeps): TailorDeps {
           // The queue's own concurrency: a pipeline start sets it, and Automation runs one job at a time anyway.
           concurrency: deps.queue.state().concurrency,
           resumeAfterRestart: false,
-          skipTailored: true,
+          // New jobs never run twice; the user's Retry of a result that needs attention is the one exception.
+          skipTailored: !retry,
           stallMinutes: DEFAULT_STALL_MINUTES,
           origin: 'automation',
           automationRunId
@@ -80,19 +83,30 @@ export function pipelineTailor(deps: PipelineTailorDeps): TailorDeps {
       if (!item) throw new Error('The pipeline queued no job.')
       return { itemId: item.id }
     },
-    wait: (itemId) =>
+    wait: (itemId, signal) =>
       new Promise<TailorResult>((resolve) => {
-        let off: (() => void) | null = null
+        let settled = false
+        const finish = (r: TailorResult) => {
+          if (settled) return
+          settled = true
+          off()
+          clearInterval(poll)
+          signal.removeEventListener('abort', aborted)
+          resolve(r)
+        }
         const check = () => {
           const item = find(itemId)
           const r: TailorResult | 'working' = item ? resultOf(item) : { status: 'cancelled', error: 'The job left the queue.' }
-          if (r === 'working') return false
-          off?.()
-          resolve(r)
-          return true
+          if (r !== 'working') finish(r)
         }
-        off = deps.onQueueChange(() => void check())
-        check()
+        const aborted = () => finish({ status: 'cancelled', aborted: true })
+        const off = deps.onQueueChange(check)
+        // A queue reload (workspace switch, restart) changes items without an event for this listener.
+        const poll = setInterval(check, deps.pollMs ?? 2000)
+        poll.unref?.()
+        signal.addEventListener('abort', aborted)
+        if (signal.aborted) aborted()
+        else check()
       }),
     item: (itemId) => {
       const item = find(itemId)
@@ -119,6 +133,15 @@ export function pipelineTailor(deps: PipelineTailorDeps): TailorDeps {
       const mid = Math.floor(costs.length / 2)
       return costs.length % 2 ? costs[mid] : (costs[mid - 1] + costs[mid]) / 2
     },
-    runCostUsd: async (ws, runId) => runCost(await deps.readRun(ws, runId))
+    costUsd: async (ws, itemId) => {
+      const item = find(itemId)
+      if (!item) return 0
+      // Every attempt of the item records its batch id on its run: a failed attempt the pipeline retried counts too.
+      if (item.batchId) {
+        const runs = (await deps.listRuns(ws)).filter((r) => r.params.batchId === item.batchId)
+        if (runs.length > 0) return Math.round(runs.reduce((sum, r) => sum + runCost(r), 0) * 10000) / 10000
+      }
+      return item.runId ? runCost(await deps.readRun(ws, item.runId)) : 0
+    }
   }
 }

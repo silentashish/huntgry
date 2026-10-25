@@ -37,9 +37,9 @@ export interface ExploreSourceDeps {
   rows(workspace: string): Promise<ExploreJob[]>
   /** The Job a row is saved as (`toJob`). */
   toJob(row: ExploreJob, now: Date): Job
-  /** The saved copy of a row, if it was added already (`findCanonical`). */
-  saved(workspace: string, savedId: string): Promise<Job | null>
-  /** "Add to Jobs" (`addExplore`): saves the row and, while Jobright is connected, resolves its employer link. */
+  /** The saved jobs, canonical with their aliases (`listJobs`): read once per list, joined to the rows by id. */
+  savedJobs(workspace: string): Promise<Job[]>
+  /** "Add to Jobs" (`addExplore`): saves the row (Automation looks its employer link up in its own step). */
   add(workspace: string, rowId: string): Promise<Job>
   now?: () => Date
 }
@@ -52,10 +52,14 @@ export function exploreCandidates(deps: ExploreSourceDeps): CandidateSource {
     id: 'explore',
     list: async (ws) => {
       const now = deps.now?.() ?? new Date()
+      const rows = await deps.rows(ws)
+      // One read of the saved jobs for the whole list (hundreds of rows), indexed by id and alias.
+      const index = new Map<string, Job>()
+      if (rows.length > 0) for (const job of await deps.savedJobs(ws).catch(() => [])) for (const id of [job.id, ...(job.aliases ?? [])]) index.set(id, job)
       const out: CandidateInput[] = []
-      for (const row of await deps.rows(ws)) {
+      for (const row of rows) {
         const listed = deps.toJob(row, now)
-        const saved = await deps.saved(ws, listed.id).catch(() => null)
+        const saved = index.get(listed.id) ?? null
         const job = saved ?? listed
         out.push({
           key: saved ? saved.id : `${EXPLORE_KEY_PREFIX}${row.id}`,

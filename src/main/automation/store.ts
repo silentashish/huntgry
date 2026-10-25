@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { appendFile, mkdir, open, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
@@ -11,6 +11,7 @@ import {
   type PreparedFill
 } from '@shared/automation-types'
 import { HUNTGRY_DIR } from '../workspace/constants'
+import type { TrustedUsage } from './service'
 
 /**
  * Automation's files in the workspace (#154):
@@ -112,9 +113,11 @@ export function writeState(ws: string, state: AutomationState): Promise<void> {
       await rename(tmp, stateFile(ws))
     })
   writes.set(ws, run)
-  void run.finally(() => {
+  // Both ways: a cleanup chained with `finally` alone would reject again, unhandled, when the write fails.
+  const forget = () => {
     if (writes.get(ws) === run) writes.delete(ws)
-  })
+  }
+  run.then(forget, forget)
   return run
 }
 
@@ -153,9 +156,10 @@ export function appendLog(ws: string, entry: AutomationLogEntry): Promise<void> 
       await appendFile(file, `${prefix}${JSON.stringify(entry)}\n`, 'utf8')
     })
   appends.set(ws, run)
-  void run.finally(() => {
+  const forget = () => {
     if (appends.get(ws) === run) appends.delete(ws)
-  })
+  }
+  run.then(forget, forget)
   return run
 }
 
@@ -221,4 +225,44 @@ export async function readPrepared(ws: string, applicationId: string): Promise<P
   } catch {
     return null
   }
+}
+
+/**
+ * What controls spending, out of the workspace (#154 review): the run window switch and today's count, per
+ * workspace under `<userData>/automation/<sha256(workspace)>.json`. An agent can write into the workspace, so the
+ * workspace's `automation.json` only mirrors these for display; editing or deleting it neither turns the window on
+ * nor gives back the day's allowance.
+ */
+export const trustedFile = (root: string, ws: string): string => join(root, `${createHash('sha256').update(ws).digest('hex')}.json`)
+
+export async function readTrusted(root: string, ws: string): Promise<TrustedUsage | null> {
+  try {
+    const raw: unknown = JSON.parse(await readFile(trustedFile(root, ws), 'utf8'))
+    if (!isObject(raw) || raw.version !== 1) return null
+    const day = isObject(raw.day) ? raw.day : {}
+    return { enabled: raw.enabled === true, day: { date: str(day.date) ?? '', started: Math.max(0, Math.floor(num(day.started) ?? 0)) } }
+  } catch {
+    return null
+  }
+}
+
+const trustedWrites = new Map<string, Promise<unknown>>()
+
+export function writeTrusted(root: string, ws: string, usage: TrustedUsage): Promise<void> {
+  const file = trustedFile(root, ws)
+  const body = `${JSON.stringify({ version: 1, ...usage }, null, 2)}\n`
+  const run = (trustedWrites.get(file) ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(async () => {
+      await mkdir(root, { recursive: true })
+      const tmp = `${file}.${randomBytes(4).toString('hex')}.tmp`
+      await writeFile(tmp, body, 'utf8')
+      await rename(tmp, file)
+    })
+  trustedWrites.set(file, run)
+  const forget = () => {
+    if (trustedWrites.get(file) === run) trustedWrites.delete(file)
+  }
+  run.then(forget, forget)
+  return run
 }

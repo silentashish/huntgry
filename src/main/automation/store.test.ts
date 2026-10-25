@@ -1,9 +1,9 @@
 import { appendFile, mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EMPTY_AUTOMATION_STATE, type AutomationLogEntry, type PreparedFill } from '@shared/automation-types'
-import { appendLog, flushState, logFile, preparedFile, readLog, readPrepared, readState, stateFile, writePrepared, writeState } from './store'
+import { appendLog, flushState, logFile, preparedFile, readLog, readPrepared, readState, readTrusted, stateFile, trustedFile, writePrepared, writeState, writeTrusted } from './store'
 
 let ws: string
 beforeEach(async () => {
@@ -77,5 +77,29 @@ describe('automation store', () => {
     expect(preparedFile(ws, fill.applicationId)).toMatch(/embedded-software-engineer_contoso-robotics_e2e0a3\.json$/)
     expect(await readPrepared(ws, fill.applicationId)).toEqual(fill)
     expect(await readPrepared(ws, 'other/app/id')).toBeNull()
+  })
+
+  it('a failed write or append rejects to its caller only: no unhandled rejection from the cleanup', async () => {
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    try {
+      // `.huntgry` is a file: every write under it fails.
+      await writeFile(join(ws, '.huntgry'), 'not a folder')
+      await expect(appendLog(ws, entry(1))).rejects.toThrow()
+      await expect(writeState(ws, structuredClone(EMPTY_AUTOMATION_STATE))).rejects.toThrow()
+      await new Promise((r) => setTimeout(r, 20))
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      process.off('unhandledRejection', unhandled)
+    }
+  })
+
+  it('keeps the trusted usage per workspace outside it, and reads nothing for another workspace', async () => {
+    const root = join(ws, 'user-data', 'automation')
+    expect(await readTrusted(root, '/w1')).toBeNull()
+    await writeTrusted(root, '/w1', { enabled: true, day: { date: '2026-10-24', started: 3 } })
+    expect(await readTrusted(root, '/w1')).toEqual({ enabled: true, day: { date: '2026-10-24', started: 3 } })
+    expect(await readTrusted(root, '/w2')).toBeNull()
+    expect(trustedFile(root, '/w1')).not.toContain('w1')
   })
 })

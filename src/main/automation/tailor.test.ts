@@ -7,7 +7,7 @@ import type { PipelineSummary } from '@shared/pipeline-types'
 import type { QueueOptions, QueueState } from '@shared/queue-types'
 import type { AgentId, RunSummary } from '@shared/runner-types'
 import { RunManager, type RunContext } from '../cli/runner'
-import { listRuns, readRun } from '../cli/runs'
+import { folderSlug, listRuns, readRun } from '../cli/runs'
 import { TailorQueue } from '../queue/queue'
 import { Pipeline } from '../pipeline/pipeline'
 import { setReviewAuthorityRoot } from '../review/authority'
@@ -102,7 +102,8 @@ beforeEach(async () => {
     workspace: async () => ws,
     findJob: async (_ws, id) => jobs.get(id) ?? null,
     fetchDetails: async (_ws, id) => jobs.get(id)!,
-    tailoredJobIds: async () => new Set(),
+    // Like the app's scan of application folders: a job whose run built its folder counts as tailored before.
+    tailoredJobIds: async () => new Set(queue.state().items.filter((i) => i.applicationId).map((i) => folderSlug(jobs.get(i.jobId)!.sourceId))),
     environment: async () => ({ agents: (['claude', 'codex', 'antigravity'] as AgentId[]).map((id) => ({ id, ready: true, problems: [] })), sharedProblems: [] }),
     freeDiskBytes: async () => 10 * 1024 ** 3,
     runHistory: async () => ({ medianMs: null, medianCostUsd: null }),
@@ -168,11 +169,11 @@ describe('pipelineTailor', { timeout: 30_000 }, () => {
     expect(t.blocked(ws)).toMatch(/last tailoring run/)
     expect(t.item(itemId)).toBe('working')
 
-    const result = await t.wait(itemId)
+    const result = await t.wait(itemId, new AbortController().signal)
     expect(result).toMatchObject({ status: 'done', outcome: 'unreviewed' })
     expect(result.applicationId).toBeTruthy()
     expect(result.runId).toBeTruthy()
-    expect(await t.runCostUsd(ws, result.runId!)).toBeGreaterThan(0)
+    expect(await t.costUsd(ws, itemId)).toBeGreaterThan(0)
     await waitFor(() => pipeline.state()?.status === 'finished' && finished.length === 1)
     // Automation tells the user itself: no per-job "pipeline finished" notification.
     expect(notifications).not.toContain('pipeline-finished')
@@ -185,7 +186,34 @@ describe('pipelineTailor', { timeout: 30_000 }, () => {
     notes = 'VERIFY_FAIL'
     const t = tailor()
     const { itemId } = await t.start(ws, 'url:b', { automationRunId: 'a-2', coverLetter: false })
-    expect(await t.wait(itemId)).toMatchObject({ status: 'done', outcome: 'needs-attention' })
+    expect(await t.wait(itemId, new AbortController().signal)).toMatchObject({ status: 'done', outcome: 'needs-attention' })
+  })
+
+  it('an explicit Retry gets past the tailored-before guard for a result that needs attention (one attempt, verify gate)', async () => {
+    jobs.set('url:r', job('url:r'))
+    notes = 'VERIFY_FAIL'
+    const t = tailor()
+    const first = await t.start(ws, 'url:r', { automationRunId: 'a-4', coverLetter: false })
+    expect(await t.wait(first.itemId, new AbortController().signal)).toMatchObject({ status: 'done', outcome: 'needs-attention' })
+    await waitFor(() => pipeline.state()?.status === 'finished')
+    notes = 'WRITE_NOTES'
+    // A new pick is refused (tailored before); the user's Retry is not.
+    await expect(t.start(ws, 'url:r', { automationRunId: 'a-4', coverLetter: false })).rejects.toThrow(/Tailored before/)
+    const retry = await t.start(ws, 'url:r', { automationRunId: 'a-4', coverLetter: false, retry: true })
+    expect(retry.itemId).not.toBe(first.itemId)
+    expect(await t.wait(retry.itemId, new AbortController().signal)).toMatchObject({ status: 'done', outcome: 'unreviewed' })
+  })
+
+  it('a wait ends at once when its run is stopped, whatever the queue does', async () => {
+    jobs.set('url:s', job('url:s'))
+    notes = 'SLOW WRITE_NOTES'
+    const t = tailor()
+    const { itemId } = await t.start(ws, 'url:s', { automationRunId: 'a-5', coverLetter: false })
+    const abort = new AbortController()
+    const waiting = t.wait(itemId, abort.signal)
+    abort.abort()
+    expect(await waiting).toEqual({ status: 'cancelled', aborted: true })
+    await t.stop(ws)
   })
 
   it("waits for someone else's pipeline, and pauses or stops only its own", async () => {
@@ -206,7 +234,7 @@ describe('pipelineTailor', { timeout: 30_000 }, () => {
     await t.resume(ws)
     expect(pipeline.state()?.status).toBe('running')
     await t.stop(ws)
-    const r = await t.wait(itemId)
+    const r = await t.wait(itemId, new AbortController().signal)
     expect(['cancelled', 'done']).toContain(r.status)
   })
 
@@ -224,6 +252,24 @@ describe('pipelineTailor', { timeout: 30_000 }, () => {
       })
     expect(paused('queued').blocked(ws)).toMatch(/queue is paused/)
     expect(paused('done').blocked(ws)).toBeNull()
+  })
+})
+
+describe('costUsd', () => {
+  it('adds up every attempt of the item (a failed run the pipeline retried included)', async () => {
+    const item = { id: 'q1', jobId: 'url:x', title: 't', options: { coverLetter: false, dateStyle: 'right' as const }, agent: 'claude' as const, runId: 'r2', attempts: 2, createdAt: '', updatedAt: '', status: 'done' as const, batchId: 'b-1' }
+    const run = (id: string, batchId: string, cost: number) => ({ id, status: 'finished', unattended: true, costUsd: 0, totals: { estimatedCostUsd: cost }, params: { batchId } }) as unknown as RunSummary
+    const t = pipelineTailor({
+      pipeline: { state: () => null } as unknown as Pipeline,
+      queue: { state: () => ({ items: [item], concurrency: 1, paused: false }), isPaused: () => false, itemsOf: () => [] },
+      onQueueChange: () => () => undefined,
+      agent: async () => 'claude',
+      options: (coverLetter) => ({ coverLetter, dateStyle: 'right' }),
+      listRuns: async () => [run('r1', 'b-1', 0.1), run('r2', 'b-1', 0.01), run('r3', 'b-other', 5)],
+      readRun: async () => null
+    })
+    expect(await t.costUsd('/ws', 'q1')).toBe(0.11)
+    expect(await t.costUsd('/ws', 'missing')).toBe(0)
   })
 })
 

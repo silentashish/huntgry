@@ -184,20 +184,12 @@ export function selectCandidates(inputs: readonly CandidateInput[], ctx: SelectC
   const ordered = [...scored.sort(byRank), ...unscored.sort(byRank)]
 
   // Per company: what Automation has ready or in flight, and applications made in the last 30 days.
-  const held = new Map<string, Set<string>>()
+  const held = companyHeld(ctx.applications, ctx.candidates, now)
   const hold = (company: string, id: string) => {
     const k = normCompany(company)
     if (!k) return
     if (!held.has(k)) held.set(k, new Set())
     held.get(k)!.add(id)
-  }
-  const since = now.getTime() - PER_COMPANY_DAYS * DAY_MS
-  for (const a of ctx.applications) {
-    const created = Date.parse(a.createdAt)
-    if (Number.isFinite(created) && created >= since) hold(a.company, `app:${a.id}`)
-  }
-  for (const c of Object.values(ctx.candidates)) {
-    if (c.step === 'ready' || c.step === 'submitted' || WORKING_STEPS.has(c.step)) hold(c.company, c.applicationId ? `app:${c.applicationId}` : `key:${c.key}`)
   }
 
   // Per day: only jobs that will be tailored for sure (scored now) count here; Explore rows are counted when they
@@ -220,6 +212,39 @@ export function selectCandidates(inputs: readonly CandidateInput[], ctx: SelectC
     picked.push(c)
   }
   return { picked, skipped }
+}
+
+/**
+ * What holds a company's places: applications created in the last 30 days, and Automation's jobs that are ready,
+ * in flight, or submitted in the last 30 days (each application counted once). `except` leaves one candidate out
+ * (the one asking for a place).
+ */
+export function companyHeld(
+  applications: SelectContext['applications'],
+  candidates: Readonly<Record<string, AutomationCandidate>>,
+  now: Date,
+  except?: string
+): Map<string, Set<string>> {
+  const held = new Map<string, Set<string>>()
+  const hold = (company: string, id: string) => {
+    const k = normCompany(company)
+    if (!k) return
+    if (!held.has(k)) held.set(k, new Set())
+    held.get(k)!.add(id)
+  }
+  const since = now.getTime() - PER_COMPANY_DAYS * DAY_MS
+  const recent = (iso: string) => {
+    const t = Date.parse(iso)
+    return Number.isFinite(t) && t >= since
+  }
+  for (const a of applications) if (recent(a.createdAt)) hold(a.company, `app:${a.id}`)
+  for (const c of Object.values(candidates)) {
+    if (c.key === except) continue
+    // A submission older than the window no longer holds a place (its application ages out the same way).
+    const counts = c.step === 'ready' || WORKING_STEPS.has(c.step) || (c.step === 'submitted' && recent(c.updatedAt))
+    if (counts) hold(c.company, c.applicationId ? `app:${c.applicationId}` : `key:${c.key}`)
+  }
+  return held
 }
 
 /** Local YYYY-MM-DD of `date`. */
