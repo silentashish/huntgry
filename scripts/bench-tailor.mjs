@@ -131,7 +131,8 @@ async function run(argv) {
   const { dir, results } = await runBench({
     set,
     profile,
-    coverLetter: workspace && existsSync(join(workspace, 'cover-letter.md')) ? join(workspace, 'cover-letter.md') : null,
+    // The base cover letter that sits next to the profile, as in a workspace.
+    coverLetter: existsSync(join(dirname(profile), 'cover-letter.md')) ? join(dirname(profile), 'cover-letter.md') : null,
     sourceWorkspace: workspace,
     out: expand(values.out),
     label: values.label ?? `${values.model}-${new Date().toISOString().slice(0, 10)}`,
