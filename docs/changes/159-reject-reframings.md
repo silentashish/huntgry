@@ -38,7 +38,9 @@ rule sticks).
 **Caller rules** (`src/main/cli/start.ts`, `command.ts`). `rulesForPrompt` turns the rules into the
 skill's caller rules: kept wordings and better wordings → `preferred`, rejected wordings →
 `avoid`. Newest first, capped together at `RULES_PROMPT_CAP` (150 wordings, 32 KB, the old
-approvals cap). A rejection with a better wording is sent whole or not at all.
+approvals cap). A rejection with a better wording is sent whole or not at all. Each fact/wording
+pair is decided once, by the newest rule that names it, so a wording is never both preferred and
+avoided: rejecting A with B and later rejecting B (with C or nothing) sends B to `avoid` only.
 
 **Review service** (`src/main/review/service.ts`, `ipc.ts`).
 
@@ -49,16 +51,20 @@ approvals cap). A rejection with a better wording is sent whole or not at all.
 - `ReviewDetail.proposedReframings[].rule` shows the rule standing for each pair. It is not part of
   the revision: a rule is a decision, not the result.
 - **Re-run** needs no typed answers any more. Its message spells out this result's rejected
-  reframings (with "Use instead") and the ticked ones, then repeats the full caller rules. They are
-  repeated because a continued session keeps the system prompt it started with; a resumed process
-  also gets the new system prompt.
+  reframings (with "Use instead", unless that wording was rejected since) and the ticked ones, then
+  repeats the full caller rules. They are repeated because a continued session keeps the system
+  prompt it started with; a resumed process also gets the new system prompt. The ticked wordings
+  are saved *before* the reply leaves (and put back if the run cannot be resumed), so a resumed
+  process's system prompt says the same as the message.
 - `review:rules`, `review:remove-rule`, `review:remove-all-rules` replace the `approvals` channels.
 
 **Review page** (`src/renderer/src/pages/review/*`). Each reframing the run used has **Reject**,
 which opens an optional "Better wording" field. A rejected reframing shows its wording struck
 through, "Use instead", a Rejected pill and **Undo** (removes the rule). The Decision card's
 **Re-run** is always available; its hint says what it will do ("…with your reframing rules
-(without R1; keeping R2 as written)"). The header button is **Reframing rules · N** and opens that
+(without R1; keeping R2 as written)"). Rejecting a reframing removes its Keep tick (on the phone
+too), so a later Approve or Re-run cannot undo the rejection; ticking it again afterwards keeps it
+on purpose. The header button is **Reframing rules · N** and opens that
 Settings section. v1 results ("left out") have no Reject: there is nothing in the resume to remove.
 
 **Settings → Reframing rules** (`ReframingRulesCard.tsx`, was `StandingApprovalsCard.tsx`): two
@@ -70,7 +76,8 @@ commands, additively:
 
 - `review.reframings { applicationId }` (a read) → `ReviewReframings { applicationId, revision,
   format, reframings: { id, sourceFact, wording, requirement?, rule?, betterWording? }[], truncated? }`,
-  for the same revision as `review.get`. The ids it lists join what the device was served.
+  for the same revision as `review.get`, cut to whole entries that fit one frame after JSON
+  escaping (`truncated`). The ids it lists join what the device was served.
 - `review.reject { applicationId, revision, reframingId, betterWording? }` → the updated
   `ReviewReframings`. Only an id the phone was served under that revision (`denied` / `invalid`
   otherwise); the service answers `stale` like any decision. Audited with the revision and id.
