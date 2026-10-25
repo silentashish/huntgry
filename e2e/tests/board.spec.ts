@@ -6,9 +6,9 @@ import { savedJob, seedJobs, seedQueue } from '../fixtures/queue'
 import { seedResult, seedReviews } from '../fixtures/review'
 import { expect, test } from '../fixtures/servers/fixture'
 import { BoardPage } from '../pages/board'
-import { Dashboard } from '../pages/dashboard'
 import { JobsPage } from '../pages/jobs'
 import { Shell } from '../pages/shell'
+import { openedPaths, stubOpenPath } from '../pages/tailor'
 
 /**
  * The Board (#85) on the `demo` workspace (five applications and one saved job, see
@@ -119,14 +119,21 @@ test.describe('board columns', () => {
     await expect(page.column('review').getByLabel('2 cards', { exact: true })).toBeVisible()
   })
 
-  test('a card that left the board is still on the Dashboard and on Jobs', async ({ app }) => {
-    await openBoard(app)
-    await new Shell(app.window).goTo('dashboard')
-    const dash = new Dashboard(app.window)
-    await dash.statusFilter.click()
-    await app.window.getByRole('option', { name: 'Archived' }).click()
-    await app.window.keyboard.press('Escape')
-    await dash.expectCompanies(['Lexcorp', 'Oscorp'])
+  test('a card that left the board comes back with "Show older" in Archived, and is still on Jobs', async ({ app }) => {
+    const page = await openBoard(app)
+    // The Dashboard table's Archived filter listed every archived application; Archived does now, when asked (#161).
+    const archived = page.column('archived')
+    await expect(archived).toContainText('1 older not shown.')
+    await archived.getByRole('button', { name: 'Show 1 older' }).click()
+    await page.openAllWeeks('archived')
+    await expect.poll(() => page.titles('archived')).toEqual(['Solutions Architect', ARCHIVED.recent.title, ARCHIVED.old.title])
+    await expect(archived).toContainText('Every archived card, however old.')
+    // Search finds it too, as the table's search did with Archived picked.
+    await page.search.fill('Oscorp')
+    await expect.poll(() => page.titles('archived')).toEqual([ARCHIVED.old.title])
+    await page.search.fill('')
+    await archived.getByRole('button', { name: 'Only the last 7 days' }).click()
+    await expect(page.card(ARCHIVED.old.title)).toHaveCount(0)
 
     await new Shell(app.window).goTo('jobs')
     const jobs = new JobsPage(app.window)
@@ -234,10 +241,9 @@ test.describe('details on the board', () => {
     const shell = new Shell(app.window)
 
     await page.card(DEMO.globex).getByText(DEMO.globex, { exact: true }).click()
-    const dash = new Dashboard(app.window)
-    await expect(dash.drawer).toBeVisible()
-    await expect(dash.drawer.getByRole('heading', { level: 2 })).toContainText('Globex')
-    await dash.closeDrawer()
+    await expect(page.drawer).toBeVisible()
+    await expect(page.drawer.getByRole('heading', { level: 2 })).toContainText('Globex')
+    await page.closeDrawer()
 
     await page.card(DEMO.savedJob).hover()
     await page.card(DEMO.savedJob).getByText(DEMO.savedJob, { exact: true }).click()
@@ -249,6 +255,125 @@ test.describe('details on the board', () => {
 
     await page.card('Security Engineer').getByRole('button', { name: 'Review', exact: true }).click()
     await expect(app.window.getByRole('heading', { name: 'Review', level: 2 })).toBeVisible()
+  })
+})
+
+/**
+ * What the Dashboard table did, on the Board (#161): every row action is on the card or in the
+ * application drawer it opens, and the table's search has its home above the columns.
+ */
+test.describe('applications on the board (#161)', () => {
+  test('search narrows the board by company, role, job title and notes', async ({ app }) => {
+    const page = await openBoard(app)
+    await page.search.fill('globex')
+    await expect.poll(() => page.titles('applied')).toEqual([DEMO.globex])
+    await expect(page.cards('ready')).toHaveCount(0)
+    await page.search.fill('Streaming')
+    await expect.poll(() => page.titles('ready')).toEqual([DEMO.umbrella])
+    // Wayne's notes mention the take-home.
+    await page.search.fill('take-home')
+    await page.openAllWeeks()
+    await expect.poll(() => page.titles('rejected')).toEqual([DEMO.wayne])
+    await page.search.fill('no such application')
+    await expect(app.window.getByRole('article')).toHaveCount(0)
+    await app.window.getByRole('button', { name: 'Clear', exact: true }).click()
+    await expect(page.search).toHaveValue('')
+    await expect(page.card(DEMO.acme)).toBeVisible()
+  })
+
+  test('the drawer opens the resume, the cover letter, the posting and the folder', async ({ app }) => {
+    const page = await openBoard(app)
+    await stubOpenPath(app.electronApp)
+    const id = 'platform-engineer/initech/init-9'
+    const drawer = await page.openApplication('Initech')
+
+    await drawer.getByRole('button', { name: 'Open resume', exact: true }).click()
+    await drawer.getByRole('button', { name: 'Open cover letter' }).click()
+    await drawer.getByRole('button', { name: 'Show in Finder' }).click()
+    await expect
+      .poll(() => openedPaths(app.electronApp))
+      .toEqual([join(app.workspace!, id, 'resume.pdf'), join(app.workspace!, id, 'cover.pdf'), join(app.workspace!, id)])
+
+    // The build result and the tracking the row showed.
+    await expect(drawer.getByText('ATS checks passed')).toBeVisible()
+    await expect(drawer.getByLabel('Applied on')).toHaveValue('2026-09-22')
+
+    // The posting opens in the in-app browser.
+    await drawer.getByRole('button', { name: 'Job posting' }).click()
+    await new Shell(app.window).expectActive('browser')
+  })
+
+  test('the status dropdown writes huntgry.json; "Applied" stamps today, and the card changes column', async ({ app }) => {
+    const page = await openBoard(app)
+    const id = 'software-engineer/acme/acme-4821'
+    expect(await tracking(app.workspace!, id)).toEqual({ status: 'generated', notes: '' })
+    const drawer = await page.openApplication('Acme')
+
+    // The app stamps the UTC date at write time; take it before and after so a run across UTC midnight accepts either day.
+    const utcDate = () => new Date().toISOString().slice(0, 10)
+    const before = utcDate()
+    await page.pick(drawer.getByRole('combobox', { name: 'Status' }), 'Applied')
+    const after = utcDate()
+    await expect.poll(() => tracking(app.workspace!, id)).toMatchObject({ status: 'applied', notes: '' })
+    const written = await tracking(app.workspace!, id)
+    expect(Object.keys(written).sort()).toEqual(['appliedAt', 'notes', 'status', 'statusChangedAt'])
+    expect([before, after]).toContain(written.appliedAt)
+    await expect(drawer.getByLabel('Applied on')).toHaveValue(written.appliedAt as string)
+    await page.closeDrawer()
+    await page.search.fill('')
+    await page.expectIn('applied', DEMO.acme)
+
+    // Notes are written when the field loses focus, and are searchable right away.
+    const again = await page.openApplication('Acme')
+    await again.getByLabel('Notes').fill('Recruiter: Dana.')
+    await again.getByLabel('Notes').blur()
+    await expect.poll(() => tracking(app.workspace!, id)).toMatchObject({ notes: 'Recruiter: Dana.' })
+    await page.closeDrawer()
+    await page.search.fill('Dana')
+    await expect.poll(() => page.titles('applied')).toEqual([DEMO.acme])
+  })
+
+  test('the build badge and review state are on the card and in the drawer; Apply says why it cannot start', async ({ app }) => {
+    const page = await openBoard(app)
+    // Build results on the cards: ok, failed, missing; the review state of an unattended result.
+    await expect(page.card(DEMO.acme)).toContainText('ATS passed')
+    await expect(page.card(DEMO.globex)).toContainText('Build failed')
+    await expect(page.card(DEMO.umbrella)).toContainText('No report')
+    await expect(page.card('Security Engineer')).toContainText('Unreviewed')
+
+    // Ready to apply: Acme's card has Apply; Umbrella's (no resume.pdf) has none.
+    await expect(page.card(DEMO.acme).getByRole('button', { name: 'Apply', exact: true })).toBeEnabled()
+    await expect(page.card(DEMO.umbrella).getByRole('button', { name: 'Apply', exact: true })).toHaveCount(0)
+
+    // The drawer: the build report, no resume to open, Apply disabled with the reason.
+    const umbrella = await page.openApplication('Umbrella')
+    await expect(umbrella.getByText('No build report')).toBeVisible()
+    await expect(umbrella.getByRole('button', { name: 'Open cover letter' })).toHaveCount(0)
+    const apply = umbrella.getByRole('button', { name: 'Apply in browser' })
+    await expect(apply).toBeDisabled()
+    await apply.hover({ force: true })
+    await expect(page.tooltip('No resume.pdf yet: build the resume in Tailor first.')).toBeVisible()
+    await page.closeDrawer()
+
+    // An unattended result: its review state, and Open in Review.
+    const stark = await page.openApplication('Stark')
+    await expect(stark.getByText('Unreviewed', { exact: true })).toBeVisible()
+    await expect(stark.getByRole('button', { name: 'Apply in browser' })).toBeDisabled()
+    await stark.getByText('Open in Review').click()
+    await expect(app.window.getByRole('heading', { name: 'Review', level: 2 })).toBeVisible()
+  })
+
+  test('adding the posting URL in the drawer unblocks Apply', async ({ app }) => {
+    const page = await openBoard(app)
+    const drawer = await page.openApplication('Wayne')
+    await expect(drawer.getByRole('button', { name: 'Apply in browser' })).toBeDisabled()
+    await expect(drawer.getByRole('button', { name: 'Job posting' })).toHaveCount(0)
+    await drawer.getByLabel('Job posting URL').fill('https://jobs.example.com/wayne/3')
+    await drawer.getByLabel('Job posting URL').blur()
+    await expect(drawer.getByRole('button', { name: 'Apply in browser' })).toBeEnabled()
+    await expect.poll(() => tracking(app.workspace!, 'frontend-engineer/wayne/wy-3')).toMatchObject({
+      jobUrl: 'https://jobs.example.com/wayne/3'
+    })
   })
 })
 

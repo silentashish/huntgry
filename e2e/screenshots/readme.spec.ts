@@ -91,7 +91,7 @@ test.describe('demo workspace', () => {
     await frame(app.electronApp, page)
 
     await shell.expectActive('dashboard')
-    await expect(page.getByRole('row').filter({ hasText: 'Initech' }).first()).toBeVisible()
+    await expect(page.getByRole('group', { name: 'Applications by status' })).toBeVisible()
     await shoot(page, 'dashboard')
 
     await shell.goTo('board')
@@ -122,8 +122,8 @@ test.describe('mocks workspace', () => {
     const shell = new Shell(page)
     await shell.expectVisible()
     await frame(app.electronApp, page)
-    await shell.expectActive('dashboard')
-    await page.getByRole('row').filter({ hasText: 'Lever Mock' }).getByRole('button', { name: 'Apply', exact: true }).click()
+    await shell.goTo('board')
+    await new BoardPage(page).applyFrom('Lever Mock')
     await shell.expectActive('browser')
     const browser = new BrowserPage(page)
     await expectTabLoaded(app.electronApp, `${mock.origin.replace('http://', '')}/lever/`)

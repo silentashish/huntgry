@@ -6,6 +6,7 @@ import { ASHBY_JOB_ID, type AshbyUpload } from '../../scripts/mock-ats/ashby.mjs
 import { withFakeAgents } from '../fixtures/fake-agent'
 import { expect, test } from '../fixtures/servers/fixture'
 import { evaluateInTab, expectTabLoaded } from '../fixtures/tabs'
+import { BoardPage } from '../pages/board'
 import { BrowserPage } from '../pages/browser'
 import { Shell } from '../pages/shell'
 import { pastedFolder, TailorPage } from '../pages/tailor'
@@ -84,11 +85,11 @@ async function screenshots(app: { electronApp: ElectronApplication; window: Page
 const panelRow = (page: Page, label: string) =>
   page.getByText(new RegExp(`^${label}( \\*)?$`)).locator('..').locator('..')
 
-/** Starts Apply from the Dashboard row of `company` and waits for the Browser page. */
-async function applyFromDashboard(page: Page, company: string): Promise<BrowserPage> {
+/** Starts Apply from the drawer of `company`'s application on the Board (#161) and waits for the Browser page. */
+async function applyFromBoard(page: Page, company: string): Promise<BrowserPage> {
   const shell = new Shell(page)
-  await shell.expectActive('dashboard')
-  await page.getByRole('row').filter({ hasText: company }).getByRole('button', { name: 'Apply', exact: true }).click()
+  await shell.goTo('board')
+  await new BoardPage(page).applyFrom(company)
   await shell.expectActive('browser')
   return new BrowserPage(page)
 }
@@ -169,8 +170,8 @@ test.describe('apply on Ashby', () => {
 
   test('values Ashby’s own autofill already put in are kept; only the empty fields are filled', async ({ app, mock }, testInfo) => {
     const shell = new Shell(app.window)
-    await shell.expectActive('dashboard')
-    await app.window.getByRole('row').filter({ hasText: 'Ashby Mock' }).getByRole('button', { name: 'Apply', exact: true }).click()
+    await shell.goTo('board')
+    await new BoardPage(app.window).applyFrom('Ashby Mock')
     await shell.expectActive('browser')
     const browser = new BrowserPage(app.window)
     await expect(browser.address).toHaveValue(`${mock.origin}/ashby/?parsed=1`)
@@ -194,7 +195,7 @@ test.describe('apply on Ashby', () => {
     // finds it. staggerMs=4000: the resume question renders first and the rest 4 s later (within the 6 s readiness wait), so a fill that skips
     // the adapter's `ready` (a system field is rendered) misses the contact fields. clearPhone=once: the page wipes
     // the phone 100 ms after it is filled, so a fill without the settle-and-verify leaves it empty.
-    const browser = await applyFromDashboard(app.window, 'Ashby Late Mock')
+    const browser = await applyFromBoard(app.window, 'Ashby Late Mock')
     await expect(browser.address).toHaveValue(/\/ashby\/\?renderMs=5000/)
     await browser.apply.expectStatus('Ready to fill')
     await expect(browser.apply.status('Filled: review and submit')).toBeVisible({ timeout: 25_000 })
@@ -212,7 +213,7 @@ test.describe('apply on Ashby', () => {
   })
 
   test('a value the page keeps wiping is reported Rejected, not Filled', async ({ app }) => {
-    const browser = await applyFromDashboard(app.window, 'Ashby Wipe Mock')
+    const browser = await applyFromBoard(app.window, 'Ashby Wipe Mock')
     await browser.apply.expectStatus('Filled: review and submit')
     expect(await value(app.electronApp, `[id="${PHONE}"]`)).toBe('')
     await expect(panelRow(app.window, 'Phone Number')).toContainText('Rejected')
@@ -223,7 +224,7 @@ test.describe('apply on Ashby', () => {
   })
 
   test('an upload Ashby rejects is never reported Attached', async ({ app, mock }) => {
-    const browser = await applyFromDashboard(app.window, 'Ashby Reject Mock')
+    const browser = await applyFromBoard(app.window, 'Ashby Reject Mock')
     // The widget never lists the file: the service waits for it (twice), then gives up.
     await expect(browser.apply.status('Filled: review and submit')).toBeVisible({ timeout: 45_000 })
     await expect(app.window.getByText('An upload failed; attach the file yourself.', { exact: false })).toBeVisible()
@@ -241,7 +242,7 @@ test.describe('apply on Ashby', () => {
   })
 
   test('an Ashby job embedded on a company page is opened on its /application page and filled there', async ({ app, mock }) => {
-    const browser = await applyFromDashboard(app.window, 'Ashby Embed Mock')
+    const browser = await applyFromBoard(app.window, 'Ashby Embed Mock')
     // The company page injects Ashby's iframe 800 ms after load; main opens the job's own form page.
     const form = `${mock.origin}/ashby/${ASHBY_JOB_ID}/application`
     await expect(browser.address).toHaveValue(form, { timeout: 15_000 })

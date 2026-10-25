@@ -1,4 +1,6 @@
 import { expect, test } from '../fixtures/app'
+import { BoardPage } from '../pages/board'
+import { Dashboard } from '../pages/dashboard'
 import { ProfileEditor } from '../pages/profile-editor'
 import { SHELL_PAGES, Shell, type ShellPage } from '../pages/shell'
 
@@ -30,11 +32,11 @@ test.describe('app shell', () => {
     }
   })
 
-  test('the dashboard lists the demo applications', async ({ app }) => {
+  test('the dashboard counts the demo applications', async ({ app }) => {
     const shell = new Shell(app.window)
     await shell.expectActive('dashboard')
-    await expect(app.window.getByText('Acme', { exact: true }).first()).toBeVisible()
-    await expect(app.window.getByText('Globex', { exact: true }).first()).toBeVisible()
+    // Counted on the stat tiles; listed on the Board (#161).
+    await expect(new Dashboard(app.window).statValue('Total')).toHaveText('5')
     await expect(app.window.getByRole('heading', { name: 'No applications yet' })).toHaveCount(0)
   })
 
@@ -104,6 +106,16 @@ test.describe('command palette (⌘K)', () => {
     await expect(shell.paletteGroup(/^Applications · \d+$/).getByRole('option', { name: /^Globex/ }).first()).toBeVisible()
     await expect(shell.paletteGroup('Actions').getByRole('option', { name: /^Show the folder/ })).toBeVisible()
 
+    // An application opens in its drawer on the Board (#161).
+    await shell.paletteGroup(/^Applications · \d+$/).getByRole('option', { name: /^Globex/ }).first().click()
+    await expect(shell.palette).toBeHidden()
+    await shell.expectActive('board')
+    const drawer = new BoardPage(app.window).drawer
+    await expect(drawer.getByRole('heading', { level: 2 })).toContainText('Globex')
+    await app.window.keyboard.press('Escape')
+    await expect(drawer).toBeHidden()
+
+    await shell.openPalette()
     await shell.paletteInput.fill('initech')
     const jobs = shell.paletteGroup(/^Jobs · \d+$/)
     await expect(jobs.getByRole('option', { name: /^Initech · Staff Backend Engineer/ })).toBeVisible()

@@ -89,6 +89,7 @@ export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDrag
       ref={self}
       aria-label={card.title}
       className={classes.card}
+      data-kind={card.kind}
       data-compact={compact ? 'true' : undefined}
       tabIndex={0}
       draggable={targets.length > 0}

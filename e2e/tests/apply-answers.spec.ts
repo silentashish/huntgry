@@ -4,6 +4,7 @@ import type { ElectronApplication, Page } from '@playwright/test'
 import { fakeAgents, withFakeAgents } from '../fixtures/fake-agent'
 import { expect, test } from '../fixtures/servers/fixture'
 import { evaluateInTab, expectTabLoaded } from '../fixtures/tabs'
+import { BoardPage } from '../pages/board'
 import { BrowserPage } from '../pages/browser'
 import { Shell } from '../pages/shell'
 
@@ -22,10 +23,11 @@ const exists = (path: string) => access(path).then(() => true, () => false)
 const genderInTab = (electronApp: ElectronApplication, urlPart: string) =>
   evaluateInTab<string>(electronApp, urlPart, `document.querySelector('select[name="eeo[gender]"]').value`)
 
-async function applyFromDashboard(page: Page, company: string, urlPart: string): Promise<BrowserPage> {
+/** Starts Apply from the application's drawer on the Board (#161) and waits for the Browser page. */
+async function applyFromBoard(page: Page, company: string, urlPart: string): Promise<BrowserPage> {
   const shell = new Shell(page)
-  await shell.expectActive('dashboard')
-  await page.getByRole('row').filter({ hasText: company }).getByRole('button', { name: 'Apply', exact: true }).click()
+  await shell.goTo('board')
+  await new BoardPage(page).applyFrom(company)
   await shell.expectActive('browser')
   const browser = new BrowserPage(page)
   await expect(browser.address).toHaveValue(new RegExp(urlPart.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')))
@@ -46,7 +48,7 @@ test('a question answered once in the Apply panel fills itself on the next appli
   const mappingCalls = async () => (await oneShots()).filter((i) => schema(i).includes('"mappings"'))
   const draftCalls = async () => (await oneShots()).filter((i) => !schema(i).includes('"mappings"'))
 
-  const browser = await applyFromDashboard(app.window, 'Lever Mock', `${mock.origin}/lever/`)
+  const browser = await applyFromBoard(app.window, 'Lever Mock', `${mock.origin}/lever/`)
   await expectTabLoaded(app.electronApp, '/lever/', 'Acme - Software Engineer')
   await browser.apply.expectStatus('Filled: review and submit')
   const gender = browser.apply.field('Gender')
@@ -97,8 +99,7 @@ test('a question answered once in the Apply panel fills itself on the next appli
 
   // A second application with the same question: filled on its own, no prompt, no new model call.
   await browser.apply.endButton.click()
-  await new Shell(app.window).goTo('dashboard')
-  const second = await applyFromDashboard(app.window, 'Lever Second Mock', 'posting=2')
+  const second = await applyFromBoard(app.window, 'Lever Second Mock', 'posting=2')
   await expectTabLoaded(app.electronApp, 'posting=2', 'Acme - Software Engineer')
   await second.apply.expectStatus('Filled: review and submit')
   await expect(second.apply.field('Gender')).toContainText('Filled')
@@ -130,7 +131,7 @@ const genderPicked = (electronApp: ElectronApplication, urlPart: string) =>
   )
 
 test('a dropdown answered once is picked automatically on the next Greenhouse application', async ({ app, mock }) => {
-  const browser = await applyFromDashboard(app.window, 'Greenhouse Mock', `${mock.origin}/greenhouse/`)
+  const browser = await applyFromBoard(app.window, 'Greenhouse Mock', `${mock.origin}/greenhouse/`)
   await expectTabLoaded(app.electronApp, '/greenhouse/', 'Job Application for Software Engineer at Acme')
   await browser.apply.expectStatus('Filled: review and submit')
   // A react-select question (the mock's Gender): nothing saved yet, so it asks.
@@ -147,8 +148,7 @@ test('a dropdown answered once is picked automatically on the next Greenhouse ap
 
   // The next application picks it on its own.
   await browser.apply.endButton.click()
-  await new Shell(app.window).goTo('dashboard')
-  const second = await applyFromDashboard(app.window, 'Greenhouse Second Mock', 'posting=2')
+  const second = await applyFromBoard(app.window, 'Greenhouse Second Mock', 'posting=2')
   await expectTabLoaded(app.electronApp, 'posting=2', 'Job Application for Software Engineer at Acme')
   await second.apply.expectStatus('Filled: review and submit')
   await expect(second.apply.field('Gender')).toContainText('Filled')
