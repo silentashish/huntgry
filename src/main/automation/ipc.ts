@@ -7,6 +7,7 @@ import {
   requireCandidateKey,
   requireSettingsPatch
 } from '@shared/automation-types'
+import { DEFAULT_EXPLORE_CATEGORY } from '@shared/explore-types'
 import { profileSignals, scoreJob } from '@shared/job-relevance'
 import { resolveApplicationFolder } from '../applications/safe-path'
 import { scanApplications } from '../applications/scan'
@@ -79,15 +80,13 @@ const watched = (pages: PageBudget): PageBudget & { refused: boolean } => {
 
 const jobs = jobsSource({ listJobs })
 const explore = exploreCandidates({
-  // The cache as it is: Automation never fetches the list (no refresh on a timer, #154 Q4).
-  rows: async (ws) => {
-    const deps = exploreDeps()
-    return (await readCache(ws, deps.sourceUrl, deps.hosts))?.jobs ?? []
-  },
+  // The cache as it is: Automation never fetches the list (no refresh on a timer, #154 Q4). It reads the
+  // default category (#169), the one the README list used to be.
+  rows: async (ws) => (await readCache(ws, DEFAULT_EXPLORE_CATEGORY, exploreDeps()))?.jobs ?? [],
   toJob,
   savedJobs: listJobs,
   // Saved without the employer-link lookup: the link step does it, counted and with its failure reported.
-  add: (ws, id) => addExplore(ws, id, { ...exploreDeps(), link: undefined })
+  add: (ws, id) => addExplore(ws, id, DEFAULT_EXPLORE_CATEGORY, { ...exploreDeps(), link: undefined })
 })
 
 /** Where Automation keeps what controls spending, per workspace (`store.ts` `trustedFile`). */
