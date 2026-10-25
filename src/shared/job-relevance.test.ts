@@ -6,6 +6,7 @@ import {
   relevantJobs,
   scoreJob,
   shortTitle,
+  titleEstimate,
   type ProfileSignals
 } from './job-relevance'
 import type { Job } from './jobs-types'
@@ -192,3 +193,24 @@ describe('scoreJob and relevantJobs', () => {
     expect(() => relevantJobs([old], s, NOW)).not.toThrow()
   })
 })
+
+describe('titleEstimate (#150)', () => {
+  const s = profileSignals(backend(), NOW)
+
+  it("rescales Relevant's title, seniority and location parts to 0–100", () => {
+    // Title fully covered (35), seniority unknown (5 of 10), remote (10): 50 of 55.
+    expect(titleEstimate(job({ title: 'Backend Engineer', remote: true }), s)).toEqual({ score: 91, reasons: ['Title: Backend Engineer', 'Remote'] })
+    // Same title, not remote and far away: 40 of 55.
+    expect(titleEstimate(job({ title: 'Backend Engineer', location: 'Austin, TX' }), s).score).toBe(73)
+    // Nothing in common: only the seniority half-point.
+    expect(titleEstimate(job({ title: 'Registered Nurse', location: 'Austin, TX' }), s)).toEqual({ score: 9, reasons: ['No target title in common'] })
+  })
+
+  it('ignores skills and recency, and scoreJob is unchanged by the refactor', () => {
+    const a = job({ title: 'Backend Engineer', description: 'Go, Python, AWS.', postedAt: '2026-10-05T00:00:00Z' })
+    const b = job({ title: 'Backend Engineer', description: '', postedAt: '2025-01-01T00:00:00Z' })
+    expect(titleEstimate(a, s)).toEqual(titleEstimate(b, s))
+    expect(scoreJob(a, s, NOW).score).toBeGreaterThan(scoreJob(b, s, NOW).score)
+  })
+})
+
