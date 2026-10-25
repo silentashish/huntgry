@@ -10,9 +10,22 @@ export interface MockJobrightJob {
   blocked?: boolean
   /** Path of the employer's posting a signed-in page links (#146). */
   employer?: string
+  /** Older than the README's few days: listed by the API only (#169). */
+  apiOnly?: boolean
+  /** The API's per-job fields (#169). */
+  api?: { salary?: string; h1bSponsored?: string; industry?: string[]; companySize?: string }
 }
 
 export const JOBRIGHT_JOBS: readonly MockJobrightJob[]
+
+/** The category of `JOBRIGHT_JOBS` (#169). */
+export const JOBRIGHT_CATEGORY: string
+
+/** `newgrad:us:data_analysis`'s jobs (#169). */
+export const JOBRIGHT_OTHER_JOBS: readonly MockJobrightJob[]
+
+/** The newgrad-jobs API's answer for `body.category`, paged by `position` / `count` (#169). */
+export function jobrightApi(body: unknown, position: number, count: number, now?: Date): unknown
 
 /** The mock README, dated relative to `now`, job links on `origin`. */
 export function jobrightReadme(origin: string, now?: Date): string

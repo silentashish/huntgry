@@ -1,6 +1,9 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 
-/** The Explore page (#142): Jobright's daily list, its posted-day buttons, filters and per-row Add to Jobs. */
+/**
+ * The Explore page (#142, #169): Jobright's list of one category, its posted-day buttons (older days under
+ * "Earlier"), filters, the source it shows, and per-row Add to Jobs.
+ */
 export class ExplorePage {
   readonly heading: Locator
   readonly refreshButton: Locator
@@ -10,6 +13,16 @@ export class ExplorePage {
   readonly error: Locator
   /** Shown while Jobright is not connected (#146), with a "Connect Jobright" button to Settings. */
   readonly connectHint: Locator
+  /** The category picker (#169), a Mantine Select. */
+  readonly category: Locator
+  /** "newgrad-jobs API · 12 jobs" or "Jobright's GitHub list (fallback) · 6 jobs". */
+  readonly source: Locator
+  /** The warning shown when the list is the README fallback, with the API's error. */
+  readonly fallback: Locator
+  /** The toggle of the days past the newest seven. */
+  readonly earlier: Locator
+  readonly h1bFilter: Locator
+  readonly minSalary: Locator
 
   constructor(readonly page: Page) {
     this.heading = page.getByRole('heading', { name: 'Explore', level: 2 })
@@ -19,6 +32,25 @@ export class ExplorePage {
     this.list = page.getByRole('list', { name: 'Jobright jobs' })
     this.error = page.getByRole('alert').filter({ hasText: 'The Jobright list could not be loaded' })
     this.connectHint = page.getByRole('alert').filter({ hasText: "Get the employer's own posting links" })
+    this.category = page.getByRole('combobox', { name: 'Category' })
+    this.source = page.getByLabel('List source')
+    this.fallback = page.getByRole('alert').filter({ hasText: "Showing Jobright's GitHub list instead" })
+    this.earlier = this.days.getByRole('button', { name: /^Earlier, / })
+    this.h1bFilter = page.getByRole('combobox', { name: 'H1B sponsorship' })
+    this.minSalary = page.getByRole('textbox', { name: 'Min. salary / year' })
+  }
+
+  /** Picks a category by its label ("Data Analysis"; the first one with that label is New grad · US). */
+  async pickCategory(label: string): Promise<void> {
+    await this.category.click()
+    await this.page.getByRole('option', { name: label, exact: true }).first().click()
+    await expect(this.category).toHaveValue(label)
+  }
+
+  async filterH1b(option: 'Any H1B' | 'Sponsors H1B' | 'H1B not ruled out'): Promise<void> {
+    await this.h1bFilter.click()
+    await this.page.getByRole('option', { name: option, exact: true }).click()
+    await expect(this.h1bFilter).toHaveValue(option)
   }
 
   /** A posted-day button, by its label ("Today", "Yesterday", "Oct 18"); its name ends with the day's count. */

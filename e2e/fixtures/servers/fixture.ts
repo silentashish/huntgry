@@ -46,11 +46,16 @@ export const test = base.extend<{ mock: MockServer }, { mockServer: MockServer }
   mock: async ({ mockServer }, use) => {
     mockServer.requests.length = 0
     mockServer.jobright.status = 200
+    mockServer.jobright.api = { status: 200, mode: 'ok' }
     await rm(mockServer.submissionFile, { force: true })
     await rm(mockServer.uploadsFile, { force: true })
     await use(mockServer)
   },
   prepareWorkspace: async ({ mockServer }, use) => use((path) => rewriteMockUrls(path, mockServer.origin)),
-  // Explore (#142) reads its Jobright list from the mock server instead of GitHub.
-  launchEnv: async ({ mockServer }, use) => use({ HUNTGRY_EXPLORE_SOURCE_URL: `${mockServer.origin}/jobright/README.md` })
+  // Explore (#142, #169) reads the newgrad-jobs API and its README fallback from the mock server, never jobright.ai or GitHub.
+  launchEnv: async ({ mockServer }, use) =>
+    use({
+      HUNTGRY_EXPLORE_API_URL: `${mockServer.origin}/jobright/swan/mini-sites/list`,
+      HUNTGRY_EXPLORE_SOURCE_URL: `${mockServer.origin}/jobright/README.md`
+    })
 })

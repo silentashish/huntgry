@@ -207,8 +207,8 @@ export function ExplorePage() {
           title="Showing Jobright's GitHub list instead"
           className={classes.connect}
         >
-          The newgrad-jobs API could not be used{shownList?.fallbackReason ? `: ${shownList.fallbackReason}` : '.'} This list has
-          only the last few days of new-grad software jobs, without salary or H1B details. Refresh to try the API again.
+          {shownList?.fallbackReason ?? 'The newgrad-jobs API could not be used.'} This list has only the last few days of
+          new-grad software jobs, without salary or H1B details. Refresh to try the API again.
         </Alert>
       )}
 
