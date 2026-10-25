@@ -6,6 +6,7 @@ export const COLUMN: Record<BoardColumnId, string> = {
   todo: 'To do',
   tailoring: 'Tailoring',
   review: 'Needs review',
+  submit: 'Ready to submit',
   ready: 'Ready to apply',
   applied: 'Applied',
   interviewing: 'Interviewing',

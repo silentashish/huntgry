@@ -36,6 +36,8 @@ interface Props {
   onFollow(): void
   /** Ready to apply: start auto-apply in the in-app browser. */
   onApply(): void
+  /** Ready to submit (#154): approve the result and open Automation's filled form in the in-app browser. */
+  onSubmit?(): void
   /** A queue card re-running an application (`card.app`): open that application's drawer (#161). */
   onOpenApplication?(): void
   /** An Apply is starting (the page's `useApply` is busy): the Apply button waits. */
@@ -68,6 +70,7 @@ export function BoardCardView({
   onTailor,
   onFollow,
   onApply,
+  onSubmit,
   onOpenApplication,
   applying,
   compact
@@ -168,7 +171,7 @@ export function BoardCardView({
             {meta}
           </MonoLabel>
           <div onClick={stop}>
-            <NextStep card={card} lead={lead} onTailor={onTailor} onFollow={onFollow} onApply={onApply} applying={applying} />
+            <NextStep card={card} lead={lead} onTailor={onTailor} onFollow={onFollow} onApply={onApply} onSubmit={onSubmit} applying={applying} />
           </div>
         </div>
       </div>
@@ -262,7 +265,7 @@ function MoveMenu({ card, targets, onMove }: { card: BoardCard; targets: BoardCo
   )
 }
 
-function NextStep({ card, lead, onTailor, onFollow, onApply, applying }: Pick<Props, 'card' | 'lead' | 'onTailor' | 'onFollow' | 'onApply' | 'applying'>) {
+function NextStep({ card, lead, onTailor, onFollow, onApply, onSubmit, applying }: Pick<Props, 'card' | 'lead' | 'onTailor' | 'onFollow' | 'onApply' | 'onSubmit' | 'applying'>) {
   if (card.kind === 'job' && card.column === 'todo') {
     return (
       <Button size="xs" variant={lead ? 'filled' : 'secondary'} className={classes.action} leftSection={<IconSparkles size={14} />} onClick={onTailor}>
@@ -286,6 +289,15 @@ function NextStep({ card, lead, onTailor, onFollow, onApply, applying }: Pick<Pr
       <Button size="xs" variant="secondary" className={classes.action} leftSection={<IconClipboardCheck size={14} />} onClick={onFollow}>
         Review
       </Button>
+    )
+  }
+  if (card.kind === 'application' && card.column === 'submit' && onSubmit) {
+    return (
+      <Tooltip label="Approve the result and open the form Automation filled; you press Submit" multiline maw={240} openDelay={400}>
+        <Button size="xs" className={classes.action} leftSection={<IconSend size={14} />} loading={applying} disabled={applying} onClick={onSubmit}>
+          Review & submit
+        </Button>
+      </Tooltip>
     )
   }
   if (card.kind === 'application' && card.column === 'ready' && applyBlocker(card.app) === null) {

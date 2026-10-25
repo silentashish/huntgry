@@ -17,6 +17,7 @@ export const COLUMN_TONE: Record<BoardColumnId, UiTone> = {
   todo: 'neutral',
   tailoring: 'info',
   review: 'warning',
+  submit: 'trail',
   ready: 'accent',
   applied: 'info',
   interviewing: 'review',
@@ -166,6 +167,7 @@ export function cardMeta(card: BoardCard, now = Date.now()): string {
   const t = card.app.tracking
   if (card.column === 'review') return t.review ? 'unattended' : pdfs(card.app.files)
   if (card.column === 'ready') return pdfs(card.app.files)
+  if (card.column === 'submit') return 'form filled · not submitted'
   if (card.column === 'applied' && t.appliedAt) {
     const days = Math.floor((now - Date.parse(t.appliedAt)) / DAY)
     return Number.isFinite(days) ? (days <= 0 ? 'today' : `${days} day${days === 1 ? '' : 's'}`) : ''
