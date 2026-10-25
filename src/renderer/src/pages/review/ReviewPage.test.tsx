@@ -200,4 +200,17 @@ describe('ReviewPage', () => {
     expect(text).toContain('Review notes')
     expect(container.querySelector('[aria-label="Approve: Led a team of two"]')).not.toBeNull()
   })
+
+  it('shows profile fit vs resume coverage in Verify (#151)', async () => {
+    const items = [item('a')]
+    review.list.mockResolvedValue(items)
+    review.get.mockResolvedValue({
+      ...detailOf(items[0]),
+      match: { profileFit: 82, resumeCoverage: 74, surfaced: 90, requirements: 11, leftOut: ['Kafka'], resumeFrom: 'resume_data.json', source: 'description', at: '2026-10-24T12:00:00.000Z' }
+    })
+    await renderPage(undefined)
+    const box = container.querySelector('[data-testid="resume-match"]')!
+    expect(box.textContent).toContain('Profile fit 82 · Resume 74 (90% surfaced)')
+    expect(box.textContent).toContain('Kafka')
+  })
 })

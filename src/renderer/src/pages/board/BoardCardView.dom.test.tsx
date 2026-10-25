@@ -157,4 +157,23 @@ describe('BoardCardView menu and keyboard', () => {
     expect(apply.disabled).toBe(true)
     expect(apply.hasAttribute('data-loading')).toBe(true)
   })
+
+  it("an application card shows its profile fit and resume coverage on one line (#151)", () => {
+    const match = {
+      profileFit: 82,
+      resumeCoverage: 74,
+      surfaced: 90,
+      requirements: 11,
+      leftOut: ['Kubernetes'],
+      resumeFrom: 'resume_data.json' as const,
+      source: 'description' as const,
+      at: '2026-10-24T12:00:00.000Z'
+    }
+    render(only({ applications: [{ ...app, tracking: { ...app.tracking, match } }] }))
+    const line = [...container.querySelectorAll('div')].find((d) => d.textContent === 'Profile fit 82 · Resume 74 (90% surfaced)')!
+    expect(line).toBeDefined()
+    expect(line.getAttribute('title')).toContain('Left out: Kubernetes')
+    render(only({ applications: [app] }))
+    expect(container.textContent).not.toContain('Profile fit')
+  })
 })

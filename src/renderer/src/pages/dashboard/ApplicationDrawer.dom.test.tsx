@@ -138,4 +138,29 @@ describe('ApplicationDrawer: the table row actions (#161)', () => {
     await click('Open in Review')
     expect(navigate).toHaveBeenCalledWith('review', { applicationId: app.id })
   })
+
+  it('shows profile fit vs resume coverage and what the resume left out (#151)', async () => {
+    const match = {
+      profileFit: 82,
+      resumeCoverage: 74,
+      surfaced: 90,
+      requirements: 11,
+      leftOut: ['Kubernetes', 'Terraform'],
+      absent: ['event streaming'],
+      resumeFrom: 'resume_data.json' as const,
+      source: 'description' as const,
+      at: '2026-10-24T12:00:00.000Z'
+    }
+    await render({ ...app, tracking: { status: 'generated', notes: '', match } })
+    const box = document.querySelector('[data-testid="resume-match"]')!
+    expect(box.textContent).toContain('Profile fit 82 · Resume 74 (90% surfaced)')
+    expect([...box.querySelectorAll('[aria-label="Left out of the resume"] [data-variant]')].map((p) => p.textContent)).toEqual(['Kubernetes', 'Terraform'])
+    expect(box.textContent).toContain("Absent (skill's keyword check): event streaming")
+  })
+
+  it('shows no scores for an application never re-scored', async () => {
+    await render(app)
+    expect(document.querySelector('[data-testid="resume-match"]')).toBeNull()
+    expect(document.body.textContent).not.toContain('Profile fit')
+  })
 })

@@ -245,6 +245,7 @@ async function detailWithRecord(
       ...(parsed.format === 'v2' ? { directHits: parsed.directHits.slice(0, MAX_LIST), decisions: parsed.decisions.slice(0, MAX_LIST) } : {}),
       verify,
       build: record.build,
+      ...(record.tracking.match ? { match: record.tracking.match } : {}),
       artifacts,
       resumePages: record.resumePages,
       coverPages: record.coverPages,

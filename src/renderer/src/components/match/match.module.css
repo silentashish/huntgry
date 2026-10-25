@@ -1,0 +1,18 @@
+.match {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.note {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--hg-text-secondary);
+}

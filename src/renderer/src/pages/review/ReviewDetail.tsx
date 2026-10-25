@@ -3,6 +3,7 @@ import { Alert, Button, Checkbox, Code, Collapse, Divider, Tabs, Text, Textarea 
 import { IconCheck, IconExternalLink, IconFileText, IconFlame, IconRefresh, IconShieldCheck, IconTrash } from '@tabler/icons-react'
 import { REVIEW_STATE_LABEL, type ProposedReframing, type ReviewDetail, type ReviewOutcome } from '@shared/review-types'
 import { api, errorText } from '../../api'
+import { ResumeMatch } from '../../components/match/ResumeMatch'
 import { MonoLabel, SectionCard, StatusPill } from '../../components/ui'
 import { useNavigation } from '../../navigation'
 import { Markdown } from '../tailor/Transcript'
@@ -194,6 +195,7 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
                 )}
               </>
             ) : null}
+            <ResumeMatch match={d.match} />
           </SectionCard>
 
           <SectionCard
