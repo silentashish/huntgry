@@ -98,6 +98,15 @@ flowchart TD
 the resume can't be read. When there is no master profile or no `job-description.md`, nothing is
 written.
 
+## Screenshots
+
+From `e2e/tests/rescore.spec.ts` (demo profile: Go and PostgreSQL, not Kubernetes; the fake resume names Go only).
+The card's ring is still Relevant (#73), which has title, seniority, location and recency parts on top of the match score.
+
+| Board card | Drawer | Review → Verify |
+| --- | --- | --- |
+| ![Board card](151-images/rescore-card.png) | ![Drawer](151-images/rescore-drawer.png) | ![Review](151-images/rescore-review.png) |
+
 ## Decisions and alternatives
 
 - **Surfaced compares weights, not the two scores.** A failed gate caps both scores at 40, which
