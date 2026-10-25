@@ -6,6 +6,8 @@ import type { RunSummary, StartRunParams } from '@shared/runner-types'
 import { buildTranscript } from '@shared/transcript'
 import { RunManager, type RunContext } from './runner'
 import { listRuns, readEvents, readRun, saveRun } from './runs'
+import { rescoreApplication } from '../applications/rescore'
+import { readTracking } from '../applications/tracking'
 
 const FAKE = join(__dirname, 'fixtures/fake-claude.mjs')
 const params: StartRunParams = {
@@ -111,7 +113,7 @@ describe('RunManager against a fake claude', () => {
     manager = new RunManager({
       onEvent: () => undefined,
       onRun: (r) => runs.push(r),
-      afterBuild: async (run, workspace) => {
+      afterOutput: async (run, workspace) => {
         built.push({ folder: run.outputFolder, workspace })
       }
     })
@@ -123,11 +125,45 @@ describe('RunManager against a fake claude', () => {
     expect(built.at(-1)).toEqual({ folder: join('software-engineer', 'acme', '42'), workspace: ws })
   })
 
+  it('re-scores on every later turn, and a rebuild that removed the resume drops the old scores (review)', async () => {
+    manager = new RunManager({
+      onEvent: () => undefined,
+      onRun: (r) => runs.push(r),
+      afterOutput: async (run, workspace) => {
+        await rescoreApplication(workspace, run.outputFolder!, { runId: run.id })
+      }
+    })
+    await writeFile(join(ws, 'master-profile.md'), '# Profile\n\n## Skills\n\n- Languages: Python, Go\n')
+    const { id } = await manager.start(params, ctx())
+    await until(id, (r) => r.status === 'waiting')
+    await manager.reply(id, 'Approved. WRITE_OUTPUT', async () => ctx())
+    const built = await until(id, (r) => r.status === 'waiting' && r.outputFolder !== null)
+    const dir = join(ws, built.outputFolder!)
+    const match = async () => (await readTracking(dir)).match
+    // The skill's job description and resume data, as a real build leaves them.
+    await writeFile(join(dir, 'job-description.md'), '# Backend Engineer\n\nPython and Kafka.\n')
+    await writeFile(join(dir, 'resume_data.json'), JSON.stringify({ skills: [{ label: 'Languages', items: 'Python' }] }))
+    runs.length = 0
+    await manager.reply(id, 'Looks good.', async () => ctx())
+    await until(id, (r) => r.status === 'waiting')
+    await manager.flush(id)
+    expect(await match()).toMatchObject({ profileFit: 50, resumeCoverage: 50, surfaced: 100 })
+
+    // A rebuild that failed and cleaned its resume: the folder has no resume, so its scores go.
+    await rm(join(dir, 'resume_data.json'))
+    await rm(join(dir, 'resume.pdf'))
+    runs.length = 0
+    await manager.reply(id, 'Rebuild it.', async () => ctx())
+    await until(id, (r) => r.status === 'waiting')
+    await manager.flush(id)
+    expect(await match()).toBeUndefined()
+  })
+
   it('a failing re-score does not fail the run', async () => {
     manager = new RunManager({
       onEvent: () => undefined,
       onRun: (r) => runs.push(r),
-      afterBuild: async () => {
+      afterOutput: async () => {
         throw new Error('boom')
       }
     })

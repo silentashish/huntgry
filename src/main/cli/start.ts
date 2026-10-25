@@ -62,8 +62,8 @@ export const manager = new RunManager({
       await reopenForContinuation(workspace, run.outputFolder, run.id, new Date())
   },
   prices: currentPrices,
-  // Profile fit vs resume coverage of what the turn built, kept in the application's huntgry.json.
-  afterBuild: async (run, workspace) => {
+  // Profile fit vs resume coverage of the run's resume, kept in the application's huntgry.json.
+  afterOutput: async (run, workspace) => {
     if (run.outputFolder) await rescoreApplication(workspace, run.outputFolder, { runId: run.id })
   }
 })

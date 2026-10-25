@@ -57,10 +57,11 @@ export interface RunnerHooks {
   /** The price table turn estimates use (Settings → Pricing); the bundled one when absent. */
   prices?(): readonly ModelPrice[]
   /**
-   * A turn ended with a built resume in the run's output folder (`run.outputFolder`): the re-score after
-   * tailoring (#151). Awaited before the run reads as waiting; a failure is logged, never fails the run.
+   * A turn ended and the run has an application folder (`run.outputFolder`, found this turn or recorded
+   * earlier): the re-score after tailoring (#151), which also drops the scores of a resume that is gone.
+   * Awaited before the run reads as waiting; a failure is logged, never fails the run.
    */
-  afterBuild?(run: RunSummary, workspace: string): Promise<void>
+  afterOutput?(run: RunSummary, workspace: string): Promise<void>
 }
 
 interface Live {
@@ -561,9 +562,11 @@ export class RunManager {
               console.error('Recording the job source failed:', err)
             )
           }
-          if (this.hooks.afterBuild && (out.files.includes('resume_data.json') || out.files.includes('resume.pdf'))) {
-            await this.hooks.afterBuild({ ...r }, entry.ctx.workspace).catch((err) => console.error('Re-scoring the resume failed:', err))
-          }
+        }
+        // Whatever the turn did to the run's application (built, rebuilt, removed its resume, or left
+        // it as it was), its re-score follows: a folder the scan no longer finds keeps the one recorded.
+        if (r.outputFolder && this.hooks.afterOutput) {
+          await this.hooks.afterOutput({ ...r }, entry.ctx.workspace).catch((err) => console.error('Re-scoring the resume failed:', err))
         }
         // Only now does the run read as waiting, so every summary that says so carries the output
         // folder (a summary queued earlier, e.g. for the session id, still reads as running).
