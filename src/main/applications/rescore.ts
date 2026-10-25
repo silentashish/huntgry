@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { MAX_MATCH_LIST, type ApplicationMatch } from '@shared/applications-types'
 import { profileSignals } from '@shared/job-relevance'
 import type { Job } from '@shared/jobs-types'
-import type { MatchJob } from '@shared/match-score'
+import type { JobrightSkill, MatchJob } from '@shared/match-score'
 import { resumeCoverage, resumeEvidenceFromData, resumeEvidenceFromText, type ResumeEvidence } from '@shared/resume-coverage'
 import { listJobs } from '../jobs/store'
 import { readProfile } from '../profile/store'
@@ -88,8 +88,16 @@ async function readWorkspaceProfile(workspace: string) {
   return null
 }
 
+/** A saved job as stored: a Jobright posting may carry its weighted `jdCoreSkills` (#150) next to the `Job` fields. */
+type SavedJob = Job & { jdCoreSkills?: unknown }
+
+/** `jdCoreSkills` of a saved job when it is a list, else `null`; `matchScore` skips malformed entries itself. */
+function coreSkillsOf(job: SavedJob | null): readonly JobrightSkill[] | null {
+  return Array.isArray(job?.jdCoreSkills) ? (job.jdCoreSkills as JobrightSkill[]) : null
+}
+
 /** The saved job the application was tailored for (the Board links them by URL), for its tags and board data. */
-async function savedJob(workspace: string, url: string | null): Promise<Job | null> {
+async function savedJob(workspace: string, url: string | null): Promise<SavedJob | null> {
   if (!url) return null
   const jobs = await listJobs(workspace).catch(() => [] as Job[])
   return jobs.find((j) => j.url === url || j.boardUrl === url) ?? null
@@ -102,8 +110,10 @@ export interface RescoreOptions {
 
 /**
  * Scores an application's resume (`resumeCoverage`) and stores the result as `huntgry.json` → `match`.
- * Returns what was stored: `null` (and any earlier `match` dropped) when the job names no requirement or
- * the resume can't be read; `null` without a write when there is no master profile or job description.
+ * Returns what was stored: `null`, with any earlier `match` dropped, when there is no master profile, job
+ * description or readable resume, or the job names no requirement, so old numbers never outlive their inputs.
+ * A folder that was never scored is not written then. The same scores as stored (only `at` differs) are not
+ * written again, so a turn that changed nothing does not touch `huntgry.json`.
  */
 export async function rescoreApplication(workspace: string, applicationId: string, opts: RescoreOptions = {}): Promise<ApplicationMatch | null> {
   const folder = await resolveApplicationFolder(workspace, applicationId)
@@ -113,11 +123,17 @@ export async function rescoreApplication(workspace: string, applicationId: strin
     readOwn(folder, 'build-report.json', MAX_TEXT_BYTES),
     readTracking(folder)
   ])
-  if (!profile || !jdBuf) return null
+  const clear = async () => {
+    if (tracking.match) await updateTracking(folder, { match: undefined })
+    return null
+  }
+  if (!profile || !jdBuf) return clear()
   const jd = jdBuf.toString('utf8')
   const saved = await savedJob(workspace, tracking.jobUrl ?? postingUrl(jd))
-  // The description the skill tailored against; the saved job adds what only the board knows.
+  // The description the skill tailored against; the saved job adds what only the board knows, including
+  // Jobright's weighted skills, which `matchScore` prefers over the description (as profile fit does elsewhere).
   const job: MatchJob = {
+    jdCoreSkills: coreSkillsOf(saved),
     title: saved?.title || jobTitleOf(jd),
     description: jd,
     tags: saved?.tags ?? [],
@@ -126,10 +142,7 @@ export async function rescoreApplication(workspace: string, applicationId: strin
   }
   const resume = await readResumeEvidence(folder)
   const r = resume ? resumeCoverage(job, profileSignals(profile, opts.now), resume.evidence) : null
-  if (!resume || !r) {
-    if (tracking.match) await updateTracking(folder, { match: undefined })
-    return null
-  }
+  if (!resume || !r) return clear()
   const match: ApplicationMatch = {
     profileFit: r.profileFit,
     resumeCoverage: r.resumeCoverage,
@@ -144,5 +157,12 @@ export async function rescoreApplication(workspace: string, applicationId: strin
   if (absent.length > 0) match.absent = absent
   if (r.gates.length > 0) match.gates = r.gates.map((g) => g.reason)
   if (opts.runId) match.runId = opts.runId
+  if (tracking.match && sameScores(tracking.match, match)) return tracking.match
   return (await updateTracking(folder, { match })).match ?? null
+}
+
+/** Whether two matches say the same thing, whenever they were computed. */
+function sameScores(a: ApplicationMatch, b: ApplicationMatch): boolean {
+  const keys = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => k !== 'at').sort()
+  return JSON.stringify(a, keys) === JSON.stringify(b, keys)
 }

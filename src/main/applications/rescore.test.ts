@@ -74,6 +74,25 @@ afterEach(async () => {
 
 const stored = async () => JSON.parse(await readFile(join(folder, 'huntgry.json'), 'utf8'))
 
+/** A saved job for the fixture's posting URL, as `.huntgry/jobs/<id>.json` holds it. */
+const savedJobJson = () => ({
+  id: 'hiring.cafe:1',
+  source: 'hiring.cafe',
+  sourceId: '1',
+  title: 'Backend Engineer',
+  company: 'Acme',
+  location: 'Austin, TX',
+  remote: false,
+  salary: '',
+  postedAt: null,
+  url: 'https://boards.greenhouse.io/acme/jobs/123',
+  boardUrl: null,
+  description: '',
+  descriptionComplete: false,
+  tags: [] as string[],
+  fetchedAt: NOW.toISOString()
+})
+
 describe('rescoreApplication', () => {
   it('stores profile fit, resume coverage, surfaced and what the resume left out in huntgry.json', async () => {
     const match = await rescoreApplication(ws, ID, { runId: 'run-1', now: NOW })
@@ -160,29 +179,54 @@ describe('rescoreApplication', () => {
 
   it('adds the saved job of the same posting (its board facts) to the requirements', async () => {
     await mkdir(join(ws, '.huntgry', 'jobs'), { recursive: true })
-    const job = {
-      id: 'hiring.cafe:1',
-      source: 'hiring.cafe',
-      sourceId: '1',
-      title: 'Backend Engineer',
-      company: 'Acme',
-      location: 'Austin, TX',
-      remote: false,
-      salary: '',
-      postedAt: null,
-      url: 'https://boards.greenhouse.io/acme/jobs/123',
-      boardUrl: null,
-      description: '',
-      descriptionComplete: false,
-      tags: ['GraphQL'],
-      fetchedAt: NOW.toISOString(),
-      minYearsExperience: 8
-    }
+    const job = { ...savedJobJson(), tags: ['GraphQL'], minYearsExperience: 8 }
     await writeFile(join(ws, '.huntgry', 'jobs', 'hiring.cafe-1.json'), JSON.stringify(job))
     const match = await rescoreApplication(ws, ID, { now: NOW })
     expect(match?.requirements).toBe(9)
     expect(match?.gates).toEqual(['Asks for 8+ years of experience (you have 4.8)'])
     expect(match?.profileFit).toBe(40)
+  })
+
+  it("uses the saved job's weighted Jobright skills, as profile fit does (review)", async () => {
+    await mkdir(join(ws, '.huntgry', 'jobs'), { recursive: true })
+    const job = {
+      ...savedJobJson(),
+      jdCoreSkills: [
+        { skill: 'Python', score: 3, type: 'hard_skill' },
+        { skill: 'Kafka', score: 1, type: 'hard_skill' }
+      ]
+    }
+    await writeFile(join(ws, '.huntgry', 'jobs', 'hiring.cafe-1.json'), JSON.stringify(job))
+    const match = await rescoreApplication(ws, ID, { now: NOW })
+    // Python (3) of Python + Kafka (4); the description's eight requirements are not used.
+    expect(match).toMatchObject({ source: 'jobright-skills', requirements: 2, profileFit: 75, resumeCoverage: 75, surfaced: 100 })
+  })
+
+  it('drops an earlier score when the job description or the profile is gone (review)', async () => {
+    expect(await rescoreApplication(ws, ID, { now: NOW })).not.toBeNull()
+    await rm(join(folder, 'job-description.md'))
+    expect(await rescoreApplication(ws, ID, { now: NOW })).toBeNull()
+    expect((await stored()).match).toBeUndefined()
+
+    await copyFile(join(FIXTURES, 'tailored-job.md'), join(folder, 'job-description.md'))
+    expect(await rescoreApplication(ws, ID, { now: NOW })).not.toBeNull()
+    await rm(join(ws, 'master-profile.md'))
+    expect(await rescoreApplication(ws, ID, { now: NOW })).toBeNull()
+    expect((await stored()).match).toBeUndefined()
+  })
+
+  it('drops an earlier score when a rebuild removed the resume', async () => {
+    await rescoreApplication(ws, ID, { now: NOW })
+    await rm(join(folder, 'resume_data.json'))
+    expect(await rescoreApplication(ws, ID, { now: NOW })).toBeNull()
+    expect((await stored()).match).toBeUndefined()
+  })
+
+  it('does not rewrite huntgry.json when the scores did not change', async () => {
+    const first = await rescoreApplication(ws, ID, { runId: 'run-1', now: NOW })
+    const again = await rescoreApplication(ws, ID, { runId: 'run-1', now: new Date('2026-10-25T00:00:00Z') })
+    expect(again).toEqual(first)
+    expect((await stored()).match.at).toBe(NOW.toISOString())
   })
 
   it('refuses an application id outside the workspace', async () => {
