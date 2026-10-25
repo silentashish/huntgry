@@ -164,11 +164,17 @@ describe('file.get (#40)', () => {
     await writeFile(join(ws, APP, 'tailoring-notes.md'), v2)
     const { bytes } = await fetchAll('review-notes.md')
     expect(bytes.toString('utf8')).toBe(v2)
-    // review-notes.md v1 of an older result wins when both are there.
+    // An older v1 result continued since #158 has both files: the phone gets the v2 notes, the ones the
+    // Review detail (gaps, reframings, revision) is built from, even above the inline limit.
     await writeFile(join(ws, APP, 'review-notes.md'), '# Review notes\n')
+    const big = `${v2}\n## Decisions\n${'- A long decision line about the dates and the cuts.\n'.repeat(500)}`
+    expect(Buffer.byteLength(big)).toBeGreaterThan(LIMITS.reviewNotesInlineBytes)
+    await writeFile(join(ws, APP, 'tailoring-notes.md'), big)
+    expect((await fetchAll('review-notes.md')).bytes.toString('utf8')).toBe(big)
+    // Free-form tailoring notes (an older attended run) never replace v1 notes, and are never served alone.
+    await writeFile(join(ws, APP, 'tailoring-notes.md'), '# Tailoring notes\n\nFree-form.\n')
     expect(((await chunk('review-notes.md')).body as FileChunk).bytes).toBe(15)
     await unlink(join(ws, APP, 'review-notes.md'))
-    await writeFile(join(ws, APP, 'tailoring-notes.md'), '# Tailoring notes\n\nFree-form.\n')
     expect((await chunk('review-notes.md')).error?.code).toBe('invalid')
     // The protocol does not know tailoring-notes.md: the phone cannot ask for it by that name.
     expect((await chunk('tailoring-notes.md')).error?.code).toBe('invalid')

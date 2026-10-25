@@ -549,9 +549,10 @@ and otherwise fetched like a file; the `revision` in `ReviewDetail` always cover
 > (resume-tailor notes v2) instead of `review-notes.md` (v1). The protocol is unchanged: the
 > desktop maps the name. `reviewNotes` carries whichever notes the result has, `openGaps` are
 > v2's "Gaps left open", `proposedReframings` are v2's "Reframings used" (same ids), and
-> `file.get` for `review-notes.md` serves `tailoring-notes.md` when the folder has no v1 notes and
-> the v2 file carries the `<!-- resume-tailor notes v2 -->` marker (`src/main/remote/notes-file.ts`).
-> Older v1 results are served as before. See [the change notes](../changes/158-single-flow.md).
+> `file.get` for `review-notes.md` serves the notes the Review detail reads: `tailoring-notes.md` when
+> it carries the `<!-- resume-tailor notes v2 -->` marker (also in an older v1 folder continued
+> since, which holds both files), else `review-notes.md` v1 (`src/main/remote/notes-file.ts`).
+> Free-form tailoring notes are never served. See [the change notes](../changes/158-single-flow.md).
 A protocol test builds every command and event with its largest allowed fields and asserts
 the serialised frame stays under `frameBytes`.
 
