@@ -154,6 +154,17 @@ describe('review service', () => {
     expect((await reviewDetail(ws, ID)).revision).not.toBe(d.revision)
   })
 
+  it("carries the re-score (#151) from huntgry.json, outside the revision", async () => {
+    const dir = await application()
+    const before = await reviewDetail(ws, ID)
+    expect(before.match).toBeUndefined()
+    const match = { profileFit: 82, resumeCoverage: 74, surfaced: 90, requirements: 11, leftOut: ['Kafka'], resumeFrom: 'resume_data.json', source: 'description', at: '2026-09-30T01:00:00.000Z' }
+    await writeFile(join(dir, 'huntgry.json'), JSON.stringify({ status: 'generated', notes: '', match }))
+    const d = await reviewDetail(ws, ID)
+    expect(d.match).toEqual(match)
+    expect(d.revision).toBe(before.revision)
+  })
+
   it('keeps a v1 result as it was: format v1, no v2 fields, same ids (AC-4)', async () => {
     await application()
     const d = await reviewDetail(ws, ID)

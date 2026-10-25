@@ -1,4 +1,4 @@
-import type { BuildSummary } from './applications-types'
+import type { ApplicationMatch, BuildSummary } from './applications-types'
 
 /**
  * Review of tailoring results (#31, #158). Every run goes to the end on its
@@ -133,6 +133,8 @@ export interface ReviewDetail {
   decisions?: string[]
   verify: { ok: boolean; report: string }
   build: BuildSummary
+  /** Profile fit vs resume coverage (#151), from `huntgry.json`; not part of `revision`. */
+  match?: ApplicationMatch
   artifacts: { file: string; bytes: number; sha256: string }[]
   resumePages: string[]
   coverPages: string[]

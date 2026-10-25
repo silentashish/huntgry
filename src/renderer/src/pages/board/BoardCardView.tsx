@@ -15,6 +15,7 @@ import {
 import { BOARD_COLUMNS, BOARD_COLUMN_LABEL, moveTargets, type BoardCard, type BoardColumnId } from '@shared/board'
 import { CompanyAvatar, MonoLabel, ScoreRing, StatusPill, scoreLabel } from '../../components/ui'
 import { applyBlocker } from '../../components/apply/blocker'
+import { ResumeMatch } from '../../components/match/ResumeMatch'
 import { cardMeta, cardPills, companyOf, type Scent } from './card'
 import classes from './board.module.css'
 
@@ -161,6 +162,7 @@ export function BoardCardView({
         </div>
 
         <Pills card={card} />
+        {card.kind === 'application' && <ResumeMatch match={card.app.tracking.match} compact className={classes.match} />}
 
         <div className={classes.foot}>
           <Ring scent={scent} />

@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import {
   APPLICATION_STATUSES,
   DEFAULT_TRACKING,
+  MAX_MATCH_LIST,
+  type ApplicationMatch,
   type ApplicationStatus,
   type ApplicationTracking
 } from '@shared/applications-types'
@@ -33,7 +35,40 @@ export function normalizeTracking(input: unknown): ApplicationTracking {
   if (typeof o.source === 'string' && o.source.trim()) t.source = o.source.trim().slice(0, 50)
   const review = normalizeReview(o.review)
   if (review) t.review = review
+  const match = normalizeMatch(o.match)
+  if (match) t.match = match
   return t
+}
+
+const percent = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 100
+const names = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '').slice(0, MAX_MATCH_LIST).map((x) => x.slice(0, 200)) : []
+
+/** `match` as main wrote it (#151); anything malformed is dropped, so a hand-edited one shows nothing. */
+export function normalizeMatch(input: unknown): ApplicationMatch | undefined {
+  if (typeof input !== 'object' || input === null) return undefined
+  const m = input as Record<string, unknown>
+  if (!percent(m.profileFit) || !percent(m.resumeCoverage) || typeof m.at !== 'string' || Number.isNaN(Date.parse(m.at))) return undefined
+  if (typeof m.requirements !== 'number' || !Number.isInteger(m.requirements) || m.requirements < 1) return undefined
+  if (m.resumeFrom !== 'resume_data.json' && m.resumeFrom !== 'resume.pdf') return undefined
+  if (m.source !== 'jobright-skills' && m.source !== 'description') return undefined
+  const out: ApplicationMatch = {
+    profileFit: m.profileFit,
+    resumeCoverage: m.resumeCoverage,
+    requirements: m.requirements,
+    leftOut: names(m.leftOut),
+    resumeFrom: m.resumeFrom,
+    source: m.source,
+    at: m.at
+  }
+  // Surfaced can't pass 100 (the resume selects from the profile); a larger one is not ours.
+  if (percent(m.surfaced)) out.surfaced = m.surfaced
+  const absent = names(m.absent)
+  if (absent.length > 0) out.absent = absent
+  const gates = names(m.gates)
+  if (gates.length > 0) out.gates = gates
+  if (typeof m.runId === 'string' && m.runId) out.runId = m.runId.slice(0, 100)
+  return out
 }
 
 const REVIEW_STATES = ['unreviewed', 'needs-attention', 'approved', 'discarded'] as const

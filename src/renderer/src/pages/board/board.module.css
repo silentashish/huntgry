@@ -353,6 +353,13 @@
   gap: 4px;
 }
 
+/* Profile fit · Resume (#151), one line under the pills. */
+.match {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .foot {
   display: flex;
   align-items: center;
@@ -443,7 +450,7 @@
   padding: 6px 10px;
 }
 
-.card[data-compact='true']:not(:hover, :focus-within) :is(.cardAvatar, .cardHeadText, .pills, .foot) {
+.card[data-compact='true']:not(:hover, :focus-within) :is(.cardAvatar, .cardHeadText, .pills, .match, .foot) {
   display: none;
 }
 

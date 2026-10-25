@@ -5,7 +5,7 @@ import { displaySkill, mentions, mentionsAffirmatively, normalizeSkill, skillKey
 /**
  * Match score (#149): how much of what a job asks for the master profile has evidence for, out of 100.
  * The shared engine behind the Jobs page's Relevant skills part (#73), Explore (#150), the re-score after
- * tailoring (#151) and Automation (#154). Local and deterministic: no model call, no I/O.
+ * tailoring (#151, `resume-coverage.ts`) and Automation (#154). Local and deterministic: no model call, no I/O.
  *
  * 1. **Requirements**, best source first: Jobright's `jdCoreSkills` (already extracted and weighted), else
  *    the skills the description names, looked up with the profile's own skills plus `TECH_VOCABULARY`, so
@@ -144,6 +144,17 @@ function keysOf(name: string): string[] {
 function hasEvidence(name: string, keys: ReadonlySet<string>, evidence: string): boolean {
   if (keysOf(name).some((k) => keys.has(k))) return true
   return evidence !== '' && spellings(name).some((n) => normalizeSkill(n).length >= 2 && mentionsAffirmatively(evidence, n))
+}
+
+/**
+ * Whether some words have evidence for a requirement, decided exactly as `matchScore` decides it: a skill of
+ * the same key after synonyms and filler, or the words naming it affirmatively. For matching the same
+ * requirements against other evidence than the profile, such as a tailored resume (#151, `resume-coverage.ts`).
+ */
+export function evidenceMatcher(s: Pick<MatchProfile, 'skills' | 'evidence'>): (requirement: string) => boolean {
+  const keys = new Set(s.skills.flatMap(keysOf))
+  const evidence = s.evidence ?? ''
+  return (requirement) => hasEvidence(requirement, keys, evidence)
 }
 
 /** Requirements from Jobright's `jdCoreSkills`: weight = score (1–3), soft skills × `SOFT_SKILL_WEIGHT`. */
@@ -363,11 +374,10 @@ export function matchScore(job: MatchJob, s: MatchProfile): MatchResult {
   const jobright = job.jdCoreSkills ? jobrightRequirements(job.jdCoreSkills) : []
   const source: MatchSource = jobright.length > 0 ? 'jobright-skills' : 'description'
   const requirements = source === 'jobright-skills' ? jobright : descriptionRequirements(job, s.skills)
-  const keys = new Set(s.skills.flatMap(keysOf))
-  const evidence = s.evidence ?? ''
+  const has = evidenceMatcher(s)
   const matched: MatchSkill[] = []
   const missing: MatchSkill[] = []
-  for (const r of requirements) (hasEvidence(r.skill, keys, evidence) ? matched : missing).push(r)
+  for (const r of requirements) (has(r.skill) ? matched : missing).push(r)
   const total = requirements.reduce((n, r) => n + r.weight, 0)
   const have = matched.reduce((n, r) => n + r.weight, 0)
   const coverage = total > 0 ? Math.round((have / total) * 100) : 0

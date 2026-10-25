@@ -31,6 +31,7 @@ import { APPLICATION_STATUSES, type ApplicationRecord, type ApplicationTracking 
 import { AGENT_LABEL, type RunSummary } from '@shared/runner-types'
 import { api, errorText } from '../../api'
 import { applyBlocker } from '../../components/apply/blocker'
+import { ResumeMatch } from '../../components/match/ResumeMatch'
 import { runBadge } from '../../components/usage/format'
 import { MonoLabel, StatusPill } from '../../components/ui'
 import { useNavigation } from '../../navigation'
@@ -171,6 +172,8 @@ export function ApplicationDrawer({ app, onClose, onUpdate, onApply, applying }:
                   </UnstyledButton>
                 )}
               </Group>
+
+              <ResumeMatch match={app.tracking.match} />
 
               {error && (
                 <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>

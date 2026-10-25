@@ -224,6 +224,12 @@ master profile has evidence for. Must-haves such as a degree in another field, y
 a clearance or "no sponsorship" when you need it cap it at 40. Explore, re-scoring and Automation
 build on the same engine. See [docs/changes/149-match-score.md](docs/changes/149-match-score.md).
 
+After a run builds a resume, Huntgry scores it again against the same requirements: the Board card,
+the application drawer and Review show **Profile fit 82 · Resume 74 (90% surfaced)** and the skills
+your profile has that the resume left out. The resume selects from the profile and never adds to
+it, so the resume can't beat the fit; the score is kept in the application's `huntgry.json`. See
+[docs/changes/151-rescore-after-tailoring.md](docs/changes/151-rescore-after-tailoring.md).
+
 **Explore** lists the daily new-grad software jobs from Jobright's public GitHub list
 ([jobright-ai/2026-Software-Engineer-New-Grad](https://github.com/jobright-ai/2026-Software-Engineer-New-Grad)),
 grouped by the day they were posted, today first. Huntgry fetches that one README from GitHub
