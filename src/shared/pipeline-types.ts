@@ -99,6 +99,9 @@ export interface PipelineRecord {
   interruptedAt?: string
   /** Why it is paused, stopped or finished early (budget, spend limit, start error, Stop). */
   stopReason?: string
+  /** Started by Automation (#154) for one of its jobs, with that automation run's id. */
+  origin?: 'automation'
+  automationRunId?: string
 }
 
 export interface PipelineCounts {
@@ -143,6 +146,8 @@ export interface PipelineState {
   agent: AgentId
   fallbackAgent?: AgentId
   concurrency: number
+  /** Started by Automation (#154). */
+  origin?: 'automation'
 }
 
 export type PipelineItemOutcome = 'unreviewed' | 'needs-attention' | 'approved' | 'discarded' | 'needs-reply' | 'failed' | 'cancelled'
