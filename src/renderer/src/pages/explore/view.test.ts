@@ -150,7 +150,8 @@ describe('Explore view', () => {
   it('says which source the list shows', () => {
     const jobs1000 = Array.from({ length: 1000 }, () => row('dddddd1', '2026-10-21'))
     expect(sourceLabel({ source: 'api', jobs: jobs1000, total: 2116 })).toBe('newgrad-jobs API · newest 1,000 of 2,116 jobs')
-    expect(sourceLabel({ source: 'api', jobs: jobs.slice(0, 2), total: 2 })).toBe('newgrad-jobs API · 2 jobs')
+    expect(sourceLabel({ source: 'api', jobs: jobs.slice(0, 2), total: 4 })).toBe('newgrad-jobs API · 2 jobs')
+    expect(sourceLabel({ source: 'api', jobs: jobs.slice(0, 1) })).toBe('newgrad-jobs API · 1 job')
     expect(sourceLabel({ source: 'readme', jobs })).toBe("Jobright's GitHub list (fallback) · 4 jobs")
   })
 

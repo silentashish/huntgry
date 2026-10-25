@@ -1,6 +1,7 @@
 import {
   DEFAULT_EXPLORE_CATEGORY,
   EXPLORE_CATEGORIES,
+  EXPLORE_MAX_ROWS,
   isExploreCategory,
   type ExploreJob,
   type ExploreList,
@@ -136,15 +137,18 @@ export function categoryOptions(): { group: string; items: { value: string; labe
   return [...groups].map(([group, items]) => ({ group, items }))
 }
 
-const count = (n: number) => n.toLocaleString('en-US')
+const jobsCount = (n: number) => `${n.toLocaleString('en-US')} job${n === 1 ? '' : 's'}`
 
-/** Which source the list shows, and how much of it: "newgrad-jobs API · newest 1,000 of 2,116 jobs". */
+/**
+ * Which source the list shows, and how much of it: "newgrad-jobs API · newest 1,000 of 2,116 jobs" when the category
+ * has more than one refresh fetches (the API's total also counts rows Huntgry dropped, so it is shown only then).
+ */
 export function sourceLabel(list: Pick<ExploreList, 'source' | 'jobs' | 'total'>): string {
-  if (list.source === 'readme') return `Jobright's GitHub list (fallback) · ${count(list.jobs.length)} jobs`
   const n = list.jobs.length
-  return list.total && list.total > n
-    ? `newgrad-jobs API · newest ${count(n)} of ${count(list.total)} jobs`
-    : `newgrad-jobs API · ${count(n)} jobs`
+  if (list.source === 'readme') return `Jobright's GitHub list (fallback) · ${jobsCount(n)}`
+  return list.total && list.total > EXPLORE_MAX_ROWS
+    ? `newgrad-jobs API · newest ${n.toLocaleString('en-US')} of ${jobsCount(list.total)}`
+    : `newgrad-jobs API · ${jobsCount(n)}`
 }
 
 /** `$150000-$168000/yr` → `$150k–$168k/yr`; other pay text as it is. */
