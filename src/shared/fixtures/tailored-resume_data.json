@@ -1,0 +1,23 @@
+{
+  "contact": { "name": "Sam Rivera", "email": "sam@example.com", "location": "Austin, TX" },
+  "summary": "Backend engineer who builds data services in Python and Go on AWS.",
+  "experience": [
+    {
+      "company": "Acme Logistics",
+      "title": "Software Engineer",
+      "dates": "Jan 2022 - Present",
+      "bullets": [
+        "Built order-routing services in Python and Go that handle 4M requests a day.",
+        "Moved the shipment ledger to PostgreSQL, cutting report time from 40 s to 3 s.",
+        "Shipped every service as a Docker image through GitHub Actions."
+      ]
+    }
+  ],
+  "education": [{ "institution": "UT Austin", "degree": "B.S. in Computer Science", "dates": "2017 - 2021" }],
+  "skills": [
+    { "label": "Languages", "items": "Python, Go, SQL" },
+    { "label": "Infrastructure", "items": "AWS (EC2, S3), Docker" }
+  ],
+  "projects": [{ "name": "tracer", "tech": "Go, gRPC", "bullets": ["Request tracing for small services."] }],
+  "target_pages": 1
+}
