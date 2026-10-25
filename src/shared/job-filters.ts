@@ -92,7 +92,8 @@ const CLEARANCE_REQUIRED = [
 /** "No clearance is required", "clearance not needed", "clearance preferred": not a requirement. */
 const CLEARANCE_WAIVED = /\b(?:no|not|n't|without|optional|preferred|a plus|nice to have)\b/i
 
-function requiresClearance(text: string): boolean {
+/** Whether a posting asks for a security clearance (a sentence that requires one and does not waive it). */
+export function requiresClearance(text: string): boolean {
   return text
     .split(/(?<=[.!?;])\s+|\n+/)
     .some((s) => /\bclearance\b/i.test(s) && !CLEARANCE_WAIVED.test(s) && CLEARANCE_REQUIRED.some((re) => re.test(s)))

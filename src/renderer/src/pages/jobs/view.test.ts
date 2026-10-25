@@ -20,7 +20,7 @@ const job = (id: string, over: Partial<Job> = {}): Job =>
     ...over
   }) as Job
 
-const scored = (j: Job, score: number): ScoredJob => ({ job: j, score: { score, reasons: [], matched: true } })
+const scored = (j: Job, score: number): ScoredJob => ({ job: j, score: { score, reasons: [], matched: true, match: { score: 0, matched: [], missing: [], gates: [], source: 'description' } } })
 
 describe('Jobs page view', () => {
   const a = job('url:a', { remote: true })
@@ -62,10 +62,11 @@ describe('Jobs page view', () => {
     }
     const at = (d: string) => `2026-10-0${d}T00:00:00Z`
     const saved = [
-      job('url:go', { title: 'Backend Engineer', description: 'Go services', remote: true, postedAt: at('5') }),
+      // Asks for Kafka too, which the profile lacks: half the skills, so below url:pg (#149).
+      job('url:go', { title: 'Backend Engineer', description: 'Go services on Kafka', remote: true, postedAt: at('5') }),
       job('url:pg', { title: 'Backend Engineer', description: 'Go and PostgreSQL', remote: true, postedAt: at('4') }),
       // Same score as url:go, newer: ranked first of the two.
-      job('url:go2', { title: 'Backend Engineer', description: 'Go services', remote: true, postedAt: at('6') }),
+      job('url:go2', { title: 'Backend Engineer', description: 'Go services on Kafka', remote: true, postedAt: at('6') }),
       job('url:novisa', { title: 'Backend Engineer', description: 'Go. We do not sponsor visas.', remote: true, postedAt: at('5') }),
       job('url:gone', { title: 'Backend Engineer', description: 'Go', remote: true, postedAt: at('5'), dismissed: true }),
       job('url:other', { title: 'Sales Manager', postedAt: at('5') })

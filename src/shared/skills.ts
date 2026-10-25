@@ -199,7 +199,7 @@ export function displaySkill(name: string): string {
 
 /** Splits a technologies field (`Python, Go / Kafka; AWS`) into names. */
 /** Names that contain a slash and must survive splitting on `/`. */
-const SLASH_NAMES = ['CI/CD', 'TCP/IP', 'PL/SQL', 'UI/UX', 'A/B testing', 'I/O']
+export const SLASH_NAMES: readonly string[] = ['CI/CD', 'TCP/IP', 'PL/SQL', 'UI/UX', 'A/B testing', 'I/O']
 
 export function splitSkills(field: string): string[] {
   // Drop annotations first ("AWS (EKS/EC2)"), so their slashes and commas do not split.
