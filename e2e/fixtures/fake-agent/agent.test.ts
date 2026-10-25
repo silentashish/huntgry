@@ -126,7 +126,7 @@ describe('fake claude', () => {
     expect(pdf.subarray(0, 8).toString()).toBe('%PDF-1.4')
     const doc = await getDocumentProxy(new Uint8Array(pdf))
     expect(doc.numPages).toBe(1)
-    expect((await extractText(doc)).text).toContain('Alex Rivera - staff-engineer at acme-corp')
+    expect(String((await extractText(doc)).text)).toContain('Alex Rivera - staff-engineer at acme-corp')
     expect(pdf.toString()).toMatch(/\nxref\n0 6\n[\s\S]*trailer\n<< \/Size 6 \/Root 1 0 R >>\nstartxref\n\d+\n%%EOF\n$/)
     // pdfinfo (poppler), when the machine has it, must not warn about the file.
     const pdfinfo = ['/opt/homebrew/bin/pdfinfo', '/usr/local/bin/pdfinfo'].find((p) => existsSync(p))
@@ -144,6 +144,28 @@ describe('fake claude', () => {
     const texts = buildTranscript(out.events, 'claude').filter((i) => i.kind === 'assistant').map((i) => (i as { text: string }).text)
     expect(texts.filter((x) => x.endsWith('?'))).toHaveLength(2)
     expect(await builtFiles()).toContain('tailoring-notes.md')
+  })
+
+  it('follows the caller rules of the system prompt and of a later message (#159)', async () => {
+    const notes = () => readFile(join(cwd, 'staff-engineer/acme-corp/a-42/tailoring-notes.md'), 'utf8')
+    const data = async () => JSON.parse(await readFile(join(cwd, 'staff-engineer/acme-corp/a-42/resume_data.json'), 'utf8')).experience[0].bullets[0]
+    const fact = 'Led the migration of the billing service to Go'
+    const rejected = 'Owned the platform migration of billing to Go for acme-corp'
+    // No rules: the default wording.
+    await run('claude', [], [claudeLine(FIRST)])
+    expect(await data()).toBe(rejected)
+    // Rejected in the system prompt: never that wording, the fact itself instead.
+    const prompt = `CALLER RULES …\nPREFERRED WORDINGS (JSON, newest first): []\nWORDINGS TO AVOID (JSON, newest first): ${JSON.stringify([{ sourceFact: fact, wording: rejected }])}`
+    await run('claude', ['--append-system-prompt', prompt], [claudeLine(FIRST)])
+    expect(await data()).toBe(fact)
+    expect(await notes()).not.toContain(rejected)
+    // A re-run message repeating the rules with a better wording: that one, as written.
+    const rerun = `The user reviewed the notes.\nPREFERRED WORDINGS (JSON, newest first): ${JSON.stringify([{ sourceFact: fact, wording: 'Moved billing to Go' }])}\nWORDINGS TO AVOID (JSON, newest first): ${JSON.stringify([{ sourceFact: fact, wording: rejected }])}`
+    await run('claude', [], [claudeLine(FIRST), claudeLine(rerun)])
+    expect(await data()).toBe('Moved billing to Go')
+    expect(await notes()).toContain('- Wording: Moved billing to Go')
+    const pdf = await getDocumentProxy(new Uint8Array(await readFile(join(cwd, 'staff-engineer/acme-corp/a-42/resume.pdf'))))
+    expect(String((await extractText(pdf)).text)).toContain('Moved billing to Go')
   })
 
   it('reuses the session id it is resumed with and writes the job it remembered', async () => {

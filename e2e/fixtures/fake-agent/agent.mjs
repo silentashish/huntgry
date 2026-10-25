@@ -17,6 +17,12 @@
 //                         <CV_HOME or cwd>/<role>/<company>/<job-id>/ (role, company and job id
 //                         come from the first message, as the real skill reads them)
 //   any later reply       a follow-up ("make it shorter", a Review re-run): rebuilds the folder
+//   caller rules (#159)   the one reframing it writes ("Owned the platform migration of billing to Go
+//                         for <company>", from the fact "Led the migration of the billing service to
+//                         Go") follows the PREFERRED WORDINGS / WORDINGS TO AVOID lines of the system
+//                         prompt and of any later message: a preferred wording for the fact is used
+//                         as written, an avoided one never (then the fact itself is used). The
+//                         wording lands in resume_data.json, resume.pdf and tailoring-notes.md.
 // Resuming (`--resume <id>`, `exec resume <id>`, `--conversation <id>`) reuses that session id.
 //
 // Behaviour switches, read from `$FAKE_AGENT_HOME/config.json` and overridden by the environment:
@@ -341,6 +347,41 @@ function recallJob() {
 
 let job = resume ? recallJob() : null
 
+// --- caller rules (#159) ------------------------------------------------------------------------
+
+/** The one reframing the fake writes, and its source fact in the demo master profile. */
+const FACT = 'Led the migration of the billing service to Go'
+const defaultWording = (company) => `Owned the platform migration of billing to Go for ${company}`
+
+/** The rules as Huntgry last stated them (the system prompt, then a re-run message repeating them). */
+const rules = { preferred: [], avoid: [] }
+function readRules(text) {
+  const list = (label) => {
+    const m = new RegExp(`^${label} \\(JSON[^)]*\\): (.*)$`, 'm').exec(text)
+    if (!m) return null
+    try {
+      const v = JSON.parse(m[1])
+      return Array.isArray(v) ? v : null
+    } catch {
+      return null
+    }
+  }
+  const preferred = list('PREFERRED WORDINGS')
+  const avoid = list('WORDINGS TO AVOID')
+  if (preferred) rules.preferred = preferred
+  if (avoid) rules.avoid = avoid
+}
+readRules(args.join('\n'))
+
+const same = (a, b) => String(a).replace(/\s+/g, ' ').trim() === String(b).replace(/\s+/g, ' ').trim()
+/** The wording for FACT the rules allow: a preferred one, else the default unless avoided, else the fact itself. */
+function wordingFor(company) {
+  const avoided = (w) => rules.avoid.some((r) => same(r.sourceFact, FACT) && same(r.wording, w))
+  const preferred = rules.preferred.find((r) => same(r.sourceFact, FACT) && !avoided(r.wording))
+  if (preferred) return preferred.wording
+  return avoided(defaultWording(company)) ? FACT : defaultWording(company)
+}
+
 /**
  * A structurally valid one-page PDF: every object at its recorded offset in the
  * cross-reference table, a trailer with /Size and /Root, and startxref. Small
@@ -371,14 +412,16 @@ function tinyPdf(text) {
 function build(j) {
   const dir = join(process.env.CV_HOME || process.cwd(), j.role, j.company, j.jobId)
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, 'resume.pdf'), tinyPdf(`Alex Rivera - ${j.role} at ${j.company}`))
+  const wording = wordingFor(j.company)
+  writeFileSync(join(dir, 'resume.pdf'), tinyPdf(`Alex Rivera - ${j.role} at ${j.company}. ${wording}`))
   writeFileSync(
     join(dir, 'resume_data.json'),
     `${JSON.stringify(
       {
         contact: { name: 'Alex Rivera', email: 'alex.rivera@example.com' },
         summary: `Engineer tailored for ${j.role} at ${j.company} by the fake agent.`,
-        skills: [{ category: 'Languages', items: ['Go', 'TypeScript'] }]
+        skills: [{ category: 'Languages', items: ['Go', 'TypeScript'] }],
+        experience: [{ company: 'Initrode', title: 'Software Engineer', bullets: [wording] }]
       },
       null,
       2
@@ -402,8 +445,8 @@ function build(j) {
       '',
       '## Reframings used',
       '### Platform ownership',
-      '- Source fact: Led the migration of the billing service to Go',
-      `- Wording: Owned the platform migration of billing to Go for ${j.company}`,
+      `- Source fact: ${FACT}`,
+      `- Wording: ${wording}`,
       '',
       '## Gaps left open',
       '- Kubernetes: nothing in the profile',
@@ -450,6 +493,7 @@ async function runTurn(text) {
     job = parseJob(text)
     rememberJob(job)
   }
+  readRules(text)
   await pause()
   if (turn === 1 && !resume) {
     protocol.text(`Gap analysis for ${job.role} at ${job.company} (job ${job.jobId}): reading the master profile first.`)
