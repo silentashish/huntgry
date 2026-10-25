@@ -18,7 +18,7 @@ import {
   type ReviewDetail,
   type ReviewList
 } from '@shared/remote'
-import { approvalsFile, loadApprovals } from '../review/approvals'
+import { loadRules as loadApprovals, rulesFile as approvalsFile } from '../review/approvals'
 import { getReview, setReviewAuthorityRoot, updateReview, type RecordedReview } from '../review/authority'
 import { reframingId } from '../review/notes'
 import { IN_PROGRESS_REASON } from '../pipeline/pipeline'

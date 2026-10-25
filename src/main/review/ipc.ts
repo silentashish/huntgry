@@ -3,6 +3,7 @@ import {
   REVIEW_CHANNELS,
   type ApproveReviewInput,
   type DiscardReviewInput,
+  type RejectReframingInput,
   type RerunReviewInput,
   type ReviewDetail,
   type ReviewItem,
@@ -15,20 +16,22 @@ import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
 import { pipeline } from '../pipeline/ipc'
 import { queue, replyThroughQueue } from '../queue/ipc'
-import { requireApprovalId } from './approvals'
+import { requireRuleId } from './approvals'
 import {
   approveReview,
   discardReview,
-  dropAllApprovals,
-  dropApproval,
+  dropAllRules,
+  dropRule,
   isSettledReview,
-  listApprovals,
+  listRules,
   listReviews,
   openGapCount,
   requireApplicationId,
   requireApproveInput,
   requireDiscardInput,
+  requireRejectInput,
   requireRerunInput,
+  rejectReframing,
   rerunReview,
   reviewDetail,
   type ReviewDeps
@@ -103,6 +106,7 @@ export const reviewForRemote = {
   approve: (ws: string, input: ApproveReviewInput, via: ReviewVia): Promise<ReviewOutcome> => approveReview(reviewDepsFor(ws), input, via),
   rerun: (ws: string, input: RerunReviewInput, via: ReviewVia): Promise<ReviewOutcome> => rerunReview(reviewDepsFor(ws), input, via),
   discard: (ws: string, input: DiscardReviewInput, via: ReviewVia): Promise<ReviewOutcome> => discardReview(reviewDepsFor(ws), input, via),
+  reject: (ws: string, input: RejectReframingInput, via: ReviewVia): Promise<ReviewOutcome> => rejectReframing(reviewDepsFor(ws), input, via),
   unreviewed: (ws: string): Promise<number> => {
     const now = Date.now()
     if (unreviewedCache?.ws === ws && now - unreviewedCache.at < 5000) return unreviewedCache.count
@@ -115,14 +119,15 @@ export const reviewForRemote = {
   }
 }
 
-/** Review of unattended results: list, detail, approve / re-run / discard bound to a revision, standing approvals. */
+/** Review of unattended results: list, detail, approve / re-run / discard / reject bound to a revision, reframing rules. */
 export function registerReviewIpc(): void {
   ipcMain.handle(REVIEW_CHANNELS.list, async () => listReviews(await workspace()))
   ipcMain.handle(REVIEW_CHANNELS.get, async (_e, id: unknown) => reviewDetail(await workspace(), requireApplicationId(id)))
   ipcMain.handle(REVIEW_CHANNELS.approve, (_e, input: unknown) => approveReview(reviewDeps, requireApproveInput(input), 'desktop'))
   ipcMain.handle(REVIEW_CHANNELS.rerun, (_e, input: unknown) => rerunReview(reviewDeps, requireRerunInput(input), 'desktop'))
   ipcMain.handle(REVIEW_CHANNELS.discard, (_e, input: unknown) => discardReview(reviewDeps, requireDiscardInput(input), 'desktop'))
-  ipcMain.handle(REVIEW_CHANNELS.approvals, async () => listApprovals(await workspace()))
-  ipcMain.handle(REVIEW_CHANNELS.removeApproval, async (_e, id: unknown) => dropApproval(await workspace(), requireApprovalId(id)))
-  ipcMain.handle(REVIEW_CHANNELS.removeAllApprovals, async () => dropAllApprovals(await workspace()))
+  ipcMain.handle(REVIEW_CHANNELS.reject, (_e, input: unknown) => rejectReframing(reviewDeps, requireRejectInput(input), 'desktop'))
+  ipcMain.handle(REVIEW_CHANNELS.rules, async () => listRules(await workspace()))
+  ipcMain.handle(REVIEW_CHANNELS.removeRule, async (_e, id: unknown) => dropRule(await workspace(), requireRuleId(id)))
+  ipcMain.handle(REVIEW_CHANNELS.removeAllRules, async () => dropAllRules(await workspace()))
 }

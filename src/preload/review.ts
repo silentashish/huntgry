@@ -7,7 +7,8 @@ export const review: ReviewApi = {
   approve: (input) => ipcRenderer.invoke(REVIEW_CHANNELS.approve, input),
   rerun: (input) => ipcRenderer.invoke(REVIEW_CHANNELS.rerun, input),
   discard: (input) => ipcRenderer.invoke(REVIEW_CHANNELS.discard, input),
-  approvals: () => ipcRenderer.invoke(REVIEW_CHANNELS.approvals),
-  removeApproval: (id) => ipcRenderer.invoke(REVIEW_CHANNELS.removeApproval, id),
-  removeAllApprovals: () => ipcRenderer.invoke(REVIEW_CHANNELS.removeAllApprovals)
+  reject: (input) => ipcRenderer.invoke(REVIEW_CHANNELS.reject, input),
+  rules: () => ipcRenderer.invoke(REVIEW_CHANNELS.rules),
+  removeRule: (id) => ipcRenderer.invoke(REVIEW_CHANNELS.removeRule, id),
+  removeAllRules: () => ipcRenderer.invoke(REVIEW_CHANNELS.removeAllRules)
 }

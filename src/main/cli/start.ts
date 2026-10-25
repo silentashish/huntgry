@@ -34,7 +34,7 @@ import { fetchPostingText } from './posting'
 import { pinnedFetch } from './public-url'
 import { RunManager, type RunContext } from './runner'
 import { readRun } from './runs'
-import { approvalsForPrompt, loadApprovals } from '../review/approvals'
+import { loadRules, rulesForPrompt } from '../review/approvals'
 import { reopenForContinuation } from '../review/authority'
 import { currentPrices, withPrices } from './usage'
 import { claudeVersion, supportsPermissionPrompts } from './version'
@@ -159,11 +159,12 @@ export async function contextForRun(runId: string, expectedWorkspace?: string): 
 }
 
 /**
- * The caller rules every run gets (newest first, capped): standing approvals as preferred
- * wordings. Wordings to avoid stay empty until Review stores rejections (#159).
+ * The caller rules every run gets (newest first, capped): the reframing rules (#159), kept
+ * wordings and rejections' better wordings as preferred wordings, rejected ones as wordings to avoid.
  */
 async function callerRules(workspace: string): Promise<CallerRules> {
-  return { preferred: approvalsForPrompt(await loadApprovals(workspace)).sent, avoid: [] }
+  const { preferred, avoid } = rulesForPrompt(await loadRules(workspace))
+  return { preferred, avoid }
 }
 
 /**

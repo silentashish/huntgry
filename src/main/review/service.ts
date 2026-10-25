@@ -4,29 +4,32 @@ import { appendFile, mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ApplicationRecord } from '@shared/applications-types'
 import {
+  MAX_BETTER_WORDING,
   REVIEW_NOTES_INLINE_BYTES,
   TAILORING_NOTES_FILE,
-  type ApprovalsSummary,
   type ApproveReviewInput,
   type DiscardReviewInput,
+  type ReframingRule,
+  type ReframingRulesSummary,
+  type RejectReframingInput,
   type RerunReviewInput,
   type ReviewDetail,
   type ReviewItem,
   type ReviewOutcome,
   type ReviewTracking,
-  type ReviewVia,
-  type StandingApproval
+  type ReviewVia
 } from '@shared/review-types'
 import type { RunSummary } from '@shared/runner-types'
 import { resolveApplicationFolder } from '../applications/safe-path'
 import { readApplication, scanApplications } from '../applications/scan'
 import { updateTracking } from '../applications/tracking'
-import { MAX_TEXT } from '../cli/command'
+import { callerRulesBlock, MAX_TEXT, type CallerRules } from '../cli/command'
 import { RUN_ID_PATTERN } from '../cli/runs'
 import { RERUN_REASON } from '@shared/review-types'
 import { HUNTGRY_DIR } from '../workspace/constants'
 import { getReview, sameReview, updateReview, type RecordedReview } from './authority'
-import { addApprovals, approvalsForPrompt, loadApprovals, removeAllApprovals, removeApproval } from './approvals'
+import { addRules, loadRules, mergeRules, removeAllRules, removeRule, rulesForPrompt, type RuleEntry } from './approvals'
+import { normalizeText } from './notes'
 import { boundedText, MAX_NOTES_BYTES, parseResultNotes, readResultNotes } from './notes-file'
 
 /**
@@ -35,8 +38,9 @@ import { boundedText, MAX_NOTES_BYTES, parseResultNotes, readResultNotes } from 
  * will call it for the phone. Every decision is bound to the `revision` the
  * caller was shown: a result that changed on disk meanwhile is refused
  * (`stale`), and so are reframing ids that are not in that revision
- * (`invalid`), without writing anything. Standing approvals are written only
- * as source-fact → wording pairs read from disk, never from client text.
+ * (`invalid`), without writing anything. Reframing rules (#159) are written only
+ * as source-fact → wording pairs read from disk; the only client text in one is
+ * a rejection's better wording.
  */
 
 export interface ReviewDeps {
@@ -88,13 +92,27 @@ export function requireApproveInput(input: unknown): ApproveReviewInput {
 
 export function requireRerunInput(input: unknown): RerunReviewInput {
   const p = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
-  const out: RerunReviewInput = {
+  // Empty answers and no ticks is a plain Re-run (#159): the run is redone with the reframing rules.
+  return {
     applicationId: requireApplicationId(p.applicationId),
     revision: requireRevision(p.revision),
     answers: requireAnswers(p.answers ?? ''),
     approvedReframingIds: requireReframingIds(p.approvedReframingIds)
   }
-  if (!out.answers && out.approvedReframingIds!.length === 0) throw new Error('Type your decisions or tick a reframing first.')
+}
+
+export function requireBetterWording(v: unknown): string | undefined {
+  if (v === undefined || v === null) return undefined
+  if (typeof v !== 'string' || v.length > MAX_BETTER_WORDING) throw new Error('The better wording is too long.')
+  return normalizeText(v) || undefined
+}
+
+export function requireRejectInput(input: unknown): RejectReframingInput {
+  const p = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
+  const [reframingId] = requireReframingIds([p.reframingId])
+  const out: RejectReframingInput = { applicationId: requireApplicationId(p.applicationId), revision: requireRevision(p.revision), reframingId }
+  const better = requireBetterWording(p.betterWording)
+  if (better) out.betterWording = better
   return out
 }
 
@@ -196,8 +214,8 @@ async function detailWithRecord(
   const notesText = notes?.text ?? null
   if (notes?.tooLarge !== undefined) warnings.push(`${notes.file} is too large to read (${kib(notes.tooLarge)}; at most ${kib(MAX_NOTES_BYTES)}).`)
   const parsed = notes ? parseResultNotes(notes) : parseResultNotes({ format: 'v1', text: '' })
-  // v2: the reframings the run used are the ones the user can tick (same ids as v1's proposed ones).
-  const proposed = (parsed.format === 'v2' ? parsed.reframingsUsed : parsed.proposed).slice(0, MAX_LIST)
+  // v2: the reframings the run used are the ones the user can tick or reject (same ids as v1's proposed ones).
+  const listed = (parsed.format === 'v2' ? parsed.reframingsUsed : parsed.proposed).slice(0, MAX_LIST)
   const openGaps = parsed.openGaps.slice(0, MAX_LIST)
   if (Math.max(parsed.proposed.length, parsed.reframingsUsed.length, parsed.openGaps.length) > MAX_LIST) warnings.push(`Only the first ${MAX_LIST} reframings and gaps are shown.`)
 
@@ -215,7 +233,13 @@ async function detailWithRecord(
     if (info) artifacts.push(info)
   }
   const notesHash = notes?.tooLarge !== undefined ? await hashFile(join(folder, notes.file)).catch(() => '') : ''
-  const ids = proposed.map((p) => p.id)
+  const ids = listed.map((p) => p.id)
+  // The rule standing for each pair (#159). Not part of the revision: a rule is a decision, not the result.
+  const rules = new Map((await loadRules(workspace)).map((r) => [r.id, r]))
+  const proposed = listed.map((p) => {
+    const rule = rules.get(p.id)
+    return rule ? { ...p, rule: { kind: rule.kind, ...(rule.betterWording ? { betterWording: rule.betterWording } : {}) } } : p
+  })
   // The files only (what an approval vouches for)...
   const contentRevision = sha256(
     JSON.stringify([notesText ?? notesHash, openGaps, ids, verify, artifacts.map((a) => [a.file, a.sha256])])
@@ -355,13 +379,17 @@ function entriesFor(
   picked: ReviewDetail['proposedReframings'],
   detail: ReviewDetail,
   via: ReviewVia,
-  now: Date
-): Omit<StandingApproval, 'id'>[] {
+  now: Date,
+  kind: ReframingRule['kind'] = 'preferred',
+  betterWording?: string
+): RuleEntry[] {
   return picked.map((p) => ({
+    kind,
     sourceFact: p.sourceFact,
     wording: p.wording,
+    ...(betterWording ? { betterWording } : {}),
     ...(p.requirement ? { requirement: p.requirement } : {}),
-    approvedAt: now.toISOString(),
+    at: now.toISOString(),
     applicationId: detail.applicationId,
     runId: detail.runId,
     via
@@ -388,7 +416,7 @@ export function approveReview(deps: ReviewDeps, input: ApproveReviewInput, via: 
         contentRevision: p.contentRevision
       }
       if (!(await decide(workspace, input.applicationId, p.review, approved, true))) return STALE
-      if (picked.length > 0) await addApprovals(workspace, entriesFor(picked, detail, via, now))
+      if (picked.length > 0) await addRules(workspace, entriesFor(picked, detail, via, now))
       await audit(workspace, { at, action: 'approve', applicationId: input.applicationId, revision: input.revision, ids, via })
       deps.changed?.()
       return { ok: true, detail: await reviewDetail(workspace, input.applicationId) }
@@ -399,14 +427,30 @@ export function approveReview(deps: ReviewDeps, input: ApproveReviewInput, via: 
 /** Shared with the renderer (#109): the Dashboard counts results to review with the same rule. */
 export { isSettledReview, RERUN_REASON } from '@shared/review-types'
 
-/** What the agent is told on a re-run: the user's decisions, plus the ticked reframings as preferred wordings. */
-export function rerunMessage(answers: string, approved: { sourceFact: string; wording: string }[]): string {
+/**
+ * What the agent is told on a re-run: the reframings of this result the user rejected (with the
+ * better wording when given), the ones ticked to keep, the user's decisions, and the caller rules
+ * as they stand now (#159). The rules are repeated here because a continued session keeps the
+ * system prompt it started with; a run started later gets them from `buildSystemPrompt`.
+ */
+export function rerunMessage(
+  answers: string,
+  approved: { sourceFact: string; wording: string }[],
+  rejected: { sourceFact: string; wording: string; betterWording?: string }[] = [],
+  rules?: CallerRules
+): string {
   const lines = ['The user reviewed the notes.']
+  if (rejected.length > 0) {
+    lines.push('Rejected reframings (do not use these wordings, or a close paraphrase, for that fact):')
+    for (const r of rejected)
+      lines.push(`- Source fact: ${r.sourceFact}\n  Rejected wording: ${r.wording}${r.betterWording ? `\n  Use instead: ${r.betterWording}` : ''}`)
+  }
   if (approved.length > 0) {
     lines.push('Preferred wordings (use them as written):')
     for (const a of approved) lines.push(`- Source fact: ${a.sourceFact}\n  Wording: ${a.wording}`)
   }
   if (answers) lines.push(`Decisions: ${answers}`)
+  if (rules) lines.push(...callerRulesBlock(rules))
   lines.push(`Apply them, rebuild, verify, and update ${TAILORING_NOTES_FILE} (pass it to build.py with --notes). Everything else in your instructions still applies: never stop to ask.`)
   return lines.join('\n')
 }
@@ -427,15 +471,21 @@ export function rerunReview(deps: ReviewDeps, input: RerunReviewInput, via: Revi
       const rerunning: RecordedReview = { state: 'unreviewed', runId: detail.runId, at, reason: RERUN_REASON, via }
       const before = await getReview(workspace, input.applicationId)
       if (!(await decide(workspace, input.applicationId, p.review, rerunning))) return STALE
+      // The rules as they will stand once the ticks are saved; the rejections of this result spelled out.
+      const rules = mergeRules(await loadRules(workspace), entriesFor(picked, detail, via, now))
+      const rejected = detail.proposedReframings
+        .filter((p) => p.rule?.kind === 'rejected' && !ids.includes(p.id))
+        .map((p) => ({ sourceFact: p.sourceFact, wording: p.wording, ...(p.rule?.betterWording ? { betterWording: p.rule.betterWording } : {}) }))
+      const { preferred, avoid } = rulesForPrompt(rules)
       try {
-        await deps.reply(detail.runId, rerunMessage(input.answers, picked), workspace)
+        await deps.reply(detail.runId, rerunMessage(input.answers, picked, rejected, { preferred, avoid }), workspace)
       } catch (err) {
         // The session could not be resumed: put back what was there, unless something else wrote meanwhile.
         if (before) await decide(workspace, input.applicationId, rerunning, before).catch(() => false)
         throw err
       }
-      if (picked.length > 0) await addApprovals(workspace, entriesFor(picked, detail, via, now))
-      await audit(workspace, { at, action: 'rerun', applicationId: input.applicationId, revision: input.revision, ids, via })
+      if (picked.length > 0) await addRules(workspace, entriesFor(picked, detail, via, now))
+      await audit(workspace, { at, action: 'rerun', applicationId: input.applicationId, revision: input.revision, ids, rejected: rejected.length, via })
       deps.changed?.()
       return { ok: true, detail: await reviewDetail(workspace, input.applicationId) }
     })
@@ -462,18 +512,44 @@ export function discardReview(deps: ReviewDeps, input: DiscardReviewInput, via: 
   )
 }
 
-function summary(list: StandingApproval[]): ApprovalsSummary {
-  return { approvals: list, leftOut: approvalsForPrompt(list).leftOut }
+/**
+ * Rejects one reframing of the revision on screen (#159): it becomes a `rejected` reframing rule
+ * (the pair read from disk, plus the user's better wording). The result itself keeps its state
+ * and revision; Re-run redoes it with the rules. Allowed while the run works (it writes no file
+ * of the result); a revision that changed meanwhile is `stale`.
+ */
+export function rejectReframing(deps: ReviewDeps, input: RejectReframingInput, via: ReviewVia): Promise<ReviewOutcome> {
+  return deps.workspace().then((workspace) =>
+    withDecisionLock(workspace, input.applicationId, async () => {
+      const p = await pinned(deps, workspace, input.applicationId, input.revision, false)
+      if ('outcome' in p) return p.outcome
+      const { detail } = p
+      const picked = pick(detail, [input.reframingId])
+      if (!picked) return INVALID
+      const [r] = picked
+      if (input.betterWording && normalizeText(input.betterWording) === normalizeText(r.wording))
+        return { ok: false, error: 'invalid', message: 'The better wording is the wording you are rejecting.' }
+      const now = deps.now?.() ?? new Date()
+      await addRules(workspace, entriesFor(picked, detail, via, now, 'rejected', input.betterWording))
+      await audit(workspace, { at: now.toISOString(), action: 'reject', applicationId: input.applicationId, revision: input.revision, ids: [r.id], better: !!input.betterWording, via })
+      deps.changed?.()
+      return { ok: true, detail: await reviewDetail(workspace, input.applicationId) }
+    })
+  )
 }
 
-export async function listApprovals(workspace: string): Promise<ApprovalsSummary> {
-  return summary(await loadApprovals(workspace))
+function summary(list: ReframingRule[]): ReframingRulesSummary {
+  return { rules: list, leftOut: rulesForPrompt(list).leftOut }
 }
 
-export async function dropApproval(workspace: string, id: string): Promise<ApprovalsSummary> {
-  return summary(await removeApproval(workspace, id))
+export async function listRules(workspace: string): Promise<ReframingRulesSummary> {
+  return summary(await loadRules(workspace))
 }
 
-export async function dropAllApprovals(workspace: string): Promise<ApprovalsSummary> {
-  return summary(await removeAllApprovals(workspace))
+export async function dropRule(workspace: string, id: string): Promise<ReframingRulesSummary> {
+  return summary(await removeRule(workspace, id))
+}
+
+export async function dropAllRules(workspace: string): Promise<ReframingRulesSummary> {
+  return summary(await removeAllRules(workspace))
 }
