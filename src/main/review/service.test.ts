@@ -573,6 +573,33 @@ describe('review service', () => {
     expect(text).toContain('PREFERRED WORDINGS (JSON, newest first): []')
   })
 
+  it('a rejection ticked to keep again is saved before the run resumes (its new system prompt reads the store), and put back if it cannot resume', async () => {
+    await application(ID, { notes: null, tailoring: NOTES_V2 })
+    const d = await reviewDetail(ws, ID)
+    const [r1] = d.proposedReframings
+    await rejectReframing(deps, { applicationId: ID, revision: d.revision, reframingId: r1.id }, 'desktop')
+    // What contextForRun would read when the reply resumes the process.
+    const seen: string[] = []
+    deps.reply = async (runId, text) => {
+      seen.push(...(await loadApprovals(ws)).map((r) => r.kind))
+      replies.push({ runId, text })
+      return 'held'
+    }
+    await rerunReview(deps, { applicationId: ID, revision: d.revision, answers: '', approvedReframingIds: [r1.id] }, 'desktop')
+    expect(seen).toEqual(['preferred'])
+
+    // A run that cannot be resumed: the rule goes back to what it was.
+    await application('a/b/9', { notes: null, tailoring: NOTES_V2 })
+    await rejectReframing(deps, { applicationId: 'a/b/9', revision: (await reviewDetail(ws, 'a/b/9')).revision, reframingId: r1.id }, 'desktop')
+    expect((await loadApprovals(ws)).map((r) => r.kind)).toEqual(['rejected'])
+    deps.reply = async () => {
+      throw new Error('cannot resume')
+    }
+    const d9 = await reviewDetail(ws, 'a/b/9')
+    await expect(rerunReview(deps, { applicationId: 'a/b/9', revision: d9.revision, answers: '', approvedReframingIds: [r1.id] }, 'desktop')).rejects.toThrow('cannot resume')
+    expect((await loadApprovals(ws)).map((r) => [r.kind, r.applicationId])).toEqual([['rejected', 'a/b/9']])
+  })
+
   it('a reframing ticked to keep on a re-run is preferred again, not avoided', async () => {
     await application(ID, { notes: null, tailoring: NOTES_V2 })
     const d = await reviewDetail(ws, ID)

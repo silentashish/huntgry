@@ -144,6 +144,12 @@ export function addRules(workspace: string, entries: RuleEntry[]): Promise<Refra
   return write(workspace, (list) => mergeRules(list, entries))
 }
 
+/** Puts the rules of `ids` back as they were in `previous` (none: removed), leaving every other rule as it is now. */
+export function restoreRules(workspace: string, ids: readonly string[], previous: readonly ReframingRule[]): Promise<ReframingRule[]> {
+  const set = new Set(ids)
+  return write(workspace, (list) => [...list.filter((r) => !set.has(r.id)), ...previous.filter((r) => set.has(r.id))])
+}
+
 export function removeRule(workspace: string, id: string): Promise<ReframingRule[]> {
   return write(workspace, (list) => list.filter((r) => r.id !== id))
 }

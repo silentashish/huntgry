@@ -28,7 +28,7 @@ import { RUN_ID_PATTERN } from '../cli/runs'
 import { RERUN_REASON } from '@shared/review-types'
 import { HUNTGRY_DIR } from '../workspace/constants'
 import { getReview, sameReview, updateReview, type RecordedReview } from './authority'
-import { addRules, loadRules, mergeRules, removeAllRules, removeRule, rulesForPrompt, type RuleEntry } from './approvals'
+import { addRules, loadRules, removeAllRules, removeRule, restoreRules, rulesForPrompt, type RuleEntry } from './approvals'
 import { normalizeText } from './notes'
 import { boundedText, MAX_NOTES_BYTES, parseResultNotes, readResultNotes } from './notes-file'
 
@@ -471,8 +471,10 @@ export function rerunReview(deps: ReviewDeps, input: RerunReviewInput, via: Revi
       const rerunning: RecordedReview = { state: 'unreviewed', runId: detail.runId, at, reason: RERUN_REASON, via }
       const before = await getReview(workspace, input.applicationId)
       if (!(await decide(workspace, input.applicationId, p.review, rerunning))) return STALE
-      // The rules as they will stand once the ticks are saved; the rejections of this result spelled out.
-      const rules = mergeRules(await loadRules(workspace), entriesFor(picked, detail, via, now))
+      // The ticks are saved before the run resumes: a resumed process builds its system prompt from
+      // the store, and it must say what the message says. Put back if the run cannot be resumed.
+      const rulesBefore = await loadRules(workspace)
+      const rules = picked.length > 0 ? await addRules(workspace, entriesFor(picked, detail, via, now)) : rulesBefore
       const { preferred, avoid } = rulesForPrompt(rules)
       // A better wording rejected since is not offered as "Use instead" (the caller rules avoid it).
       const avoided = (fact: string, wording: string) => avoid.some((a) => a.sourceFact === normalizeText(fact) && a.wording === normalizeText(wording))
@@ -487,9 +489,9 @@ export function rerunReview(deps: ReviewDeps, input: RerunReviewInput, via: Revi
       } catch (err) {
         // The session could not be resumed: put back what was there, unless something else wrote meanwhile.
         if (before) await decide(workspace, input.applicationId, rerunning, before).catch(() => false)
+        if (picked.length > 0) await restoreRules(workspace, ids, rulesBefore).catch(() => undefined)
         throw err
       }
-      if (picked.length > 0) await addRules(workspace, entriesFor(picked, detail, via, now))
       await audit(workspace, { at, action: 'rerun', applicationId: input.applicationId, revision: input.revision, ids, rejected: rejected.length, via })
       deps.changed?.()
       return { ok: true, detail: await reviewDetail(workspace, input.applicationId) }
