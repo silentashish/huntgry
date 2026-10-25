@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
+import { constants } from 'node:fs'
 import { copyFile, mkdir, readdir, readFile, realpath, rename, writeFile } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { AgentId, RunSummary, StartRunParams } from '@shared/runner-types'
 import { rescoreApplication } from '../applications/rescore'
 import { buildSystemPrompt, NUDGE_TEXT, resolveRunPaths, texRootOf } from '../cli/command'
@@ -96,7 +97,9 @@ export async function assertBenchOut(out: string, protectedDirs: readonly (strin
   for (const dir of protectedDirs) {
     if (!dir) continue
     const rel = relative(await realpathLoose(dir), target)
-    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)))
+    // By path segment: `..bench` is a child named "..bench", not a way out.
+    const outside = rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)
+    if (!outside)
       throw new Error(`The bench output folder ${out} is inside ${dir}. Bench runs never write into a real workspace: pick a folder outside it (default ~/huntgry-bench).`)
   }
 }
@@ -128,6 +131,40 @@ async function writeAtomic(path: string, text: string): Promise<void> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * Folders the bench may never write into: the real workspace, the profile's folder as given and as it really is
+ * (a symlinked profile protects its target's folder too), and the set's folder.
+ */
+async function protectedFolders(opts: BenchOptions): Promise<string[]> {
+  const profile = resolve(opts.profile)
+  const realProfile = await realpath(profile).catch(() => profile)
+  return [...new Set([opts.sourceWorkspace, dirname(profile), dirname(realProfile), opts.set.dir].filter((d): d is string => !!d))]
+}
+
+/**
+ * Creates `<out>/<base>` itself (never reusing what is there, a symlink included): a name already taken, by an earlier
+ * bench of the same second and label or anything else, gets `-2`, `-3`, … so every bench starts from an empty folder.
+ */
+async function freshBenchDir(out: string, base: string): Promise<{ id: string; dir: string }> {
+  await mkdir(out, { recursive: true })
+  for (let n = 1; n <= 100; n++) {
+    const id = n === 1 ? base : `${base}-${n}`
+    const dir = join(out, id)
+    try {
+      await mkdir(dir)
+      return { id, dir }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+    }
+  }
+  throw new Error(`Could not create a fresh bench folder in ${out}.`)
+}
+
+/** The job id a run uses: each repeat builds its own application folder, so no run reads another's output. */
+function repeatJobId(job: BenchJob, repeat: number, repeats: number): string {
+  return repeats > 1 ? `${job.jobId}-r${repeat}` : job.jobId
+}
+
 export async function runBench(opts: BenchOptions): Promise<{ dir: string; results: BenchResults }> {
   const now = opts.now ?? (() => new Date())
   const log = opts.log ?? (() => undefined)
@@ -137,15 +174,17 @@ export async function runBench(opts: BenchOptions): Promise<{ dir: string; resul
   const unknown = (opts.only ?? []).filter((id) => !opts.set.jobs.some((j) => j.id === id))
   if (unknown.length > 0) throw new Error(`Not in the bench set: ${unknown.join(', ')}.`)
 
-  await assertBenchOut(opts.out, [opts.sourceWorkspace, dirname(resolve(opts.profile)), opts.set.dir])
+  const protectedDirs = await protectedFolders(opts)
+  await assertBenchOut(opts.out, protectedDirs)
   const profileText = await readFile(opts.profile)
   const startedAt = now()
-  const id = `bench-${stamp(startedAt)}-${slug(opts.label)}`
-  const dir = join(resolve(opts.out), id)
+  const { id, dir } = await freshBenchDir(resolve(opts.out), `bench-${stamp(startedAt)}-${slug(opts.label)}`)
   const workspace = join(dir, 'workspace')
-  await mkdir(workspace, { recursive: true })
-  await copyFile(opts.profile, join(workspace, MASTER_PROFILE_FILE))
-  if (opts.coverLetter) await copyFile(opts.coverLetter, join(workspace, COVER_LETTER_FILE)).catch(() => undefined)
+  await mkdir(workspace)
+  // The folder the runs write to, checked again now that it exists, before anything is copied in.
+  await assertBenchOut(workspace, protectedDirs)
+  await copyFile(opts.profile, join(workspace, MASTER_PROFILE_FILE), constants.COPYFILE_EXCL)
+  if (opts.coverLetter) await copyFile(opts.coverLetter, join(workspace, COVER_LETTER_FILE), constants.COPYFILE_EXCL).catch(() => undefined)
 
   const { skillDir, sandbox } = await resolveRunPaths({
     workspace,
@@ -246,8 +285,7 @@ async function turnOver(manager: RunManager, workspace: string, id: string): Pro
 }
 
 async function runOne(manager: RunManager, ctx: RunContext, job: BenchJob, repeat: number, repeats: number, timeoutMs: number): Promise<BenchRow> {
-  // Each repeat builds its own application folder, so no run reads another's output.
-  const jobId = repeats > 1 ? `${job.jobId}-r${repeat}` : job.jobId
+  const jobId = repeatJobId(job, repeat, repeats)
   const params: StartRunParams = {
     jobDescription: job.description,
     role: job.role,

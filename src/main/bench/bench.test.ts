@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { NUDGE_TEXT } from '../cli/command'
 import { readEvents, readRun } from '../cli/runs'
 import { readTracking } from '../applications/tracking'
-import { RESULTS_FILE, REPORT_FILE, runBench, type BenchOptions } from './run'
+import { assertBenchOut, RESULTS_FILE, REPORT_FILE, runBench, type BenchOptions } from './run'
 import { compareBench } from './report'
 import { loadBenchSet } from './set'
 import type { BenchResults } from './types'
@@ -195,4 +195,45 @@ describe('runBench with the fake agent', () => {
     expect(md).toContain('**Verdict**:')
     expect(md).not.toContain('different bench sets')
   }, 30_000)
+})
+
+describe('runBench safety (review of #177)', () => {
+  it('treats a child named "..bench" as inside the workspace, as typed or through ".." segments', async () => {
+    await expect(assertBenchOut(join(source, '..bench'), [source])).rejects.toThrow(/never write into a real workspace/)
+    await expect(assertBenchOut(`${source}/x/../..bench`, [source])).rejects.toThrow(/never write/)
+    await symlink(source, join(root, 'alias'))
+    await expect(assertBenchOut(join(root, 'alias', '..bench'), [source])).rejects.toThrow(/never write/)
+    // A sibling of the workspace is still fine.
+    await expect(assertBenchOut(join(root, '..bench'), [source])).resolves.toBeUndefined()
+    await expect(runBench(await options({ out: join(source, '..bench') }))).rejects.toThrow(/never write/)
+    expect((await readdir(source)).sort()).toEqual(['.huntgry', 'master-profile.md'])
+  })
+
+  it("protects the real folder of a symlinked profile, even without a source workspace", async () => {
+    await mkdir(join(root, 'alias'))
+    await symlink(join(source, 'master-profile.md'), join(root, 'alias', 'profile.md'))
+    await expect(
+      runBench(await options({ sourceWorkspace: null, profile: join(root, 'alias', 'profile.md'), out: join(source, 'bench') }))
+    ).rejects.toThrow(/never write into a real workspace/)
+    expect((await readdir(source)).sort()).toEqual(['.huntgry', 'master-profile.md'])
+  })
+
+  it('never reuses an existing bench folder: a symlink there is not followed, and the same label and second get their own', async () => {
+    const before = await snapshot(source)
+    const now = () => new Date(2026, 9, 24, 12, 0, 0)
+    // A planted <out>/<bench-id> link to the real workspace, with another profile to copy over its own.
+    await mkdir(out)
+    await symlink(source, join(out, 'bench-20261024-120000-ci'))
+    const other = join(root, 'other')
+    await mkdir(other)
+    await writeFile(join(other, 'master-profile.md'), '# Someone else\n')
+    const first = await runBench(await options({ now, profile: join(other, 'master-profile.md'), only: ['backend'] }))
+    expect(first.results.id).toBe('bench-20261024-120000-ci-2')
+    expect(await snapshot(source)).toEqual(before)
+    const second = await runBench(await options({ now, only: ['backend'] }))
+    expect(second.results.id).toBe('bench-20261024-120000-ci-3')
+    // The first bench's results are intact.
+    expect(JSON.parse(await readFile(join(first.dir, RESULTS_FILE), 'utf8')).rows).toHaveLength(1)
+  }, 30_000)
+
 })
