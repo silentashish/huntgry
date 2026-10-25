@@ -41,7 +41,9 @@ and can't be opened" message, which has no "Open Anyway" button.
   3. `release`: downloads them all, writes `SHA256SUMS.txt` (`sha256sum` format, which
      `shasum -a 256 -c` reads) and runs `gh release create --draft --verify-tag --generate-notes`.
      GitHub writes the notes from the PRs merged since the previous tag. Only this job has
-     `contents: write`.
+     `contents: write`. On a rerun (or after a first run that created the draft and then failed
+     mid-upload), a draft that already exists for the tag gets this run's complete set of files
+     (`gh release upload --clobber`) and keeps its notes; a published release is refused.
 - **Settings → About** (new card, last in the section nav, ⌘K "Settings → About"): the full version
   and links to that version's release and to the install guide. The version comes from
   `package.json` at build time (the same `__APP_VERSION__` the sidebar uses), which is what
@@ -131,6 +133,11 @@ copied out and opened, on macOS 26.6.2:
   `codesign --verify --deep --strict` (`Signature=adhoc`), and launched it reported
   `app.isPackaged: true`, `app.getVersion(): 0.0.0-test.1` and "Huntgry 0.0.0-test.1" in the sidebar.
   The release and the tag were then deleted.
+- **Rerun** ([run 40156981665](https://github.com/silentashish/huntgry/actions/runs/40156981665),
+  after the review): the tag `v0.0.0-test.3` created a draft with all 7 files. Re-running only the
+  release job then logged "A draft for v0.0.0-test.3 exists: replacing its files." and re-uploaded
+  all 7 to the same draft (one release, new upload times; the dmg still matched `SHA256SUMS.txt`).
+  The published-release refusal was not exercised, since nothing may be published.
 - **Mismatch** ([run 40155693782](https://github.com/silentashish/huntgry/actions/runs/40155693782)):
   the tag `v0.0.0-test.2` on a commit at `0.1.0` failed in the version job with "Tag v0.0.0-test.2
   does not match package.json version 0.1.0 (expected tag v0.1.0)…", and nothing was built.
@@ -177,6 +184,17 @@ The packaged app's first run (fresh userData) and Settings → About in a packag
   `0.0.0-test.1`, tag pushed alone, draft checked, then deleted). A tag that does not match
   `package.json` fails in the `version` job.
 
+## Windows: a known limitation
+
+The review of PR #174 found that the Windows build cannot finish the Python setup: environment
+discovery looks for `python3` in `:`-joined folders and uses `<venv>/bin/python3`, while Windows has
+`python.exe` and `Scripts\python.exe`. The gap is wider than Python, though. CLI discovery
+(`findInDirs`) never applies `PATHEXT`, so `claude.exe` and `codex.cmd` are not found either, and the
+child PATH, the well-known folders and the TeX candidates are all Unix paths. A Python-only patch would
+not make tailoring work, so the Windows installer still ships (the issue asks for it) but is marked
+**experimental** in `docs/install.md` and the README. The fix is
+[#175](https://github.com/silentashish/huntgry/issues/175).
+
 ## Follow-ups
 
 - [#168](https://github.com/silentashish/huntgry/issues/168): Developer ID signing, notarization
@@ -184,3 +202,5 @@ The packaged app's first run (fresh userData) and Settings → About in a packag
 - Screenshots of the Gatekeeper dialog and the Privacy & Security "Open Anyway" row from an unlocked
   Mac, to confirm the wording in `docs/install.md`.
 - Keep renderer-only dependencies out of `app.asar` to shrink the download.
+- [#175](https://github.com/silentashish/huntgry/issues/175): Windows discovery of the agent CLIs, Python
+  and TeX, so the Windows build can tailor.

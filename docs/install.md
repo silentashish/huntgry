@@ -2,8 +2,9 @@
 
 Huntgry is a desktop app. Each release on
 [GitHub Releases](https://github.com/silentashish/huntgry/releases) has installable builds, so you
-do not need to clone the repository or build it yourself. macOS is the primary target; the Windows
-and Linux builds are packaged the same way but get less testing.
+do not need to clone the repository or build it yourself. macOS is the primary target. The Linux
+build is packaged the same way but gets less testing. The Windows build is **experimental**: it
+installs and opens, but it cannot tailor resumes yet (see [Windows](#windows)).
 
 - [Download](#download)
 - [macOS](#macos)
@@ -83,6 +84,14 @@ and drag a fresh copy into Applications. If it persists, please
    **More info**, check that the app is `Huntgry-<version>-win-x64.exe`, then click **Run anyway**.
 3. The installer installs Huntgry for your user (no administrator rights) and adds it to the Start
    menu.
+
+**Known limitation: Windows cannot tailor resumes yet.** Huntgry's discovery of the agent CLIs,
+Python and LaTeX only knows macOS and Linux paths. On Windows it does not find `claude.exe` or npm's
+`codex.cmd`, does not find Python, and cannot create or use the Python environment
+(**Install Python dependencies** reports that `python3` was not found). Settings therefore never
+reaches "Ready to tailor". The board, jobs, Explore, the browser and the master profile work. Windows
+support is tracked in [#175](https://github.com/silentashish/huntgry/issues/175); until then, use
+the macOS or Linux build to tailor.
 
 ## Linux
 
@@ -180,6 +189,10 @@ package.json version Y" otherwise).
    page), edit the notes if needed, download the macOS build for your Mac and check it opens and
    reports the right version in Settings → About.
 5. Click **Publish release**. Nothing is public until then.
+
+If a run fails (a flaky runner, an upload cut off), rerun it from the Actions page. A draft that
+already exists for the tag gets the rerun's complete set of files and keeps its notes; a release that
+is already published is never changed, and the run says so.
 
 To throw a draft away (for example a failed or test run), delete the release and its tag:
 `gh release delete v0.2.0 --yes --cleanup-tag`.

@@ -37,8 +37,8 @@ the agent CLI you already use.
 
 Download the build for your computer from the
 [latest release](https://github.com/silentashish/huntgry/releases/latest): a `.dmg` for macOS (Apple silicon
-or Intel), an installer for Windows, an AppImage for Linux. The builds are not signed with an Apple Developer ID
-yet, so macOS asks you to allow the first launch in System Settings → Privacy & Security → **Open Anyway**.
+or Intel), an AppImage for Linux, or an installer for Windows (experimental: it cannot tailor resumes yet). The
+builds are not signed with an Apple Developer ID yet, so macOS asks you to allow the first launch in System Settings → Privacy & Security → **Open Anyway**.
 [docs/install.md](docs/install.md) walks through each OS, checking the download against `SHA256SUMS.txt`, and
 what Huntgry installs for you on first launch (Claude Code, the resume-tailor skill, its Python modules); it
 also explains how a release is cut.
