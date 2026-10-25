@@ -169,8 +169,10 @@ export type RemoteCommand =
   | { name: 'review.list' } // #31 Unreviewed results
   | { name: 'review.get'; args: { applicationId: string } } // → ReviewDetail: what the desktop review screen shows
   | { name: 'review.approve'; args: { applicationId: string; revision: string; approvedReframingIds?: string[] } }
-  | { name: 'review.rerun'; args: { runId: string; revision: string; answers: string } }
+  | { name: 'review.rerun'; args: { runId: string; revision: string; answers: string } } // #159: answers may be empty (redo with the reframing rules) on a desktop that answers review.reframings
   | { name: 'review.discard'; args: { applicationId: string; revision: string } }
+  | { name: 'review.reframings'; args: { applicationId: string } } // #159 → ReviewReframings; an older desktop answers `unsupported`
+  | { name: 'review.reject'; args: { applicationId: string; revision: string; reframingId: string; betterWording?: string } } // #159 → ReviewReframings; betterWording ≤ LIMITS.reviewEntryBytes
   | { name: 'file.get'; args: { applicationId: string; file: RemoteFile; chunk: number } } // chunks of LIMITS.fileChunkBytes
   | { name: 'device.setNotifications'; args: { categories: NotificationCategory[] } }
 // The Expo push token is not a command: the phone registers it with the relay in clear (RelayClientFrame).
@@ -204,6 +206,8 @@ export const REMOTE_COMMAND_NAMES = [
   'review.approve',
   'review.rerun',
   'review.discard',
+  'review.reframings',
+  'review.reject',
   'file.get',
   'device.setNotifications'
 ] as const satisfies readonly RemoteCommandName[]
@@ -215,7 +219,7 @@ export const COSTLY_COMMANDS = ['pipeline.start', 'queue.enqueue', 'review.appro
 export const WORKSPACE_FREE_COMMANDS = ['status.get', 'device.setNotifications'] as const satisfies readonly RemoteCommandName[]
 
 /** Reads: no write-ahead audit entry, may be re-executed freely on redelivery. */
-export const READ_COMMANDS = ['status.get', 'queue.get', 'jobs.list', 'runs.list', 'run.get', 'review.list', 'review.get', 'file.get'] as const satisfies readonly RemoteCommandName[]
+export const READ_COMMANDS = ['status.get', 'queue.get', 'jobs.list', 'runs.list', 'run.get', 'review.list', 'review.get', 'review.reframings', 'file.get'] as const satisfies readonly RemoteCommandName[]
 
 // ── Events (desktop → phone) ─────────────────────────────────────────────────────────────────
 
@@ -375,6 +379,35 @@ export interface ReviewDetail {
    * reframing that is not listed cannot be approved from the phone.
    */
   truncated?: boolean
+}
+
+/**
+ * #159: the reframings of one result with the user's reframing rule on each (`review.reframings`,
+ * and the answer to `review.reject`). A minor addition to protocol 1: a phone asks for it, and a
+ * desktop older than #159 answers `unsupported`, so the phone shows `ReviewDetail` as before.
+ */
+export interface ReviewReframings {
+  applicationId: string
+  /** The revision these reframings belong to (`ReviewDetail.revision`); `review.reject` echoes it. */
+  revision: string
+  /** `v2`: the reframings the run used (each can be rejected); `v1`: the ones an older run left out. */
+  format: 'v1' | 'v2'
+  reframings: RemoteReframing[]
+  /** Some reframings did not fit the bounds (only whole ones are listed; reject the rest on the Mac). */
+  truncated?: boolean
+}
+
+export interface RemoteReframing {
+  /** sha256(sourceFact + '\n' + wording), as in `ReviewDetail.proposedReframings`. */
+  id: string
+  sourceFact: string
+  wording: string
+  /** The posting's requirement it answers; ≤ `LIMITS.reviewEntryBytes`. */
+  requirement?: string
+  /** The reframing rule standing for this pair: kept as a preferred wording, or rejected. */
+  rule?: 'preferred' | 'rejected'
+  /** rejected only: what to say instead; ≤ `LIMITS.reviewEntryBytes`. */
+  betterWording?: string
 }
 
 export type RemoteRunStatus = 'running' | 'waiting' | 'finished' | 'failed' | 'stopped'

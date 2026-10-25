@@ -23,7 +23,7 @@ import { RemoteCard } from './RemoteCard'
 import { SavedAnswersCard } from './SavedAnswersCard'
 import { SectionNav, sectionDomId, SettingsSection, type SettingsSectionId } from './SectionNav'
 import { PathText, SettingsCard, toneOfColor } from './SettingsCard'
-import { StandingApprovalsCard } from './StandingApprovalsCard'
+import { ReframingRulesCard } from './ReframingRulesCard'
 import classes from './settings.module.css'
 
 const STATUS: Record<PreflightItem['status'], { tone: UiTone; label: string }> = {
@@ -39,7 +39,7 @@ type Installer = 'python' | 'claude' | 'update' | 'skill' | 'reinstall-skill' | 
 /** Sections that need the runner environment (the agent check) before they render. */
 const ENV_SECTIONS: readonly SettingsSectionId[] = [
   'agents',
-  'standing-approvals',
+  'reframing-rules',
   'saved-answers',
   'pricing',
   'claude',
@@ -49,7 +49,7 @@ const ALWAYS_SECTIONS: readonly SettingsSectionId[] = ['jobright', 'remote-contr
 
 /**
  * Settings (#116, Figma "Settings"): a sticky section nav on the left and the cards on the right:
- * the agent CLIs, standing approvals, saved answers, pricing, the Claude CLI and the skill's
+ * the agent CLIs, reframing rules, saved answers, pricing, the Claude CLI and the skill's
  * dependencies, the Jobright sign-in, remote control and appearance.
  */
 export function SettingsPage() {
@@ -257,8 +257,8 @@ export function SettingsPage() {
                 />
               </SettingsSection>
 
-              <SettingsSection id="standing-approvals">
-                <StandingApprovalsCard />
+              <SettingsSection id="reframing-rules">
+                <ReframingRulesCard />
               </SettingsSection>
 
               <SettingsSection id="saved-answers">

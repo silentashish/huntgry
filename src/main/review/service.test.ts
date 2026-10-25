@@ -7,7 +7,7 @@ import { readTracking } from '../applications/tracking'
 import { getReview, setReviewAuthorityRoot, updateReview, type RecordedReview } from './authority'
 import { RunManager, type RunContext } from '../cli/runner'
 import { readEvents, saveRun } from '../cli/runs'
-import { approvalsFile, loadApprovals } from './approvals'
+import { addRules, loadRules as loadApprovals, rulesFile as approvalsFile } from './approvals'
 import { reframingId } from './notes'
 import {
   approvalDrift,
@@ -16,7 +16,9 @@ import {
   MAX_REPORT_BYTES,
   discardReview,
   listReviews,
+  rejectReframing,
   requireApproveInput,
+  requireRejectInput,
   requireRerunInput,
   rerunMessage,
   rerunReview,
@@ -221,7 +223,8 @@ describe('review service', () => {
       applicationId: ID,
       runId: RUN,
       via: 'desktop',
-      approvedAt: '2026-09-30T02:00:00.000Z'
+      kind: 'preferred',
+      at: '2026-09-30T02:00:00.000Z'
     })
     expect(await recorded()).toMatchObject({ state: 'approved', runId: RUN, reviewedAt: '2026-09-30T02:00:00.000Z', via: 'desktop' })
     // The approval vouches for these files: Apply's drift check passes now.
@@ -424,7 +427,10 @@ describe('review service', () => {
     expect(replies).toHaveLength(1)
     expect(replies[0].runId).toBe(RUN)
     expect(replies[0].text).toBe(
-      rerunMessage('Drop R2. Mention the on-call work.', [{ sourceFact: r1.sourceFact, wording: r1.wording }])
+      rerunMessage('Drop R2. Mention the on-call work.', [{ sourceFact: r1.sourceFact, wording: r1.wording }], [], {
+        preferred: [{ sourceFact: r1.sourceFact, wording: r1.wording }],
+        avoid: []
+      })
     )
     expect(replies[0].text).toContain('Decisions: Drop R2. Mention the on-call work.')
     expect(replies[0].text).toContain('Wording: Built event-streaming pipelines (RabbitMQ; Kafka-adjacent)')
@@ -487,12 +493,136 @@ describe('review service', () => {
     await expect(readFile(join(dir, 'resume.pdf'), 'utf8')).resolves.toBe('%PDF-1.4 fake')
   })
 
+  it('reject stores a rejected-wording rule for an on-disk pair, keeps the result as it is, and shows the rule (#159)', async () => {
+    await application(ID, { notes: null, tailoring: NOTES_V2 })
+    const d = await reviewDetail(ws, ID)
+    const [r1] = d.proposedReframings
+    expect(r1.rule).toBeUndefined()
+    const out = await rejectReframing(deps, { applicationId: ID, revision: d.revision, reframingId: r1.id, betterWording: 'Built an event pipeline on RabbitMQ (queues, consumers)' }, 'desktop')
+    expect(out.ok).toBe(true)
+    const rules = await loadApprovals(ws)
+    expect(rules).toEqual([
+      {
+        id: r1.id,
+        kind: 'rejected',
+        sourceFact: 'Built an event pipeline on RabbitMQ',
+        wording: 'Built event-streaming pipelines (RabbitMQ; Kafka-adjacent)',
+        betterWording: 'Built an event pipeline on RabbitMQ (queues, consumers)',
+        requirement: 'Kafka streaming',
+        at: '2026-09-30T02:00:00.000Z',
+        applicationId: ID,
+        runId: RUN,
+        via: 'desktop'
+      }
+    ])
+    // The result is untouched: same state, same revision, the rule on the reframing.
+    if (!out.ok) throw new Error('unreachable')
+    expect(out.detail.revision).toBe(d.revision)
+    expect(out.detail.state).toBe('unreviewed')
+    expect(out.detail.proposedReframings[0].rule).toEqual({ kind: 'rejected', betterWording: 'Built an event pipeline on RabbitMQ (queues, consumers)' })
+    expect(replies).toEqual([])
+    const audit = (await readFile(join(ws, '.huntgry', REVIEW_AUDIT_FILE), 'utf8')).trim().split('\n').map((l) => JSON.parse(l))
+    expect(audit).toEqual([expect.objectContaining({ action: 'reject', applicationId: ID, ids: [r1.id], better: true, via: 'desktop' })])
+  })
+
+  it('reject refuses a stale revision, an id from elsewhere and a better wording equal to the rejected one, without writing', async () => {
+    await application(ID, { notes: null, tailoring: NOTES_V2 })
+    const d = await reviewDetail(ws, ID)
+    const [r1] = d.proposedReframings
+    expect(await rejectReframing(deps, { applicationId: ID, revision: 'f'.repeat(64), reframingId: r1.id }, 'desktop')).toMatchObject({ ok: false, error: 'stale' })
+    expect(await rejectReframing(deps, { applicationId: ID, revision: d.revision, reframingId: reframingId('a', 'b') }, 'desktop')).toMatchObject({ ok: false, error: 'invalid' })
+    expect(await rejectReframing(deps, { applicationId: ID, revision: d.revision, reframingId: r1.id, betterWording: ` ${r1.wording} ` }, 'desktop')).toMatchObject({ ok: false, error: 'invalid' })
+    await expect(readFile(approvalsFile(ws))).rejects.toThrow()
+  })
+
+  it('re-run with no answers redoes the result with the rules: the rejected wording to avoid, the better one preferred (#159)', async () => {
+    await application(ID, { notes: null, tailoring: NOTES_V2 })
+    // A rule from another result stands too.
+    await addRules(ws, [{ kind: 'rejected', sourceFact: 'Mentored two juniors', wording: 'Led a team of two', at: '2026-09-29T00:00:00.000Z', applicationId: 'x/y/z', runId: RUN, via: 'desktop' }])
+    const d = await reviewDetail(ws, ID)
+    const [r1] = d.proposedReframings
+    await rejectReframing(deps, { applicationId: ID, revision: d.revision, reframingId: r1.id, betterWording: 'Built a RabbitMQ event pipeline' }, 'desktop')
+    const out = await rerunReview(deps, { applicationId: ID, revision: d.revision, answers: '' }, 'desktop')
+    expect(out.ok).toBe(true)
+    expect(replies).toHaveLength(1)
+    const text = replies[0].text
+    expect(text).toContain('Rejected reframings (do not use these wordings, or a close paraphrase, for that fact):')
+    expect(text).toContain(`- Source fact: ${r1.sourceFact}\n  Rejected wording: ${r1.wording}\n  Use instead: Built a RabbitMQ event pipeline`)
+    expect(text).not.toContain('Decisions:')
+    expect(text).toContain(
+      `WORDINGS TO AVOID (JSON, newest first): ${JSON.stringify([
+        { sourceFact: r1.sourceFact, wording: r1.wording },
+        { sourceFact: 'Mentored two juniors', wording: 'Led a team of two' }
+      ])}`
+    )
+    expect(text).toContain(`PREFERRED WORDINGS (JSON, newest first): ${JSON.stringify([{ sourceFact: r1.sourceFact, wording: 'Built a RabbitMQ event pipeline' }])}`)
+    expect(await recorded()).toMatchObject({ state: 'unreviewed', reason: 'Re-running with your answers.' })
+  })
+
+  it('re-run does not offer a better wording that was rejected since as "Use instead"', async () => {
+    await application(ID, { notes: null, tailoring: NOTES_V2 })
+    const d = await reviewDetail(ws, ID)
+    const [r1] = d.proposedReframings
+    await rejectReframing(deps, { applicationId: ID, revision: d.revision, reframingId: r1.id, betterWording: 'B wording' }, 'desktop')
+    // Later, on another result, "B wording" itself was rejected for the same fact.
+    await addRules(ws, [{ kind: 'rejected', sourceFact: r1.sourceFact, wording: 'B wording', at: '2026-09-30T03:00:00.000Z', applicationId: 'x/y/z', runId: RUN, via: 'desktop' }])
+    await rerunReview(deps, { applicationId: ID, revision: d.revision, answers: '' }, 'desktop')
+    const text = replies[0].text
+    expect(text).toContain(`Rejected wording: ${r1.wording}`)
+    expect(text).not.toContain('Use instead: B wording')
+    expect(text).toContain('PREFERRED WORDINGS (JSON, newest first): []')
+  })
+
+  it('a rejection ticked to keep again is saved before the run resumes (its new system prompt reads the store), and put back if it cannot resume', async () => {
+    await application(ID, { notes: null, tailoring: NOTES_V2 })
+    const d = await reviewDetail(ws, ID)
+    const [r1] = d.proposedReframings
+    await rejectReframing(deps, { applicationId: ID, revision: d.revision, reframingId: r1.id }, 'desktop')
+    // What contextForRun would read when the reply resumes the process.
+    const seen: string[] = []
+    deps.reply = async (runId, text) => {
+      seen.push(...(await loadApprovals(ws)).map((r) => r.kind))
+      replies.push({ runId, text })
+      return 'held'
+    }
+    await rerunReview(deps, { applicationId: ID, revision: d.revision, answers: '', approvedReframingIds: [r1.id] }, 'desktop')
+    expect(seen).toEqual(['preferred'])
+
+    // A run that cannot be resumed: the rule goes back to what it was.
+    await application('a/b/9', { notes: null, tailoring: NOTES_V2 })
+    await rejectReframing(deps, { applicationId: 'a/b/9', revision: (await reviewDetail(ws, 'a/b/9')).revision, reframingId: r1.id }, 'desktop')
+    expect((await loadApprovals(ws)).map((r) => r.kind)).toEqual(['rejected'])
+    deps.reply = async () => {
+      throw new Error('cannot resume')
+    }
+    const d9 = await reviewDetail(ws, 'a/b/9')
+    await expect(rerunReview(deps, { applicationId: 'a/b/9', revision: d9.revision, answers: '', approvedReframingIds: [r1.id] }, 'desktop')).rejects.toThrow('cannot resume')
+    expect((await loadApprovals(ws)).map((r) => [r.kind, r.applicationId])).toEqual([['rejected', 'a/b/9']])
+  })
+
+  it('a reframing ticked to keep on a re-run is preferred again, not avoided', async () => {
+    await application(ID, { notes: null, tailoring: NOTES_V2 })
+    const d = await reviewDetail(ws, ID)
+    const [r1] = d.proposedReframings
+    await rejectReframing(deps, { applicationId: ID, revision: d.revision, reframingId: r1.id }, 'desktop')
+    await rerunReview(deps, { applicationId: ID, revision: d.revision, answers: '', approvedReframingIds: [r1.id] }, 'desktop')
+    expect(replies[0].text).not.toContain('Rejected reframings')
+    expect(replies[0].text).toContain('WORDINGS TO AVOID (JSON, newest first): []')
+    expect((await loadApprovals(ws)).map((r) => [r.id, r.kind])).toEqual([[r1.id, 'preferred']])
+  })
+
   it('validates what the renderer (or the phone) sends', () => {
     expect(() => requireApproveInput({ applicationId: 'a/b/c', revision: 'zz' })).toThrow(/revision/)
     expect(() => requireApproveInput({ applicationId: 'a/b/c', revision: 'a'.repeat(64), approvedReframingIds: ['x'] })).toThrow(/reframing id/)
     expect(requireApproveInput({ applicationId: 'a/b/c', revision: 'a'.repeat(64), approvedReframingIds: ['b'.repeat(64), 'b'.repeat(64)] }).approvedReframingIds).toEqual(['b'.repeat(64)])
-    expect(() => requireRerunInput({ applicationId: 'a/b/c', revision: 'a'.repeat(64), answers: '   ' })).toThrow(/decisions/)
+    expect(requireRerunInput({ applicationId: 'a/b/c', revision: 'a'.repeat(64), answers: '   ' }).answers).toBe('')
     expect(() => requireRerunInput({ applicationId: 'a/b/c', revision: 'a'.repeat(64), answers: 'x'.repeat(200_001) })).toThrow(/too long/)
     expect(requireRerunInput({ applicationId: 'a/b/c', revision: 'a'.repeat(64), answers: ' ok ' }).answers).toBe('ok')
+    const base = { applicationId: 'a/b/c', revision: 'a'.repeat(64), reframingId: 'b'.repeat(64) }
+    expect(requireRejectInput({ ...base, betterWording: '  Say  it  plainly ' })).toEqual({ ...base, betterWording: 'Say it plainly' })
+    expect(requireRejectInput({ ...base, betterWording: '   ' })).toEqual(base)
+    expect(() => requireRejectInput({ ...base, reframingId: 'nope' })).toThrow(/reframing id/)
+    expect(() => requireRejectInput({ ...base, betterWording: 'x'.repeat(2001) })).toThrow(/too long/)
+    expect(() => requireRejectInput({ ...base, betterWording: 7 })).toThrow(/better wording/)
   })
 })

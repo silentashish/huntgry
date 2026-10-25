@@ -18,7 +18,7 @@ import classes from './review.module.css'
 export function ReviewPage({ params }: { params: PageParams['review'] }) {
   const { navigate } = useNavigation()
   const [items, setItems] = useState<ReviewItem[] | null>(null)
-  const [approvals, setApprovals] = useState<number | null>(null)
+  const [rules, setRules] = useState<number | null>(null)
   const [filter, setFilter] = useState<ReviewFilter>('all')
   const [selected, setSelected] = useState<string | null>(params?.applicationId ?? null)
   const [detail, setDetail] = useState<ReviewDetail | null>(null)
@@ -32,11 +32,11 @@ export function ReviewPage({ params }: { params: PageParams['review'] }) {
     } catch (err) {
       setError(errorText(err))
     }
-    // The count on the Standing approvals button; the page works without it.
+    // The count on the Reframing rules button; the page works without it.
     api.review
-      .approvals()
-      .then((s) => setApprovals(s.approvals.length))
-      .catch(() => setApprovals(null))
+      .rules()
+      .then((s) => setRules(s.rules.length))
+      .catch(() => setRules(null))
   }, [])
 
   // Each open() takes a ticket; a response that is not the latest one is dropped, so a slow
@@ -103,12 +103,12 @@ export function ReviewPage({ params }: { params: PageParams['review'] }) {
       subtitle={
         empty || items === null
           ? undefined
-          : 'Every run goes to the end and lists the bridges it used and the gaps it left open. Check each result here: approve to unlock Apply, re-run with your answers, or discard.'
+          : 'Every run goes to the end and lists the bridges it used and the gaps it left open. Check each result here: approve to unlock Apply, reject a reframing and re-run, or discard.'
       }
       actions={
         <>
-          <Button variant="default" leftSection={<IconShieldCheck size={16} />} onClick={() => navigate('settings')}>
-            Standing approvals{approvals !== null ? ` · ${approvals}` : ''}
+          <Button variant="default" leftSection={<IconShieldCheck size={16} />} onClick={() => navigate('settings', { section: 'reframing-rules' })}>
+            Reframing rules{rules !== null ? ` · ${rules}` : ''}
           </Button>
           <Button variant="subtle" leftSection={<IconRefresh size={16} />} onClick={() => void load()}>
             Refresh

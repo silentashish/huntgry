@@ -16,6 +16,7 @@ import {
   requireRemoteFile,
   requireRemoteRun,
   requireReviewDetail,
+  requireReviewReframings,
   requireReviewItem,
   requireReviewList,
   requireRunPage,
@@ -38,6 +39,7 @@ import {
   type ReviewDetail,
   type ReviewItem,
   type ReviewList,
+  type ReviewReframings,
   type RunPage,
   type StatusSummary
 } from '@shared/remote'
@@ -379,6 +381,29 @@ export function projectReviewList(entries: readonly { item: DesktopReviewItem; o
  * - when the whole detail would not fit one frame, the inline notes go first (the phone then
  *   fetches review-notes.md with `file.get`), then the report, then list entries from the end.
  */
+/**
+ * The reframings of a result with their rules, for `review.reframings` / `review.reject` (#159).
+ * Only whole entries are listed (a reframing cut short could not be rejected as what it is), at
+ * most `LIMITS.reviewListItems` and within one frame (JSON escaping can grow agent-written text
+ * sixfold); anything left out sets `truncated`.
+ */
+export function projectReviewReframings(d: DesktopReviewDetail): ReviewReframings {
+  const fits = (text: string | undefined) => text === undefined || utf8Bytes(text) <= LIMITS.reviewEntryBytes
+  const whole = d.proposedReframings.filter((p) => fits(p.sourceFact) && fits(p.wording) && fits(p.rule?.betterWording))
+  const reframings = whole.slice(0, LIMITS.reviewListItems).map((p) => ({
+    id: p.id,
+    sourceFact: p.sourceFact,
+    wording: p.wording,
+    ...(p.requirement && fits(p.requirement) ? { requirement: p.requirement } : {}),
+    ...(p.rule ? { rule: p.rule.kind } : {}),
+    ...(p.rule?.kind === 'rejected' && p.rule.betterWording ? { betterWording: p.rule.betterWording } : {})
+  }))
+  const out: ReviewReframings = { applicationId: d.applicationId, revision: d.revision, format: d.notesFormat ?? 'v1', reframings }
+  while (reframings.length > 0 && jsonBytes(out) > PAGE_BUDGET) reframings.pop()
+  if (d.proposedReframings.length > reframings.length) out.truncated = true
+  return requireReviewReframings(out)
+}
+
 export function projectReviewDetail(d: DesktopReviewDetail): ReviewDetail {
   let truncated = false
   const cut = (text: string, max: number): string => {

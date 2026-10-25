@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ProposedReframing, ReviewItem } from '@shared/review-types'
-import { approveHint, buildWarnings, filterItems, reframingLabel, reviewEyebrow, shortRevision, shownTicked, sinceLabel } from './review-ui'
+import { approveHint, buildWarnings, filterItems, reframingLabel, rejectedHere, rerunHint, reviewEyebrow, shortRevision, shownTicked, sinceLabel } from './review-ui'
 
 const item = (applicationId: string, state: ReviewItem['state']): ReviewItem => ({
   applicationId,
@@ -53,9 +53,19 @@ describe('reframings on screen', () => {
 
   it('labels reframings R1… and says what Approve saves', () => {
     expect(reframingLabel(PROPOSED, 'y')).toBe('R2')
-    expect(approveHint(PROPOSED, [])).toBe('Unlocks Apply for this application. Nothing is saved as a standing approval.')
-    expect(approveHint(PROPOSED, ['x'])).toBe('Unlocks Apply for this application and saves R1 as a standing approval.')
-    expect(approveHint(PROPOSED, ['x', 'y', 'z'])).toBe('Unlocks Apply for this application and saves R1, R2 and R3 as standing approvals.')
+    expect(approveHint(PROPOSED, [])).toBe('Unlocks Apply for this application. Nothing is saved as a preferred wording.')
+    expect(approveHint(PROPOSED, ['x'])).toBe('Unlocks Apply for this application and saves R1 as a preferred wording.')
+    expect(approveHint(PROPOSED, ['x', 'y', 'z'])).toBe('Unlocks Apply for this application and saves R1, R2 and R3 as preferred wordings.')
+  })
+
+  it('says what Re-run sends: without the rejected reframings, keeping the ticked ones (#159)', () => {
+    const rules: ProposedReframing[] = [{ ...reframing('x'), rule: { kind: 'rejected' } }, reframing('y'), { ...reframing('z'), rule: { kind: 'rejected', betterWording: 'b' } }]
+    expect(rejectedHere(rules, []).map((r) => r.id)).toEqual(['x', 'z'])
+    expect(rejectedHere(rules, ['z']).map((r) => r.id)).toEqual(['x'])
+    expect(rerunHint(PROPOSED, [])).toBe('Redoes this result in the run’s own session with your reframing rules. It comes back here as Unreviewed with a new revision.')
+    expect(rerunHint(rules, ['y'])).toBe(
+      'Redoes this result in the run’s own session with your reframing rules (without R1, R3; keeping R2 as written). It comes back here as Unreviewed with a new revision.'
+    )
   })
 
   it('shortens the revision', () => {

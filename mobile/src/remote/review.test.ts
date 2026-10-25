@@ -1,6 +1,6 @@
 import type { RemoteFile, ReviewDetail } from '@huntgry/remote-protocol'
 import { describe, expect, it } from 'vitest'
-import { REVIEW_COPY, approvalGate, approvalIds, canRerun, keepTicks, requiredPreviews } from './review'
+import { REVIEW_COPY, approvalGate, approvalIds, canReject, dropNewlyRejected, canRerun, canRerunWithoutAnswers, keepTicks, reframingsFor, requiredPreviews } from './review'
 
 const H = (c: string) => c.repeat(64)
 
@@ -69,5 +69,32 @@ describe('approved ids', () => {
   it('ticks survive a new revision only for reframings still listed', () => {
     const next = { ...DETAIL, revision: H('8'), proposedReframings: [DETAIL.proposedReframings[1]] }
     expect([...keepTicks(next, [H('1'), H('2')])]).toEqual([H('2')])
+  })
+})
+
+describe('reframing rules (#159)', () => {
+  const list = { applicationId: DETAIL.applicationId, revision: DETAIL.revision, format: 'v2' as const, reframings: DETAIL.proposedReframings }
+  it('uses the Mac’s list only for the revision on screen', () => {
+    expect(reframingsFor(DETAIL, list)).toBe(list)
+    expect(reframingsFor(DETAIL, { ...list, revision: H('8') })).toBeNull()
+    expect(reframingsFor(DETAIL, { ...list, applicationId: 'other/app/1' })).toBeNull()
+    expect(reframingsFor(DETAIL, undefined)).toBeNull()
+  })
+
+  it('a ticked reframing that becomes rejected is unticked; one ticked after its rejection stays (#159)', () => {
+    const [a, b] = list.reframings
+    const rejectedA = { ...list, reframings: [{ ...a, rule: 'rejected' as const }, b] }
+    expect(dropNewlyRejected(new Set([a.id, b.id]), list, rejectedA)).toEqual(new Set([b.id]))
+    // Ticked again after the rejection (to keep it): a refresh of the same list keeps the tick.
+    expect(dropNewlyRejected(new Set([a.id]), rejectedA, { ...rejectedA })).toEqual(new Set([a.id]))
+    expect(dropNewlyRejected(new Set([a.id]), null, null)).toEqual(new Set([a.id]))
+  })
+
+  it('rejects only reframings a run used and not rejected yet; re-runs without answers only on a Mac that knows the rules', () => {
+    expect(canReject(list, list.reframings[0])).toBe(true)
+    expect(canReject(list, { ...list.reframings[0], rule: 'rejected' })).toBe(false)
+    expect(canReject({ ...list, format: 'v1' }, list.reframings[0])).toBe(false)
+    expect(canRerunWithoutAnswers(list)).toBe(true)
+    expect(canRerunWithoutAnswers(null)).toBe(false)
   })
 })

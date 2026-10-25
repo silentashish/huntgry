@@ -159,13 +159,13 @@ export interface CallerWording {
 }
 
 /**
- * The user's earlier decisions, passed to every run as the skill's caller rules (#158):
- * `preferred` are standing approvals (use as written), `avoid` are reframings the user rejected
- * (never use them or a close paraphrase). Both newest first and already capped.
+ * The user's earlier decisions, passed to every run as the skill's caller rules (#158, #159):
+ * `preferred` are kept reframings and the better wordings of rejected ones (use as written),
+ * `avoid` are reframings the user rejected (never use them or a close paraphrase). Both newest
+ * first and already capped (`rulesForPrompt`).
  */
 export interface CallerRules {
   preferred: CallerWording[]
-  /** Filled once Review stores rejections (#159). */
   avoid: CallerWording[]
 }
 

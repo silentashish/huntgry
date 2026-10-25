@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react'
-import { Alert, Button, Checkbox, Code, Collapse, Divider, Tabs, Text, Textarea } from '@mantine/core'
-import { IconCheck, IconExternalLink, IconFileText, IconFlame, IconRefresh, IconShieldCheck, IconTrash } from '@tabler/icons-react'
+import { Alert, Button, Checkbox, Code, Collapse, Divider, Tabs, Text, TextInput, Textarea } from '@mantine/core'
+import { IconArrowBackUp, IconCheck, IconExternalLink, IconFileText, IconFlame, IconRefresh, IconShieldCheck, IconThumbDown, IconTrash } from '@tabler/icons-react'
 import { REVIEW_STATE_LABEL, type ProposedReframing, type ReviewDetail, type ReviewOutcome } from '@shared/review-types'
 import { api, errorText } from '../../api'
 import { MonoLabel, SectionCard, StatusPill } from '../../components/ui'
 import { useNavigation } from '../../navigation'
 import { Markdown } from '../tailor/Transcript'
-import { STATE_TONE, approveHint, buildWarnings, shortRevision, shownTicked } from './review-ui'
+import { STATE_TONE, approveHint, buildWarnings, rerunHint, shortRevision, shownTicked } from './review-ui'
 import classes from './review.module.css'
 
 interface Props {
@@ -15,15 +15,17 @@ interface Props {
   onReload(): void
 }
 
-type Decision = 'approve' | 'rerun' | 'discard'
+type Decision = 'approve' | 'rerun' | 'discard' | 'reject'
 
 /**
  * One result (Figma Review — Detail): the header with its files and revision, verify, the
  * reframings to tick, the previews, and the Decision card. A result's notes are
  * tailoring-notes.md v2 (#158: the reframings the run used, the gaps left open, its decisions and
  * direct hits) or, for an older unattended run, review-notes.md v1 (the reframings it left out, the
- * standing approvals used and the open gaps). Approve, re-run and discard all carry the revision
- * that is on screen.
+ * standing approvals used and the open gaps). Each reframing can be ticked to keep its wording or,
+ * since #159, rejected (with a better wording if the user has one): the rejection becomes a
+ * reframing rule and Re-run redoes the result with the rules. Approve, re-run, discard and reject
+ * all carry the revision that is on screen.
  */
 export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
   const { navigate } = useNavigation()
@@ -65,6 +67,40 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
       setBusy(null)
     }
   }
+
+  /** A rejection (#159) or its undo: the result stays as it is, so the ticks and answers stay too. */
+  async function rule(call: () => Promise<ReviewOutcome | null>): Promise<boolean> {
+    setBusy('reject')
+    setError(null)
+    setStale(null)
+    try {
+      const out = await call()
+      if (out === null) {
+        onReload()
+        return true
+      }
+      if (!out.ok) {
+        if (out.error === 'stale') setStale(out.message)
+        else setError(out.message)
+        return false
+      }
+      onDecided(out.detail)
+      return true
+    } catch (err) {
+      setError(errorText(err))
+      return false
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const untick = (id: string) =>
+    setTicked((s) => {
+      if (!s.has(id)) return s
+      const next = new Set(s)
+      next.delete(id)
+      return next
+    })
 
   const toggle = (id: string) =>
     setTicked((s) => {
@@ -203,8 +239,8 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
               d.proposedReframings.length === 0
                 ? undefined
                 : v2
-                  ? 'The bridges the run wrote into the resume, each with the profile fact behind it. Tick the ones to keep: later runs use them as preferred wordings. To drop one, re-run with your answers.'
-                  : 'Tick the ones that are true. Ticked reframings become standing approvals: later unattended runs may use them as written, for any job.'
+                  ? 'The bridges the run wrote into the resume, each with the profile fact behind it. Tick the ones to keep: later runs use them as preferred wordings. Reject one you do not want (optionally with a better wording), then Re-run to redo the result without it.'
+                  : 'Tick the ones that are true. Ticked reframings become preferred wordings: later runs may use them as written, for any job.'
             }
           >
             {d.parseWarning && (
@@ -220,7 +256,23 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
             {d.proposedReframings.length > 0 && (
               <div className={classes.reframings}>
                 {d.proposedReframings.map((r, i) => (
-                  <Reframing key={r.id} r={r} index={i} used={v2} checked={ticked.has(r.id)} disabled={!decidable} onToggle={() => toggle(r.id)} />
+                  <Reframing
+                    key={r.id}
+                    r={r}
+                    index={i}
+                    used={v2}
+                    checked={ticked.has(r.id)}
+                    disabled={!decidable}
+                    busy={busy !== null}
+                    onToggle={() => toggle(r.id)}
+                    onReject={async (betterWording) => {
+                      const ok = await rule(() => api.review.reject({ applicationId: d.applicationId, revision: d.revision, reframingId: r.id, ...(betterWording ? { betterWording } : {}) }))
+                      // A rejected reframing is no longer kept: a later Approve or Re-run must not undo the rejection.
+                      if (ok) untick(r.id)
+                      return ok
+                    }}
+                    onUndo={() => rule(() => api.review.removeRule(r.id).then(() => null))}
+                  />
                 ))}
               </div>
             )}
@@ -363,10 +415,10 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
                 <p className={classes.hint}>{approveHint(d.proposedReframings, ids)}</p>
                 <Divider />
                 <Textarea
-                  label="Re-run with my answers"
+                  label="Notes for the re-run (optional)"
                   autosize
                   minRows={3}
-                  placeholder="e.g. Use R1 but say “contributed to”, not “led”. Drop R2."
+                  placeholder="e.g. Mention the on-call work. Keep it to one page."
                   value={answers}
                   onChange={(e) => setAnswers(e.currentTarget.value)}
                 />
@@ -375,14 +427,12 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
                   fullWidth
                   leftSection={<IconRefresh size={16} />}
                   loading={busy === 'rerun'}
-                  disabled={busy !== null || (!answers.trim() && ids.length === 0)}
+                  disabled={busy !== null}
                   onClick={() => decide('rerun', () => api.review.rerun({ applicationId: d.applicationId, revision: d.revision, answers, approvedReframingIds: ids }))}
                 >
-                  Send and rebuild
+                  Re-run
                 </Button>
-                <p className={classes.hint}>
-                  Sent to the run’s own session, with the ticked reframings as preferred wordings. The result comes back here as Unreviewed with a new revision.
-                </p>
+                <p className={classes.hint}>{rerunHint(d.proposedReframings, ids)}</p>
                 <Divider />
                 {!confirmDiscard ? (
                   <>
@@ -428,14 +478,20 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
   )
 }
 
-/** One proposed reframing: the whole box toggles its checkbox. */
+/**
+ * One reframing: the box (but its actions) toggles its checkbox. A reframing the run used (v2) can
+ * be rejected, with an optional better wording; a rejected one shows its rule and can be undone.
+ */
 function Reframing({
   r,
   index,
   used,
   checked,
   disabled,
-  onToggle
+  busy,
+  onToggle,
+  onReject,
+  onUndo
 }: {
   r: ProposedReframing
   index: number
@@ -443,32 +499,99 @@ function Reframing({
   used: boolean
   checked: boolean
   disabled: boolean
+  busy: boolean
   onToggle(): void
+  onReject(betterWording: string): Promise<boolean>
+  onUndo(): Promise<boolean>
 }) {
+  const [rejecting, setRejecting] = useState(false)
+  const [better, setBetter] = useState('')
+  const rejected = r.rule?.kind === 'rejected'
+  const label = `R${index + 1}`
   return (
-    <label className={classes.reframing} data-checked={checked || undefined} data-disabled={disabled || undefined}>
-      <Checkbox mt={1} checked={checked} disabled={disabled} onChange={onToggle} aria-label={`${used ? 'Keep' : 'Approve'}: ${r.wording}`} />
-      <span className={classes.reframingBody}>
-        <MonoLabel tone="muted">
-          R{index + 1}
-          {r.requirement ? ` · ${r.requirement}` : ''}
-        </MonoLabel>
-        <span className={classes.reframingRow}>
-          <MonoLabel size="xs">Fact</MonoLabel>
-          <span className={classes.fact}>{r.sourceFact}</span>
-        </span>
-        <span className={classes.reframingRow}>
-          <MonoLabel size="xs">Wording</MonoLabel>
-          <span className={classes.wording}>{r.wording}</span>
-        </span>
-        {r.reason && (
+    <div className={classes.reframing} data-checked={checked || undefined} data-disabled={disabled || undefined} data-rejected={(rejected && !checked) || undefined}>
+      <label className={classes.reframingMain}>
+        <Checkbox mt={1} checked={checked} disabled={disabled} onChange={onToggle} aria-label={`${used ? 'Keep' : 'Approve'}: ${r.wording}`} />
+        <span className={classes.reframingBody}>
+          <MonoLabel tone="muted">
+            {label}
+            {r.requirement ? ` · ${r.requirement}` : ''}
+          </MonoLabel>
           <span className={classes.reframingRow}>
-            <MonoLabel size="xs">Why unsure</MonoLabel>
-            <span className={classes.unsure}>{r.reason}</span>
+            <MonoLabel size="xs">Fact</MonoLabel>
+            <span className={classes.fact}>{r.sourceFact}</span>
           </span>
-        )}
-      </span>
-    </label>
+          <span className={classes.reframingRow}>
+            <MonoLabel size="xs">Wording</MonoLabel>
+            <span className={classes.wording}>{r.wording}</span>
+          </span>
+          {r.reason && (
+            <span className={classes.reframingRow}>
+              <MonoLabel size="xs">Why unsure</MonoLabel>
+              <span className={classes.unsure}>{r.reason}</span>
+            </span>
+          )}
+          {rejected && r.rule?.betterWording && (
+            <span className={classes.reframingRow}>
+              <MonoLabel size="xs">Use instead</MonoLabel>
+              <span className={classes.better}>{r.rule.betterWording}</span>
+            </span>
+          )}
+        </span>
+      </label>
+      {used && !disabled && (
+        <div className={classes.reframingActions}>
+          {rejected ? (
+            <>
+              <StatusPill tone="danger" dot>
+                Rejected{checked ? ' · kept again on the next decision' : ''}
+              </StatusPill>
+              <Button size="compact-xs" variant="subtle" leftSection={<IconArrowBackUp size={14} />} disabled={busy} onClick={() => void onUndo()} aria-label={`Undo the rejection of ${label}`}>
+                Undo
+              </Button>
+            </>
+          ) : rejecting ? (
+            <div className={classes.rejectForm}>
+              <TextInput
+                size="xs"
+                label="Better wording (optional)"
+                placeholder="What the resume should say instead"
+                value={better}
+                maxLength={2000}
+                onChange={(e) => setBetter(e.currentTarget.value)}
+                autoFocus
+              />
+              <div className={classes.rejectButtons}>
+                <Button
+                  size="xs"
+                  color="danger"
+                  variant="light"
+                  leftSection={<IconThumbDown size={14} />}
+                  loading={busy}
+                  onClick={() =>
+                    void onReject(better.trim()).then((ok) => {
+                      if (ok) {
+                        setRejecting(false)
+                        setBetter('')
+                      }
+                    })
+                  }
+                >
+                  Reject {label}
+                </Button>
+                <Button size="xs" variant="subtle" disabled={busy} onClick={() => setRejecting(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button size="compact-xs" variant="subtle" color="danger" leftSection={<IconThumbDown size={14} />} disabled={busy} onClick={() => setRejecting(true)} aria-label={`Reject ${label}`}>
+              Reject
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 

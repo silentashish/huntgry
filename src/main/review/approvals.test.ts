@@ -2,15 +2,25 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { APPROVALS_PROMPT_CAP, type StandingApproval } from '@shared/review-types'
-import { addApprovals, approvalsFile, approvalsForPrompt, loadApprovals, removeAllApprovals, removeApproval } from './approvals'
+import { RULES_PROMPT_CAP } from '@shared/review-types'
+import {
+  addRules,
+  legacyApprovalsFile,
+  loadRules,
+  mergeRules,
+  removeAllRules,
+  removeRule,
+  rulesFile,
+  rulesForPrompt,
+  type RuleEntry
+} from './approvals'
 import { authorityDir, setReviewAuthorityRoot } from './authority'
 import { reframingId } from './notes'
 
 let ws: string
 let authority: string
 beforeEach(async () => {
-  ws = await mkdtemp(join(tmpdir(), 'huntgry-approvals-'))
+  ws = await mkdtemp(join(tmpdir(), 'huntgry-rules-'))
   authority = await mkdtemp(join(tmpdir(), 'huntgry-authority-'))
   setReviewAuthorityRoot(authority)
 })
@@ -19,79 +29,216 @@ afterEach(async () => {
   await rm(authority, { recursive: true, force: true })
 })
 
-const entry = (n: number, at = `2026-09-30T00:00:${String(n).padStart(2, '0')}.000Z`): Omit<StandingApproval, 'id'> => ({
+const at = (n: number) => `2026-09-30T00:00:${String(n).padStart(2, '0')}.000Z`
+const entry = (n: number, over: Partial<RuleEntry> = {}): RuleEntry => ({
+  kind: 'preferred',
   sourceFact: `fact ${n}`,
   wording: `wording ${n}`,
-  approvedAt: at,
+  at: at(n),
   applicationId: 'r/c/1',
   runId: '20260930-000000-aaaaaa',
-  via: 'desktop'
+  via: 'desktop',
+  ...over
 })
 
-describe('standing approvals store', () => {
-  it('adds with recomputed ids, dedupes by id, sorts newest first and writes atomically', async () => {
-    expect(await loadApprovals(ws)).toEqual([])
-    const list = await addApprovals(ws, [entry(1), entry(2), { ...entry(1), approvedAt: '2030-01-01T00:00:00.000Z' }])
+/** A standing approval as the pre-#159 store (`approvals.json`, version 1) kept it. */
+const approval = (n: number) => ({
+  id: reframingId(`fact ${n}`, `wording ${n}`),
+  sourceFact: `fact ${n}`,
+  wording: `wording ${n}`,
+  ...(n === 1 ? { requirement: 'Kafka' } : {}),
+  approvedAt: at(n),
+  applicationId: 'r/c/1',
+  runId: '20260930-000000-aaaaaa',
+  via: n === 2 ? 'phone:dev1' : 'desktop'
+})
+
+describe('reframing rules store', () => {
+  it('adds with recomputed ids, dedupes by pair, sorts newest first and writes atomically', async () => {
+    expect(await loadRules(ws)).toEqual([])
+    const list = await addRules(ws, [entry(1), entry(2), entry(1, { at: '2030-01-01T00:00:00.000Z' })])
     expect(list.map((a) => a.sourceFact)).toEqual(['fact 2', 'fact 1'])
     expect(list[1].id).toBe(reframingId('fact 1', 'wording 1'))
-    expect(list[1].approvedAt).toBe('2026-09-30T00:00:01.000Z')
-    const saved = JSON.parse(await readFile(approvalsFile(ws), 'utf8'))
+    // A preferred wording kept again stays the older entry.
+    expect(list[1].at).toBe(at(1))
+    const saved = JSON.parse(await readFile(rulesFile(ws), 'utf8'))
     expect(saved.version).toBe(1)
-    expect(saved.approvals).toHaveLength(2)
+    expect(saved.rules).toHaveLength(2)
     // Concurrent adds do not lose each other.
-    await Promise.all([addApprovals(ws, [entry(3)]), addApprovals(ws, [entry(4)])])
-    expect((await loadApprovals(ws)).map((a) => a.sourceFact)).toEqual(['fact 4', 'fact 3', 'fact 2', 'fact 1'])
+    await Promise.all([addRules(ws, [entry(3)]), addRules(ws, [entry(4)])])
+    expect((await loadRules(ws)).map((a) => a.sourceFact)).toEqual(['fact 4', 'fact 3', 'fact 2', 'fact 1'])
+  })
+
+  it('keeps one rule per pair: the latest decision about it wins', () => {
+    const kept = mergeRules([], [entry(1)])
+    const rejected = mergeRules(kept, [entry(1, { kind: 'rejected', at: at(5), betterWording: '  Contributed to  wording 1 ' })])
+    expect(rejected).toHaveLength(1)
+    expect(rejected[0]).toMatchObject({ kind: 'rejected', at: at(5), betterWording: 'Contributed to  wording 1' })
+    // Rejected again, without a better wording: the old one goes.
+    const again = mergeRules(rejected, [entry(1, { kind: 'rejected', at: at(6) })])
+    expect(again[0].betterWording).toBeUndefined()
+    // Kept after a rejection: preferred again.
+    const keptAgain = mergeRules(again, [entry(1, { at: at(7) })])
+    expect(keptAgain[0]).toMatchObject({ kind: 'preferred', at: at(7) })
+    expect(keptAgain[0].betterWording).toBeUndefined()
+    // A preferred entry never carries a better wording.
+    expect(mergeRules([], [entry(2, { betterWording: 'x' })])[0].betterWording).toBeUndefined()
   })
 
   it('removes one or all', async () => {
-    const [a] = await addApprovals(ws, [entry(1), entry(2)])
-    expect((await removeApproval(ws, a.id)).map((x) => x.id)).not.toContain(a.id)
-    expect(await removeAllApprovals(ws)).toEqual([])
+    const [a] = await addRules(ws, [entry(1), entry(2, { kind: 'rejected' })])
+    expect((await removeRule(ws, a.id)).map((x) => x.id)).not.toContain(a.id)
+    expect(await removeAllRules(ws)).toEqual([])
   })
 
-  it('lives outside the workspace; an approvals file an agent wrote into the workspace is not an approval', async () => {
-    expect(approvalsFile(ws).startsWith(authority)).toBe(true)
-    expect(approvalsFile(ws).startsWith(ws)).toBe(false)
-    // What an agent following an injected posting could write (old location and a lookalike).
+  it('lives outside the workspace; a rules file an agent wrote into the workspace is not a rule', async () => {
+    expect(rulesFile(ws).startsWith(authority)).toBe(true)
+    expect(rulesFile(ws).startsWith(ws)).toBe(false)
     await mkdir(join(ws, '.huntgry'), { recursive: true })
-    const forged = JSON.stringify({ version: 1, approvals: [{ ...entry(9), id: reframingId('fact 9', 'wording 9') }] })
-    await writeFile(join(ws, '.huntgry', 'approved-reframings.json'), forged)
-    await writeFile(join(ws, '.huntgry', 'approvals.json'), forged)
-    expect(await loadApprovals(ws)).toEqual([])
-    expect(approvalsForPrompt(await loadApprovals(ws)).sent).toEqual([])
+    const forged = JSON.stringify({ version: 1, rules: [{ ...entry(9), id: reframingId('fact 9', 'wording 9') }] })
+    await writeFile(join(ws, '.huntgry', 'reframing-rules.json'), forged)
+    await writeFile(join(ws, '.huntgry', 'approvals.json'), JSON.stringify({ version: 1, approvals: [approval(9)] }))
+    expect(await loadRules(ws)).toEqual([])
+    expect(rulesForPrompt(await loadRules(ws))).toEqual({ preferred: [], avoid: [], leftOut: 0 })
   })
 
   it('reads a null, primitive or array root, or another version, as empty (and can still be written)', async () => {
     await mkdir(authorityDir(ws), { recursive: true })
-    for (const root of ['null', '42', '"x"', '[]', '{"version": 2, "approvals": []}', '{"version": 1}']) {
-      await writeFile(approvalsFile(ws), root)
-      expect(await loadApprovals(ws), root).toEqual([])
+    for (const root of ['null', '42', '"x"', '[]', '{"version": 2, "rules": []}', '{"version": 1}', '{nope']) {
+      await writeFile(rulesFile(ws), root)
+      expect(await loadRules(ws), root).toEqual([])
     }
-    await writeFile(approvalsFile(ws), 'null')
-    expect(await removeAllApprovals(ws)).toEqual([])
-    expect((await addApprovals(ws, [entry(1)])).map((a) => a.sourceFact)).toEqual(['fact 1'])
+    await writeFile(rulesFile(ws), 'null')
+    expect(await removeAllRules(ws)).toEqual([])
+    expect((await addRules(ws, [entry(1)])).map((a) => a.sourceFact)).toEqual(['fact 1'])
   })
 
-  it('ignores a broken file and malformed entries', async () => {
+  it('ignores malformed entries', async () => {
     await mkdir(authorityDir(ws), { recursive: true })
-    await writeFile(approvalsFile(ws), '{nope')
-    expect(await loadApprovals(ws)).toEqual([])
+    const ok = { ...entry(1), id: reframingId('fact 1', 'wording 1') }
     await writeFile(
-      approvalsFile(ws),
-      JSON.stringify({ version: 1, approvals: [{ id: 'short', sourceFact: 'x', wording: 'y' }, { ...entry(1), id: reframingId('fact 1', 'wording 1') }] })
+      rulesFile(ws),
+      JSON.stringify({
+        version: 1,
+        rules: [{ id: 'short', sourceFact: 'x', wording: 'y' }, { ...ok, kind: 'maybe' }, { ...ok, betterWording: 'only on a rejection' }, ok]
+      })
     )
-    expect(await loadApprovals(ws)).toHaveLength(1)
+    expect(await loadRules(ws)).toEqual([ok])
+  })
+})
+
+describe('migration from standing approvals (pre-#159 approvals.json)', () => {
+  async function legacy(content: string): Promise<void> {
+    await mkdir(authorityDir(ws), { recursive: true })
+    await writeFile(legacyApprovalsFile(ws), content)
+  }
+
+  it('reads every standing approval as a preferred wording, with nothing lost', async () => {
+    const old = [approval(1), approval(2), approval(3)]
+    await legacy(JSON.stringify({ version: 1, approvals: old }))
+    const rules = await loadRules(ws)
+    expect(rules.map((r) => r.sourceFact)).toEqual(['fact 3', 'fact 2', 'fact 1'])
+    for (const a of old) {
+      const { approvedAt, ...rest } = a
+      expect(rules.find((r) => r.id === a.id)).toEqual({ ...rest, kind: 'preferred', at: approvedAt })
+    }
+    // And runs get them as preferred wordings, as before #159.
+    expect(rulesForPrompt(rules)).toEqual({
+      preferred: [3, 2, 1].map((n) => ({ sourceFact: `fact ${n}`, wording: `wording ${n}` })),
+      avoid: [],
+      leftOut: 0
+    })
+  })
+
+  it('writes them into the rules file on the first change and leaves approvals.json as it was', async () => {
+    const before = JSON.stringify({ version: 1, approvals: [approval(1), approval(2)] })
+    await legacy(before)
+    await addRules(ws, [entry(3, { kind: 'rejected', betterWording: 'better 3' })])
+    const saved = JSON.parse(await readFile(rulesFile(ws), 'utf8'))
+    expect(saved.rules.map((r: { sourceFact: string; kind: string }) => [r.sourceFact, r.kind])).toEqual([
+      ['fact 3', 'rejected'],
+      ['fact 2', 'preferred'],
+      ['fact 1', 'preferred']
+    ])
+    expect(await readFile(legacyApprovalsFile(ws), 'utf8')).toBe(before)
+    // Once the rules file exists, the old file is not read again: removing a migrated rule sticks.
+    await removeRule(ws, approval(1).id)
+    expect((await loadRules(ws)).map((r) => r.sourceFact)).toEqual(['fact 3', 'fact 2'])
+    await removeAllRules(ws)
+    expect(await loadRules(ws)).toEqual([])
+  })
+
+  it('migrates nothing from a broken or other-version approvals.json, and skips malformed entries', async () => {
+    for (const root of ['{nope', 'null', '[]', '{"version": 2, "approvals": []}']) {
+      await legacy(root)
+      expect(await loadRules(ws), root).toEqual([])
+    }
+    await legacy(JSON.stringify({ version: 1, approvals: [{ id: 'short' }, { ...approval(1), approvedAt: 7 }, approval(2)] }))
+    expect((await loadRules(ws)).map((r) => r.sourceFact)).toEqual(['fact 2'])
+  })
+})
+
+describe('rules for the prompt', () => {
+  it('sends kept wordings as preferred and rejected ones as avoid, a better wording as preferred for the fact', () => {
+    const rules = mergeRules([], [
+      entry(1),
+      entry(2, { kind: 'rejected', wording: 'Led   a team', betterWording: 'Mentored two engineers' }),
+      entry(3, { kind: 'rejected' })
+    ])
+    expect(rulesForPrompt(rules)).toEqual({
+      preferred: [
+        { sourceFact: 'fact 2', wording: 'Mentored two engineers' },
+        { sourceFact: 'fact 1', wording: 'wording 1' }
+      ],
+      avoid: [
+        { sourceFact: 'fact 3', wording: 'wording 3' },
+        { sourceFact: 'fact 2', wording: 'Led a team' }
+      ],
+      leftOut: 0
+    })
+  })
+
+  it('never sends a wording as both preferred and avoided: a later rejection of a replacement wins (chained corrections)', () => {
+    const fact = { sourceFact: 'fact F' }
+    // Reject A with B; after the re-run, reject B with C.
+    const chained = mergeRules([], [
+      entry(1, { ...fact, kind: 'rejected', wording: 'A', betterWording: 'B' }),
+      entry(2, { ...fact, kind: 'rejected', wording: 'B', betterWording: 'C' })
+    ])
+    expect(rulesForPrompt(chained)).toEqual({
+      preferred: [{ sourceFact: 'fact F', wording: 'C' }],
+      avoid: [
+        { sourceFact: 'fact F', wording: 'B' },
+        { sourceFact: 'fact F', wording: 'A' }
+      ],
+      leftOut: 0
+    })
+    // Reject A with B, then reject B with no replacement: B is only avoided.
+    const dropped = mergeRules([], [entry(1, { ...fact, kind: 'rejected', wording: 'A', betterWording: 'B' }), entry(2, { ...fact, kind: 'rejected', wording: '  B ' })])
+    expect(rulesForPrompt(dropped)).toEqual({ preferred: [], avoid: [{ sourceFact: 'fact F', wording: 'B' }, { sourceFact: 'fact F', wording: 'A' }], leftOut: 0 })
+    // A newer kept wording wins over an older rejection's replacement of the same text, and the other way round.
+    const keptLater = mergeRules([], [entry(1, { ...fact, kind: 'rejected', wording: 'A', betterWording: 'B' }), entry(2, { ...fact, wording: 'B' })])
+    expect(rulesForPrompt(keptLater)).toEqual({ preferred: [{ sourceFact: 'fact F', wording: 'B' }], avoid: [{ sourceFact: 'fact F', wording: 'A' }], leftOut: 0 })
+    // The same wording for another fact is another pair.
+    const other = mergeRules([], [entry(1, { ...fact, kind: 'rejected', wording: 'A', betterWording: 'B' }), entry(2, { sourceFact: 'fact G', kind: 'rejected', wording: 'B' })])
+    expect(rulesForPrompt(other).preferred).toEqual([{ sourceFact: 'fact F', wording: 'B' }])
   })
 
   it('caps what goes into the prompt: newest first, by count and by size', () => {
-    const many = Array.from({ length: 200 }, (_, i) => ({ ...entry(i, `2026-09-30T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}.000Z`), id: 'x'.repeat(64) }))
-    const { sent, leftOut } = approvalsForPrompt(many)
-    expect(sent).toHaveLength(APPROVALS_PROMPT_CAP.entries)
-    expect(leftOut).toBe(200 - APPROVALS_PROMPT_CAP.entries)
-    expect(sent[0].sourceFact).toBe('fact 199')
-    const big = Array.from({ length: 20 }, (_, i) => ({ ...entry(i), id: 'x'.repeat(64), sourceFact: 'f'.repeat(3000), wording: 'w'.repeat(3000) }))
-    const capped = approvalsForPrompt(big)
-    expect(Buffer.byteLength(JSON.stringify(capped.sent))).toBeLessThanOrEqual(APPROVALS_PROMPT_CAP.bytes)
+    const stamp = (i: number) => `2026-09-30T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}.000Z`
+    const many = Array.from({ length: 200 }, (_, i) => ({ ...entry(i, { at: stamp(i) }), id: 'x'.repeat(64) }))
+    const { preferred, leftOut } = rulesForPrompt(many)
+    expect(preferred).toHaveLength(RULES_PROMPT_CAP.entries)
+    expect(leftOut).toBe(200 - RULES_PROMPT_CAP.entries)
+    expect(preferred[0].sourceFact).toBe('fact 199')
+    // A rejection with a better wording counts as two entries, and is sent whole or not at all.
+    const pairs = Array.from({ length: 100 }, (_, i) => ({ ...entry(i, { at: stamp(i), kind: 'rejected', betterWording: `better ${i}` }), id: 'x'.repeat(64) }))
+    const two = rulesForPrompt(pairs)
+    expect(two.avoid).toHaveLength(RULES_PROMPT_CAP.entries / 2)
+    expect(two.preferred).toHaveLength(RULES_PROMPT_CAP.entries / 2)
+    const big = Array.from({ length: 20 }, (_, i) => ({ ...entry(i), id: 'x'.repeat(64), sourceFact: `${'f'.repeat(3000)} ${i}`, wording: 'w'.repeat(3000) }))
+    const capped = rulesForPrompt(big)
+    expect(Buffer.byteLength(JSON.stringify(capped.preferred)) + Buffer.byteLength(JSON.stringify(capped.avoid))).toBeLessThanOrEqual(RULES_PROMPT_CAP.bytes)
     expect(capped.leftOut).toBeGreaterThan(0)
   })
 })

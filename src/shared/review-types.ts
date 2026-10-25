@@ -6,9 +6,9 @@ import type { BuildSummary } from './applications-types'
  * `tailoring-notes.md` (resume-tailor notes v2). Results of older unattended
  * runs list what they left out in `review-notes.md` (v1) instead; both parse.
  * A result stays **Unreviewed** (Apply is blocked) until the user approves it
- * here, on the desktop or from the phone (#42). Ticked reframings become
- * standing approvals that later runs get as preferred wordings, keyed by
- * `sha256(sourceFact + "\n" + wording)`.
+ * here, on the desktop or from the phone (#42). Reframings the user keeps or
+ * rejects become reframing rules (#159) that later runs get as preferred
+ * wordings or wordings to avoid, keyed by `sha256(sourceFact + "\n" + wording)`.
  */
 
 export type ReviewState = 'unreviewed' | 'needs-attention' | 'approved' | 'discarded'
@@ -28,14 +28,28 @@ export interface ReviewTracking {
 
 export type ReviewVia = 'desktop' | `phone:${string}`
 
-/** One reframing the user approved: later unattended runs may use it as it is (same fact, same wording). */
-export interface StandingApproval {
-  /** sha256 hex of `sourceFact + "\n" + wording` (whitespace-normalised). */
+/**
+ * A reframing rule (#159): the user's standing decision about one source fact → wording pair,
+ * which every later run gets as a caller rule. `preferred`: use this wording as written (a
+ * reframing kept on the Review page; the standing approvals of #31 and #158 migrate as these).
+ * `rejected`: never use this wording, or a close paraphrase, for that fact; `betterWording`, when
+ * the user gave one, is passed as the preferred wording for the fact instead. One rule per pair:
+ * the latest decision about it replaces the earlier one.
+ */
+export type ReframingRuleKind = 'preferred' | 'rejected'
+
+export interface ReframingRule {
+  /** sha256 hex of `sourceFact + "\n" + wording` (whitespace-normalised), the reframing's own id. */
   id: string
+  kind: ReframingRuleKind
   sourceFact: string
+  /** preferred: the wording to use; rejected: the wording not to use. */
   wording: string
+  /** rejected only: what to say instead (a preferred wording for the fact). */
+  betterWording?: string
   requirement?: string
-  approvedAt: string
+  /** ISO time of the decision. */
+  at: string
   applicationId: string
   runId: string
   via: ReviewVia
@@ -51,6 +65,8 @@ export interface ProposedReframing {
   sourceFact: string
   wording: string
   reason?: string
+  /** The reframing rule standing for this pair, if any (#159; the detail only, never parsed from notes). */
+  rule?: { kind: ReframingRuleKind; betterWording?: string }
 }
 
 /** Which notes file a result carries: `review-notes.md` (v1, #31) or `tailoring-notes.md` (v2, #158). */
@@ -74,7 +90,7 @@ export interface ReviewNotes {
   decisions: string[]
   /** v1 "Notes". */
   notes: string
-  /** The file did not follow the format; nothing can be saved as a standing approval from it. */
+  /** The file did not follow the format; nothing can be saved as a reframing rule from it. */
   parseWarning?: string
 }
 
@@ -107,8 +123,8 @@ export interface ReviewDetail {
   usedApprovals: { sourceFact: string; wording: string }[]
   openGaps: string[]
   /**
-   * The reframings the user can tick (they become standing approvals): v1 the ones the run left
-   * out, v2 the ones it used ("Reframings used"). Same ids either way.
+   * The reframings the user can tick (they become preferred wordings) or reject (#159): v1 the
+   * ones the run left out, v2 the ones it used ("Reframings used"). Same ids either way.
    */
   proposedReframings: ProposedReframing[]
   /** v2 only. */
@@ -127,17 +143,27 @@ export interface ReviewDetail {
 export interface ApproveReviewInput {
   applicationId: string
   revision: string
-  /** Ids from `proposedReframings` of this revision; they become standing approvals. */
+  /** Ids from `proposedReframings` of this revision; they become preferred wordings. */
   approvedReframingIds?: string[]
 }
 
 export interface RerunReviewInput {
   applicationId: string
   revision: string
-  /** Free text sent to the agent (decisions per reframing, anything else). */
+  /** Free text sent to the agent (decisions per reframing, anything else); may be empty: the re-run then applies the reframing rules (#159). */
   answers: string
-  /** Ticked reframings: told to the agent and saved as standing approvals. */
+  /** Ticked reframings: told to the agent and saved as preferred wordings. */
   approvedReframingIds?: string[]
+}
+
+/** Reject one reframing of the revision on screen (#159): it becomes a `rejected` reframing rule. */
+export interface RejectReframingInput {
+  applicationId: string
+  revision: string
+  /** An id from `proposedReframings` of this revision. */
+  reframingId: string
+  /** What to say instead; passed to later runs as the preferred wording for the fact. */
+  betterWording?: string
 }
 
 export interface DiscardReviewInput {
@@ -150,9 +176,10 @@ export type ReviewOutcome =
   /** The result changed since it was shown (new revision); reload. */
   | { ok: false; error: 'stale' | 'invalid'; message: string }
 
-export interface ApprovalsSummary {
-  approvals: StandingApproval[]
-  /** How many of them unattended runs do not get (beyond the prompt cap). */
+export interface ReframingRulesSummary {
+  /** Newest first. */
+  rules: ReframingRule[]
+  /** How many of them runs do not get (beyond the prompt cap). */
   leftOut: number
 }
 
@@ -163,9 +190,11 @@ export interface ReviewApi {
   /** Sends the decisions to the run's own session (through the queue); the result is Unreviewed again. */
   rerun(input: RerunReviewInput): Promise<ReviewOutcome>
   discard(input: DiscardReviewInput): Promise<ReviewOutcome>
-  approvals(): Promise<ApprovalsSummary>
-  removeApproval(id: string): Promise<ApprovalsSummary>
-  removeAllApprovals(): Promise<ApprovalsSummary>
+  /** Stores a rejected-wording rule (#159); the result keeps its state until it is re-run. */
+  reject(input: RejectReframingInput): Promise<ReviewOutcome>
+  rules(): Promise<ReframingRulesSummary>
+  removeRule(id: string): Promise<ReframingRulesSummary>
+  removeAllRules(): Promise<ReframingRulesSummary>
 }
 
 export const REVIEW_CHANNELS = {
@@ -174,13 +203,17 @@ export const REVIEW_CHANNELS = {
   approve: 'review:approve',
   rerun: 'review:rerun',
   discard: 'review:discard',
-  approvals: 'review:approvals',
-  removeApproval: 'review:remove-approval',
-  removeAllApprovals: 'review:remove-all-approvals'
+  reject: 'review:reject',
+  rules: 'review:rules',
+  removeRule: 'review:remove-rule',
+  removeAllRules: 'review:remove-all-rules'
 } as const
 
-/** Most standing approvals sent to an unattended run: newest first, then this many / this size. */
-export const APPROVALS_PROMPT_CAP = { entries: 150, bytes: 32 * 1024 } as const
+/** Most reframing rules sent to a run: newest first, then this many / this size (preferred and avoid together). */
+export const RULES_PROMPT_CAP = { entries: 150, bytes: 32 * 1024 } as const
+
+/** Longest better wording a rejection may carry. */
+export const MAX_BETTER_WORDING = 2000
 
 /** Longest notes file sent inline in a `ReviewDetail`. */
 export const REVIEW_NOTES_INLINE_BYTES = 16 * 1024

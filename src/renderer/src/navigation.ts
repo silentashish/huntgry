@@ -72,7 +72,7 @@ export type ProfileView = 'editor' | 'graph' | 'skills'
 /** Sections of the Settings page, in its section nav order (Figma Settings 14:2). */
 export type SettingsSection =
   | 'agents'
-  | 'standing-approvals'
+  | 'reframing-rules'
   | 'saved-answers'
   | 'pricing'
   | 'claude'
@@ -128,7 +128,7 @@ export const PAGE_LABEL: Record<NavPage, string> = {
 /** Settings section names, as its section nav shows them. */
 export const SETTINGS_SECTION_LABEL: Record<SettingsSection, string> = {
   agents: 'Agents',
-  'standing-approvals': 'Standing approvals',
+  'reframing-rules': 'Reframing rules',
   'saved-answers': 'Saved answers',
   pricing: 'Pricing',
   claude: 'Claude',

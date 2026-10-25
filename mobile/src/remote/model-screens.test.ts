@@ -366,6 +366,54 @@ describe('review (#42)', () => {
     expect(t.sent('review.get')).toHaveLength(2)
   })
 
+  it('asks for the reframings with their rules (#159), rejects one with a better wording, and re-runs without answers', async () => {
+    const t = await opened()
+    const ask = t.last('review.reframings')
+    expect(ask.body).toEqual({ applicationId: APP })
+    const used = { applicationId: APP, revision: DETAIL.revision, format: 'v2' as const, reframings: DETAIL.proposedReframings.map((p) => ({ ...p, requirement: 'Leadership' })) }
+    await t.answer(ask, used)
+    expect(t.model.getSnapshot().review[APP].reframings).toEqual(used)
+    // Only an id of the served list, with the served revision.
+    expect(t.model.reject(APP, 'f'.repeat(64), 'x')).toBe(false)
+    expect(t.model.reject(APP, DETAIL.proposedReframings[0].id, '  Led a platform team of six ')).toBe(true)
+    await settle()
+    const reject = t.last('review.reject')
+    expect(reject.body).toEqual({ applicationId: APP, revision: DETAIL.revision, reframingId: DETAIL.proposedReframings[0].id, betterWording: 'Led a platform team of six' })
+    expect(t.model.getSnapshot().review[APP].rejecting).toBe(DETAIL.proposedReframings[0].id)
+    const after = { ...used, reframings: [{ ...used.reframings[0], rule: 'rejected' as const, betterWording: 'Led a platform team of six' }, used.reframings[1]] }
+    await t.answer(reject, after)
+    expect(t.model.getSnapshot().review[APP]).toMatchObject({ rejecting: undefined, reframings: after })
+    expect(t.model.getSnapshot().toast?.text).toBe(REVIEW_COPY.rejected)
+    t.model.rerun(APP, '')
+    await settle()
+    expect(t.last('review.rerun').body).toEqual({ runId: 'run-figma', revision: DETAIL.revision, answers: '' })
+  })
+
+  it('an older Mac answers review.reframings unsupported: no list, no Reject, nothing else changes (#159)', async () => {
+    const t = await opened()
+    await t.refuse(t.last('review.reframings'), 'unsupported', 'Unknown command "review.reframings".')
+    const view = t.model.getSnapshot().review[APP]
+    expect(view).toMatchObject({ rulesUnsupported: true, reframings: null, detail: { revision: DETAIL.revision } })
+    expect(t.model.getSnapshot().toast).toBeFalsy()
+    expect(t.model.reject(APP, DETAIL.proposedReframings[0].id)).toBe(false)
+    // A refreshed detail does not ask again.
+    t.model.openReview(APP)
+    await settle()
+    await t.answer(t.last('review.get'), { ...DETAIL, revision: '5'.repeat(64) })
+    expect(t.sent('review.reframings')).toHaveLength(1)
+  })
+
+  it('a stale rejection reloads the result and says why (#159)', async () => {
+    const t = await opened()
+    await t.answer(t.last('review.reframings'), { applicationId: APP, revision: DETAIL.revision, format: 'v2', reframings: DETAIL.proposedReframings })
+    t.model.reject(APP, DETAIL.proposedReframings[1].id)
+    await settle()
+    expect(t.last('review.reject').body).toEqual({ applicationId: APP, revision: DETAIL.revision, reframingId: DETAIL.proposedReframings[1].id })
+    await t.refuse(t.last('review.reject'), 'stale', 'This result changed since it was shown.')
+    expect(t.model.getSnapshot().review[APP]).toMatchObject({ rejecting: undefined, notice: REVIEW_COPY.stale })
+    expect(t.sent('review.get')).toHaveLength(2)
+  })
+
   it('invalid (an id the Mac did not list) shows the Mac’s message and keeps the detail', async () => {
     const t = await opened()
     t.model.approve(APP, ['1'.repeat(64)])

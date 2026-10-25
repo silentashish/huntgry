@@ -62,10 +62,26 @@ export function reframingLabel(proposed: readonly ProposedReframing[], id: strin
 
 /** The line under Approve: what approving does with the current ticks. */
 export function approveHint(proposed: readonly ProposedReframing[], ids: readonly string[]): string {
-  if (ids.length === 0) return 'Unlocks Apply for this application. Nothing is saved as a standing approval.'
+  if (ids.length === 0) return 'Unlocks Apply for this application. Nothing is saved as a preferred wording.'
   const labels = ids.map((id) => reframingLabel(proposed, id))
   const list = labels.length === 1 ? labels[0] : `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`
-  return `Unlocks Apply for this application and saves ${list} as ${ids.length === 1 ? 'a standing approval' : 'standing approvals'}.`
+  return `Unlocks Apply for this application and saves ${list} as ${ids.length === 1 ? 'a preferred wording' : 'preferred wordings'}.`
+}
+
+/** The reframings of this result the user rejected (#159), not ticked to keep again. */
+export function rejectedHere(proposed: readonly ProposedReframing[], ticked: readonly string[]): ProposedReframing[] {
+  return proposed.filter((r) => r.rule?.kind === 'rejected' && !ticked.includes(r.id))
+}
+
+/** The line under Re-run: what the re-run sends with the current ticks and rejections. */
+export function rerunHint(proposed: readonly ProposedReframing[], ticked: readonly string[]): string {
+  const rejected = rejectedHere(proposed, ticked).map((r) => reframingLabel(proposed, r.id))
+  const kept = ticked.map((id) => reframingLabel(proposed, id))
+  const parts = [
+    ...(rejected.length ? [`without ${rejected.join(', ')}`] : []),
+    ...(kept.length ? [`keeping ${kept.join(', ')} as written`] : [])
+  ]
+  return `Redoes this result in the run’s own session with your reframing rules${parts.length ? ` (${parts.join('; ')})` : ''}. It comes back here as Unreviewed with a new revision.`
 }
 
 /**

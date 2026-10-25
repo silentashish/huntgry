@@ -187,6 +187,8 @@ describe('requireCommand', () => {
       'review.approve': { applicationId: 'a1', revision: 'r'.repeat(64), approvedReframingIds: ['x'] },
       'review.rerun': { runId: 'r1', revision: 'rev', answers: 'because' },
       'review.discard': { applicationId: 'a1', revision: 'rev' },
+      'review.reframings': { applicationId: 'a1' },
+      'review.reject': { applicationId: 'a1', revision: 'rev', reframingId: 'f'.repeat(64), betterWording: 'Moved billing to Go' },
       'file.get': { applicationId: 'a1', file: 'resume-page-2.jpg', chunk: 0 },
       'device.setNotifications': { categories: ['needs-reply', 'failed'] }
     }
@@ -198,6 +200,11 @@ describe('requireCommand', () => {
     }
     expect(requireCommand('run.get', { runId: 'r1' })).toEqual({ name: 'run.get', args: { runId: 'r1' } })
     expect(isReadCommand('run.get')).toBe(true)
+    // #159: reading the reframings is a read; rejecting one is a write, not a costly command; re-run answers may be empty.
+    expect(isReadCommand('review.reframings')).toBe(true)
+    expect(isReadCommand('review.reject')).toBe(false)
+    expect(requireCommand('review.reject', { applicationId: 'a1', revision: 'rev', reframingId: 'f'.repeat(64) })).toEqual({ name: 'review.reject', args: { applicationId: 'a1', revision: 'rev', reframingId: 'f'.repeat(64) } })
+    expect(requireCommand('review.rerun', { runId: 'r1', revision: 'rev', answers: '' })).toMatchObject({ args: { answers: '' } })
     expect(isReadCommand('run.reply')).toBe(false)
   })
 
@@ -248,6 +255,11 @@ describe('requireCommand', () => {
       ['run.reply', { runId: 'r', text: 42 }],
       ['review.approve', { applicationId: 'a', revision: 'r', approvedReframingIds: 'x' }],
       ['review.approve', { applicationId: 'a' }],
+      ['review.reject', { applicationId: 'a', revision: 'r' }],
+      ['review.reject', { applicationId: 'a', revision: 'r', reframingId: 'f'.repeat(64), betterWording: 7 }],
+      ['review.reject', { applicationId: 'a', revision: 'r', reframingId: 'f'.repeat(64), betterWording: 'b'.repeat(257) }],
+      ['review.reject', { applicationId: 'a', revision: 'r', reframingId: 'f'.repeat(64), text: 'free text' }],
+      ['review.reframings', { applicationId: 'a', revision: 'r' }],
       ['file.get', { applicationId: 'a', file: '../master-profile.md', chunk: 0 }],
       ['file.get', { applicationId: 'a', file: 'resume.pdf', chunk: -1 }],
       ['file.get', { applicationId: 'a', file: 'resume-page-x.jpg', chunk: 0 }],

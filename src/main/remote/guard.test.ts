@@ -15,7 +15,7 @@ const FORBIDDEN_WORDS = ['apply', 'browser', 'workspace', 'profile', 'install', 
 
 /** Argument names a command may carry; anything else is a new surface that needs this test changed on purpose. */
 const ALLOWED_ARG_KEYS = new Set([
-  'paused', 'itemId', 'jobIds', 'options', 'concurrency', 'agent', 'fallback', 'budget', 'filter', 'cursor', 'url', 'runId', 'sinceSeq', 'text', 'applicationId', 'revision', 'approvedReframingIds', 'answers', 'file', 'chunk', 'categories'
+  'paused', 'itemId', 'jobIds', 'options', 'concurrency', 'agent', 'fallback', 'budget', 'filter', 'cursor', 'url', 'runId', 'sinceSeq', 'text', 'applicationId', 'revision', 'approvedReframingIds', 'answers', 'file', 'chunk', 'categories', 'reframingId', 'betterWording'
 ])
 const FORBIDDEN_ARG_WORDS = /path|cwd|dir|folder|command|cmd|argv|args$|flag|model|tool|setting|permission|env|prompt|script|binary|exec/i
 
@@ -37,6 +37,8 @@ const SAMPLES: Record<string, unknown> = {
   'review.approve': { applicationId: 'a/b/c', revision: 'r', approvedReframingIds: ['x'] },
   'review.rerun': { runId: 'r', revision: 'r', answers: 'a' },
   'review.discard': { applicationId: 'a/b/c', revision: 'r' },
+  'review.reframings': { applicationId: 'a/b/c' },
+  'review.reject': { applicationId: 'a/b/c', revision: 'r', reframingId: 'x', betterWording: 'w' },
   'file.get': { applicationId: 'a/b/c', file: 'resume.pdf', chunk: 0 },
   'device.setNotifications': { categories: ['failed'] }
 }

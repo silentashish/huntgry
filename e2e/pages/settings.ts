@@ -5,7 +5,7 @@ export type AgentLabel = 'Claude' | 'Codex' | 'Antigravity'
 /** The entries of the section nav on the left (#116). */
 export type SettingsSection =
   | 'Agents'
-  | 'Standing approvals'
+  | 'Reframing rules'
   | 'Saved answers'
   | 'Pricing'
   | 'Claude'

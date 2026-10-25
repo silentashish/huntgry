@@ -264,14 +264,42 @@
 
 .reframing {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   padding: 12px;
   border: 1px solid var(--hg-border-default);
   border-radius: var(--hg-radius-lg);
   background-color: var(--hg-bg-surface-sunken);
-  cursor: pointer;
   transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.reframingMain {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+/* Under the body, lined up with the text (past the checkbox). */
+.reframingActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-left: 30px;
+}
+
+.rejectForm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.rejectButtons {
+  display: flex;
+  gap: 8px;
 }
 
 .reframing:hover {
@@ -283,7 +311,17 @@
   background-color: var(--hg-accent-primary-soft);
 }
 
-.reframing[data-disabled] {
+.reframing[data-rejected] {
+  border-color: var(--hg-status-danger);
+  background-color: var(--hg-status-danger-soft);
+}
+
+.reframing[data-rejected] .wording {
+  text-decoration: line-through;
+  color: var(--hg-text-secondary);
+}
+
+.reframing[data-disabled] .reframingMain {
   cursor: default;
 }
 
@@ -313,6 +351,13 @@
 }
 
 .wording {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--hg-text-primary);
+}
+
+.better {
   font-size: 14px;
   line-height: 20px;
   font-weight: 600;

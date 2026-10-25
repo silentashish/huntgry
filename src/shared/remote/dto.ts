@@ -47,6 +47,8 @@ import {
   type ReviewDetail,
   type ReviewItem,
   type ReviewList,
+  type ReviewReframings,
+  type RemoteReframing,
   type RunPage,
   type StatusSummary
 } from './protocol'
@@ -340,6 +342,35 @@ export function requireReviewDetail(v: unknown, what = 'review.get'): ReviewDeta
   if (r.state !== undefined) out.state = requireOneOf(r.state, REVIEW_STATES, `${what}.state`)
   if (r.reason !== undefined) out.reason = requireError(r.reason, `${what}.reason`)
   if (r.parseWarning !== undefined) out.parseWarning = requireError(r.parseWarning, `${what}.parseWarning`)
+  if (r.truncated !== undefined) out.truncated = requireBoolean(r.truncated, `${what}.truncated`)
+  return out
+}
+
+/** `review.reframings` / `review.reject` result body (#159). */
+export function requireReviewReframings(v: unknown, what = 'review.reframings'): ReviewReframings {
+  const r = requireRecord(v, what)
+  rejectUnknownKeys(r, ['applicationId', 'revision', 'format', 'reframings', 'truncated'], what)
+  const out: ReviewReframings = {
+    applicationId: requireApplicationId(r.applicationId, `${what}.applicationId`),
+    revision: requireSha256(r.revision, `${what}.revision`),
+    format: requireOneOf(r.format, ['v1', 'v2'] as const, `${what}.format`),
+    reframings: requireList(r.reframings, `${what}.reframings`, LIMITS.reviewListItems, (p, at) => {
+      const x = requireRecord(p, at)
+      rejectUnknownKeys(x, ['id', 'sourceFact', 'wording', 'requirement', 'rule', 'betterWording'], at)
+      const item: RemoteReframing = {
+        id: requireSha256(x.id, `${at}.id`),
+        sourceFact: requireBoundedText(x.sourceFact, `${at}.sourceFact`, LIMITS.reviewEntryBytes),
+        wording: requireBoundedText(x.wording, `${at}.wording`, LIMITS.reviewEntryBytes)
+      }
+      if (x.requirement !== undefined) item.requirement = requireBoundedText(x.requirement, `${at}.requirement`, LIMITS.reviewEntryBytes)
+      if (x.rule !== undefined) item.rule = requireOneOf(x.rule, ['preferred', 'rejected'] as const, `${at}.rule`)
+      if (x.betterWording !== undefined) {
+        if (item.rule !== 'rejected') invalid(`${at}.betterWording is only for a rejected reframing.`)
+        item.betterWording = requireBoundedText(x.betterWording, `${at}.betterWording`, LIMITS.reviewEntryBytes)
+      }
+      return item
+    })
+  }
   if (r.truncated !== undefined) out.truncated = requireBoolean(r.truncated, `${what}.truncated`)
   return out
 }

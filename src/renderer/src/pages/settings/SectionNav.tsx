@@ -19,7 +19,7 @@ import classes from './settings.module.css'
  */
 export type SettingsSectionId =
   | 'agents'
-  | 'standing-approvals'
+  | 'reframing-rules'
   | 'saved-answers'
   | 'pricing'
   | 'claude'
@@ -34,7 +34,7 @@ export const SETTINGS_SECTIONS: readonly {
   icon: ComponentType<{ size?: number; stroke?: number }>
 }[] = [
   { id: 'agents', label: 'Agents', icon: IconCpu },
-  { id: 'standing-approvals', label: 'Standing approvals', icon: IconShieldCheck },
+  { id: 'reframing-rules', label: 'Reframing rules', icon: IconShieldCheck },
   { id: 'saved-answers', label: 'Saved answers', icon: IconLock },
   { id: 'pricing', label: 'Pricing', icon: IconCurrencyDollar },
   { id: 'claude', label: 'Claude', icon: IconTerminal2 },
