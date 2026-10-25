@@ -114,10 +114,25 @@ export interface Verdict {
 }
 
 /**
- * Quality holds when the candidate's median resume coverage and surfaced drop by at most `tolerance` points, its
+ * The two runs' rows of the jobs both ran: medians of different job mixes would compare the jobs, not the
+ * versions. Each run's own rows when they share none.
+ */
+export function sharedRows(base: BenchResults, cand: BenchResults): { base: BenchRow[]; cand: BenchRow[]; shared: string[] } {
+  const ids = new Set(cand.rows.map((r) => r.jobId))
+  const shared = [...new Set(base.rows.map((r) => r.jobId))].filter((id) => ids.has(id)).sort()
+  if (shared.length === 0) return { base: base.rows, cand: cand.rows, shared }
+  const keep = (rows: BenchRow[]) => rows.filter((r) => shared.includes(r.jobId))
+  return { base: keep(base.rows), cand: keep(cand.rows), shared }
+}
+
+/**
+ * Over the jobs both runs ran (`sharedRows`), quality holds when the candidate's median resume coverage and surfaced drop by at most `tolerance` points, its
  * mean untraceable count per run does not rise, and its pass rate does not drop. Only then is faster better.
  */
-export function verdict(base: BenchResults, cand: BenchResults, tolerance = DEFAULT_TOLERANCE): Verdict {
+export function verdict(baseRun: BenchResults, candRun: BenchResults, tolerance = DEFAULT_TOLERANCE): Verdict {
+  const rows = sharedRows(baseRun, candRun)
+  const base = { rows: rows.base }
+  const cand = { rows: rows.cand }
   const regressions: string[] = []
   for (const [label, of] of [
     ['resume coverage', (r: BenchRow) => r.resumeCoverage],
@@ -169,15 +184,20 @@ export function compareBench(base: BenchResults, cand: BenchResults, opts: { tol
   const v = verdict(base, cand, tolerance)
   lines.push(`**Verdict**: ${v.text}`, '')
 
-  lines.push('## Medians', '', '| Metric | Base | Candidate | Δ | Δ % |', '| --- | ---: | ---: | ---: | ---: |')
+  const rows = sharedRows(base, cand)
+  const scope =
+    rows.shared.length > 0
+      ? `Over the ${rows.shared.length} job${rows.shared.length === 1 ? '' : 's'} both runs ran (${rows.base.length} and ${rows.cand.length} runs).`
+      : 'The two runs share no job: every run of each is counted.'
+  lines.push('## Medians', '', scope, '', '| Metric | Base | Candidate | Δ | Δ % |', '| --- | ---: | ---: | ---: | ---: |')
   for (const m of METRICS) {
-    const b = medianOf(base.rows, m.of)
-    const c = medianOf(cand.rows, m.of)
+    const b = medianOf(rows.base, m.of)
+    const c = medianOf(rows.cand, m.of)
     const d = delta(b, c, m.format)
     lines.push(`| ${m.label} | ${cell(b, m.format)} | ${cell(c, m.format)} | ${d.abs} | ${d.rel} |`)
   }
-  const bp = passRate(base.rows)
-  const cp = passRate(cand.rows)
+  const bp = passRate(rows.base)
+  const cp = passRate(rows.cand)
   const dp = delta(bp, cp, pct)
   lines.push(`| Pass rate | ${cell(bp, pct)} | ${cell(cp, pct)} | ${dp.abs} | – |`, '')
 
