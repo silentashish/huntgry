@@ -263,8 +263,23 @@ const FIELD_AREAS: { label: string; re: RegExp }[] = [
 const DEGREE = /\b(?:[Bb]achelor['’]?s?|[Mm]aster['’]?s?|[Dd]octorate|[Dd]egree)\b|\b(?:B\.?S\.?c?|B\.A\.|B\.E\.|M\.?S\.?c?|M\.E\.|Ph\.?\s?D)(?![A-Za-z])/
 /** A degree that may be replaced by experience is not a must-have. */
 const EQUIVALENT = /\bor\s+(?:an?\s+)?(?:\w+\s+){0,2}?(?:equivalent|comparable)\b|\bequivalent\s+(?:\w+\s+){0,3}?experience\b/i
-/** How far after the degree word its field is read: "Bachelor's degree in Chemistry, Biology or a related field". */
+/** How far after the degree word its field is read at most: "Bachelor's degree in Chemistry, Biology or a related field". */
 const FIELD_WINDOW = 160
+/**
+ * Where a degree's field list ends: a sentence end, or the next qualification ("and experience with software",
+ * "with 3+ years", "plus strong SQL"). Alternatives inside the list ("Chemistry or Computer Science") stay.
+ */
+const FIELD_END =
+  /[;:]|\.(?=\s|$)|\b(?:and|with|plus|as well as)\s+(?:\d|at least|experience|proficien|knowledge|strong|solid|demonstrated|hands|familiar|expert|exposure)|\b(?:experience|years?)\b/i
+
+/** The field phrase after the degree that starts at `at`: "in Chemistry or Biology". */
+function fieldPhrase(text: string, at: number): string {
+  const rest = text.slice(at)
+  const word = DEGREE.exec(rest)
+  const after = rest.slice(word ? word.index + word[0].length : 0).replace(/^\./, '').slice(0, FIELD_WINDOW)
+  const end = after.search(FIELD_END)
+  return end < 0 ? after : after.slice(0, end)
+}
 const PHD = /\b(?:Ph\.?\s?D|[Dd]octorate)(?![A-Za-z])/
 /**
  * A PhD the sentence itself requires. Under a must-have heading a bullet naming only a PhD is required too,
@@ -287,7 +302,7 @@ function degreeGates(job: MatchJob, degrees: readonly ProfileDegree[]): MatchGat
   for (const { text, preferred, required, section } of all) {
     const at = text.search(DEGREE)
     if (preferred || at < 0 || EQUIVALENT.test(text)) continue
-    const asked = areasOf(text.slice(at, at + FIELD_WINDOW))
+    const asked = areasOf(fieldPhrase(text, at))
     if (held.size > 0 && asked.length > 0 && !asked.some((a) => held.has(a)) && !gates.some((g) => g.kind === 'degree')) {
       gates.push({ kind: 'degree', reason: `Asks for a degree in ${asked.join(' / ')}` })
     }
