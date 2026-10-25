@@ -1,0 +1,11 @@
+{
+  "id": "backend",
+  "role": "backend-engineer",
+  "company": "acme",
+  "descriptionFile": "backend.md",
+  "url": "https://boards.greenhouse.io/acme/jobs/123",
+  "coverLetter": false,
+  "dateStyle": "right",
+  "seniority": "mid",
+  "stack": ["python", "go", "aws"]
+}

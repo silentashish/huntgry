@@ -1,0 +1,10 @@
+{
+  "id": "platform",
+  "role": "platform-engineer",
+  "company": "acme",
+  "description": "# Platform Engineer\n\n## Requirements\n- Go and Python services on AWS.\n- PostgreSQL, Docker and Kubernetes.\n- Kafka for event streaming.\n\nBENCH_LATE: the fake agent asks first, and builds only after the nudge.",
+  "coverLetter": false,
+  "dateStyle": "inline",
+  "seniority": "senior",
+  "stack": ["go", "kubernetes"]
+}

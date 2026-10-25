@@ -69,6 +69,7 @@ Screenshots come from the real app with the fictional e2e demo data; regenerate 
 - [Initial Idea](#initial-idea)
 - [Development](#development)
   - [Project layout](#project-layout)
+  - [Benchmarking tailoring runs](#benchmarking-tailoring-runs)
   - [Adding a feature](#adding-a-feature)
 - [Board](#board)
 - [Finding jobs](#finding-jobs)
@@ -127,6 +128,8 @@ npm start            # preview the production build
 npm run dist         # packaged app for this OS in release/ via electron-builder (releases: docs/install.md)
 npm run icons        # regenerate resources/icon.png + icon.icns from resources/icon.svg
 npm run screenshots  # build, then retake the README screenshots in docs/assets/screenshots/
+npm run bench:tailor # manual, costs money: the tailoring benchmark (see "Benchmarking tailoring runs")
+npm run bench:compare # compare two bench runs as Markdown
 ```
 
 End-to-end tests live in `e2e/` and run the built app in a sandbox (own `userData`, `HOME`
@@ -163,6 +166,7 @@ src/
 │   ├── apply/                  # auto-apply: session per tab, CDP resume upload, page-reply checks
 │   ├── automation/             # Automation (#154): candidate sources, run loop, run window, caps, step log
 │   ├── resume/                 # resume file → lines (docx, pdf, txt/md) → draft profile (parse.ts)
+│   ├── bench/                  # tailoring benchmark (#152): bench set, unattended runner, metrics, honesty count, report
 │   └── cli/                    # runs the resume-tailor skill via an agent CLI (claude / codex / agy), run history
 ├── preload/                    # index.ts composes window.huntgry from <feature>.ts + events.ts;
 │                               # browser-page.ts is the in-app tabs' autofill preload (exposes nothing)
@@ -174,6 +178,31 @@ resources/                      # app icon (svg source, png, icns)
 scripts/                        # icon rendering, dev Electron branding, mock-ats.mjs + mock-ats/ (local test forms), doc link check
 e2e/                            # Playwright end-to-end tests: fixtures/ (sandbox, workspaces, fake-agent/, servers/), pages/, tests/, screenshots/
 ```
+
+### Benchmarking tailoring runs
+
+`npm run bench:tailor` runs a fixed set of saved jobs unattended with a given model and skill and records
+time, API time, output tokens, cost, hard-check failures, rebuilds, page fill, the #151 profile fit /
+resume coverage / surfaced, and a count of claims the master profile doesn't back, one row per run.
+`npm run bench:compare` compares two bench runs by median and per job. Its verdict never calls a
+faster version better when quality dropped. Today's numbers (63 Opus 5.5 runs) are a median 195 s,
+$1.30, about 21K output tokens and 97 % API time per run.
+
+The bench never touches your workspace: runs go to `~/huntgry-bench/<bench-id>/workspace/` with a
+copy of the master profile, and an output folder inside the workspace is refused. **It spends real
+money** (about $1.30 a job at today's median), so it is manual only and never runs in `npm test`, CI
+or e2e. Those run it against a fake agent. The baseline command:
+
+```bash
+npm run bench:tailor -- --model claude-opus-5-5 --label baseline-$(git rev-parse --short HEAD) \
+  --set ~/<workspace>/.huntgry/bench --profile ~/<workspace>/master-profile.md --out ~/huntgry-bench
+npm run bench:compare -- ~/huntgry-bench/<baseline-id> ~/huntgry-bench/<candidate-id> --out report.md
+```
+
+A bench set is a folder (default `<workspace>/.huntgry/bench/`, never committed) of one JSON file per job:
+`{ "id", "role", "company", "description" | "descriptionFile", "url"?, "coverLetter"?, "dateStyle"? }`.
+Each run writes `results.json` and `report.md` next to its workspace. The full set format, every metric's definition and the honesty heuristic are in
+[docs/changes/152-tailoring-benchmark.md](docs/changes/152-tailoring-benchmark.md).
 
 ### Adding a feature
 

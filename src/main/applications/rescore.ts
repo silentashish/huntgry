@@ -1,10 +1,10 @@
 import { lstat, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { MAX_MATCH_LIST, type ApplicationMatch } from '@shared/applications-types'
+import { MAX_MATCH_LIST, type ApplicationMatch, type ApplicationTracking } from '@shared/applications-types'
 import { profileSignals } from '@shared/job-relevance'
 import type { Job } from '@shared/jobs-types'
 import type { JobrightSkill, MatchJob } from '@shared/match-score'
-import { resumeCoverage, resumeEvidenceFromData, resumeEvidenceFromText, type ResumeEvidence } from '@shared/resume-coverage'
+import { resumeCoverage, resumeEvidenceFromData, resumeEvidenceFromText, type ResumeCoverage, type ResumeEvidence } from '@shared/resume-coverage'
 import { listJobs } from '../jobs/store'
 import { readProfile } from '../profile/store'
 import { extractPdf } from '../resume/pdf'
@@ -108,26 +108,35 @@ export interface RescoreOptions {
   now?: Date
 }
 
+/** An application's re-score: what `huntgry.json` → `match` stores, and the full `resumeCoverage` it came from. */
+export interface ApplicationScore {
+  match: ApplicationMatch
+  /** Everything `resumeCoverage` found, `unbacked` among it (the benchmark's honesty count, #152). */
+  coverage: ResumeCoverage
+}
+
 /**
- * Scores an application's resume (`resumeCoverage`) and stores the result as `huntgry.json` → `match`.
- * Returns what was stored: `null`, with any earlier `match` dropped, when there is no master profile, job
- * description or readable resume, or the job names no requirement, so old numbers never outlive their inputs.
- * A folder that was never scored is not written then. The same scores as stored (only `at` differs) are not
- * written again, so a turn that changed nothing does not touch `huntgry.json`.
+ * Scores an application's resume (`resumeCoverage`) without writing anything: the numbers `rescoreApplication`
+ * stores, plus the coverage they came from. `null` when there is no master profile, job description or readable
+ * resume, or the job names no requirement.
  */
-export async function rescoreApplication(workspace: string, applicationId: string, opts: RescoreOptions = {}): Promise<ApplicationMatch | null> {
+export async function scoreApplication(workspace: string, applicationId: string, opts: RescoreOptions = {}): Promise<ApplicationScore | null> {
   const folder = await resolveApplicationFolder(workspace, applicationId)
-  const [profile, jdBuf, report, tracking] = await Promise.all([
+  return scoreFolder(workspace, folder, await readTracking(folder), opts)
+}
+
+async function scoreFolder(
+  workspace: string,
+  folder: string,
+  tracking: ApplicationTracking,
+  opts: RescoreOptions
+): Promise<ApplicationScore | null> {
+  const [profile, jdBuf, report] = await Promise.all([
     readWorkspaceProfile(workspace),
     readOwn(folder, 'job-description.md', MAX_TEXT_BYTES),
-    readOwn(folder, 'build-report.json', MAX_TEXT_BYTES),
-    readTracking(folder)
+    readOwn(folder, 'build-report.json', MAX_TEXT_BYTES)
   ])
-  const clear = async () => {
-    if (tracking.match) await updateTracking(folder, { match: undefined })
-    return null
-  }
-  if (!profile || !jdBuf) return clear()
+  if (!profile || !jdBuf) return null
   const jd = jdBuf.toString('utf8')
   const saved = await savedJob(workspace, tracking.jobUrl ?? postingUrl(jd))
   // The description the skill tailored against; the saved job adds what only the board knows, including
@@ -142,7 +151,7 @@ export async function rescoreApplication(workspace: string, applicationId: strin
   }
   const resume = await readResumeEvidence(folder)
   const r = resume ? resumeCoverage(job, profileSignals(profile, opts.now), resume.evidence) : null
-  if (!resume || !r) return clear()
+  if (!resume || !r) return null
   const match: ApplicationMatch = {
     profileFit: r.profileFit,
     resumeCoverage: r.resumeCoverage,
@@ -157,6 +166,25 @@ export async function rescoreApplication(workspace: string, applicationId: strin
   if (absent.length > 0) match.absent = absent
   if (r.gates.length > 0) match.gates = r.gates.map((g) => g.reason)
   if (opts.runId) match.runId = opts.runId
+  return { match, coverage: r }
+}
+
+/**
+ * Scores an application's resume (`scoreApplication`) and stores the result as `huntgry.json` → `match`.
+ * Returns what was stored: `null`, with any earlier `match` dropped, when there is no master profile, job
+ * description or readable resume, or the job names no requirement, so old numbers never outlive their inputs.
+ * A folder that was never scored is not written then. The same scores as stored (only `at` differs) are not
+ * written again, so a turn that changed nothing does not touch `huntgry.json`.
+ */
+export async function rescoreApplication(workspace: string, applicationId: string, opts: RescoreOptions = {}): Promise<ApplicationMatch | null> {
+  const folder = await resolveApplicationFolder(workspace, applicationId)
+  const tracking = await readTracking(folder)
+  const score = await scoreFolder(workspace, folder, tracking, opts)
+  if (!score) {
+    if (tracking.match) await updateTracking(folder, { match: undefined })
+    return null
+  }
+  const { match } = score
   if (tracking.match && sameScores(tracking.match, match)) return tracking.match
   return (await updateTracking(folder, { match })).match ?? null
 }

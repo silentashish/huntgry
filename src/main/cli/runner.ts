@@ -108,7 +108,12 @@ export class RunManager {
   /** Per run: the chain of resumes and ends of a run with no process (see `idle`). */
   private idleOps = new Map<string, Promise<unknown>>()
 
-  constructor(private hooks: RunnerHooks) {}
+  private hooks: RunnerHooks
+
+  // A plain field, not a parameter property: the benchmark (#152) loads this file with Node's type stripping.
+  constructor(hooks: RunnerHooks) {
+    this.hooks = hooks
+  }
 
   isLive(id: string): boolean {
     return this.live.has(id)

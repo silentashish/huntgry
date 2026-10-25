@@ -16,6 +16,12 @@
 //   "NOTES_FREEFORM" -> like WRITE_NOTES, but tailoring-notes.md without the v2 marker (a v4 skill ignoring the format)
 //   "VERIFY_FAIL" -> like WRITE_NOTES, but build-report.json says ok: false with a failed hard check
 //   "NO_NOTES" -> like WRITE_OUTPUT (resume.pdf + ok report) without any notes file
+//   "BENCH_OUTPUT" -> what a real build leaves for the benchmark (#152): resume_data.json (the shared tailored fixture),
+//                     a full build-report.json (render pages/fill/target_pages, verify results, jd_keyword_coverage),
+//                     tailoring-notes.md v2 with one reframing sourced from the bench profile and one that is not,
+//                     and two Bash `python3 …/scripts/build.py` tool calls in the turn (one rebuild)
+//   "BENCH_LATE" in the first message -> the first turn ends without building; any later turn (the nudge) is BENCH_OUTPUT
+// In a session whose first message names a BENCH_ mode, every result carries `duration_api_ms` (4 ms a turn).
 // The first message names the saved job description ("Job description: saved at <path>", #158): like
 // the real agent, the fake reads it (its mode words count too) and, when it builds, copies it into the
 // application folder as job-description.md, as `build.py --jd` does.
@@ -38,6 +44,9 @@ const resumeIdx = process.argv.indexOf('--resume')
 const session = resumeIdx > 0 ? process.argv[resumeIdx + 1] : 'sess-fake-1'
 const out = (e) => process.stdout.write(`${JSON.stringify(e)}\n`)
 let turn = 0
+/** The first message (with its job description) and its saved job description: what later turns of a bench session build for. */
+let firstText = ''
+let firstJdPath = null
 const MODEL = 'claude-haiku-4-5-20251001'
 const countsFile = `${process.cwd()}/.fake-claude-${session}.json`
 let counts = { cost: 0, input: 0, output: 0 }
@@ -76,6 +85,12 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (text.includes('SECOND:')) text = text.replace(/SECOND:/g, '')
   const jdPath = /^Job description: saved at (.+?\.md)\./m.exec(text)?.[1]
   if (jdPath && existsSync(jdPath)) text = `${text}\n${readFileSync(jdPath, 'utf8')}`
+  if (turn === 1) {
+    firstText = text
+    firstJdPath = jdPath ?? null
+  }
+  const bench = firstText.includes('BENCH_')
+  const benchLate = firstText.includes('BENCH_LATE')
   if (text.includes('CRASH')) {
     process.stderr.write('boom: simulated failure\n')
     process.exit(3)
@@ -154,16 +169,55 @@ for await (const line of createInterface({ input: process.stdin })) {
     process.stderr.write('API Error: 500 Internal server error\n')
     process.exit(1)
   }
+  if (text.includes('BENCH_OUTPUT') || (benchLate && turn > 1)) {
+    // The application folder of the first message's role, company and job id, with its saved job description, as build.py --jd copies it.
+    const field = (name, fallback) => new RegExp(`^${name}: ([\\w-]+)$`, 'm').exec(firstText)?.[1] ?? fallback
+    const at = `${field('Role', 'software-engineer')}/${field('Company', 'acme')}/${field('Job id', '42')}`
+    const dir = `${process.cwd()}/${at}`
+    mkdirSync(dir, { recursive: true })
+    if (firstJdPath && existsSync(firstJdPath)) copyFileSync(firstJdPath, `${dir}/job-description.md`)
+    for (const n of [1, 2]) {
+      const command = `python3 /skills/resume-tailor/scripts/build.py --jd ${firstJdPath ?? 'jd.md'} --outdir ${dir}`
+      out({ type: 'assistant', message: { id: `b${turn}-${n}`, role: 'assistant', content: [{ type: 'tool_use', id: `tb${turn}-${n}`, name: 'Bash', input: { command } }] } })
+      out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `tb${turn}-${n}`, content: 'built' }] } })
+    }
+    copyFileSync(new URL('../../../shared/fixtures/tailored-resume_data.json', import.meta.url), `${dir}/resume_data.json`)
+    writeFileSync(`${dir}/resume.pdf`, '%PDF-1.4 fake')
+    writeFileSync(
+      `${dir}/build-report.json`,
+      JSON.stringify({
+        ok: true,
+        outdir: dir,
+        next_step: null,
+        render: { pdf: `${dir}/resume.pdf`, pages: 1, target_pages: 1, fill: 0.93, fits: true, attempts: [] },
+        style_warnings: [],
+        verify: {
+          ok: true,
+          results: [
+            { check: 'page_count', passed: true, detail: '1 page', hard: true },
+            { check: 'email', passed: true, detail: 'found', hard: true },
+            { check: 'jd_keyword_coverage', passed: true, detail: "31/40 substantive JD terms appear in the resume. Absent: ['Kafka', 'Kubernetes']", hard: false }
+          ]
+        },
+        cover: null
+      })
+    )
+    writeFileSync(
+      `${dir}/tailoring-notes.md`,
+      `# Tailoring notes\n<!-- resume-tailor notes v2 -->\n\n## Direct hits\n- Python: order-routing services\n\n## Reframings used\n### Go services\n- Source fact: Built order-routing services in Python and Go.\n- Wording: Built order-routing services in Python and Go that handle 4M requests a day.\n\n### Kafka streaming\n- Source fact: Built an event pipeline on RabbitMQ\n- Wording: Built event-streaming pipelines (RabbitMQ; Kafka-adjacent)\n\n## Gaps left open\n- Kubernetes: nothing honest to say\n\n## Decisions\n- Right-aligned dates: fake run.\n`
+    )
+  }
   if (text.includes('SLOW')) await new Promise((r) => setTimeout(r, 300))
   out({ type: 'assistant', message: { id: `m${turn}`, role: 'assistant', content: [{ type: 'tool_use', id: `t${turn}`, name: 'Read', input: { file_path: '/ws/master-profile.md' } }] } })
   out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${turn}`, content: 'profile text' }] } })
   // A partial line split across writes must still parse.
-  const answer = text.includes('ASK') ? 'Before I build: is "led the migration" honest for your role?' : `echo: ${text.slice(0, 40)}`
+  const answer =
+    text.includes('ASK') || (benchLate && turn === 1) ? 'Before I build: is "led the migration" honest for your role?' : `echo: ${text.slice(0, 40)}`
   const reply = JSON.stringify({ type: 'assistant', message: { id: `m${turn}b`, role: 'assistant', content: [{ type: 'text', text: answer }] } })
   process.stdout.write(reply.slice(0, 10))
   await new Promise((r) => setTimeout(r, 5))
   process.stdout.write(`${reply.slice(10)}\n`)
   // 1000 input + 1800 output tokens of Haiku 4.5 = $0.01, so the estimate matches the reported cost.
-  out(result({ subtype: 'success', is_error: false, result: 'done' }, 0.01, 1000, 1800))
+  out(result({ subtype: 'success', is_error: false, result: 'done', ...(bench ? { duration_api_ms: 4 } : {}) }, 0.01, 1000, 1800))
 }
 process.exit(0)
