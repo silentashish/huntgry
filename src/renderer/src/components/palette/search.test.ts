@@ -116,7 +116,7 @@ describe('palette search', () => {
   it('opens on the pages, the general actions and the live runs', () => {
     const sections = searchPalette(items, '')
     expect(sections.map((s) => s.group)).toEqual(['goto', 'actions', 'runs'])
-    expect(titles(sections[0].items)).toEqual(['Dashboard', 'Board', 'Jobs', 'Explore', 'Browser', 'Tailor', 'Review', 'Profile', 'Settings'])
+    expect(titles(sections[0].items)).toEqual(['Dashboard', 'Board', 'Jobs', 'Explore', 'Browser', 'Tailor', 'Review', 'Automation', 'Profile', 'Settings'])
     expect(titles(sections[1].items)).toEqual(['New tailored resume', 'Paste a job', 'Switch theme', 'Switch workspace'])
     expect(titles(sections[2].items)).toEqual(['Stripe · Senior Backend Engineer'])
   })
@@ -169,6 +169,16 @@ describe('palette search', () => {
     expect(globex.command).toEqual({ kind: 'navigate', location: { page: 'tailor', params: { runId: 'r-2' } } })
     const pricing = flatten(searchPalette(items, 'pricing'))[0]
     expect(pricing.command).toEqual({ kind: 'navigate', location: { page: 'settings', params: { section: 'pricing' } } })
+  })
+
+  it('goes to Automation and offers its controls only when asked for (#154)', () => {
+    const goto = flatten(searchPalette(items, 'overnight')).find((i) => i.group === 'goto')!
+    expect(goto.title).toBe('Automation')
+    expect(goto.command).toEqual({ kind: 'navigate', location: { page: 'automation', params: undefined } })
+    const actions = searchPalette(items, 'automation').find((s) => s.group === 'actions')!
+    expect(titles(actions.items)).toEqual(['Pause automation', 'Resume automation', 'Run automation now'])
+    expect(actions.items[2].command).toEqual({ kind: 'automation', action: 'run-now' })
+    expect(flatten(searchPalette(items, '')).some((i) => i.id.startsWith('automation:'))).toBe(false)
   })
 
   it('says where Switch theme goes and shows its shortcut', () => {

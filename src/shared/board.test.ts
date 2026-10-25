@@ -72,6 +72,7 @@ describe('buildBoard', () => {
       'To do',
       'Tailoring',
       'Needs review',
+      'Ready to submit',
       'Ready to apply',
       'Applied',
       'Interviewing',
@@ -273,5 +274,36 @@ describe('moveFor', () => {
     expect(moveTargets(card(board, 'app:software-engineer/acme/d'))).toEqual([])
     expect(moveTargets(card(board, 'queue:q-q'))).toEqual([])
     expect(moveFor(card(board, 'app:software-engineer/acme/r'), 'ready')).toBeNull()
+  })
+})
+
+describe('Ready to submit (#154)', () => {
+  const unreviewed = { review: { state: 'unreviewed' as const, runId: 'r', at: '2026-10-04T00:00:00.000Z' } }
+  const board = buildBoard({
+    jobs: [],
+    queue: [],
+    applications: [
+      app('s', unreviewed),
+      app('a', { status: 'applied' }),
+      app('x', { review: { state: 'discarded', runId: 'r', at: '2026-10-04T00:00:00.000Z' } }),
+      app('n', unreviewed)
+    ],
+    readyToSubmit: new Set(['software-engineer/acme/s', 'software-engineer/acme/a', 'software-engineer/acme/x']),
+    now: NOW
+  })
+
+  it('puts a prepared application in Ready to submit while it is generated, not once applied or discarded', () => {
+    expect(layout(board)).toEqual({
+      submit: ['app:software-engineer/acme/s'],
+      review: ['app:software-engineer/acme/n'],
+      applied: ['app:software-engineer/acme/a'],
+      archived: ['app:software-engineer/acme/x']
+    })
+  })
+
+  it('takes no drops, and its cards can only be archived or rejected', () => {
+    expect(moveTargets(card(board, 'app:software-engineer/acme/s'))).toEqual(['rejected', 'archived'])
+    expect(moveFor(card(board, 'app:software-engineer/acme/a'), 'submit')).toBeNull()
+    expect(moveTargets(card(board, 'app:software-engineer/acme/a'))).not.toContain('submit')
   })
 })

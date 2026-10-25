@@ -136,15 +136,23 @@ export async function resolveEmployerLink(
 
 /**
  * Resolves every Jobright copy of a saved job (the canonical record and its aliases), e.g. before its full
- * description is fetched. Returns whether any link changed.
+ * description is fetched. Returns whether any link changed; `onOutcome` hears each copy's outcome.
  */
-export async function resolveJobrightCopies(workspace: string, id: string, deps: LinkDeps): Promise<boolean> {
+export async function resolveJobrightCopies(
+  workspace: string,
+  id: string,
+  deps: LinkDeps,
+  onOutcome?: (outcome: LinkOutcome) => void
+): Promise<boolean> {
   const canonical = await findCanonical(workspace, id)
   if (!canonical) return false
   let changed = false
   for (const copyId of [canonical.id, ...(canonical.aliases ?? [])]) {
     if (!copyId.startsWith('jobright:')) continue
-    if ((await resolveEmployerLink(workspace, copyId, deps)).outcome === 'resolved') changed = true
+    const { outcome } = await resolveEmployerLink(workspace, copyId, deps)
+    // Automation (#154) tells a failed lookup from "no link given".
+    onOutcome?.(outcome)
+    if (outcome === 'resolved') changed = true
   }
   return changed
 }

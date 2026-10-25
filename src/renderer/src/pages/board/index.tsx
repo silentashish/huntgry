@@ -24,6 +24,7 @@ import { tailorPrefillFor, type Job } from '@shared/jobs-types'
 import { emptyProfile } from '@shared/master-profile'
 import { api, errorText } from '../../api'
 import { useApply } from '../../components/apply/useApply'
+import { useAutomationState } from '../../components/automation/useAutomation'
 import { useQueue } from '../../components/queue/useQueue'
 import { PageHeader, toneStyle } from '../../components/ui'
 import { useNavigation, type PageParams } from '../../navigation'
@@ -68,6 +69,28 @@ export function BoardPage({ params }: { params?: PageParams['board'] }) {
   const [openAppId, setOpenAppId] = useState<string | null>(null)
   const [tailorJob, setTailorJob] = useState<Job | null>(null)
   const applier = useApply(setError)
+  // Automation's prepared forms (#154): their applications sit in Ready to submit, keyed to their candidate.
+  const automation = useAutomationState()
+  const submitKeys = useMemo(() => {
+    const keys = new Map<string, string>()
+    for (const c of Object.values(automation?.candidates ?? {})) if (c.step === 'ready' && c.applicationId) keys.set(c.applicationId, c.key)
+    return keys
+  }, [automation])
+  const readyToSubmit = useMemo(() => new Set(submitKeys.keys()), [submitKeys])
+  const [submitting, setSubmitting] = useState(false)
+  const submit = async (applicationId: string) => {
+    const key = submitKeys.get(applicationId)
+    if (!key || submitting) return
+    setSubmitting(true)
+    try {
+      await api.automation.openPrepared(key)
+      navigate('browser')
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setSubmitting(false)
+    }
+  }
   /** What the master profile says to score jobs on (the Scent ring); `null` until read. */
   const [signals, setSignals] = useState<ProfileSignals | null>(null)
   const [filter, setFilter] = useState<BoardFilter>(EMPTY_BOARD_FILTER)
@@ -121,8 +144,8 @@ export function BoardPage({ params }: { params?: PageParams['board'] }) {
   }, [load])
 
   const board = useMemo(
-    () => (jobs && apps ? buildBoard({ jobs, applications: apps, queue: queue?.items ?? [], keepArchived: allArchived }) : null),
-    [jobs, apps, queue, allArchived]
+    () => (jobs && apps ? buildBoard({ jobs, applications: apps, queue: queue?.items ?? [], keepArchived: allArchived, readyToSubmit }) : null),
+    [jobs, apps, queue, allArchived, readyToSubmit]
   )
   const shown = useMemo(() => (board ? filterBoard(board, filter) : null), [board, filter])
   const groups = useMemo(() => {
@@ -337,8 +360,9 @@ export function BoardPage({ params }: { params?: PageParams['board'] }) {
                               onTailor={() => card.kind === 'job' && setTailorJob(card.job)}
                               onFollow={() => follow(card)}
                               onApply={() => card.kind === 'application' && applier.apply(card.app)}
+                              onSubmit={() => card.kind === 'application' && void submit(card.app.id)}
                               onOpenApplication={() => card.kind === 'queue' && card.app && setOpenAppId(card.app.id)}
-                              applying={applier.busy}
+                              applying={applier.busy || submitting}
                             />
                           ))}
                         </Week>

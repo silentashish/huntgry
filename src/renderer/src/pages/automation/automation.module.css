@@ -1,0 +1,138 @@
+/* Automation page (#154). Colours are --hg-* tokens only. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hg-space-6);
+}
+
+.statusRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--hg-space-3);
+}
+
+.note {
+  color: var(--hg-text-secondary);
+  font-size: 13px;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: var(--hg-space-4);
+  align-items: end;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--hg-space-4);
+}
+
+.readyHead {
+  display: flex;
+  align-items: center;
+  gap: var(--hg-space-3);
+}
+
+.readyTitle {
+  font-weight: 600;
+  margin: 0;
+  font-size: 15px;
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--hg-space-2);
+  margin-top: var(--hg-space-3);
+}
+
+.aiList {
+  list-style: none;
+  padding: 0;
+  margin: var(--hg-space-3) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aiItem {
+  display: flex;
+  align-items: baseline;
+  gap: var(--hg-space-2);
+  font-size: 13px;
+}
+
+.aiLabel {
+  color: var(--hg-text-secondary);
+}
+
+.aiValue {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--hg-space-2);
+  margin-top: var(--hg-space-4);
+}
+
+.needsList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--hg-space-3);
+}
+
+.needsItem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--hg-space-3);
+  padding-bottom: var(--hg-space-3);
+  border-bottom: 1px solid var(--hg-border-subtle);
+}
+
+.needsText {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.muted {
+  color: var(--hg-text-muted);
+}
+
+.reason {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log {
+  list-style: none;
+  padding: 0;
+  margin: var(--hg-space-3) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 420px;
+  overflow: auto;
+  font-size: 13px;
+}
+
+.logItem {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 220px) 140px 60px minmax(0, 1fr);
+  gap: var(--hg-space-2);
+  align-items: baseline;
+}

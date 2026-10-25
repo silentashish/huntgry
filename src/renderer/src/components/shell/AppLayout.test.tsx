@@ -37,6 +37,7 @@ const api = {
   runner: { listRuns: vi.fn(async () => []) },
   review: { list: vi.fn(async () => []) },
   pipeline: { state: vi.fn(async () => null) },
+  automation: { state: vi.fn(async () => null) },
   on: () => () => undefined
 }
 

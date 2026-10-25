@@ -47,6 +47,7 @@ const ICONS: Record<PaletteIcon, Icon> = {
   browser: IconWorld,
   tailor: IconSparkles,
   review: IconClipboardCheck,
+  automation: IconRobot,
   profile: IconUser,
   settings: IconSettings,
   graph: IconChartDots3,
@@ -157,6 +158,10 @@ export function CommandPalette({ opened, onClose, profile, onSwitchWorkspace, gu
         return setPreference(resolved === 'dark' ? 'light' : 'dark')
       case 'switch-workspace':
         return guarded(onSwitchWorkspace)
+      case 'automation': {
+        const call = command.action === 'pause' ? api.automation.pause() : command.action === 'resume' ? api.automation.resume() : api.automation.runNow()
+        return void call.catch((err) => setError(errorText(err)))
+      }
     }
   }
 

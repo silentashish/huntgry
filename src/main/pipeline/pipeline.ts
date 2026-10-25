@@ -39,6 +39,12 @@ import {
 } from './failures'
 import type { NotificationCategory } from './notify'
 
+/** Who started a pipeline (main only, never from IPC): Automation's runs say so on the Tailor page (#154). */
+export interface PipelineOrigin {
+  origin?: 'automation'
+  automationRunId?: string
+}
+
 /**
  * The unattended pipeline (#31): policy over the queue's unattended items.
  * One record at a time, persisted in `queue.json` by the queue. Electron-free;
@@ -352,7 +358,7 @@ export class Pipeline {
    * active are separated by awaits (plan, history), so a second start (a double click, the phone)
    * is refused while the first is between them.
    */
-  async start(input: Parameters<Pipeline['plan']>[0], expected?: string): Promise<PipelineState> {
+  async start(input: Parameters<Pipeline['plan']>[0] & PipelineOrigin, expected?: string): Promise<PipelineState> {
     // After shutdown nothing would supervise it, and the queue would never start its jobs (#134).
     if (this.stopped) throw new Error('Huntgry is quitting; a pipeline can no longer be started.')
     if (this.starting) throw new Error('A pipeline is already starting.')
@@ -364,7 +370,7 @@ export class Pipeline {
     }
   }
 
-  private async startNow(input: Parameters<Pipeline['plan']>[0], expected?: string): Promise<PipelineState> {
+  private async startNow(input: Parameters<Pipeline['plan']>[0] & PipelineOrigin, expected?: string): Promise<PipelineState> {
     const plan = await this.plan(input, expected)
     if (plan.blockers.length > 0) throw new Error(plan.blockers[0])
     if (plan.ready.length === 0)
@@ -392,7 +398,8 @@ export class Pipeline {
       unparsedStrikes: 0,
       startedAt: new Date(now).toISOString(),
       runCosts: {},
-      estimateMsPerJob: history.medianMs
+      estimateMsPerJob: history.medianMs,
+      ...(input.origin ? { origin: input.origin, ...(input.automationRunId ? { automationRunId: input.automationRunId } : {}) } : {})
     }
     // Before the record is kept: another workspace loaded during the awaits must not inherit it,
     // and a pipeline that is already running there must not be overwritten.
@@ -530,7 +537,8 @@ export class Pipeline {
       stopReason: r.stopReason,
       agent: r.options.agent,
       fallbackAgent: r.options.fallbackAgent,
-      concurrency: r.options.concurrency
+      concurrency: r.options.concurrency,
+      ...(r.origin ? { origin: r.origin } : {})
     }
   }
 
@@ -1035,11 +1043,13 @@ export class Pipeline {
     const ws = this.deps.queue.workspace()
     if (ws) await writeSummary(ws, summary).catch((err) => console.error('Writing the pipeline summary failed:', err))
     const look = counts.needsAttention + counts.needsReply + counts.failed
-    this.deps.notify(
-      'pipeline-finished',
-      r.stopReason ? 'Huntgry pipeline stopped' : 'Huntgry pipeline finished',
-      `${counts.unreviewed} ready for review · ${look} need a look · ${counts.cancelled} cancelled${summary.costUsd ? ` · $${summary.costUsd.toFixed(2)}` : ''}`
-    )
+    // Automation (#154) tailors one job per pipeline and tells the user itself at the end of its run.
+    if (r.origin !== 'automation')
+      this.deps.notify(
+        'pipeline-finished',
+        r.stopReason ? 'Huntgry pipeline stopped' : 'Huntgry pipeline finished',
+        `${counts.unreviewed} ready for review · ${look} need a look · ${counts.cancelled} cancelled${summary.costUsd ? ` · $${summary.costUsd.toFixed(2)}` : ''}`
+      )
     this.updateBadge(true)
     this.deps.emitFinished(summary)
     this.changed()

@@ -9,6 +9,7 @@ import { attachBrowser, destroyBrowser } from './browser/manager'
 import { setPackagedBuild } from './cli/env'
 import { stopAllRuns } from './cli/ipc'
 import { initPipeline, stopPipeline } from './pipeline/ipc'
+import { initAutomation, stopAutomation } from './automation/ipc'
 import { setReviewAuthorityRoot } from './review/authority'
 import { stopQueue } from './queue/ipc'
 import { startRemote, stopRemote } from './remote/ipc'
@@ -97,6 +98,8 @@ app.whenReady().then(() => {
   createWindow()
   // Resumes an unattended pipeline interrupted by a restart, keeps the Mac awake while it has work.
   initPipeline()
+  // Automation (#154): its run window's tick; a run a quit interrupted ends, its job in Needs you.
+  initAutomation()
   // The relay session (ADR-0001): outbound only, off until enabled in Settings.
   void startRemote()
   app.on('activate', () => {
@@ -116,6 +119,7 @@ app.whenReady().then(() => {
 let runsStopped = false
 app.on('will-quit', (event) => {
   stopApplicationsWatcher()
+  stopAutomation()
   stopApply()
   destroyBrowser()
   if (runsStopped) return

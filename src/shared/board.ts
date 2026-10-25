@@ -12,6 +12,7 @@ export const BOARD_COLUMNS = [
   'todo',
   'tailoring',
   'review',
+  'submit',
   'ready',
   'applied',
   'interviewing',
@@ -25,6 +26,7 @@ export const BOARD_COLUMN_LABEL: Record<BoardColumnId, string> = {
   todo: 'To do',
   tailoring: 'Tailoring',
   review: 'Needs review',
+  submit: 'Ready to submit',
   ready: 'Ready to apply',
   applied: 'Applied',
   interviewing: 'Interviewing',
@@ -85,6 +87,11 @@ export interface BoardInput {
    * Dashboard table's Archived filter used to list them all). `hiddenArchived` is then 0.
    */
   keepArchived?: boolean
+  /**
+   * Applications Automation prepared up to Submit (#154): their form is filled and waits for the user, so
+   * their card sits in Ready to submit (while their status is still `generated`).
+   */
+  readyToSubmit?: ReadonlySet<string>
 }
 
 const STATUS_COLUMN: Record<ApplicationStatus, BoardColumnId> = {
@@ -151,11 +158,13 @@ function queueCard(item: QueueItem, job: Job | null, app: ApplicationRecord | nu
   }
 }
 
-function applicationCard(app: ApplicationRecord, job: Job | null): BoardCard {
+function applicationCard(app: ApplicationRecord, job: Job | null, readyToSubmit?: ReadonlySet<string>): BoardCard {
+  const column = applicationColumn(app)
   return {
     kind: 'application',
     key: `app:${app.id}`,
-    column: applicationColumn(app),
+    // A prepared form (#154) waits in Ready to submit until the user submits it or moves the card on.
+    column: app.tracking.status === 'generated' && column !== 'archived' && readyToSubmit?.has(app.id) ? 'submit' : column,
     title: app.jobTitle || app.role,
     subtitle: app.company,
     at: app.updatedAt,
@@ -171,7 +180,7 @@ function applicationCard(app: ApplicationRecord, job: Job | null): BoardCard {
  * item, then the saved job itself. A saved job is matched to its application by posting URL, or by
  * the folder's job id together with the company; to a queue item by its id or an alias.
  */
-export function buildBoard({ jobs, applications, queue, now = new Date(), keepArchived = false }: BoardInput): Board {
+export function buildBoard({ jobs, applications, queue, now = new Date(), keepArchived = false, readyToSubmit }: BoardInput): Board {
   const jobOf = new Map<string, Job>()
   for (const j of jobs) for (const id of [j.id, ...(j.aliases ?? [])]) jobOf.set(id, j)
 
@@ -206,11 +215,11 @@ export function buildBoard({ jobs, applications, queue, now = new Date(), keepAr
     const app = appOf.get(job)
     const item = itemOf.get(job)
     const working = item && WORKING.has(item.status)
-    if (app && (app.tracking.status !== 'generated' || !working)) cards.push(applicationCard(app, job))
+    if (app && (app.tracking.status !== 'generated' || !working)) cards.push(applicationCard(app, job, readyToSubmit))
     else if (item) cards.push(queueCard(item, job, app ?? null))
     else cards.push(jobCard(job))
   }
-  for (const app of applications) if (!claimed.has(app)) cards.push(applicationCard(app, null))
+  for (const app of applications) if (!claimed.has(app)) cards.push(applicationCard(app, null, readyToSubmit))
   for (const [owner, item] of itemOf) if (typeof owner === 'string') cards.push(queueCard(item, null))
 
   const cutoff = now.getTime() - ARCHIVE_TTL_MS
@@ -249,10 +258,11 @@ const COLUMN_STATUS: Partial<Record<BoardColumnId, ApplicationStatus>> = {
  * The write behind dropping `card` on column `to`, or `null` when the move means nothing.
  * Tailoring and Needs review are run by the queue and the Review page and take no drops;
  * a queue card cannot be moved; a result discarded on Review stays where it is; a result still
- * waiting for review can only be archived or rejected.
+ * waiting for review can only be archived or rejected. Ready to submit (#154) is Automation's: nothing is
+ * dropped there, and a card in it can only be archived or rejected.
  */
 export function moveFor(card: BoardCard, to: BoardColumnId): BoardMove | null {
-  if (to === card.column) return null
+  if (to === card.column || to === 'submit') return null
   if (card.kind === 'job') {
     if (card.column === 'todo' && to === 'archived') return { kind: 'job', id: card.job.id, patch: { dismissed: true } }
     if (card.column === 'archived' && to === 'todo') return { kind: 'job', id: card.job.id, patch: { dismissed: false } }
@@ -262,7 +272,7 @@ export function moveFor(card: BoardCard, to: BoardColumnId): BoardMove | null {
   if (card.app.tracking.review?.state === 'discarded') return null
   const status = COLUMN_STATUS[to]
   if (!status) return null
-  if (card.column === 'review' && to !== 'archived' && to !== 'rejected') return null
+  if ((card.column === 'review' || card.column === 'submit') && to !== 'archived' && to !== 'rejected') return null
   return { kind: 'application', id: card.app.id, patch: { status } }
 }
 

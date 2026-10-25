@@ -37,6 +37,11 @@ import { parseEdits, parseFillReport, parsePageScan, parseUploadState, type Page
  * watches for the site's confirmation page. It never submits, never clicks
  * the site's buttons and never changes tracking; the user presses the site's
  * Submit button and then "Mark as applied".
+ *
+ * Automation (#154) prepares a form unattended through `prepare` (main only, never over IPC): the same
+ * open and fill, in a tab that is not activated, with the file uploads left for the user's own open, and
+ * a snapshot of the fill (report, AI drafts and answers) when every model call is done. The user's open
+ * (`start` with that snapshot) writes the same answers again without asking the model.
  */
 
 /** One browser tab, as the service needs it (wrapped around `WebContents` in ipc.ts). */
@@ -107,7 +112,10 @@ export interface ApplyDeps {
    * at all (no mapping, no drafts); answers a model gave earlier are only suggested.
    */
   aiAnswers?(): Promise<boolean>
-  openTab(url: string): Promise<string>
+  /** `activate: false` opens it without taking the active tab; `background` keeps its timers running while hidden. */
+  openTab(url: string, options?: { activate?: boolean; background?: boolean }): Promise<string>
+  /** Closes a tab (Automation's hidden tab once its fill is saved). */
+  closeTab?(tabId: string): void
   navigate(tabId: string, url: string): Promise<unknown>
   page(tabId: string): ApplyPage
   attachDebugger(tabId: string): Cdp
@@ -202,6 +210,10 @@ interface Context {
    */
   confirmedSeq: number | null
   timers: Set<ReturnType<typeof setTimeout>>
+  /** Automation's unattended fill (#154): no uploads (they send files to the employer before Submit). */
+  deferUploads: boolean
+  /** The model calls after the last fill (`learn`: mapping, drafts and their refills), while they run. */
+  learning: Promise<void> | null
 }
 
 interface Pending {
@@ -225,6 +237,10 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 const WORKDAY_FILL_TIMEOUT_MS = 60_000
 const DEFAULT_UPLOAD_CONFIRM_MS = 10_000
 const MAX_EMBED_FOLLOWS = 3
+/** Automation's whole fill may take this long by default (page load, fill, model calls, refills). */
+const DEFAULT_PREPARE_TIMEOUT_MS = 180_000
+/** A page that shows no form for this long (after its own retries) ends a prepare as "no form". */
+const READY_SETTLE_MS = 12_000
 const DRAFTED = 'AI draft from your resume and this job description. Read and edit it in the page before you submit.'
 
 export class ApplyService {
@@ -233,11 +249,20 @@ export class ApplyService {
   private readonly pending = new Map<string, Pending>()
   /** A start() is between its first await and emitting the new session. */
   private starting = false
+  /** The session is Automation's unattended fill (#154): not shown to the renderer. */
+  private quiet = false
+  /** Called on every session change (a prepare waits for its fill this way). */
+  private readonly watchers = new Set<() => void>()
 
   constructor(private readonly deps: ApplyDeps) {}
 
   current(): ApplySession | null {
-    return this.session
+    return this.quiet ? null : this.session
+  }
+
+  /** A session is open or starting (Automation waits rather than ending the user's, #154). */
+  busy(): boolean {
+    return this.starting || (this.ctx !== null && !this.quiet)
   }
 
   /**
@@ -245,22 +270,143 @@ export class ApplyService {
    * is still resolving files and opening the tab is refused, so two quick
    * clicks (or two windows) cannot swap the session under each other.
    */
-  async start(applicationId: string): Promise<ApplySession> {
+  async start(applicationId: string, seed?: PreparedSeed): Promise<ApplySession> {
     if (this.starting) throw new Error('Another Apply is still starting. Try again in a moment.')
     this.starting = true
     try {
-      return await this.open(applicationId)
+      return await this.open(applicationId, { seed })
     } finally {
       this.starting = false
     }
   }
 
-  private async open(applicationId: string): Promise<ApplySession> {
+  /**
+   * Automation's unattended fill (#154, main only): opens the application's apply page in a tab that does not
+   * take the active one, fills it like `start` (AI answers and drafts included) without attaching any file, waits
+   * until the fill and its model calls are done, then ends the session, closes the tab and returns what was filled.
+   * Any other end (a step that is the user's, a bot wall, no form, an error, the timeout) comes back as `ok: false`
+   * with the reason. It never submits. An Unreviewed result may be prepared (the user approves it when opening the
+   * form); one that needs attention, was discarded, or changed since its approval may not. Refused while another
+   * session is open or starting: the caller waits.
+   */
+  async prepare(applicationId: string, { timeoutMs = DEFAULT_PREPARE_TIMEOUT_MS }: { timeoutMs?: number } = {}): Promise<PrepareResult> {
+    if (this.busy() || this.ctx) throw new Error('An apply session is open; Automation waits for it to end.')
+    // One deadline for the whole prepare: the page, the fill, the model calls and their refills.
+    const deadline = Date.now() + timeoutMs
+    this.starting = true
+    let session: ApplySession
+    try {
+      session = await this.open(applicationId, { prepare: true })
+    } finally {
+      this.starting = false
+    }
+    // Read through a call: the check above narrowed `this.ctx` to null across the await.
+    const ctx = this.context()
+    if (!ctx) return { ok: false, status: 'closed', message: 'The apply session ended before the page loaded.' }
+    const tabId = session.tabId
+    try {
+      const end = await this.settle(ctx, Math.max(0, deadline - Date.now()))
+      if (end !== 'filled') return { ok: false, status: end, message: this.endMessage(end) }
+      // The mapping and the drafts (and their refills) within what is left of the deadline.
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const learned = await Promise.race([
+        (ctx.learning ?? Promise.resolve()).then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()))
+        })
+      ])
+      clearTimeout(timer)
+      if (!learned) return { ok: false, status: 'timeout', message: this.endMessage('timeout') }
+      const live = this.context() === ctx
+      if (!live || this.session?.status !== 'filled' || !this.session.report) {
+        return { ok: false, status: live ? (this.session?.status ?? 'closed') : 'closed', message: this.endMessage('closed') }
+      }
+      return {
+        ok: true,
+        fill: {
+          url: this.session.report.url,
+          report: this.session.report,
+          drafts: Object.fromEntries(ctx.drafts),
+          aiOnce: { ...ctx.aiOnce },
+          mappedSteps: [...ctx.mappedSteps],
+          draftedSteps: [...ctx.draftedSteps],
+          asked: [...ctx.asked]
+        }
+      }
+    } finally {
+      if (this.context() === ctx) this.end()
+      this.deps.closeTab?.(tabId)
+    }
+  }
+
+  private context(): Context | null {
+    return this.ctx
+  }
+
+  /** Waits until the prepare's session settles: filled (and no fill running), a terminal status, or the timeout. */
+  private settle(ctx: Context, timeoutMs: number): Promise<PrepareEnd> {
+    return new Promise((resolve) => {
+      let readySince: number | null = null
+      let readyTimer: ReturnType<typeof setTimeout> | null = null
+      const done = (end: PrepareEnd) => {
+        this.watchers.delete(check)
+        clearTimeout(timer)
+        if (readyTimer) clearTimeout(readyTimer)
+        resolve(end)
+      }
+      const check = () => {
+        if (this.ctx !== ctx || !this.session) return done('closed')
+        const { status, message } = this.session
+        if (status !== 'ready') {
+          readySince = null
+          if (readyTimer) clearTimeout(readyTimer)
+          readyTimer = null
+        }
+        if (status === 'filled' && ctx.fillingSeq === null) return done('filled')
+        if (status === 'waiting' && message !== BUSY) return done('waiting')
+        if (status === 'blocked' || status === 'error' || status === 'closed' || status === 'submitted-detected') return done(status)
+        if (status === 'ready' && readySince === null) {
+          readySince = Date.now()
+          readyTimer = setTimeout(() => {
+            if (this.ctx === ctx && this.session?.status === 'ready') done('ready')
+          }, READY_SETTLE_MS)
+        }
+      }
+      const timer = setTimeout(() => done('timeout'), timeoutMs)
+      this.watchers.add(check)
+      check()
+    })
+  }
+
+  /** Why a prepare ended without a filled form, for the "Needs you" row. */
+  private endMessage(end: PrepareEnd): string {
+    const message = this.session?.message
+    switch (end) {
+      case 'waiting':
+        return message ?? 'The site needs you on this step.'
+      case 'blocked':
+        return 'The site asked for a human check.'
+      case 'ready':
+        return message ?? 'No application form Huntgry could fill on this page.'
+      case 'timeout':
+        return 'The form did not finish filling in time.'
+      case 'submitted-detected':
+        return 'The page shows an "application submitted" page.'
+      case 'error':
+        return message ?? 'Filling failed.'
+      default:
+        return 'The apply tab closed before the form was filled.'
+    }
+  }
+
+  private async open(applicationId: string, { seed, prepare = false }: { seed?: PreparedSeed; prepare?: boolean } = {}): Promise<ApplySession> {
     const workspace = await this.deps.workspace()
     const folder = await resolveApplicationFolder(workspace, applicationId)
     const record = await readApplication(workspace, folder)
-    // An unattended result is applied only once the user approved it on the Review page (#31).
-    const unreviewed = reviewBlocker(record.tracking.review)
+    // An unattended result is applied only once the user approved it on the Review page (#31). Automation may
+    // prepare an Unreviewed one (#154): the user approves it when opening the filled form.
+    const review = record.tracking.review
+    const unreviewed = prepare && review?.state === 'unreviewed' ? null : reviewBlocker(review)
     if (unreviewed) throw new Error(unreviewed)
     // An approval vouches for the files the user saw; if they changed since, it no longer holds.
     const drift = await approvalDrift(workspace, applicationId)
@@ -276,7 +422,8 @@ export class ApplyService {
     const applyUrl = applyUrlFor(record.jobUrl)
 
     this.end()
-    const tabId = await this.deps.openTab(applyUrl)
+    this.quiet = prepare
+    const tabId = await this.deps.openTab(applyUrl, prepare ? { activate: false, background: true } : undefined)
     const sessionId = randomUUID()
     const ctx: Context = {
       sessionId,
@@ -285,17 +432,18 @@ export class ApplyService {
       values,
       profile,
       answers,
-      once: {},
+      // A prepared fill's answers (#154): written again as they were, without asking the model.
+      once: { ...seed?.drafts },
       replace: {},
-      aiOnce: {},
+      aiOnce: { ...(seed?.aiOnce as Context['aiOnce'] | undefined) },
       pick: false,
       ai: true,
       workspace,
-      asked: new Set(),
-      mappedSteps: new Set(),
+      asked: new Set(seed?.asked),
+      mappedSteps: new Set(seed?.mappedSteps),
       applicationId,
-      drafts: new Map(),
-      draftedSteps: new Set(),
+      drafts: new Map(Object.entries(seed?.drafts ?? {})),
+      draftedSteps: new Set(seed?.draftedSteps),
       resumePath,
       coverPath,
       unsubscribe: [],
@@ -310,7 +458,9 @@ export class ApplyService {
       fillingSeq: null,
       loadSeq: 0,
       confirmedSeq: null,
-      timers: new Set()
+      timers: new Set(),
+      deferUploads: prepare,
+      learning: null
     }
     this.ctx = ctx
     this.session = {
@@ -330,11 +480,19 @@ export class ApplyService {
     if (this.deps.onTabOpened) {
       ctx.sessionUnsubscribe.push(
         this.deps.onTabOpened((opener, child) => {
-          if (this.ctx === ctx && opener === ctx.tabId) this.follow(ctx, child)
+          if (this.ctx !== ctx || opener !== ctx.tabId) return
+          if (ctx.deferUploads) {
+            // Automation's hidden fill (#154) never follows a page into a new tab: the tab is closed and the job is
+            // left to the user, so no tab outlives the prepare and none stays in front.
+            this.deps.closeTab?.(child)
+            this.update({ status: 'waiting', report: null, message: 'The page opened a new tab for its form. Automation leaves such pages to you.' })
+            return
+          }
+          this.follow(ctx, child)
         })
       )
     }
-    this.deps.emit(this.session)
+    this.notify()
     return this.session
   }
 
@@ -615,7 +773,8 @@ export class ApplyService {
         })
         return
       }
-      const uploads = report.fields.filter((f) => f.outcome === 'to-upload')
+      // Automation's unattended fill (#154) attaches nothing: an upload widget sends the file to the employer.
+      const uploads = ctx.deferUploads ? [] : report.fields.filter((f) => f.outcome === 'to-upload')
       // Default order is text first, files last: Lever's resume parser only fills empty fields, after an upload.
       // A `files-first` adapter reported its file fields only; its text is filled after the upload.
       for (const field of uploads) {
@@ -637,7 +796,7 @@ export class ApplyService {
       this.markHandled(ctx, report)
       report = this.withAi(ctx, this.withDrafts(ctx, report))
       this.update({ status: 'filled', ats: report.ats, report, message: summary(report.fields) })
-      void this.learn(ctx, report, seq)
+      ctx.learning = this.learn(ctx, report, seq).catch(() => undefined)
       if (ctx.recheck) {
         ctx.recheck = false
         // Fields the step rendered meanwhile get filled now (finally clears fillingSeq first).
@@ -653,6 +812,8 @@ export class ApplyService {
         if (this.ctx === ctx && ctx.loadSeq !== seq && this.session?.status === 'filling') {
           this.update({ status: 'ready', message: 'Press Fill form to fill this page.' })
         }
+        // "Filled" was announced while the fill still held the page: a prepare waiting for it looks again now.
+        for (const watcher of [...this.watchers]) watcher()
       }
     }
   }
@@ -1071,7 +1232,13 @@ export class ApplyService {
   private update(patch: Partial<ApplySession>): void {
     if (!this.session) return
     this.session = { ...this.session, ...patch }
-    this.deps.emit(this.session)
+    this.notify()
+  }
+
+  /** Tells the renderer (not for Automation's unattended session) and the prepare waiting for it. */
+  private notify(): void {
+    if (!this.quiet) this.deps.emit(this.session)
+    for (const watcher of [...this.watchers]) watcher()
   }
 
   /** Drops the tab listeners and pending requests; the session object stays for the panel. */
@@ -1089,12 +1256,30 @@ export class ApplyService {
   }
 
   private end(): void {
-    const had = this.session !== null
+    const had = this.session !== null && !this.quiet
     this.release()
     this.session = null
+    this.quiet = false
     if (had) this.deps.emit(null)
+    for (const watcher of [...this.watchers]) watcher()
   }
 }
+
+/** How a prepare ended (#154): `filled`, or the session status (or timeout) that stopped it. */
+export type PrepareEnd = 'filled' | 'waiting' | 'blocked' | 'ready' | 'error' | 'closed' | 'submitted-detected' | 'timeout'
+
+/** What a prepared fill hands back to the user's open (`start`), so it writes the same answers without the model. */
+export interface PreparedSeed {
+  drafts: Record<string, string>
+  aiOnce: Record<string, { fact: string | null; value: string }>
+  mappedSteps: string[]
+  draftedSteps: string[]
+  asked: string[]
+}
+
+export type PrepareResult =
+  | { ok: true; fill: PreparedSeed & { url: string; report: FillReport } }
+  | { ok: false; status: Exclude<PrepareEnd, 'filled'> | ApplySession['status']; message: string }
 
 const CONFIRMED = 'The site shows its "application submitted" page. Mark this application as applied?'
 

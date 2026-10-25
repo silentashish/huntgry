@@ -31,6 +31,8 @@ export interface AppSettings {
   aiAnswers?: boolean
   /** Settings → Jobright (#146): whether the hidden job-board browser was signed in to Jobright when last seen, and when. */
   jobright?: { connected?: boolean; checkedAt?: string }
+  /** Automation (#154): threshold, caps, run window and sources; read through `automation/settings.ts`. */
+  automation?: unknown
 }
 
 /** Reads the settings file; a missing or corrupt file yields empty settings. */

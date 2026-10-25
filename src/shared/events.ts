@@ -6,6 +6,7 @@
 
 import type { ApplicationsEvents } from './applications-types'
 import type { ApplyEvents } from './apply-types'
+import type { AutomationEvents } from './automation-types'
 import type { BrowserEvents } from './browser-types'
 import type { PipelineEvents } from './pipeline-types'
 import type { QueueEvents } from './queue-types'
@@ -20,6 +21,7 @@ export interface HuntgryEvents
     QueueEvents,
     ApplyEvents,
     PipelineEvents,
+    AutomationEvents,
     RemoteEvents {}
 
 export type EventChannel = keyof HuntgryEvents
@@ -36,6 +38,8 @@ export const EVENT_CHANNELS: readonly EventChannel[] = [
   'apply:session',
   'pipeline:changed',
   'pipeline:finished',
+  'automation:changed',
+  'automation:step',
   'remote:state'
 ]
 

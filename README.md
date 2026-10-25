@@ -24,6 +24,9 @@
 - **Browser and Apply**: opens postings in a sandboxed in-app browser, fills Greenhouse, Lever and generic forms
   from your master profile and attaches the tailored PDFs. You review and submit. See [Browser](#browser) and
   [Applying](#applying).
+- **Automation**: picks the jobs that match well and prepares each one up to the site's Submit button, unattended
+  (for example overnight), within caps per company, per day and per run. You open the filled form and press Submit.
+  See [Automation](#automation).
 - **Master profile and knowledge graph**: one plain Markdown file is the only store; Huntgry shows your skills
   as a graph and the ones jobs keep asking for that it has no evidence of. See
   [Knowledge graph](#knowledge-graph) and [Keeping the master profile up to date](#keeping-the-master-profile-up-to-date).
@@ -60,6 +63,7 @@ Screenshots come from the real app with the fictional e2e demo data; regenerate 
 - [Finding jobs](#finding-jobs)
 - [Browser](#browser)
 - [Applying](#applying)
+- [Automation](#automation)
 - [Tailoring a resume](#tailoring-a-resume)
 - [Knowledge graph](#knowledge-graph)
 - [Keeping the master profile up to date](#keeping-the-master-profile-up-to-date)
@@ -146,6 +150,7 @@ src/
 │   ├── jobs/                   # saved jobs: hidden-window posting loader and parser, .huntgry/jobs store
 │   ├── browser/                # in-app browser: one WebContentsView per tab, session hardening, address rules
 │   ├── apply/                  # auto-apply: session per tab, CDP resume upload, page-reply checks
+│   ├── automation/             # Automation (#154): candidate sources, run loop, run window, caps, step log
 │   ├── resume/                 # resume file → lines (docx, pdf, txt/md) → draft profile (parse.ts)
 │   └── cli/                    # runs the resume-tailor skill via an agent CLI (claude / codex / agy), run history
 ├── preload/                    # index.ts composes window.huntgry from <feature>.ts + events.ts;
@@ -291,6 +296,31 @@ The mock's routes live in `scripts/mock-ats/server.mjs`; the e2e suite mounts th
 its own server (`e2e/fixtures/servers/`, see `docs/testing/e2e.md`). The e2e harness
 additionally sets `HUNTGRY_E2E_LOOPBACK_ONLY=1`, under which a dev build refuses every non-loopback
 address outright; packaged builds ignore it too.
+
+## Automation
+
+**Automation** (sidebar, after Review) prepares applications for the jobs that match well while you are away,
+and stops before Submit. It picks candidates from your saved Jobs and the cached Explore list: Match ≥ 80 with at
+least 4 requirements and no failed must-have (degree, years, clearance, sponsorship), not excluded by Relevant,
+passing your Jobs filters, not applied to or tailored before. For each one, one at a time, it saves an Explore row
+to Jobs, looks up the employer link (while Jobright is connected), reads the full description, scores it again,
+tailors it through the unattended pipeline, and fills the application form in a hidden tab, with AI-drafted
+answers marked and **no file attached and nothing submitted**. The job then waits in **Ready to submit** (also a
+Board column). **Review & submit** approves the result and opens the filled form in Browser with the resume
+attached; you read it and press the site's Submit, and the confirmation page records it as applied.
+
+- **Controls**: a run window (default 22:00–07:00, local time) or **Run now**, Pause / Resume, Stop, and caps:
+  2 per company (ready, in flight, applied in the last 30 days), 10 a day, $15 of tailoring per run (estimated
+  from tokens; AI answers in forms are not counted), 20 Jobright pages per run. Settings live in your user data,
+  not in the workspace.
+- **Needs you**: a step that fails (description unreadable, tailoring failed or needs attention, a sign-in wall
+  or bot check on the form, a timeout) leaves the job there with the step and the reason. Nothing is retried
+  automatically; **Retry step** makes one more attempt, **Dismiss** drops the job.
+- **Step log**: every step is written to `<workspace>/.huntgry/automation-log.jsonl` and shown on the page; the
+  state is in `<workspace>/.huntgry/automation.json`.
+
+Huntgry must stay open (and the Mac awake) for the run window to work; there is no background service. See
+[docs/changes/154-automation.md](docs/changes/154-automation.md).
 
 ## Tailoring a resume
 
