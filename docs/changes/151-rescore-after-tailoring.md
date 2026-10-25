@@ -24,22 +24,22 @@ Huntgry shows comes from the #149 engine; the skill's list is shown only as the 
 | Area | Files | Why |
 | --- | --- | --- |
 | Engine | `src/shared/resume-coverage.ts`, `src/shared/match-score.ts` | `resumeCoverage(job, profile, resume)` is the one function the app and the benchmark (#152) call. It runs `matchScore(job, profile)` and matches the **same** requirements, weights and gates against the resume through `evidenceMatcher`, which is the matcher `matchScore` itself uses, newly exported. There is no second matcher. `resumeEvidenceFromData` reads the skill's `resume_data.json` (skills rows, summary, roles and bullets, projects, education, certifications, publications; no contact details); `resumeEvidenceFromText` reads a PDF's text. |
-| Run finish | `src/main/cli/runner.ts`, `src/main/cli/start.ts` | `RunnerHooks.afterBuild` runs when a turn ends with `resume_data.json` or `resume.pdf` in the run's output folder, right after the job source is recorded and before the run reads as waiting. That covers a Tailor run, a pipeline run, a follow-up reply and a Review re-run, so every rebuild is re-scored. A failure is logged and never fails the run. |
-| Re-score | `src/main/applications/rescore.ts` | `rescoreApplication(workspace, id)` reads the master profile (`master-profile.md`, else `master_profile.md`), the folder's `job-description.md` (what the skill tailored against), the saved job with the same posting URL when there is one (its tags, minimum years and sponsorship, as the Board links them), the resume (`resume_data.json`, else the text of `resume.pdf`) and the `jd_keyword_coverage` row of `build-report.json`. Files are read only when they are regular files (never through a symlink) and within a size limit. |
+| Run finish | `src/main/cli/runner.ts`, `src/main/cli/start.ts` | `RunnerHooks.afterOutput` runs when a turn ends and the run has an application folder, whether found this turn or recorded earlier. It runs right after the job source is recorded and before the run reads as waiting. That covers a Tailor run, a pipeline run, a follow-up reply and a Review re-run, including a rebuild that removed the resume, so no score outlives its resume. A failure is logged and never fails the run. |
+| Re-score | `src/main/applications/rescore.ts` | `rescoreApplication(workspace, id)` reads the master profile (`master-profile.md`, else `master_profile.md`), the folder's `job-description.md` (what the skill tailored against), the saved job with the same posting URL when there is one (its Jobright `jdCoreSkills`, which `matchScore` prefers over the description just as profile fit does elsewhere, plus its tags, minimum years and sponsorship, as the Board links them), the resume (`resume_data.json`, else the text of `resume.pdf`) and the `jd_keyword_coverage` row of `build-report.json`. Files are read only when they are regular files (never through a symlink) and within a size limit. |
 | Storage | `src/shared/applications-types.ts`, `src/main/applications/tracking.ts` | The result is `huntgry.json` → `match` (main-owned tracking data, see below), written through `updateTracking`, so it's serialized with other tracking writes and leaves the status and notes alone. `normalizeMatch` drops anything malformed, including a surfaced share over 100. The renderer's tracking patches can't write it: the `applications:update-tracking` allowlist is unchanged. The skill's files aren't touched. |
 | UI | `src/renderer/src/components/match/` | One `ResumeMatch` component (and a pure `matchText`) used in three places. **Drawer** (Board → application): "Profile fit 82 · Resume 74 (90% surfaced)", the profile's skills the resume left out as chips, any failed must-have, and the skill's "Absent" terms. **Board card** (applications): the same line in mono, with the left-out skills in its hover text; hidden on a folded compact card like the pills. **Review** → Verify: the drawer's block. Nothing shows for an application that was never scored. |
-| Review | `src/shared/review-types.ts`, `src/main/review/service.ts` | `ReviewDetail.match` carries it. It's outside `revision`: a re-score never makes a decision on screen stale, and the files an approval vouches for don't change. The phone's projection doesn't include it. |
+| Review | `src/shared/review-types.ts`, `src/main/review/service.ts`, `src/renderer/src/pages/review/index.tsx` | `ReviewDetail.match` carries it. It's outside `revision`: a re-score never makes a decision on screen stale, and the files an approval vouches for don't change. On `applications:changed` the page fetches the open result's match again (`applications.get`) and swaps only that field, so a result kept open through a Re-run shows its new scores. A result opened since wins. The phone's projection doesn't include it. |
 
 ## How it works
 
 ```mermaid
 flowchart TD
-  T[Agent turn ends] --> F{output folder has<br/>resume_data.json or resume.pdf?}
+  T[Agent turn ends] --> F{run has an<br/>application folder?}
   F -- no --> W[run reads as waiting]
-  F -- yes --> H["afterBuild hook (start.ts)"]
+  F -- yes --> H["afterOutput hook (start.ts)"]
   H --> R["rescoreApplication(workspace, folder)"]
   P[master-profile.md] --> R
-  J[job-description.md + saved job by URL] --> R
+  J["job-description.md + saved job by URL<br/>(jdCoreSkills, tags, years)"] --> R
   D["resume_data.json, else resume.pdf text"] --> R
   B["build-report.json → jd_keyword_coverage"] --> R
   R --> C["resumeCoverage(job, profileSignals, resume)<br/>src/shared/resume-coverage.ts"]
@@ -52,7 +52,7 @@ flowchart TD
   U --> X["applications:changed"]
   X --> DR[Drawer]
   X --> CA[Board card]
-  U --> RV["Review: ReviewDetail.match"]
+  U --> RV["Review: ReviewDetail.match,<br/>refreshed on applications:changed"]
   C --> BM["Benchmark #152 calls resumeCoverage directly"]
 ```
 
@@ -94,9 +94,10 @@ flowchart TD
 | `source` | `jobright-skills` or `description`, as in `MatchResult.source`. |
 | `runId`, `at` | The run whose turn wrote it, and when. |
 
-`match` is replaced by every re-score, and removed when the job no longer names a requirement or
-the resume can't be read. When there is no master profile or no `job-description.md`, nothing is
-written.
+`match` is replaced by every re-score whose numbers changed (the same scores aren't rewritten just
+for a new `at`). It is removed when the master profile, `job-description.md` or a readable resume is
+gone, or the job no longer names a requirement, so old numbers never stay up for inputs that no
+longer exist. A folder that was never scored isn't written in those cases.
 
 ## Screenshots
 
@@ -126,9 +127,11 @@ The card's ring is still Relevant (#73), which has title, seniority, location an
   that main recomputes after every turn, while the authority store holds decisions an agent must
   not forge. An agent that edits `huntgry.json` can change what the drawer shows until the next
   turn, but nothing it gates.
-- **Run finish = the turn that built the resume.** The hook sits where the runner already finds
-  the output folder and records the job source, so attended and unattended runs, replies and
-  re-runs all go through it, and the score is on disk before the queue sees the run waiting.
+- **Run finish = every turn of a run with an application.** The hook sits where the runner already
+  finds the output folder and records the job source, so attended and unattended runs, replies and
+  re-runs all go through it, and the score is on disk before the queue sees the run waiting. It
+  also runs when a turn's scan finds no new output (a rebuild that removed the resume). Running
+  only after a built resume would leave the old scores up.
 - **The skill's keyword list is only the "Absent" hint.** It's frequency-based and capped at 40
   terms, so it isn't the number shown.
 
