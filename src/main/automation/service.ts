@@ -390,10 +390,11 @@ export class Automation {
       return
     }
     if (!state.enabled || state.paused || !isOpen(settings.window, this.now())) return
-    // One run per opening of the window: a run that finished early is not followed by another until tomorrow's.
+    // One run per opening of the window: a window run that ended in this opening (finished early, or held over from
+    // the last one) is not followed by another until the next opening.
     const opened = this.windowOpenedAt(settings, this.now())
     const last = state.lastRun
-    if (last && last.trigger === 'window' && opened && Date.parse(last.startedAt) >= opened.getTime()) return
+    if (last && last.trigger === 'window' && opened && Date.parse(last.endedAt ?? last.startedAt) >= opened.getTime()) return
     await this.startRun(ws, state, 'window')
   }
 
