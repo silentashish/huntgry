@@ -10,7 +10,7 @@ shared match score (`src/shared/match-score.ts`) for exactly this. The issue fir
 each row's Jobright posting page to read its `jdCoreSkills`, with a "Score this day" button, a
 per-day cap and a page cache.
 
-**Owner's decision (2026-10-24, on #150):** use the newgrad-jobs API. Since #169 every API row
+**[Owner's decision (2026-10-24, on #150)](https://github.com/silentashish/huntgry/issues/150#issuecomment-6391537791):** use the newgrad-jobs API. Since #169 every API row
 carries Jobright's `qualifications` (a numbered list of what the posting asks for), so rows are
 scored from that text and no posting page is loaded. Rows from the GitHub README fallback have no
 qualifications and get a title-only estimate shown with "≈".
@@ -64,7 +64,8 @@ flowchart TD
 - **Qualifications as the saved job's description**, not a new field: Jobs, Automation and
   tailoring already read `description`, and `descriptionComplete: false` already means "a summary,
   fetch the posting for the full text".
-- **Dropped from the issue body (owner's decision on #150):** the **Score this day** button, the
+- **Dropped from the issue body ([owner's decision on #150](https://github.com/silentashish/huntgry/issues/150#issuecomment-6391537791);
+  [adapted acceptance criteria](https://github.com/silentashish/huntgry/issues/150#issuecomment-6393737027)):** the **Score this day** button, the
   **per-day cap N** and the **page cache** in `.huntgry/explore/jobright.json`. They existed to
   keep posting-page loads down; scoring from the API's qualifications loads no page, so there is
   nothing to cap or cache. Jobright's `jdCoreSkills` still wins for jobs whose posting page gets
@@ -88,7 +89,9 @@ flowchart TD
   - `view.test.ts`: `matchRows`: newest order kept, best match with stable ties, estimates sort
     and filter by their number, the threshold, composed with the day filter, unscored rows as 0.
   - `ExplorePage.dom.test.tsx`: exact badges and no "≈" for API rows; focus shows "You have" /
-    "Missing"; a README row's "≈" badge and its title-only tooltip; Match ≥ N then Best match.
+    "Missing"; a README row's "≈" badge and its title-only tooltip; Match ≥ N then Best match;
+    after the profile gains skills, reopening over the same cached rows shows the new badges,
+    tooltip, Best match order and Match ≥ N result.
   - `api.test.ts`: an added API row keeps the qualifications as its description, and its
     `scoreJob` match score equals the row's.
   - `sources.test.ts`: a row with qualifications is a `scoreable` Automation candidate.
@@ -96,7 +99,8 @@ flowchart TD
   - Today's rows show Match 25 / 80 / 100; hovering shows the skills; Tab focus opens the tooltip;
     Best match and Match ≥ 50, combined with the Remote filter; yesterday's rows are scored too; no
     posting page and no second API request; the added job's description is the row's
-    qualifications; reopening Explore scores from the cache.
+    qualifications; reopening Explore scores from the cache; after Kafka is added to
+    `master-profile.md`, reopening shows Backend Engineer I at 100 (was 80) with no new request.
   - The README fallback rows show "≈ N", say "a title-only estimate", and filter by the estimate.
   - Automation picks Contoso from its qualifications and skips the thin rows.
   - `HUNTGRY_DOC_SHOTS=1` saves the screenshots below.
