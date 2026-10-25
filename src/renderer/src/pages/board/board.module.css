@@ -117,6 +117,30 @@
   border-color: var(--hg-accent-primary);
 }
 
+/* The column a link asked for (a Dashboard stat tile, #161): an Ember ring that fades. */
+.rail[data-focus='true'],
+.lane[data-focus='true'] {
+  animation: focusRing 2.4s ease-out;
+}
+
+@keyframes focusRing {
+  0%,
+  40% {
+    box-shadow: 0 0 0 2px var(--hg-accent-primary);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail[data-focus='true'],
+  .lane[data-focus='true'] {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--hg-accent-primary);
+  }
+}
+
 /* ---------- Week groups ---------- */
 
 .week {
@@ -221,6 +245,9 @@
 }
 
 .laneNote {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   padding: 0 6px;
   font-size: 11px;
   line-height: 14px;

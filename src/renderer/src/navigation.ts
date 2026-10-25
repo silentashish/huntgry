@@ -1,3 +1,4 @@
+import type { BoardColumnId } from '@shared/board'
 import type { AgentId, JobSourceTag } from '@shared/runner-types'
 import { createContext, useContext } from 'react'
 
@@ -9,8 +10,12 @@ import { createContext, useContext } from 'react'
 /** Parameters each page accepts. Add a page here, then add it to `PAGES` and the shell. */
 export interface PageParams {
   dashboard: undefined
-  /** Every job as a card, from To do to Archived (#85). */
-  board: undefined
+  /**
+   * Every job as a card, from To do to Archived (#85). Where applications are browsed since the
+   * Dashboard table went (#161): `column` scrolls to that column and marks it, `applicationId`
+   * opens that application's drawer.
+   */
+  board: { column?: BoardColumnId; applicationId?: string } | undefined
   /**
    * `reload` (any new value) draws the page afresh, e.g. after the palette's "Paste a job" saved one;
    * `openId` opens that saved job's drawer (Explore's "Added", #142).

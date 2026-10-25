@@ -26,7 +26,7 @@ import { api, errorText } from '../../api'
 import { useApply } from '../../components/apply/useApply'
 import { useQueue } from '../../components/queue/useQueue'
 import { PageHeader, toneStyle } from '../../components/ui'
-import { useNavigation } from '../../navigation'
+import { useNavigation, type PageParams } from '../../navigation'
 import { ApplicationDrawer } from '../dashboard/ApplicationDrawer'
 import { BulkTailorModal } from '../jobs/BulkTailorModal'
 import { JobDrawer } from '../jobs/JobDrawer'
@@ -48,9 +48,11 @@ const SOURCE_OPTIONS = BOARD_SOURCES.map((s) => ({ value: s, label: BOARD_SOURCE
  * Needs review) and applications by status, one card per job. A link pasted into To do saves
  * the job; cards move by drag and drop or their Move to menu; archived cards leave the board a week later.
  * Inside a column, cards are grouped by week with past weeks folded; empty columns shrink to a
- * rail; a search and a source filter narrow every column (#160).
+ * rail; a search and a source filter narrow every column (#160). Applications are browsed here
+ * since the Dashboard table went (#161): `params` opens one's drawer or scrolls to a column, and
+ * Archived can show its older cards too.
  */
-export function BoardPage() {
+export function BoardPage({ params }: { params?: PageParams['board'] }) {
   const { navigate } = useNavigation()
   const [jobs, setJobs] = useState<Job[] | null>(null)
   const [apps, setApps] = useState<ApplicationRecord[] | null>(null)
@@ -70,6 +72,17 @@ export function BoardPage() {
   const [signals, setSignals] = useState<ProfileSignals | null>(null)
   const [filter, setFilter] = useState<BoardFilter>(EMPTY_BOARD_FILTER)
   const [folds, setFold] = useFolds()
+  /** Archived shows every archived card, not only the last week's (the Dashboard table's Archived filter). */
+  const [allArchived, setAllArchived] = useState(false)
+  /** The column a link asked for (a Dashboard stat tile): scrolled to and marked once the board is drawn. */
+  const [focus, setFocus] = useState<BoardColumnId | null>(null)
+  const lanes = useRef<HTMLDivElement>(null)
+
+  // A new location (the Dashboard, ⌘K) can name an application to open or a column to show.
+  useEffect(() => {
+    if (params?.applicationId) setOpenAppId(params.applicationId)
+    setFocus(params?.column ?? null)
+  }, [params])
 
   useEffect(() => {
     api.profile.read().then(
@@ -108,14 +121,19 @@ export function BoardPage() {
   }, [load])
 
   const board = useMemo(
-    () => (jobs && apps ? buildBoard({ jobs, applications: apps, queue: queue?.items ?? [] }) : null),
-    [jobs, apps, queue]
+    () => (jobs && apps ? buildBoard({ jobs, applications: apps, queue: queue?.items ?? [], keepArchived: allArchived }) : null),
+    [jobs, apps, queue, allArchived]
   )
   const shown = useMemo(() => (board ? filterBoard(board, filter) : null), [board, filter])
   const groups = useMemo(() => {
     const now = new Date()
     return new Map(shown?.columns.map((c) => [c.id, weekGroups(c.cards, { now })] as const) ?? [])
   }, [shown])
+  const drawn = shown !== null
+  useEffect(() => {
+    if (!drawn || !focus) return
+    lanes.current?.querySelector(`[data-column="${focus}"]`)?.scrollIntoView({ block: 'nearest', inline: 'start', behavior: 'smooth' })
+  }, [drawn, focus])
   // Scored once per board, not on every drag-state render.
   const scents = useMemo(() => {
     const now = new Date()
@@ -238,7 +256,7 @@ export function BoardPage() {
           </Group>
 
           <div className={classes.board}>
-            <div className={classes.lanes}>
+            <div className={classes.lanes} ref={lanes}>
               {shown.columns.map((column) => {
                 const weeks = groups.get(column.id) ?? []
                 const lead = column.id === 'todo' ? weeks[0]?.cards[0]?.key : undefined
@@ -246,8 +264,9 @@ export function BoardPage() {
                   <Column
                     key={column.id}
                     column={column}
-                    // To do keeps its link box, so it never shrinks to a rail.
-                    rail={column.cards.length === 0 && column.id !== 'todo'}
+                    // To do keeps its link box, and Archived its "Show older" while it has older cards, so neither shrinks to a rail.
+                    rail={column.cards.length === 0 && column.id !== 'todo' && !(column.id === 'archived' && board.hiddenArchived > 0)}
+                    focus={focus === column.id}
                     railTitle={column.id === 'archived' ? archiveNote(board.hiddenArchived) : undefined}
                     dropTarget={dragging ? moveFor(dragging, column.id) !== null : null}
                     over={over === column.id}
@@ -285,7 +304,14 @@ export function BoardPage() {
                           )}
                         </Stack>
                       ) : column.id === 'archived' ? (
-                        <div className={classes.laneNote}>{archiveNote(board.hiddenArchived)}</div>
+                        <div className={classes.laneNote}>
+                          {allArchived ? 'Every archived card, however old.' : archiveNote(board.hiddenArchived)}
+                          {(allArchived || board.hiddenArchived > 0) && (
+                            <button type="button" className={classes.pasteLink} onClick={() => setAllArchived(!allArchived)}>
+                              {allArchived ? `Only the last ${ARCHIVE_TTL_DAYS} days` : `Show ${board.hiddenArchived} older`}
+                            </button>
+                          )}
+                        </div>
                       ) : null
                     }
                   >
@@ -367,6 +393,8 @@ interface ColumnProps {
   rail: boolean
   /** Hover text of the rail. */
   railTitle?: string
+  /** The column a link asked for: marked for a moment (`data-focus`). */
+  focus?: boolean
   /** While a card is dragged: whether this column takes it; `null` when nothing is dragged. */
   dropTarget: boolean | null
   over: boolean
@@ -376,13 +404,15 @@ interface ColumnProps {
   children: React.ReactNode
 }
 
-function Column({ column, header, rail, railTitle, dropTarget, over, onDragOver, onDragLeave, onDrop, children }: ColumnProps) {
+function Column({ column, header, rail, railTitle, focus, dropTarget, over, onDragOver, onDragLeave, onDrop, children }: ColumnProps) {
   const count = column.cards.length
   return (
     <section
       aria-label={column.label}
       className={rail ? classes.rail : classes.lane}
       title={rail ? (railTitle ?? `${column.label}: nothing here`) : undefined}
+      data-column={column.id}
+      data-focus={focus ? 'true' : undefined}
       data-drop={dropTarget === null ? undefined : String(dropTarget)}
       data-over={over && dropTarget ? 'true' : undefined}
       onDragOver={(e) => {
