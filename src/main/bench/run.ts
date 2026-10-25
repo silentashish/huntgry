@@ -160,6 +160,22 @@ async function freshBenchDir(out: string, base: string): Promise<{ id: string; d
   throw new Error(`Could not create a fresh bench folder in ${out}.`)
 }
 
+/**
+ * Every run must build its own application folder (`<role>/<company>/<job-id>`): runs share one workspace, so two
+ * jobs with the same folder would overwrite each other. Checks the folders the runs will use, repeats included.
+ */
+export function assertDistinctApplications(jobs: readonly BenchJob[], repeat: number): void {
+  const seen = new Map<string, string>()
+  for (const job of jobs) {
+    for (let r = 1; r <= repeat; r++) {
+      const path = `${job.role}/${job.company}/${repeatJobId(job, r, repeat)}`
+      const other = seen.get(path)
+      if (other !== undefined) throw new Error(`Jobs "${other}" and "${job.id}" would both write ${path}; give one another role, company or jobId.`)
+      seen.set(path, job.id)
+    }
+  }
+}
+
 /** The job id a run uses: each repeat builds its own application folder, so no run reads another's output. */
 function repeatJobId(job: BenchJob, repeat: number, repeats: number): string {
   return repeats > 1 ? `${job.jobId}-r${repeat}` : job.jobId
@@ -176,6 +192,7 @@ export async function runBench(opts: BenchOptions): Promise<{ dir: string; resul
 
   const protectedDirs = await protectedFolders(opts)
   await assertBenchOut(opts.out, protectedDirs)
+  assertDistinctApplications(jobs, repeat)
   const profileText = await readFile(opts.profile)
   const startedAt = now()
   const { id, dir } = await freshBenchDir(resolve(opts.out), `bench-${stamp(startedAt)}-${slug(opts.label)}`)

@@ -40,6 +40,14 @@ export async function loadBenchSet(dir: string): Promise<BenchSet> {
   const ids = jobs.map((j) => j.id)
   const dup = ids.find((id, i) => ids.indexOf(id) !== i)
   if (dup) throw new Error(`Two jobs have the id "${dup}".`)
+  // Runs share one workspace: two jobs must not build into the same application folder.
+  const paths = new Map<string, string>()
+  for (const j of jobs) {
+    const path = `${j.role}/${j.company}/${j.jobId}`
+    const other = paths.get(path)
+    if (other !== undefined) throw new Error(`Jobs "${other}" and "${j.id}" would both write ${path}; give one another role, company or jobId.`)
+    paths.set(path, j.id)
+  }
   return { dir: root, sha256: hash.digest('hex'), jobs }
 }
 

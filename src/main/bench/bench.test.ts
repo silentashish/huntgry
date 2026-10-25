@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { NUDGE_TEXT } from '../cli/command'
 import { readEvents, readRun } from '../cli/runs'
 import { readTracking } from '../applications/tracking'
-import { assertBenchOut, RESULTS_FILE, REPORT_FILE, runBench, type BenchOptions } from './run'
+import { assertBenchOut, assertDistinctApplications, RESULTS_FILE, REPORT_FILE, runBench, type BenchOptions } from './run'
 import { compareBench } from './report'
 import { loadBenchSet } from './set'
 import type { BenchResults } from './types'
@@ -251,4 +251,19 @@ describe('runBench safety (review of #177)', () => {
     expect(results.rows.map((r) => r.jobId)).toEqual(['backend'])
   }, 30_000)
 
+  it('refuses jobs that would build into the same application folder, repeats included', async () => {
+    const set = join(root, 'set')
+    await mkdir(set)
+    await writeFile(join(set, 'a.json'), JSON.stringify({ description: 'd', jobId: 'same' }))
+    await writeFile(join(set, 'b.json'), JSON.stringify({ description: 'd', jobId: 'same' }))
+    await expect(loadBenchSet(set)).rejects.toThrow(/Jobs "a" and "b" would both write role\/company\/same/)
+    const job = (id: string, jobId: string) => ({ id, role: 'r', company: 'c', jobId, description: 'd', coverLetter: false, dateStyle: 'right' as const })
+    expect(() => assertDistinctApplications([job('a', 'x'), job('b', 'x-r1')], 2)).not.toThrow()
+    expect(() => assertDistinctApplications([job('a', 'x'), job('b', 'x')], 2)).toThrow(/Jobs "a" and "b" would both write r\/c\/x-r1/)
+    // runBench checks the jobs it was given (a set built in code, or loaded before an edit).
+    const set2 = { ...(await loadBenchSet(join(FIXTURES, 'set'))) }
+    set2.jobs = set2.jobs.map((j) => ({ ...j, role: 'r', company: 'c', jobId: 'same' }))
+    await expect(runBench(await options({ set: set2 }))).rejects.toThrow(/would both write r\/c\/same/)
+    expect(await stat(out).catch(() => null)).toBeNull()
+  })
 })
