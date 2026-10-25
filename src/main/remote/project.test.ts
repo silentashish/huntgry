@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { TranscriptItem } from '@shared/runner-types'
-import { LIMITS, jsonBytes, requireEvent, type Envelope } from '@shared/remote'
-import { pageTranscript, projectJobsPage, projectQueue, projectReviewList, projectRun, projectRunPage, projectRunsPage, projectStatus, projectTranscriptItem } from './project'
+import { LIMITS, jsonBytes, requireEnvelope, requireEvent, type Envelope } from '@shared/remote'
+import type { ReviewDetail as DesktopReviewDetail } from '@shared/review-types'
+import { pageTranscript, projectJobsPage, projectQueue, projectReviewList, projectReviewReframings, projectRun, projectRunPage, projectRunsPage, projectStatus, projectTranscriptItem } from './project'
 import { job, queueState, run } from './test-helpers'
 
 /**
@@ -158,6 +159,26 @@ describe('project.ts', () => {
     expect(JSON.stringify(list)).not.toMatch(/\/Users|MARKER_URL|build":/)
     expect(list.items[0].reason!.length).toBeLessThanOrEqual(LIMITS.errorBytes)
     expect(projectReviewList(entries.slice(0, 3)).more).toBeUndefined()
+  })
+
+  it('bounds review.reframings by serialised bytes: 16 entries of JSON-escaped control characters still fit one envelope (#159)', () => {
+    // 256 U+0001 per field passes the DTO's byte limit but escapes to 6 bytes each in JSON.
+    const ctl = '\u0001'.repeat(LIMITS.reviewEntryBytes)
+    const reframings = Array.from({ length: LIMITS.reviewListItems }, (_, i) => ({
+      id: i.toString(16).padStart(64, '0'),
+      sourceFact: ctl,
+      wording: ctl,
+      requirement: ctl,
+      rule: { kind: 'rejected' as const, betterWording: ctl }
+    }))
+    const detail = { applicationId: 'a/b/c', runId: 'r', revision: 'f'.repeat(64), notesFormat: 'v2', proposedReframings: reframings } as unknown as DesktopReviewDetail
+    const body = projectReviewReframings(detail)
+    const result: Envelope = { v: 1, sid: 's', from: 'desktop', seq: 1, ts: new Date().toISOString(), ttl: 60, kind: 'result', re: 'x', ok: true, body }
+    expect(() => requireEnvelope(result)).not.toThrow()
+    expect(jsonBytes(result)).toBeLessThanOrEqual(LIMITS.plaintextBytes)
+    expect(body.truncated).toBe(true)
+    expect(body.reframings.length).toBeGreaterThan(0)
+    expect(body.reframings.length).toBeLessThan(LIMITS.reviewListItems)
   })
 
   it('every DTO with the largest fields fits the plaintext budget and passes the package guard', () => {

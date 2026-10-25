@@ -384,7 +384,8 @@ export function projectReviewList(entries: readonly { item: DesktopReviewItem; o
 /**
  * The reframings of a result with their rules, for `review.reframings` / `review.reject` (#159).
  * Only whole entries are listed (a reframing cut short could not be rejected as what it is), at
- * most `LIMITS.reviewListItems`; anything left out sets `truncated`.
+ * most `LIMITS.reviewListItems` and within one frame (JSON escaping can grow agent-written text
+ * sixfold); anything left out sets `truncated`.
  */
 export function projectReviewReframings(d: DesktopReviewDetail): ReviewReframings {
   const fits = (text: string | undefined) => text === undefined || utf8Bytes(text) <= LIMITS.reviewEntryBytes
@@ -398,6 +399,7 @@ export function projectReviewReframings(d: DesktopReviewDetail): ReviewReframing
     ...(p.rule?.kind === 'rejected' && p.rule.betterWording ? { betterWording: p.rule.betterWording } : {})
   }))
   const out: ReviewReframings = { applicationId: d.applicationId, revision: d.revision, format: d.notesFormat ?? 'v1', reframings }
+  while (reframings.length > 0 && jsonBytes(out) > PAGE_BUDGET) reframings.pop()
   if (d.proposedReframings.length > reframings.length) out.truncated = true
   return requireReviewReframings(out)
 }
