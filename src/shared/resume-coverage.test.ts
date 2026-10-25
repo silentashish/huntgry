@@ -30,6 +30,11 @@ describe('resumeEvidenceFromData', () => {
     expect(resume.text).not.toContain('sam@example.com')
   })
 
+  it('also reads skills rows written as a list under a category', () => {
+    const r = resumeEvidenceFromData({ skills: [{ category: 'Languages', items: ['Go', 'TypeScript', 3] }] })
+    expect(r).toEqual({ skills: ['Go', 'TypeScript'], text: 'Languages: Go, TypeScript' })
+  })
+
   it('is null for anything that is not a resume payload', () => {
     expect(resumeEvidenceFromData(null)).toBeNull()
     expect(resumeEvidenceFromData([])).toBeNull()

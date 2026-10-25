@@ -65,10 +65,13 @@ const rec = (v: unknown): Record<string, unknown> => (typeof v === 'object' && v
 export function resumeEvidenceFromData(data: unknown): ResumeEvidence | null {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
   const d = data as Record<string, unknown>
-  const rows = list(d.skills).map(rec)
-  const skills = [...new Set(rows.flatMap((r) => splitSkills(str(r.items))))]
+  // `{ label, items: "Python, Go" }` per the schema; a list of items under a `category` reads the same.
+  const rows = list(d.skills)
+    .map(rec)
+    .map((r) => ({ label: str(r.label) || str(r.category), items: Array.isArray(r.items) ? r.items.map(str).filter(Boolean).join(', ') : str(r.items) }))
+  const skills = [...new Set(rows.flatMap((r) => splitSkills(r.items)))]
   const text = [
-    ...rows.map((r) => [str(r.label), str(r.items)].filter(Boolean).join(': ')),
+    ...rows.map((r) => [r.label, r.items].filter(Boolean).join(': ')),
     str(d.summary),
     ...list(d.experience)
       .map(rec)
