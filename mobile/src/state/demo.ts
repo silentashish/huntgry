@@ -7,7 +7,7 @@
  * own result handlers, so file reassembly, the hash check and the review rules run as with a Mac.
  */
 
-import { NOTIFICATION_CATEGORIES, type PipelineState, type RemoteQueueItem, type RemoteRun, type RemoteTranscriptItem, type StatusSummary } from '@huntgry/remote-protocol'
+import { NOTIFICATION_CATEGORIES, type PipelineState, type RemoteQueueItem, type RemoteRun, type RemoteTranscriptItem, type ReviewReframings, type StatusSummary } from '@huntgry/remote-protocol'
 import type { Command } from '../remote/commands'
 import { chunksOf } from '../remote/files'
 import { demoJobs, demoPipeline, demoResults, served } from './demo-content'
@@ -170,6 +170,23 @@ export class DemoModel extends RemoteModel {
     this.set({ commands: this.snap.commands.map((c) => (c.id === id ? { ...c, state } : c)) })
   }
 
+  /** #159: the pretend Mac's reframing rules (rejected wordings by reframing id). */
+  private rejected = new Map<string, string | undefined>()
+
+  private reframingsOf(r: (typeof this.data.results)[number]): ReviewReframings {
+    const d = served(r)
+    return {
+      applicationId: d.applicationId,
+      revision: d.revision,
+      format: 'v2',
+      reframings: d.proposedReframings.map((p) => {
+        if (!this.rejected.has(p.id)) return p
+        const better = this.rejected.get(p.id)
+        return { ...p, rule: 'rejected' as const, ...(better ? { betterWording: better } : {}) }
+      })
+    }
+  }
+
   private answer(id: string, command: Command): void {
     const queue = this.snap.queue
     switch (command.name) {
@@ -240,6 +257,14 @@ export class DemoModel extends RemoteModel {
         const r = this.data.results.find((x) => x.item.applicationId === command.args.applicationId)
         if (r) void this.onResult(command, served(r))
         else this.onFailure(command, { code: 'invalid', message: 'This result is not in the open workspace.' })
+        break
+      }
+      case 'review.reframings':
+      case 'review.reject': {
+        const r = this.data.results.find((x) => x.item.applicationId === command.args.applicationId)
+        if (!r) break
+        if (command.name === 'review.reject') this.rejected.set(command.args.reframingId, command.args.betterWording)
+        void this.onResult(command, this.reframingsOf(r))
         break
       }
       case 'review.approve':

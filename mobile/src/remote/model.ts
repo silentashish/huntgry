@@ -20,6 +20,7 @@ import {
   requireRemoteRun,
   requireReviewDetail,
   requireReviewList,
+  requireReviewReframings,
   requireRunPage,
   requireStatusSummary,
   requireEvent,
@@ -38,6 +39,7 @@ import {
   type RemoteTranscriptItem,
   type ReviewDetail,
   type ReviewItem,
+  type ReviewReframings,
   type StatusSummary
 } from '@huntgry/remote-protocol'
 import { commandLabel, commands, NoWorkspaceError, type Command, type DeliveryState } from './commands'
@@ -94,6 +96,12 @@ export interface ReviewView {
   /** Why the detail was reloaded (`stale`, `denied`, a change on the Mac). */
   notice?: string
   deciding?: 'approve' | 'rerun' | 'discard'
+  /** #159: the reframings with their rules for the detail's revision; `null` until (or unless) the Mac sends them. */
+  reframings?: ReviewReframings | null
+  /** #159: the Mac answered `review.reframings` with `unsupported` (older than #159): no Reject, Re-run needs answers. */
+  rulesUnsupported?: boolean
+  /** #159: the reframing id a `review.reject` is on its way for. */
+  rejecting?: string
 }
 
 /** One application file (#40), in memory only. `data` is set once reassembled and hash-checked. */
@@ -608,6 +616,32 @@ export class RemoteModel {
     return this.decide(applicationId, 'rerun', () => commands.rerun(d.runId, d.revision, answers))
   }
 
+  /**
+   * #159: rejects one reframing of the served list (its revision, its id), with the owner's better
+   * wording. The Mac stores the rule; the result stays as it is until it is re-run.
+   */
+  reject(applicationId: string, reframingId: string, betterWording?: string): boolean {
+    const view = this.snap.review[applicationId]
+    const r = view?.reframings
+    if (!r || view.rejecting || view.deciding || !r.reframings.some((x) => x.id === reframingId)) return false
+    let command: Command
+    try {
+      command = commands.reject(applicationId, r.revision, reframingId, betterWording)
+    } catch (err) {
+      this.toast(err instanceof ProtocolError ? err.message : 'That cannot be sent.')
+      return false
+    }
+    if (this.dispatch(command) === null) return false
+    this.setReview(applicationId, { rejecting: reframingId, notice: undefined })
+    return true
+  }
+
+  /** #159: asks for the reframings of a served detail, unless this Mac said it does not know them. */
+  private loadReframings(applicationId: string): void {
+    if (this.snap.review[applicationId]?.rulesUnsupported) return
+    this.dispatch(commands.reframings(applicationId), { quiet: true })
+  }
+
   /** Discard: the desktop archives the result and keeps every file. */
   discard(applicationId: string): boolean {
     const d = this.snap.review[applicationId]?.detail
@@ -795,6 +829,10 @@ export class RemoteModel {
       case 'review.discard':
         this.setReview(command.args.applicationId, { deciding: undefined })
         return
+      case 'review.reject':
+        this.setReview(command.args.applicationId, { rejecting: undefined })
+        this.toast(error.message)
+        return
       case 'review.rerun':
         for (const [id, v] of Object.entries(this.snap.review)) if (v.detail?.runId === command.args.runId && v.deciding) this.setReview(id, { deciding: undefined })
         return
@@ -976,6 +1014,19 @@ export class RemoteModel {
         }
         return
       }
+      case 'review.reframings':
+      case 'review.reject': {
+        const r = requireReviewReframings(body)
+        const view = this.snap.review[r.applicationId]
+        if (command.name === 'review.reject') {
+          this.setReview(r.applicationId, { rejecting: undefined })
+          this.toast(REVIEW_COPY.rejected, 'info')
+        }
+        // Kept only for the revision on screen; a newer detail asks again.
+        if (view?.detail?.revision === r.revision) this.setReview(r.applicationId, { reframings: r })
+        else if (command.name === 'review.reject') this.openReview(r.applicationId)
+        return
+      }
       case 'review.approve':
       case 'review.discard':
       case 'review.rerun': {
@@ -998,7 +1049,9 @@ export class RemoteModel {
 
   /** A served detail: shown, and the previews Approve waits for are fetched against its hashes. */
   private applyDetail(applicationId: string, detail: ReviewDetail): void {
-    this.setReview(applicationId, { detail, loading: false, deciding: undefined, error: undefined })
+    const kept = this.snap.review[applicationId]?.reframings
+    this.setReview(applicationId, { detail, loading: false, deciding: undefined, error: undefined, reframings: kept?.revision === detail.revision ? kept : null })
+    this.loadReframings(applicationId)
     for (const file of requiredPreviews(detail)) {
       const listed = detail.artifacts.find((a) => a.file === file)
       if (listed && listed.bytes > 0) this.fetchFile(applicationId, file, listed.sha256)
@@ -1036,6 +1089,18 @@ export class RemoteModel {
       case 'review.discard':
       case 'review.rerun':
         this.onDecisionFailure(command, error)
+        return
+      case 'review.reframings':
+        // An older Mac (#159): the screen stays as it was, without Reject. Anything else: no list this time.
+        if (error?.code === 'unsupported') this.setReview(command.args.applicationId, { rulesUnsupported: true, reframings: null })
+        return
+      case 'review.reject':
+        this.setReview(command.args.applicationId, { rejecting: undefined })
+        if (error?.code === 'stale' || error?.code === 'denied') {
+          this.openReview(command.args.applicationId, error.code === 'stale' ? REVIEW_COPY.stale : REVIEW_COPY.denied)
+          return
+        }
+        this.toast(message)
         return
       default:
         this.toast(message)

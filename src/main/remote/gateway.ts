@@ -33,6 +33,7 @@ import type { PipelineState as DesktopPipelineState } from '@shared/pipeline-typ
 import type {
   ApproveReviewInput,
   DiscardReviewInput,
+  RejectReframingInput,
   RerunReviewInput,
   ReviewDetail as DesktopReviewDetail,
   ReviewItem as DesktopReviewItem,
@@ -49,7 +50,7 @@ import { WorkspaceChangedError } from '../workspace/changed'
 import type { AgentId } from '@shared/runner-types'
 import { AuditLog, type Known } from './audit'
 import type { DeviceRecord, DeviceStore } from './devices'
-import { projectJob, projectJobsPage, projectPipeline, projectQueue, projectReviewDetail, projectReviewItem, projectReviewList, projectRun, projectRunPage, projectRunsPage, projectStatus, safeText } from './project'
+import { projectJob, projectJobsPage, projectPipeline, projectQueue, NO_RUN, projectReviewDetail, projectReviewReframings, projectReviewItem, projectReviewList, projectRun, projectRunPage, projectRunsPage, projectStatus, safeText } from './project'
 import type { WorkspaceIdentity } from './workspace'
 
 /**
@@ -125,6 +126,8 @@ export interface GatewayServices {
     approve(workspace: string, input: ApproveReviewInput, via: ReviewVia): Promise<ReviewOutcome>
     rerun(workspace: string, input: RerunReviewInput, via: ReviewVia): Promise<ReviewOutcome>
     discard(workspace: string, input: DiscardReviewInput, via: ReviewVia): Promise<ReviewOutcome>
+    /** #159: stores a rejected-wording rule. Absent (an older wiring): `review.reframings` / `review.reject` answer `unsupported`. */
+    reject?(workspace: string, input: RejectReframingInput, via: ReviewVia): Promise<ReviewOutcome>
     /** Results waiting for review whose run is done with them (the status count). */
     unreviewed(workspace: string): Promise<number>
   }
@@ -172,7 +175,7 @@ const RATE = {
   readsPerMinute: 30
 } as const
 
-const REVIEW_COMMANDS: readonly RemoteCommandName[] = ['review.list', 'review.get', 'review.approve', 'review.rerun', 'review.discard']
+const REVIEW_COMMANDS: readonly RemoteCommandName[] = ['review.list', 'review.get', 'review.approve', 'review.rerun', 'review.discard', 'review.reframings', 'review.reject']
 const PIPELINE_COMMANDS: readonly RemoteCommandName[] = ['pipeline.start', 'pipeline.pause', 'pipeline.resume', 'pipeline.stop']
 const UNSUPPORTED = 'Pipelines and reviews are not available on this Mac yet. Update Huntgry.'
 
@@ -180,6 +183,7 @@ const UNSUPPORTED = 'Pipelines and reviews are not available on this Mac yet. Up
 const SERVED_PER_DEVICE = 64
 const NOT_SERVED = 'This phone was not shown this version of the result. Open it again.'
 const UNKNOWN_REFRAMING = 'One of the ticked reframings is not part of this result. Reload it and decide again.'
+const NO_REJECT = 'Rejecting reframings is not available on this Mac yet. Update Huntgry.'
 
 /** What one device was shown under one revision (`review.get`, or the detail a decision answered with). */
 interface Served {
@@ -198,6 +202,8 @@ function auditDetail(command: RemoteCommand): Record<string, unknown> | undefine
       return { runId: command.args.runId, revision: command.args.revision }
     case 'review.discard':
       return { applicationId: command.args.applicationId, revision: command.args.revision }
+    case 'review.reject':
+      return { applicationId: command.args.applicationId, revision: command.args.revision, ids: [command.args.reframingId], better: command.args.betterWording !== undefined }
     default:
       return undefined
   }
@@ -663,7 +669,8 @@ export class Gateway {
         const a = command.args
         const served = this.servedFor(device, a.revision, (x) => x.runId === a.runId)
         const answers = a.answers.trim()
-        if (!answers || a.answers.length > MAX_TEXT) throw new ProtocolError('invalid', 'Type your answers first.')
+        // Empty answers (#159): the re-run redoes the result with the reframing rules.
+        if (a.answers.length > MAX_TEXT) throw new ProtocolError('invalid', 'The answers are too long.')
         // The desktop's Re-run: the answers go to the result's own run through the queue (same session, same sandbox).
         const outcome = await desktopCall(() => this.review().rerun(ws, { applicationId: served.applicationId, revision: a.revision, answers, approvedReframingIds: [] }, `phone:${device.id}`))
         return this.decided(device, outcome)
@@ -675,7 +682,36 @@ export class Gateway {
         const outcome = await desktopCall(() => this.review().discard(ws, { applicationId: a.applicationId, revision: a.revision }, `phone:${device.id}`))
         return this.decided(device, outcome)
       }
+      case 'review.reframings': {
+        this.rejecter()
+        const desktop = await desktopCall(() => this.review().detail(ws, command.args.applicationId))
+        const body = projectReviewReframings(desktop)
+        // The listed reframings join what this device was shown under the revision (it may reject them).
+        this.serveIds(device, desktop.applicationId, desktop.runId || NO_RUN, body.revision, body.reframings.map((r) => r.id))
+        return body
+      }
+      case 'review.reject': {
+        const reject = this.rejecter()
+        const a = command.args
+        const served = this.servedFor(device, a.revision, (x) => x.applicationId === a.applicationId)
+        if (!served.ids.has(a.reframingId)) throw new ProtocolError('invalid', UNKNOWN_REFRAMING)
+        // The review service reads the pair from disk under this revision (`stale` otherwise) and stores the rule.
+        const input: RejectReframingInput = { applicationId: a.applicationId, revision: a.revision, reframingId: a.reframingId }
+        const better = a.betterWording?.replace(/\s+/g, ' ').trim()
+        if (better) input.betterWording = better
+        const outcome = await desktopCall(() => reject(ws, input, `phone:${device.id}`))
+        if (!outcome.ok) throw new ProtocolError(outcome.error, outcome.message)
+        const body = projectReviewReframings(outcome.detail)
+        this.serveIds(device, outcome.detail.applicationId, outcome.detail.runId || NO_RUN, body.revision, body.reframings.map((r) => r.id))
+        return body
+      }
     }
+  }
+
+  private rejecter(): NonNullable<NonNullable<GatewayServices['review']>['reject']> {
+    const reject = this.review().reject
+    if (!reject) throw new ProtocolError('unsupported', NO_REJECT)
+    return reject
   }
 
   private review(): NonNullable<GatewayServices['review']> {
@@ -691,10 +727,17 @@ export class Gateway {
   }
 
   private serve(device: DeviceRecord, detail: ReviewDetail): void {
+    this.serveIds(device, detail.applicationId, detail.runId, detail.revision, detail.proposedReframings.map((p) => p.id))
+  }
+
+  /** Records what this device was shown under `revision`; ids listed in full by `review.get` or `review.reframings` add up. */
+  private serveIds(device: DeviceRecord, applicationId: string, runId: string, revision: string, ids: string[]): void {
     const key = this.servedKey(device)
     const map = this.served.get(key) ?? new Map<string, Served>()
-    map.delete(detail.revision)
-    map.set(detail.revision, { applicationId: detail.applicationId, runId: detail.runId, ids: new Set(detail.proposedReframings.map((p) => p.id)) })
+    const before = map.get(revision)
+    const known = before && before.applicationId === applicationId ? before.ids : new Set<string>()
+    map.delete(revision)
+    map.set(revision, { applicationId, runId, ids: new Set([...known, ...ids]) })
     if (map.size > SERVED_PER_DEVICE) map.delete(map.keys().next().value!)
     this.served.set(key, map)
   }

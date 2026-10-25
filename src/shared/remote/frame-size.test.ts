@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs'
 import { afterAll, describe, expect, it } from 'vitest'
 import { deriveSessionKey, generateKeyPair, openEnvelope, sealEnvelope, toBase64 } from './crypto'
-import { requireCommand, requireEnvelope, requireEvent, requireFileChunk, requireRelayFrame, requireReviewDetail, requireRunPage, ttlFor } from './guards'
+import { requireCommand, requireEnvelope, requireEvent, requireFileChunk, requireRelayFrame, requireReviewDetail, requireReviewReframings, requireRunPage, ttlFor } from './guards'
 import { jsonBytes, LIMITS } from './limits'
 import {
   COMMAND_TTL_SECONDS,
@@ -90,6 +90,8 @@ const largestArgs: Record<RemoteCommandName, unknown> = {
   'review.approve': { applicationId: APP_ID, revision: 'r'.repeat(128), approvedReframingIds: Array.from({ length: 200 }, () => SHA) },
   'review.rerun': { runId: ID, revision: 'r'.repeat(128), answers: TEXT_MAX },
   'review.discard': { applicationId: APP_ID, revision: 'r'.repeat(128) },
+  'review.reframings': { applicationId: APP_ID },
+  'review.reject': { applicationId: APP_ID, revision: 'r'.repeat(128), reframingId: 'i'.repeat(128), betterWording: 'b'.repeat(LIMITS.reviewEntryBytes) },
   'file.get': { applicationId: APP_ID, file: 'cover-page-9999.jpg', chunk: 100_000 },
   'device.setNotifications': { categories: ['needs-reply', 'usage-limit', 'pipeline-finished', 'needs-review', 'failed'] }
 }
@@ -229,6 +231,16 @@ describe('every event with its largest fields fits one frame', () => {
     sizes['result run.get'] = roundTrip(page, 'desktop')
     const reply: Envelope = { v: 1, sid: ID, from: 'desktop', seq: 3, ts: ISO, ttl: 60, kind: 'result', re: ID, ok: false, error: { code: 'failed', message: 'm'.repeat(LIMITS.shortStringChars) }, body: { text: TEXT_MAX } }
     roundTrip(reply, 'desktop')
+    // #159: the largest reframings list (every entry and field at its bound).
+    const entry = 'e'.repeat(LIMITS.reviewEntryBytes)
+    const reframings = requireReviewReframings({
+      applicationId: APP_ID,
+      revision: SHA,
+      format: 'v2',
+      reframings: Array.from({ length: LIMITS.reviewListItems }, () => ({ id: SHA, sourceFact: entry, wording: entry, requirement: entry, rule: 'rejected', betterWording: entry })),
+      truncated: true
+    })
+    sizes['result review.reframings'] = roundTrip({ v: 1, sid: ID, from: 'desktop', seq: 4, ts: ISO, ttl: 60, kind: 'result', re: ID, ok: true, body: reframings }, 'desktop')
   })
 
   it('a full transcript page of 20 × 8 KiB items does not fit one frame: the projector must page by bytes too (three items do)', () => {

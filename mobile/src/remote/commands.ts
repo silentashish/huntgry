@@ -54,6 +54,11 @@ export const commands = {
   approve: (applicationId: string, revision: string, approvedReframingIds: readonly string[]) => build('review.approve', { applicationId, revision, approvedReframingIds: [...approvedReframingIds] }),
   rerun: (runId: string, revision: string, answers: string) => build('review.rerun', { runId, revision, answers }),
   discard: (applicationId: string, revision: string) => build('review.discard', { applicationId, revision }),
+  /** #159: the reframings with their rules; an older Mac answers `unsupported`. */
+  reframings: (applicationId: string) => build('review.reframings', { applicationId }),
+  /** #159: one reframing the phone was served under `revision`, with the owner's better wording if any. */
+  reject: (applicationId: string, revision: string, reframingId: string, betterWording?: string) =>
+    build('review.reject', { applicationId, revision, reframingId, ...(betterWording?.trim() ? { betterWording: betterWording.trim() } : {}) }),
   file: (applicationId: string, file: RemoteFile, chunk: number) => build('file.get', { applicationId, file, chunk }),
   setNotifications: (categories: readonly NotificationCategory[]) =>
     // Sent in the package's order so the same choice always reads the same.
@@ -164,9 +169,11 @@ export function commandLabel(command: Command, runTitle?: (runId: string) => str
     case 'review.approve':
       return 'Approve result'
     case 'review.rerun':
-      return 'Re-run with answers'
+      return 'Re-run'
     case 'review.discard':
       return 'Discard result'
+    case 'review.reject':
+      return 'Reject reframing'
     default:
       return command.name
   }

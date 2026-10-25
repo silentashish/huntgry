@@ -3,16 +3,18 @@
  * the verify result, page previews fetched with `file.get` and checked against this
  * revision's hashes, the reframings to tick one by one, open gaps, the notes, the report) and
  * the three decisions. A decision echoes the revision the phone was served and only ids it
- * listed; Approve unlocks once page 1 of each document has loaded. `stale` and `denied` reload
+ * listed; Approve unlocks once page 1 of each document has loaded. On a Mac with #159 each
+ * reframing the run used shows its rule and can be rejected (with a better wording), and
+ * Re-run needs no typed answers: it redoes the result with the reframing rules. `stale` and `denied` reload
  * the detail and say why (never "pair again"); a truncated detail is approved on the Mac.
  */
 
-import { LIMITS, truncateUtf8, utf8Bytes, type RemoteFile, type ReviewDetail } from '@huntgry/remote-protocol'
+import { LIMITS, truncateUtf8, utf8Bytes, type RemoteFile, type RemoteReframing, type ReviewDetail, type ReviewReframings } from '@huntgry/remote-protocol'
 import { router, useFocusEffect } from 'expo-router'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from 'react-native'
 import { fileKey, pageNumber, utf8Text } from '../remote/files'
-import { REVIEW_STATE, approvalGate, canRerun, isDecidable, keepTicks, requiredPreviews, shortRevision } from '../remote/review'
+import { REVIEW_STATE, approvalGate, canReject, canRerun, canRerunWithoutAnswers, isDecidable, keepTicks, reframingsFor, requiredPreviews, shortRevision } from '../remote/review'
 import { useModel, useRemote } from '../state/RemoteProvider'
 import { Alert } from '../ui/Alert'
 import { Badge } from '../ui/Badge'
@@ -48,49 +50,119 @@ function Previews({ d }: { d: ReviewDetail }) {
   )
 }
 
-function Reframings({ d, ticked, onToggle, decidable }: { d: ReviewDetail; ticked: Set<string>; onToggle: (id: string) => void; decidable: boolean }) {
+function Reframings({ d, r, ticked, onToggle, decidable }: { d: ReviewDetail; r: ReviewReframings | null; ticked: Set<string>; onToggle: (id: string) => void; decidable: boolean }) {
   const colors = useColors()
+  const used = r?.format === 'v2'
+  // #159: the Mac's list carries each reframing's rule (and its requirement); an older Mac sends the detail's only.
+  const rows: RemoteReframing[] = r ? r.reframings : d.proposedReframings
   return (
     <View style={{ gap: 10 }}>
-      <SectionLabel>Reframings the run left out</SectionLabel>
+      <SectionLabel>{used ? 'Reframings used' : 'Reframings the run left out'}</SectionLabel>
       {d.parseWarning ? <Alert tone="warning">{d.parseWarning}</Alert> : null}
-      {d.proposedReframings.length === 0 && !d.parseWarning ? (
+      {rows.length === 0 && !d.parseWarning ? (
         <Txt variant="bodySm" color="textSecondary">
-          None: everything in the resume is a direct hit or a standing approval.
+          {used ? 'None: everything in the resume is a direct hit.' : 'None: everything in the resume is a direct hit or a standing approval.'}
         </Txt>
       ) : null}
-      {d.proposedReframings.map((r, i) => {
-        const on = ticked.has(r.id)
+      {rows.map((x, i) => {
+        const on = ticked.has(x.id)
+        const rejected = x.rule === 'rejected' && !on
         return (
-          <FadeIn key={r.id} index={i}>
-            <Pressable
-              accessibilityRole="checkbox"
-              accessibilityState={{ checked: on, disabled: !decidable }}
-              accessibilityLabel={`Approve R${i + 1}: ${r.wording}`}
-              disabled={!decidable}
-              onPress={() => onToggle(r.id)}
-              style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-start', padding: 9, borderRadius: radius.md, borderWidth: 1, borderColor: on ? colors.accentPrimary : colors.borderSubtle, backgroundColor: on ? colors.accentPrimarySoft : colors.bgSurface }}
-            >
-              <Checkbox checked={on} disabled={!decidable} />
-              <View style={{ flex: 1, gap: 2 }}>
-                <Txt variant="monoXs" color="textMuted">
-                  R{i + 1} · {r.sourceFact}
-                </Txt>
-                <Txt variant="bodySm">{r.wording}</Txt>
-              </View>
-            </Pressable>
+          <FadeIn key={x.id} index={i}>
+            <View style={{ gap: 6, padding: 9, borderRadius: radius.md, borderWidth: 1, borderColor: rejected ? colors.danger : on ? colors.accentPrimary : colors.borderSubtle, backgroundColor: on ? colors.accentPrimarySoft : colors.bgSurface }}>
+              <Pressable
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: on, disabled: !decidable }}
+                accessibilityLabel={`${used ? 'Keep' : 'Approve'} R${i + 1}: ${x.wording}`}
+                disabled={!decidable}
+                onPress={() => onToggle(x.id)}
+                style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-start' }}
+              >
+                <Checkbox checked={on} disabled={!decidable} />
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Txt variant="monoXs" color="textMuted">
+                    R{i + 1}
+                    {x.requirement ? ` · ${x.requirement}` : ''} · {x.sourceFact}
+                  </Txt>
+                  <Txt variant="bodySm" color={rejected ? 'textSecondary' : undefined} style={rejected ? { textDecorationLine: 'line-through' } : undefined}>
+                    {x.wording}
+                  </Txt>
+                  {rejected && x.betterWording ? (
+                    <Txt variant="bodySm">
+                      <Txt variant="monoXs" color="textMuted">
+                        Use instead{' '}
+                      </Txt>
+                      {x.betterWording}
+                    </Txt>
+                  ) : null}
+                </View>
+              </Pressable>
+              {r && used && decidable ? <RejectRow d={d} r={r} item={x} index={i} /> : null}
+            </View>
           </FadeIn>
         )
       })}
-      {d.truncated ? (
+      {d.truncated || r?.truncated ? (
         <Txt variant="bodyXs" color="warning">
-          Some of this result was too long for the phone (a reframing that does not fit is left out). Approve on the Mac.
+          Some of this result was too long for the phone (a reframing that does not fit is left out). Decide on it on the Mac.
         </Txt>
       ) : ticked.size > 0 ? (
         <Txt variant="bodyXs" color="textMuted">
-          Ticked reframings become standing approvals: later unattended runs may use them as written, for any job.
+          Ticked reframings become preferred wordings: later runs may use them as written, for any job.
         </Txt>
       ) : null}
+    </View>
+  )
+}
+
+/** #159: Reject (with an optional better wording) under one reframing the run used, or its Rejected mark. */
+function RejectRow({ d, r, item, index }: { d: ReviewDetail; r: ReviewReframings; item: RemoteReframing; index: number }) {
+  const model = useModel()
+  const snap = useRemote()
+  const colors = useColors()
+  const [open, setOpen] = useState(false)
+  const [better, setBetter] = useState('')
+  const view = snap.review[d.applicationId]
+  const busy = !!view?.rejecting || !!view?.deciding
+  if (!canReject(r, item))
+    return (
+      <View style={{ flexDirection: 'row', paddingLeft: 30 }}>
+        <Badge tone="danger" dot label="Rejected" />
+      </View>
+    )
+  if (!open)
+    return (
+      <View style={{ flexDirection: 'row', paddingLeft: 30 }}>
+        <Button size="sm" variant="ghost" icon="x" label={`Reject R${index + 1}`} disabled={busy} onPress={() => setOpen(true)} />
+      </View>
+    )
+  return (
+    <View style={{ gap: 6, paddingLeft: 30 }}>
+      <TextInput
+        value={better}
+        onChangeText={(v) => setBetter(utf8Bytes(v) > LIMITS.reviewEntryBytes ? truncateUtf8(v, LIMITS.reviewEntryBytes).text : v)}
+        placeholder="Better wording (optional)"
+        placeholderTextColor={colors.textMuted}
+        accessibilityLabel="Better wording (optional)"
+        style={[type.bodySm, { color: colors.textPrimary, padding: 8, borderRadius: radius.md, borderWidth: 1, borderColor: colors.borderDefault, backgroundColor: colors.bgSurfaceSunken }]}
+      />
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Button
+          size="sm"
+          variant="danger"
+          icon="x"
+          label={`Reject R${index + 1}`}
+          disabled={busy}
+          busy={view?.rejecting === item.id}
+          onPress={() => {
+            if (model.reject(d.applicationId, item.id, better)) {
+              setOpen(false)
+              setBetter('')
+            }
+          }}
+        />
+        <Button size="sm" variant="ghost" label="Cancel" disabled={busy} onPress={() => setOpen(false)} />
+      </View>
     </View>
   )
 }
@@ -134,7 +206,7 @@ function Notes({ d }: { d: ReviewDetail }) {
   )
 }
 
-function Decisions({ d, ticked }: { d: ReviewDetail; ticked: Set<string> }) {
+function Decisions({ d, r, ticked }: { d: ReviewDetail; r: ReviewReframings | null; ticked: Set<string> }) {
   const model = useModel()
   const snap = useRemote()
   const colors = useColors()
@@ -154,13 +226,13 @@ function Decisions({ d, ticked }: { d: ReviewDetail; ticked: Set<string> }) {
         </Txt>
       ) : null}
       <View style={{ flexDirection: 'row', gap: 8 }}>
-        {canRerun(d) ? <Button grow size="md" variant="outline" icon="refresh" label="Re-run with answers" disabled={!!busy} onPress={() => setRerunOpen(!rerunOpen)} /> : null}
+        {canRerun(d) ? <Button grow size="md" variant="outline" icon="refresh" label="Re-run" disabled={!!busy} onPress={() => setRerunOpen(!rerunOpen)} /> : null}
         <ConfirmButton size="md" variant="danger" icon="trash" label="Discard" confirmLabel="Discard? Files are kept" disabled={!!busy} busy={busy === 'discard'} onConfirm={() => model.discard(d.applicationId)} grow={!canRerun(d)} />
       </View>
       {rerunOpen && canRerun(d) ? (
         <Card gap={8}>
           <Txt variant="monoSm" color="textMuted">
-            Your decisions
+            {canRerunWithoutAnswers(r) ? 'Notes for the re-run (optional)' : 'Your decisions'}
           </Txt>
           <TextInput
             value={answers}
@@ -168,17 +240,19 @@ function Decisions({ d, ticked }: { d: ReviewDetail; ticked: Set<string> }) {
             multiline
             placeholder="e.g. Use R1 but say “contributed to”, not “led”. Drop R2."
             placeholderTextColor={colors.textMuted}
-            accessibilityLabel="Your decisions"
+            accessibilityLabel={canRerunWithoutAnswers(r) ? 'Notes for the re-run' : 'Your decisions'}
             style={[type.bodySm, { color: colors.textPrimary, minHeight: 84, maxHeight: 180, padding: 10, borderRadius: radius.md, borderWidth: 1, borderColor: colors.borderDefault, backgroundColor: colors.bgSurfaceSunken, textAlignVertical: 'top' }]}
           />
           <Txt variant="bodyXs" color="textMuted">
-            Sent to the run's own session, like Re-run on your Mac. The result comes back here as Unreviewed with a new revision.
+            {canRerunWithoutAnswers(r)
+              ? 'Redoes this result in the run’s own session with your reframing rules, like Re-run on your Mac. It comes back here as Unreviewed with a new revision.'
+              : "Sent to the run's own session, like Re-run on your Mac. The result comes back here as Unreviewed with a new revision."}
           </Txt>
           <Button
             variant="primary"
             icon="send"
-            label="Send and rebuild"
-            disabled={!answers.trim() || !!busy}
+            label={canRerunWithoutAnswers(r) ? 'Re-run' : 'Send and rebuild'}
+            disabled={(!answers.trim() && !canRerunWithoutAnswers(r)) || !!busy}
             busy={busy === 'rerun'}
             onPress={() => {
               if (model.rerun(d.applicationId, answers)) {
@@ -199,6 +273,7 @@ export function ReviewScreen({ applicationId }: { applicationId: string }) {
   const colors = useColors()
   const view = snap.review[applicationId]
   const d = view?.detail ?? null
+  const r = d ? reframingsFor(d, view?.reframings) : null
   const [ticked, setTicked] = useState<Set<string>>(new Set())
   useFocusEffect(
     useCallback(() => {
@@ -255,8 +330,8 @@ export function ReviewScreen({ applicationId }: { applicationId: string }) {
             </Alert>
           ) : null}
           <Previews d={d} />
-          <Reframings d={d} ticked={ticked} onToggle={toggle} decidable={isDecidable(d) && !view?.deciding} />
-          <Decisions d={d} ticked={ticked} />
+          <Reframings d={d} r={r} ticked={ticked} onToggle={toggle} decidable={isDecidable(d) && !view?.deciding} />
+          <Decisions d={d} r={r} ticked={ticked} />
           {d.openGaps.length > 0 ? (
             <View style={{ gap: 6 }}>
               <SectionLabel>Open gaps</SectionLabel>

@@ -16,7 +16,8 @@ import {
   type RemoteCommandName,
   type RemoteEventName,
   type ReviewDetail,
-  type ReviewList
+  type ReviewList,
+  type ReviewReframings
 } from '@shared/remote'
 import { loadRules as loadApprovals, rulesFile as approvalsFile } from '../review/approvals'
 import { getReview, setReviewAuthorityRoot, updateReview, type RecordedReview } from '../review/authority'
@@ -25,6 +26,7 @@ import { IN_PROGRESS_REASON } from '../pipeline/pipeline'
 import {
   approveReview,
   discardReview,
+  rejectReframing,
   isSettledReview,
   listReviews,
   openGapCount,
@@ -138,6 +140,7 @@ function makeServices(): GatewayServices {
       approve: (w, input, via) => approveReview(reviewDeps(w), input, via),
       rerun: (w, input, via) => rerunReview(reviewDeps(w), input, via),
       discard: (w, input, via) => discardReview(reviewDeps(w), input, via),
+      reject: (w, input, via) => rejectReframing(reviewDeps(w), input, via),
       unreviewed: async (w) => (await listReviews(w)).filter(isSettledReview).length
     },
     transcripts: () => true,
@@ -356,7 +359,6 @@ describe('review.rerun and review.discard (#42)', () => {
     await application(A, { review: { state: 'needs-attention', reason: 'Failed checks: page_count.' } })
     const d = await get()
     expect((await send('review.rerun', { runId: 'wrong-run', revision: d.revision, answers: 'x' })).result.error?.code).toBe('denied')
-    expect((await send('review.rerun', { runId: RUN, revision: d.revision, answers: '   ' })).result.error?.code).toBe('invalid')
     const reply = await send('review.rerun', { runId: RUN, revision: d.revision, answers: 'Drop the Kafka line.' })
     expect(reply.result.ok).toBe(true)
     expect(replies).toHaveLength(1)
@@ -380,6 +382,104 @@ describe('review.rerun and review.discard (#42)', () => {
     expect(after).toEqual(before)
     expect(JSON.parse(await readFile(join(folder, 'huntgry.json'), 'utf8')).status).toBe('archived')
     expect(await loadApprovals(ws)).toEqual([])
+  })
+})
+
+describe('review.reframings and review.reject (#159)', () => {
+  const V2 = `# Tailoring notes
+<!-- resume-tailor notes v2 -->
+
+## Direct hits
+- Node: five years
+
+## Reframings used
+### Kafka streaming
+- Source fact: ${R1[0]}
+- Wording: ${R1[1]}
+
+### Leadership
+- Source fact: ${R2[0]}
+- Wording: ${R2[1]}
+
+## Gaps left open
+- Go: never used
+
+## Decisions
+- Right-aligned dates.
+`
+  async function v2(): Promise<void> {
+    const folder = await application(A)
+    await rm(join(folder, 'review-notes.md'))
+    await writeFile(join(folder, 'tailoring-notes.md'), V2)
+  }
+  const reframings = async (from: FakePhone = phone) => (await send('review.reframings', { applicationId: A }, from)).result.body as ReviewReframings
+
+  it('lists the reframings used with their rules, bound to the same revision as review.get', async () => {
+    await v2()
+    const d = await get()
+    const r = await reframings()
+    expect(r).toEqual({
+      applicationId: A,
+      revision: d.revision,
+      format: 'v2',
+      reframings: [
+        { id: idOf(R1), sourceFact: R1[0], wording: R1[1], requirement: 'Kafka streaming' },
+        { id: idOf(R2), sourceFact: R2[0], wording: R2[1], requirement: 'Leadership' }
+      ]
+    })
+    // The detail an older phone reads is unchanged: no rule, no requirement.
+    expect(d.proposedReframings).toEqual([
+      { id: idOf(R1), sourceFact: R1[0], wording: R1[1] },
+      { id: idOf(R2), sourceFact: R2[0], wording: R2[1] }
+    ])
+  })
+
+  it('rejects what the phone was shown: the on-disk pair becomes a rule with the better wording, audited; the result keeps its state', async () => {
+    await v2()
+    const r = await reframings()
+    const reply = await send('review.reject', { applicationId: A, revision: r.revision, reframingId: idOf(R2), betterWording: '  Mentored two   junior engineers ' })
+    expect(reply.result.ok).toBe(true)
+    const body = reply.result.body as ReviewReframings
+    expect(body.revision).toBe(r.revision)
+    expect(body.reframings[1]).toEqual({ id: idOf(R2), sourceFact: R2[0], wording: R2[1], requirement: 'Leadership', rule: 'rejected', betterWording: 'Mentored two junior engineers' })
+    expect((await loadApprovals(ws)).map((x) => [x.id, x.kind, x.wording, x.betterWording, x.via])).toEqual([[idOf(R2), 'rejected', R2[1], 'Mentored two junior engineers', `phone:${phone.id}`]])
+    expect(await getReview(ws, A)).toMatchObject({ state: 'unreviewed', runId: RUN })
+    expect(changes).toBe(1)
+    const remoteAudit = (await readFile(auditFile(ws), 'utf8')).trim().split('\n').map((l) => JSON.parse(l))
+    expect(remoteAudit.find((l) => l.name === 'review.reject' && l.started)).toMatchObject({ deviceId: phone.id, detail: { applicationId: A, revision: r.revision, ids: [idOf(R2)], better: true } })
+
+    // Then a re-run without answers (#159) sends the rule to the run.
+    const d = await get()
+    const rerun = await send('review.rerun', { runId: RUN, revision: d.revision, answers: '' })
+    expect(rerun.result.ok).toBe(true)
+    expect(replies[0].text).toContain(`Rejected wording: ${R2[1]}`)
+    expect(replies[0].text).toContain(`WORDINGS TO AVOID (JSON, newest first): ${JSON.stringify([{ sourceFact: R2[0], wording: R2[1] }])}`)
+    expect(replies[0].text).toContain(`PREFERRED WORDINGS (JSON, newest first): ${JSON.stringify([{ sourceFact: R2[0], wording: 'Mentored two junior engineers' }])}`)
+  })
+
+  it('refuses a revision this phone was not shown, an id it was not shown and a stale revision, writing nothing', async () => {
+    await v2()
+    const r = await reframings()
+    expect((await send('review.reject', { applicationId: A, revision: r.revision, reframingId: idOf(R1) }, other)).result.error?.code).toBe('denied')
+    expect((await send('review.reject', { applicationId: A, revision: r.revision, reframingId: idOf(R3) })).result.error?.code).toBe('invalid')
+    await writeFile(join(ws, ...A.split('/'), 'resume.pdf'), '%PDF-1.4 changed')
+    expect((await send('review.reject', { applicationId: A, revision: r.revision, reframingId: idOf(R1) })).result.error?.code).toBe('stale')
+    expect(await approvalsOnDisk()).toBeNull()
+  })
+
+  it('an older desktop (no reject in its review service) answers both commands unsupported; an older phone never sends them', async () => {
+    await v2()
+    const older = new Gateway({ ...services, review: { ...services.review!, reject: undefined } }, devices)
+    phone.seq++
+    const r = await older.handle(devices.get(phone.id)!, command(phone, 'review.reframings', { applicationId: A }, identity.id, { ts: new Date((now += 1000)).toISOString(), seq: phone.seq }))
+    expect(r.result.error?.code).toBe('unsupported')
+    phone.seq++
+    const j = await older.handle(devices.get(phone.id)!, command(phone, 'review.reject', { applicationId: A, revision: 'r', reframingId: idOf(R1) }, identity.id, { ts: new Date((now += 1000)).toISOString(), seq: phone.seq }))
+    expect(j.result.error?.code).toBe('unsupported')
+    // Everything protocol 1 had still works on it.
+    phone.seq++
+    const g = await older.handle(devices.get(phone.id)!, command(phone, 'review.get', { applicationId: A }, identity.id, { ts: new Date((now += 1000)).toISOString(), seq: phone.seq }))
+    expect(g.result.ok).toBe(true)
   })
 })
 

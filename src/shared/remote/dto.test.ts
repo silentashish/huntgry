@@ -11,6 +11,7 @@ import {
   requireReviewDetail,
   requireReviewItem,
   requireReviewList,
+  requireReviewReframings,
   requireRunPage,
   requireRunsPage,
   requireStatusSummary,
@@ -18,7 +19,7 @@ import {
   requireTranscriptPage
 } from './dto'
 import { LIMITS } from './limits'
-import type { PipelineState, RemoteQueueItem, RemoteRun, RemoteTranscriptItem, ReviewDetail, StatusSummary } from './protocol'
+import type { PipelineState, RemoteQueueItem, RemoteRun, RemoteTranscriptItem, ReviewDetail, ReviewReframings, StatusSummary } from './protocol'
 
 /**
  * Every DTO the phone renders is validated field by field, and the first value over each
@@ -74,7 +75,26 @@ const review: ReviewDetail = {
   revision: SHA
 }
 
+const reframings: ReviewReframings = {
+  applicationId: 'backend/acme/123',
+  revision: SHA,
+  format: 'v2',
+  reframings: [
+    { id: SHA, sourceFact: 'ran a cluster', wording: 'operated Kubernetes', requirement: 'Kubernetes', rule: 'rejected', betterWording: 'ran a three-node cluster' },
+    { id: SHA, sourceFact: 'mentored', wording: 'coached two engineers', rule: 'preferred' },
+    { id: SHA, sourceFact: 'wrote Go', wording: 'built Go services' }
+  ],
+  truncated: true
+}
+
 describe('accepts every DTO and returns only its known fields', () => {
+  it('review reframings (#159), and a ReviewDetail still exactly as protocol 1 had it', () => {
+    expect(requireReviewReframings(reframings)).toEqual(reframings)
+    // What an older phone validates did not change: the detail keeps its fields, rules are not in it.
+    expect(requireReviewDetail(review)).toEqual(review)
+    expect(codeOf(() => requireReviewDetail({ ...review, proposedReframings: [{ ...review.proposedReframings[0], rule: 'rejected' }] }))).toBe('invalid')
+  })
+
   it('status, run, queue, transcript, pipeline, review, pages', () => {
     expect(requireStatusSummary(status)).toEqual(status)
     expect(requireStatusSummary({ ...status, pipeline: null })).toEqual({ ...status, pipeline: null })
@@ -158,6 +178,12 @@ describe('refuses the first value over each limit, wrong enums and unknown field
     ['review: reframing with a requirement field', () => requireReviewDetail({ ...review, proposedReframings: [{ ...review.proposedReframings[0], requirement: 'x' }] })],
     ['review item: approved state in the list', () => requireReviewItem({ applicationId: 'a', runId: 'r', title: 't', openGaps: 0, finishedAt: ISO, state: 'approved' })],
     ['review list: more than reviewItems', () => requireReviewList({ items: Array.from({ length: LIMITS.reviewItems + 1 }, () => ({ applicationId: 'a', runId: 'r', title: 't', openGaps: 0, finishedAt: ISO })) })],
+    ['reframings: format v3', () => requireReviewReframings({ ...reframings, format: 'v3' })],
+    ['reframings: too many', () => requireReviewReframings({ ...reframings, reframings: Array.from({ length: LIMITS.reviewListItems + 1 }, () => reframings.reframings[2]) })],
+    ['reframings: better wording on a kept one', () => requireReviewReframings({ ...reframings, reframings: [{ ...reframings.reframings[1], betterWording: 'x' }] })],
+    ['reframings: better wording over reviewEntryBytes', () => requireReviewReframings({ ...reframings, reframings: [{ ...reframings.reframings[0], betterWording: over(LIMITS.reviewEntryBytes) }] })],
+    ['reframings: unknown rule', () => requireReviewReframings({ ...reframings, reframings: [{ ...reframings.reframings[2], rule: 'maybe' }] })],
+    ['reframings: unknown field', () => requireReviewReframings({ ...reframings, rules: [] })],
     ['review list: unknown field', () => requireReviewList({ items: [], total: 3 })],
     ['jobs page: more than jobsPageItems', () => requireJobsPage({ items: Array.from({ length: LIMITS.jobsPageItems + 1 }, () => ({ id: 'url:1', title: 'x', savedAt: ISO })) })],
     ['job: dismissed not a boolean', () => requireJobsPage({ items: [{ id: 'url:1', title: 'x', savedAt: ISO, dismissed: 'yes' }] })],

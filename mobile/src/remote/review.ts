@@ -12,7 +12,7 @@
  * - an approved or discarded result offers nothing.
  */
 
-import type { RemoteFile, ReviewDetail } from '@huntgry/remote-protocol'
+import type { RemoteFile, RemoteReframing, ReviewDetail, ReviewReframings } from '@huntgry/remote-protocol'
 import { pageNumber } from './files'
 
 /** The desktop's `NO_RUN`: a result whose run is gone cannot be re-run. */
@@ -27,8 +27,31 @@ export const REVIEW_COPY = {
   loading: 'Approve unlocks once page 1 of each document has loaded.',
   approved: 'Approved. Nothing was applied or submitted.',
   discarded: 'Discarded on your Mac. Every file is kept.',
-  rerun: 'Sent to the same run. The result comes back here as Unreviewed with a new revision.'
+  rerun: 'Sent to the same run. The result comes back here as Unreviewed with a new revision.',
+  rejected: 'Rejected. Re-run to rebuild this result without it; later runs avoid it too.'
 } as const
+
+/**
+ * #159: the reframings with their rules, when the Mac sent them for the revision on screen (an
+ * older Mac answers `unsupported`, a newer revision's list is not this one's): else `null`, and
+ * the screen shows `ReviewDetail.proposedReframings` as before.
+ */
+export function reframingsFor(d: ReviewDetail, r: ReviewReframings | null | undefined): ReviewReframings | null {
+  return r && r.applicationId === d.applicationId && r.revision === d.revision ? r : null
+}
+
+/** A reframing the run used (v2) may be rejected, unless it already is. */
+export function canReject(r: ReviewReframings, item: RemoteReframing): boolean {
+  return r.format === 'v2' && item.rule !== 'rejected'
+}
+
+/**
+ * Re-run without typed answers redoes the result with the reframing rules: only a Mac that
+ * knows the rules (it answered `review.reframings`) takes empty answers.
+ */
+export function canRerunWithoutAnswers(r: ReviewReframings | null): boolean {
+  return r !== null
+}
 
 /** Unreviewed or Needs attention: the only states the desktop decides on. */
 export function isDecidable(d: ReviewDetail): boolean {

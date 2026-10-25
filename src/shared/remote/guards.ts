@@ -401,6 +401,20 @@ export function requireCommand(name: unknown, args: unknown): RemoteCommand {
       const a = requireArgs(args, n, ['applicationId', 'revision'])
       return { name: n, args: { applicationId: requireApplicationId(a.applicationId), revision: requireRevision(a.revision) } }
     }
+    case 'review.reframings': {
+      const a = requireArgs(args, n, ['applicationId'])
+      return { name: n, args: { applicationId: requireApplicationId(a.applicationId) } }
+    }
+    case 'review.reject': {
+      const a = requireArgs(args, n, ['applicationId', 'revision', 'reframingId', 'betterWording'])
+      const out: Extract<RemoteCommand, { name: 'review.reject' }>['args'] = {
+        applicationId: requireApplicationId(a.applicationId),
+        revision: requireRevision(a.revision),
+        reframingId: requireId(a.reframingId, 'reframingId', 128)
+      }
+      if (a.betterWording !== undefined) out.betterWording = requireText(a.betterWording, 'betterWording', LIMITS.reviewEntryBytes)
+      return { name: n, args: out }
+    }
     case 'file.get': {
       const a = requireArgs(args, n, ['applicationId', 'file', 'chunk'])
       return {
