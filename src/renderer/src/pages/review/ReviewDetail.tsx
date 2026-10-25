@@ -91,7 +91,7 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
               </StatusPill>
             </div>
             <MonoLabel tone="muted" component="div" className={classes.headPath}>
-              {d.applicationId}/ · run {d.runId} · unattended
+              {d.applicationId}/ · run {d.runId}
             </MonoLabel>
             {d.reason && (
               <p className={classes.headReason} data-attention={d.state === 'needs-attention' || undefined}>
@@ -381,7 +381,7 @@ export function ReviewDetailView({ detail: d, onDecided, onReload }: Props) {
                   Send and rebuild
                 </Button>
                 <p className={classes.hint}>
-                  Sent to the run’s own session, with the ticked reframings as approved. The result comes back here as Unreviewed with a new revision.
+                  Sent to the run’s own session, with the ticked reframings as preferred wordings. The result comes back here as Unreviewed with a new revision.
                 </p>
                 <Divider />
                 {!confirmDiscard ? (
