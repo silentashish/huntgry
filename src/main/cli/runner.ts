@@ -56,6 +56,11 @@ export interface RunnerHooks {
   beforeReply?(run: RunSummary, workspace: string): Promise<void>
   /** The price table turn estimates use (Settings → Pricing); the bundled one when absent. */
   prices?(): readonly ModelPrice[]
+  /**
+   * A turn ended with a built resume in the run's output folder (`run.outputFolder`): the re-score after
+   * tailoring (#151). Awaited before the run reads as waiting; a failure is logged, never fails the run.
+   */
+  afterBuild?(run: RunSummary, workspace: string): Promise<void>
 }
 
 interface Live {
@@ -555,6 +560,9 @@ export class RunManager {
             await recordJobSource(join(entry.ctx.workspace, out.folder), jobUrl, source ?? 'manual').catch((err) =>
               console.error('Recording the job source failed:', err)
             )
+          }
+          if (this.hooks.afterBuild && (out.files.includes('resume_data.json') || out.files.includes('resume.pdf'))) {
+            await this.hooks.afterBuild({ ...r }, entry.ctx.workspace).catch((err) => console.error('Re-scoring the resume failed:', err))
           }
         }
         // Only now does the run read as waiting, so every summary that says so carries the output

@@ -106,6 +106,38 @@ describe('RunManager against a fake claude', () => {
     expect(tracking).toMatchObject({ jobUrl: 'https://hiring.cafe/job/abc', source: 'hiring.cafe' })
   })
 
+  it('re-scores what the turn built before the run reads as waiting (#151)', async () => {
+    const built: { folder: string | null; workspace: string }[] = []
+    manager = new RunManager({
+      onEvent: () => undefined,
+      onRun: (r) => runs.push(r),
+      afterBuild: async (run, workspace) => {
+        built.push({ folder: run.outputFolder, workspace })
+      }
+    })
+    const { id } = await manager.start(params, ctx())
+    await until(id, (r) => r.status === 'waiting')
+    expect(built).toEqual([])
+    await manager.reply(id, 'Approved. WRITE_OUTPUT', async () => ctx())
+    await until(id, (r) => r.status === 'waiting' && r.outputFolder !== null)
+    expect(built.at(-1)).toEqual({ folder: join('software-engineer', 'acme', '42'), workspace: ws })
+  })
+
+  it('a failing re-score does not fail the run', async () => {
+    manager = new RunManager({
+      onEvent: () => undefined,
+      onRun: (r) => runs.push(r),
+      afterBuild: async () => {
+        throw new Error('boom')
+      }
+    })
+    const { id } = await manager.start(params, ctx())
+    await until(id, (r) => r.status === 'waiting')
+    await manager.reply(id, 'Approved. WRITE_OUTPUT', async () => ctx())
+    const done = await until(id, (r) => r.status === 'waiting' && r.outputFolder !== null)
+    expect(done.error).toBeUndefined()
+  })
+
   it('writes no tracking file for a run without a posting URL', async () => {
     const { id } = await manager.start(params, ctx())
     await until(id, (r) => r.status === 'waiting')

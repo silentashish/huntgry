@@ -30,7 +30,43 @@ export interface ApplicationTracking {
   source?: JobSource
   /** Set by the unattended pipeline (#31); cleared only by the Review page. */
   review?: ReviewTracking
+  /** The re-score after tailoring (#151): written by main when a run's turn ends with a built resume. */
+  match?: ApplicationMatch
 }
+
+/**
+ * `huntgry.json` → `match`: profile fit, resume coverage and surfaced share (`resumeCoverage`,
+ * `src/shared/resume-coverage.ts`) of the application's resume, kept as main computed them. Only main
+ * writes it (the renderer's tracking patches can't), after every turn that leaves a built resume, so
+ * a re-run replaces it; it is dropped when the job names no requirement or the resume can't be read.
+ */
+export interface ApplicationMatch {
+  /** 0–100: the job's match score against the master profile, the ceiling. */
+  profileFit: number
+  /** 0–100: the same requirements matched against the resume. */
+  resumeCoverage: number
+  /** 0–100: how much of what the profile matched the resume shows; absent when the profile matched nothing. */
+  surfaced?: number
+  /** How many requirements the job names. */
+  requirements: number
+  /** Requirements the profile has and the resume left out, heaviest first (at most `MAX_MATCH_LIST`). */
+  leftOut: string[]
+  /** The skill's own hint: the `jd_keyword_coverage` terms of `build-report.json` absent from the resume. */
+  absent?: string[]
+  /** Failed must-haves (they cap both numbers), as reasons. */
+  gates?: string[]
+  /** What the resume's words were read from. */
+  resumeFrom: 'resume_data.json' | 'resume.pdf'
+  /** Where the requirements came from (`MatchSource`). */
+  source: 'jobright-skills' | 'description'
+  /** The run whose turn wrote it, when known. */
+  runId?: string
+  /** ISO time it was computed. */
+  at: string
+}
+
+/** Most names `ApplicationMatch.leftOut` / `absent` / `gates` keep. */
+export const MAX_MATCH_LIST = 20
 
 export interface BuildSummary {
   /** `build-report.json` → `ok`; `unknown` when there is no readable report. */

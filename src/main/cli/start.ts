@@ -36,6 +36,7 @@ import { RunManager, type RunContext } from './runner'
 import { readRun } from './runs'
 import { approvalsForPrompt, loadApprovals } from '../review/approvals'
 import { reopenForContinuation } from '../review/authority'
+import { rescoreApplication } from '../applications/rescore'
 import { currentPrices, withPrices } from './usage'
 import { claudeVersion, supportsPermissionPrompts } from './version'
 
@@ -60,7 +61,11 @@ export const manager = new RunManager({
     if ((run.unattended || run.params.unattended) && run.outputFolder)
       await reopenForContinuation(workspace, run.outputFolder, run.id, new Date())
   },
-  prices: currentPrices
+  prices: currentPrices,
+  // Profile fit vs resume coverage of what the turn built, kept in the application's huntgry.json.
+  afterBuild: async (run, workspace) => {
+    if (run.outputFolder) await rescoreApplication(workspace, run.outputFolder, { runId: run.id })
+  }
 })
 
 /** Called with every run summary change (the bulk queue follows its runs this way). */
