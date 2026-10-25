@@ -1,4 +1,4 @@
-import { JOB_ID_PATTERN, type Job } from '@shared/jobs-types'
+import { jobDescriptionFor, JOB_ID_PATTERN, type Job } from '@shared/jobs-types'
 import {
   ACTIVE_STATUSES,
   type EnqueueInput,
@@ -68,6 +68,10 @@ export async function tailorJob(deps: TailorJobDeps, raw: unknown): Promise<Tail
   const job = (await deps.findJob(ws, saved.id)) ?? saved
   const options: QueueOptions = { coverLetter: input.coverLetter, dateStyle: input.dateStyle }
   if (input.notes?.trim()) options.notes = input.notes.trim()
+  // The text the user submitted is the posting of this run, even when the canonical job (merged with
+  // an older copy of the same posting from another board) carries another description.
+  const pasted = input.jobDescription?.trim()
+  if (pasted) options.jobDescription = jobDescriptionFor({ ...job, description: pasted })
   const res = await deps.enqueue(
     { jobIds: [job.id], options, agent: input.agent ?? (await deps.defaultAgent()), unattended: true },
     ws

@@ -33,6 +33,12 @@ export interface QueueOptions {
   coverLetter: boolean
   dateStyle: DateStyle
   notes?: string
+  /**
+   * The posting exactly as the user submitted it on the Tailor page (#158), formatted like
+   * `jobDescriptionFor`. It wins over the saved job's description, which a cross-board merge may
+   * take from an older copy. Main only: `requireEnqueueInput` never passes it through.
+   */
+  jobDescription?: string
 }
 
 /** The review state of a done unattended item (the same values as the review store's `ReviewState`). */

@@ -1,6 +1,12 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { Job } from '@shared/jobs-types'
 import type { EnqueueInput, EnqueueResult, QueueItem } from '@shared/queue-types'
+import { addPasted } from '../jobs/service'
+import { findCanonical, saveJob } from '../jobs/store'
+import { paramsForJob } from './queue'
 import { requireTailorJobInput, tailorJob, type TailorJobDeps } from './tailor-job'
 
 const job = (id: string, over: Partial<Job> = {}): Job => ({
@@ -62,7 +68,12 @@ describe('tailorJob (the Tailor page’s Start, #158)', () => {
     const res = await tailorJob(deps, { ...form, jobDescription: 'A long pasted posting for a staff engineer role.', role: 'Staff Engineer', company: 'Acme', jobUrl: 'https://acme.example/1', notes: ' Lead with Go. ' })
     expect(calls.pasted).toEqual([{ title: 'Staff Engineer', company: 'Acme', url: 'https://acme.example/1', text: 'A long pasted posting for a staff engineer role.' }])
     expect(calls.enqueued).toEqual([
-      { jobIds: ['pasted:abc'], options: { coverLetter: true, dateStyle: 'right', notes: 'Lead with Go.' }, agent: 'claude', unattended: true }
+      {
+        jobIds: ['pasted:abc'],
+        options: { coverLetter: true, dateStyle: 'right', notes: 'Lead with Go.', jobDescription: expect.stringContaining('A long pasted posting for a staff engineer role.') },
+        agent: 'claude',
+        unattended: true
+      }
     ])
     expect(res).toMatchObject({ itemId: 'q-0', jobId: 'pasted:abc' })
   })
@@ -103,5 +114,43 @@ describe('tailorJob (the Tailor page’s Start, #158)', () => {
       coverLetter: false,
       dateStyle: 'inline'
     })
+  })
+})
+
+describe('tailorJob with the real job store (review of #165)', () => {
+  it('runs the posting the user submitted, even when the pasted job merges with an older copy that has another description', async () => {
+    const ws = await mkdtemp(join(tmpdir(), 'huntgry-tailor-job-'))
+    try {
+      // A complete posting saved earlier from a URL, sent to the Tailor page; the user edits the description.
+      await saveJob(ws, job('url:acme-1', { title: 'Staff Engineer', company: 'Acme', remote: false, url: 'https://acme.example/1', description: 'The original posting text, saved from the URL weeks ago.', fetchedAt: '2026-09-01T00:00:00.000Z' }))
+      const edited = 'The posting as the user edited it on the Tailor page: Go, PostgreSQL, on-call.'
+      const enqueued: EnqueueInput[] = []
+      const deps: TailorJobDeps = {
+        workspace: async () => ws,
+        findJob: findCanonical,
+        addPasted: (w, input) => addPasted(w, input),
+        addByUrl: async () => {
+          throw new Error('not used')
+        },
+        enqueue: async (input): Promise<EnqueueResult> => {
+          enqueued.push(input)
+          const item = { id: 'q-1', jobId: input.jobIds[0], title: '', options: input.options, agent: 'claude' as const, status: 'queued' as const, runId: null, attempts: 0, createdAt: '', updatedAt: '' }
+          return { state: { items: [item], concurrency: 1, paused: false } as unknown as EnqueueResult['state'], added: 1, skipped: [] }
+        },
+        defaultAgent: async () => 'claude'
+      }
+      const res = await tailorJob(deps, { ...form, jobDescription: edited, role: 'Staff Engineer', company: 'Acme' })
+      // The pasted copy is deduped onto the older canonical job, whose merged description is the old one...
+      const canonical = (await findCanonical(ws, res.jobId))!
+      expect(canonical.id).toBe('url:acme-1')
+      expect(canonical.description).toContain('The original posting text')
+      // ...but the run gets the text the user submitted (what the queue passes to the run).
+      const params = paramsForJob(canonical, enqueued[0].options, true)
+      expect(params.jobDescription).toContain(edited)
+      expect(params.jobDescription).not.toContain('The original posting text')
+      expect(params.jobDescription).toMatch(/^# Staff Engineer\n/)
+    } finally {
+      await rm(ws, { recursive: true, force: true })
+    }
   })
 })

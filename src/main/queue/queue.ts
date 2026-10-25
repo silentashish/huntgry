@@ -173,7 +173,7 @@ export function requireEnqueueInput(
 export function paramsForJob(job: Job, options: QueueOptions, unattended = false): StartRunParams {
   const prefill = tailorPrefillFor(job)
   return {
-    jobDescription: prefill.jobDescription,
+    jobDescription: options.jobDescription ?? prefill.jobDescription,
     jobUrl: prefill.jobUrl,
     company: prefill.company,
     role: prefill.role,
@@ -993,7 +993,8 @@ export class TailorQueue {
   private async resolve(ws: string, item: QueueItem): Promise<StartRunParams> {
     let job = await this.deps.findJob(ws, item.jobId)
     if (!job) throw new Error('This job is no longer saved.')
-    if (!job.descriptionComplete) {
+    // A posting submitted with the item (Tailor page) needs no fetch.
+    if (!job.descriptionComplete && !item.options.jobDescription) {
       if (!canFetchDetails(job)) {
         throw new Error(`Indeed shows full job descriptions only after a human check. ${PASTE_HINT}`)
       }
