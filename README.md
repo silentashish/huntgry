@@ -199,7 +199,9 @@ npm run bench:tailor -- --model claude-opus-5-5 --label baseline-$(git rev-parse
 npm run bench:compare -- ~/huntgry-bench/<baseline-id> ~/huntgry-bench/<candidate-id> --out report.md
 ```
 
-The bench set format, every metric's definition and the honesty heuristic are in
+A bench set is a folder (default `<workspace>/.huntgry/bench/`, never committed) of one JSON file per job:
+`{ "id", "role", "company", "description" | "descriptionFile", "url"?, "coverLetter"?, "dateStyle"? }`.
+Each run writes `results.json` and `report.md` next to its workspace. The full set format, every metric's definition and the honesty heuristic are in
 [docs/changes/152-tailoring-benchmark.md](docs/changes/152-tailoring-benchmark.md).
 
 ### Adding a feature
