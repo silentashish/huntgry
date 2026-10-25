@@ -14,6 +14,8 @@ import {
   resolveJobrightCopies,
   type LinkDeps
 } from './employer-link'
+import { DEFAULT_EXPLORE_CATEGORY as CAT } from '@shared/explore-types'
+import { JOBRIGHT_API_URL } from './api'
 import { JOBRIGHT_NEW_GRAD_README } from './parse'
 import { addExplore, listExplore, toJob, type ExploreDeps } from './service'
 
@@ -22,10 +24,22 @@ const ID = '6ada8a3454bbabbab07175fc'
 const PAGE = `https://jobright.ai/jobs/info/${ID}`
 const EMPLOYER = 'https://www.citadel.com/careers/details/software-engineer-university-graduate-us/'
 
-const README = `| Company | Job Title | Location | Work Model | Date Posted |
-| ----- | --------- |  --------- | ---- | ------- |
-| **[Citadel](https://www.citadel.com)** | **[Software Engineer – University Graduate (US)](${PAGE}?utm_source=1103)** | New York, NY, United States | On Site | Oct 21 |
-`
+/** The newgrad-jobs API's answer (#169): the one Citadel posting. */
+const API = {
+  success: true,
+  errorCode: 10000,
+  result: {
+    total: 1,
+    jobList: [
+      {
+        jobId: ID,
+        tabCategory: [CAT],
+        postedAt: TODAY.getTime(),
+        properties: { title: 'Software Engineer – University Graduate (US)', company: 'Citadel', location: 'New York, NY, United States', workModel: 'On Site' }
+      }
+    ]
+  }
+}
 
 const page = (pageProps: Record<string, unknown>) => ({ logined: null, applyLink: null, originalUrl: null, ...pageProps })
 
@@ -116,9 +130,13 @@ describe('resolving the employer link (#146)', () => {
     ...over
   })
   const explore = (connected: boolean): ExploreDeps => ({
-    sourceUrl: JOBRIGHT_NEW_GRAD_README,
+    apiUrl: JOBRIGHT_API_URL,
+    readmeUrl: JOBRIGHT_NEW_GRAD_README,
     hosts: ['jobright.ai', 'www.jobright.ai'],
-    fetchText: async () => README,
+    postJson: async () => API,
+    fetchText: async () => {
+      throw new Error('The README is not read while the API answers.')
+    },
     refusal: async () => null,
     now: () => TODAY,
     link: { ...link(), connected: async () => connected }
@@ -136,27 +154,27 @@ describe('resolving the employer link (#146)', () => {
   })
 
   it('adds a job with the employer link while connected; the Jobright page stays the board link', async () => {
-    await listExplore(ws, explore(true))
-    const job = await addExplore(ws, ID, explore(true))
+    await listExplore(ws, CAT, explore(true))
+    const job = await addExplore(ws, ID, CAT, explore(true))
     expect(job).toMatchObject({ id: `jobright:${ID}`, source: 'jobright', url: EMPLOYER, boardUrl: PAGE })
     expect(loads).toEqual([PAGE])
     expect(logins).toEqual([true])
     // Idempotent: a second add loads nothing and changes nothing.
-    expect(await addExplore(ws, ID, explore(true))).toMatchObject({ url: EMPLOYER })
+    expect(await addExplore(ws, ID, CAT, explore(true))).toMatchObject({ url: EMPLOYER })
     expect(loads).toHaveLength(1)
   })
 
   it('loads nothing when not connected, and keeps the Jobright link', async () => {
-    await listExplore(ws, explore(false))
-    const job = await addExplore(ws, ID, explore(false))
+    await listExplore(ws, CAT, explore(false))
+    const job = await addExplore(ws, ID, CAT, explore(false))
     expect(job).toMatchObject({ url: PAGE, boardUrl: PAGE })
     expect(loads).toEqual([])
   })
 
   it('keeps the Jobright link when signed out, when the page has no link, or when loading fails', async () => {
-    await listExplore(ws, explore(true))
+    await listExplore(ws, CAT, explore(true))
     answer = () => ({ status: 'ok', data: { logined: false, applyLink: null, originalUrl: null } })
-    expect((await addExplore(ws, ID, explore(true))).url).toBe(PAGE)
+    expect((await addExplore(ws, ID, CAT, explore(true))).url).toBe(PAGE)
     // A signed-out page marks the account as not connected.
     expect(logins).toEqual([false])
 
@@ -175,8 +193,8 @@ describe('resolving the employer link (#146)', () => {
   })
 
   it('resolves once: a job whose link is already the employer\'s, or not a Jobright job, is skipped', async () => {
-    await listExplore(ws, explore(false))
-    await addExplore(ws, ID, explore(false))
+    await listExplore(ws, CAT, explore(false))
+    await addExplore(ws, ID, CAT, explore(false))
     expect((await resolveEmployerLink(ws, `jobright:${ID}`, link())).outcome).toBe('resolved')
     expect((await resolveEmployerLink(ws, `jobright:${ID}`, link())).outcome).toBe('skipped')
     expect(loads).toHaveLength(1)
@@ -184,7 +202,7 @@ describe('resolving the employer link (#146)', () => {
   })
 
   it('fetches the full description from the employer page once the link is resolved', async () => {
-    await listExplore(ws, explore(false))
+    await listExplore(ws, CAT, explore(false))
     const row = toJob(
       { id: ID, company: 'Citadel', companyUrl: null, title: 'Software Engineer – University Graduate (US)', url: PAGE, location: 'New York, NY', workModel: 'On Site', postedAt: '2026-10-21' },
       TODAY
@@ -217,8 +235,8 @@ describe('resolving the employer link (#146)', () => {
   })
 
   it("a human check on the employer's page is not reported as Jobright's", async () => {
-    await listExplore(ws, explore(true))
-    await addExplore(ws, ID, explore(true))
+    await listExplore(ws, CAT, explore(true))
+    await addExplore(ws, ID, CAT, explore(true))
     await expect(
       fetchDetails(ws, `jobright:${ID}`, async () => ({ status: 'blocked', message: 'www.citadel.com asked for a human check.' }))
     ).rejects.toThrow(/www\.citadel\.com asked for a human check/)

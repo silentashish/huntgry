@@ -6,7 +6,7 @@ import { loadAndExtract } from '../jobs/loader'
 import type { JobrightAccount } from '@shared/explore-types'
 import { createAccountState, createSignInLifecycle } from './account-state'
 import type { LinkDeps } from './employer-link'
-import { fetchReadme, type ExploreDeps } from './service'
+import { fetchReadme, postJson, type ExploreDeps } from './service'
 import { exploreSource } from './source'
 
 /** The app's one Jobright account state (#146), in `userData/settings.json`. */
@@ -37,10 +37,11 @@ export function linkDeps(): LinkDeps & { connected(): Promise<boolean> } {
   }
 }
 
-/** Explore's dependencies in the app: the README (or the e2e mock's), the guard and the employer-link lookup. */
+/** Explore's dependencies in the app: the API and README (or the e2e mock's), the guard and the employer-link lookup. */
 export function exploreDeps(): ExploreDeps {
   return {
     ...exploreSource(app.isPackaged),
+    postJson: (url, body) => postJson(url, body),
     fetchText: (url) => fetchReadme(url),
     refusal,
     link: linkDeps()

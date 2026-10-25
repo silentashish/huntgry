@@ -1,5 +1,5 @@
 import { app, BrowserWindow } from 'electron'
-import type { JobrightAccount } from '@shared/explore-types'
+import { DEFAULT_EXPLORE_CATEGORY, type JobrightAccount } from '@shared/explore-types'
 import { currentInspection } from '../current-workspace'
 import { configureSession, loadAndExtract, loaderIdle } from '../jobs/loader'
 import { listJobs } from '../jobs/store'
@@ -32,13 +32,14 @@ const NO_POSTING =
 async function samplePostingUrl(): Promise<string> {
   const workspace = (await currentInspection().catch(() => null))?.path
   if (!workspace) throw new Error('Open a workspace first.')
-  const { sourceUrl, hosts } = source()
-  const cached = (await readCache(workspace, sourceUrl, hosts))?.jobs[0]?.url
+  const src = source()
+  const { hosts } = src
+  const cached = (await readCache(workspace, DEFAULT_EXPLORE_CATEGORY, src))?.jobs[0]?.url
   if (cached) return cached
   for (const job of await listJobs(workspace).catch(() => [])) {
     for (const url of [job.boardUrl, job.url]) if (url && jobrightId(url, hosts)) return url
   }
-  const fetched = (await listExplore(workspace, exploreDeps()).catch(() => null))?.jobs[0]?.url
+  const fetched = (await listExplore(workspace, DEFAULT_EXPLORE_CATEGORY, exploreDeps()).catch(() => null))?.jobs[0]?.url
   if (fetched) return fetched
   throw new Error(NO_POSTING)
 }
