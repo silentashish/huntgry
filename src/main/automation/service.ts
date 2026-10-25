@@ -605,6 +605,10 @@ export class Automation {
           // Signed out or no link given is not a failure: the description and the fill go on with the Jobright page.
           await this.done(ws, state, run, c, changed ? 'Employer link found.' : 'No employer link (signed out, or Jobright gives none).', changed ? 'ok' : 'skip')
         }
+      } else if (job.source === 'jobright' && job.boardUrl && job.url !== job.boardUrl) {
+        // Saving it to Jobs while connected already looked the link up (#146): said here, so the log reads in order.
+        await this.begin(ws, state, run, c, 'link', 'Looking up the employer link on Jobright.')
+        await this.done(ws, state, run, c, 'Employer link found when it was saved to Jobs.')
       }
     }
 
