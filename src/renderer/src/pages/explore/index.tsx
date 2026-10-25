@@ -76,22 +76,36 @@ export function ExplorePage() {
     return () => clearInterval(tick)
   }, [])
 
+  /**
+   * Whether request `id` is still the newest, and when it is settled, the end of every wait it took over: a Refresh
+   * clicked while a list loads (or a list started while a Refresh runs) supersedes it, so the newest request clears
+   * both the loader and the Refresh spinner. A superseded one changes nothing on screen.
+   */
+  const current = (id: number) => id === request.current
+  const settle = (id: number) => {
+    if (!current(id)) return
+    setLoading(false)
+    setRefreshing(false)
+  }
+
   // The category's cached list; main fetches it only when the workspace has no copy yet.
   useEffect(() => {
     const id = ++request.current
     setLoading(true)
+    // A Refresh still running is for the category left; its answer is dropped.
+    setRefreshing(false)
     setError(null)
     api.explore
       .list(category)
       .then(
-        (l) => id === request.current && setList(l),
+        (l) => current(id) && setList(l),
         (err) => {
-          if (id !== request.current) return
+          if (!current(id)) return
           setList(null)
           setError(errorText(err))
         }
       )
-      .finally(() => id === request.current && setLoading(false))
+      .finally(() => settle(id))
   }, [category])
 
   function pickCategory(c: string | null) {
@@ -107,14 +121,14 @@ export function ExplorePage() {
     setError(null)
     try {
       const l = await api.explore.refresh(category)
-      if (id !== request.current) return
+      if (!current(id)) return
       setList(l)
       setNow(Date.now())
     } catch (err) {
       // The cached list stays on screen; the error says why it could not be refreshed.
-      if (id === request.current) setError(errorText(err))
+      if (current(id)) setError(errorText(err))
     } finally {
-      setRefreshing(false)
+      settle(id)
     }
   }
 

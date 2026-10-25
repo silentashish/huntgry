@@ -128,6 +128,9 @@ flowchart TD
   - `explore.test.ts`: the README path as the fallback, the overrides (loopback only, each on its
     own), and `postJson` (body, HTTP errors, non-JSON, the 5 MB cap, offline).
   - `employer-link.test.ts`: the #146 cases, now on an API row.
+  - `ExplorePage.dom.test.tsx`: list and Refresh requests that overlap (Refresh during the first load, that
+    load failing, a category picked while a Refresh runs, Refresh during an uncached category switch). The newest
+    request wins, and when it settles it clears both the loader and the Refresh spinner.
   - `view.test.ts`: the Earlier split, H1B, minimum salary (hourly too) and industry text, filters
     disabled on README lists, the remembered category, labels and the source line.
 - e2e: `npm run build && npx playwright test -c e2e/playwright.config.ts e2e/tests/explore.spec.ts e2e/tests/explore-jobright.spec.ts`.
