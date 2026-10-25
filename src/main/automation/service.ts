@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
-import { localDay, matchReason, matchSkipReason, selectCandidates, type CandidateInput, type SelectContext } from '@shared/automation-select'
+import { companyHeld, localDay, matchReason, matchSkipReason, normCompany, selectCandidates, type CandidateInput, type SelectContext } from '@shared/automation-select'
 import {
+  AUTOMATION_STEP_LABEL,
   preparedSummary,
   SETTLED_STEPS,
   WORKING_STEPS,
@@ -42,16 +43,42 @@ export interface TailorResult {
   applicationId?: string
   runId?: string
   error?: string
+  /** The wait ended because the run was stopped, not because the item did. */
+  aborted?: boolean
+}
+
+/**
+ * The run's allowance of Jobright pages (#154 Q4). The app's loaders ask it before every Jobright page they load
+ * (saving, the link, the description and its summary fallback, aliases included) and refuse the load once it is
+ * spent.
+ */
+export interface PageBudget {
+  take(): boolean
+}
+
+/** A link lookup's outcome, as `resolveEmployerLink` tells it (the best of the job's Jobright copies). */
+export type LinkOutcome = 'resolved' | 'signed-out' | 'no-link' | 'failed' | 'skipped'
+
+/** What Automation keeps in userData per workspace: who turned the run window on, and today's count. */
+export interface TrustedUsage {
+  enabled: boolean
+  day: { date: string; started: number }
 }
 
 /** The unattended pipeline, as Automation uses it (`automation/tailor.ts` adapts the app's pipeline). */
 export interface TailorDeps {
   /** Why a pipeline cannot start now (another one is running, the queue is paused with jobs), or `null`. */
   blocked(workspace: string): string | null
-  /** Starts a pipeline for this one job; resolves with its queue item once queued. */
-  start(workspace: string, jobId: string, options: { automationRunId: string; coverLetter: boolean }): Promise<{ itemId: string }>
-  /** Resolves when the item ends: done (with its review outcome), failed, cancelled, or waiting for a reply. */
-  wait(itemId: string): Promise<TailorResult>
+  /**
+   * Starts a pipeline for this one job; resolves with its queue item once queued. `retry`: the user's Retry of a
+   * result tailored before (needs attention), so the "tailored before" guard does not refuse the one attempt.
+   */
+  start(workspace: string, jobId: string, options: { automationRunId: string; coverLetter: boolean; retry?: boolean }): Promise<{ itemId: string }>
+  /**
+   * Resolves when the item ends: done (with its review outcome), failed, cancelled, or waiting for a reply; or as
+   * `cancelled` with `aborted` once `signal` aborts (Stop, quit, a workspace switch), whatever the queue does.
+   */
+  wait(itemId: string, signal: AbortSignal): Promise<TailorResult>
   /** The item's current state, if the queue still has it (restart recovery). */
   item(itemId: string): TailorResult | 'working' | null
   /** Pause, resume or stop Automation's own pipeline; nothing when the running pipeline is someone else's. */
@@ -60,8 +87,11 @@ export interface TailorDeps {
   stop(workspace: string): Promise<void>
   /** Median tailoring cost of recent runs (any agent, estimated from tokens), or `null` without history. */
   medianCostUsd(workspace: string): Promise<number | null>
-  /** A run's cost, estimated from tokens for every agent (Claude's own figure when there is no estimate). */
-  runCostUsd(workspace: string, runId: string): Promise<number>
+  /**
+   * What a queue item cost: every run of it (a failed attempt the pipeline retried included), estimated from tokens
+   * for every agent (Claude's own figure when there is no estimate).
+   */
+  costUsd(workspace: string, itemId: string): Promise<number>
 }
 
 export type PrepareOutcome =
@@ -88,10 +118,10 @@ export interface AutomationDeps {
   linkConnected(): Promise<boolean>
   /** The job's Jobright page is still its link (no employer link yet). */
   onJobright(job: Job): boolean
-  /** `resolveJobrightCopies`: whether any link changed. */
-  resolveLink(workspace: string, jobId: string): Promise<boolean>
-  /** `fetchDetails` (#148's fallback inside); throws with a message for the user. */
-  fetchDetails(workspace: string, jobId: string): Promise<Job>
+  /** `resolveJobrightCopies`, with the outcome of its lookups; Jobright pages go through `pages`. */
+  resolveLink(workspace: string, jobId: string, pages: PageBudget): Promise<LinkOutcome>
+  /** `fetchDetails` (#148's fallback inside); throws with a message for the user. Jobright pages go through `pages`. */
+  fetchDetails(workspace: string, jobId: string, pages: PageBudget): Promise<Job>
   /** Relevant's exclusion and the match score of a job, on what it says now. */
   score(workspace: string, job: Job): Promise<{ excluded?: string; match: AutomationMatch }>
   tailor: TailorDeps
@@ -104,6 +134,12 @@ export interface AutomationDeps {
   dismissJob(workspace: string, jobId: string): Promise<void>
   readState(workspace: string): Promise<AutomationState>
   writeState(workspace: string, state: AutomationState): Promise<void>
+  /**
+   * The run window switch and today's count, out of the workspace (an agent writing there must not turn the window
+   * on or reset the count). `null` when nothing is stored yet.
+   */
+  readTrusted(workspace: string): Promise<TrustedUsage | null>
+  writeTrusted(workspace: string, usage: TrustedUsage): Promise<void>
   appendLog(workspace: string, entry: AutomationLogEntry): Promise<void>
   writePrepared(workspace: string, fill: PreparedFill): Promise<void>
   readPrepared(workspace: string, applicationId: string): Promise<PreparedFill | null>
@@ -122,6 +158,13 @@ const ORDER: AutomationStep[] = ['saving', 'link', 'description', 'scoring', 'ta
 /** Thrown inside a run when it must end now (Stop, workspace switch). */
 class RunEnded extends Error {}
 
+/** A loader refused a Jobright page: the run's allowance is spent. The job waits for the next run. */
+export class PageBoundError extends Error {
+  constructor() {
+    super('The run reached its Jobright page allowance.')
+  }
+}
+
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
 const money = (n: number) => `$${n.toFixed(2)}`
 const titleOf = (c: Pick<AutomationCandidate, 'title' | 'company'>) => [c.title, c.company].filter(Boolean).join(' · ')
@@ -131,12 +174,20 @@ export class Automation {
   private ws: string | null = null
   private state: AutomationState | null = null
   private loop: Promise<void> | null = null
+  /** A run is being set up (between the start check and the driver): a second start waits its turn. */
+  private starting = false
+  /** Loading or switching the workspace's state, one at a time. */
+  private syncing: Promise<unknown> = Promise.resolve()
   private timer: NodeJS.Timeout | null = null
   private stopRequested = false
+  /** Aborts the run's waits on the pipeline (Stop, quit, workspace switch). */
+  private abort: AbortController | null = null
   /** Wakes a run that holds (window, pause, apply session, pipeline). */
   private wakers = new Set<() => void>()
   /** The inputs of the current run's candidates, by key. */
   private inputs = new Map<string, CandidateInput>()
+  /** The step the current candidate is in, for the failure boundary. */
+  private active: AutomationStep | null = null
   /** The apply session the user opened from a Ready card, to record the Submit it ends in (#154 Q2). */
   private opened: { ws: string; key: string; sessionId: string } | null = null
   private stopped = false
@@ -153,10 +204,11 @@ export class Automation {
     this.ensureTimer()
   }
 
-  /** Before quit: no new step starts; the running one is left to the services' own shutdown. */
+  /** Before quit: no new step starts; the waits end; the running step is left to the services' own shutdown. */
   shutdown(): void {
     this.stopped = true
     this.stopRequested = true
+    this.abort?.abort()
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.wake()
@@ -169,16 +221,31 @@ export class Automation {
     this.timer.unref?.()
   }
 
-  /** The open workspace's state, loaded once per workspace; a run of another workspace is stopped. */
-  private async sync(): Promise<{ ws: string; state: AutomationState }> {
+  /** The open workspace's state, loaded once per workspace, one load at a time; a run of another workspace is stopped. */
+  private sync(): Promise<{ ws: string; state: AutomationState }> {
+    const next = this.syncing.catch(() => undefined).then(() => this.syncNow())
+    this.syncing = next
+    return next
+  }
+
+  private async syncNow(): Promise<{ ws: string; state: AutomationState }> {
     const ws = await this.deps.workspace()
     if (this.ws === ws && this.state) return { ws, state: this.state }
     if (this.loop) {
+      // The old workspace's run ends now: its waits are aborted and its own pipeline stopped (refused if that
+      // workspace's queue is no longer loaded, which leaves nothing to stop).
+      const old = this.ws
       this.stopRequested = true
+      this.abort?.abort()
       this.wake()
+      if (old) await this.deps.tailor.stop(old).catch(() => undefined)
       await this.loop.catch(() => undefined)
     }
     const state = await this.deps.readState(ws)
+    const trusted = await this.deps.readTrusted(ws).catch(() => null)
+    // The workspace copy is only for display: what turns the window on and what was used today come from userData.
+    state.enabled = trusted?.enabled ?? false
+    state.day = trusted ? { ...trusted.day } : { date: '', started: 0 }
     this.ws = ws
     this.state = state
     await this.recover(ws, state)
@@ -187,15 +254,20 @@ export class Automation {
 
   /**
    * A run the app quit (or a workspace switch) interrupted: it ends, and a job that was mid-step goes to Needs you
-   * ("Interrupted"), unless its tailoring is still going on in the queue (it is followed again by the next run).
+   * ("Interrupted"). A job interrupted in tailoring keeps its queue item: Retry follows that item if it is still
+   * there instead of tailoring again.
    */
   private async recover(ws: string, state: AutomationState): Promise<void> {
     let changed = false
     for (const c of Object.values(state.candidates)) {
       if (!WORKING_STEPS.has(c.step)) continue
-      const item = c.step === 'tailoring' && c.queueItemId ? this.deps.tailor.item(c.queueItemId) : null
-      if (item === 'working') continue
-      this.fail(c, c.step, 'Interrupted: Huntgry closed (or the workspace changed) during this step.')
+      this.fail(
+        c,
+        c.step,
+        c.step === 'tailoring'
+          ? 'Interrupted while tailoring: Huntgry closed or the workspace changed. Retry follows the job in the queue if it is still there.'
+          : 'Interrupted: Huntgry closed (or the workspace changed) during this step.'
+      )
       changed = true
     }
     if (state.run && state.run.status !== 'finished') {
@@ -248,8 +320,8 @@ export class Automation {
     if (state.run?.status === 'paused') {
       state.run.status = 'running'
       state.run.message = undefined
-      await this.deps.tailor.resume(ws).catch(() => undefined)
     }
+    if (state.run) await this.deps.tailor.resume(ws).catch(() => undefined)
     await this.save(ws, state)
     this.wake()
     return state
@@ -259,8 +331,8 @@ export class Automation {
   async runNow(): Promise<AutomationState> {
     const { ws, state } = await this.sync()
     if (this.stopped) throw new Error('Huntgry is quitting; Automation can no longer start.')
-    if (state.run) {
-      if (state.run.status === 'waiting') state.run.trigger = 'now'
+    if (state.run || this.starting) {
+      if (state.run?.status === 'waiting') state.run.trigger = 'now'
       this.wake()
       return state
     }
@@ -276,6 +348,7 @@ export class Automation {
       this.stopRequested = true
       state.run.message = 'Stopping…'
       if (state.run.current && state.candidates[state.run.current]?.step === 'tailoring') await this.deps.tailor.stop(ws).catch(() => undefined)
+      this.abort?.abort()
       await this.save(ws, state)
       this.wake()
     }
@@ -304,7 +377,9 @@ export class Automation {
     c.updatedAt = this.now().toISOString()
     await this.log(ws, state.run?.id ?? '', c, from, 'info', 'Retry pressed: one more attempt.')
     if (state.run) {
-      if (!state.run.candidates.includes(key)) state.run.candidates.push(key)
+      // Appended even when the run passed this job already: the driver works through the list in order and only
+      // takes jobs that are Selected, so the job gets its attempt after the current one, exactly once.
+      state.run.candidates.push(key)
       await this.save(ws, state)
       this.wake()
     } else {
@@ -324,6 +399,7 @@ export class Automation {
     c.reasons = ['Dismissed by you.']
     c.error = undefined
     c.failedStep = undefined
+    c.retryFrom = undefined
     c.updatedAt = this.now().toISOString()
     await this.log(ws, state.run?.id ?? '', c, 'skipped', 'skip', 'Dismissed by you.')
     await this.save(ws, state)
@@ -386,7 +462,7 @@ export class Automation {
       state.nextWindowAt = next
       this.deps.emit(state)
     }
-    if (state.run) {
+    if (state.run || this.starting) {
       this.wake()
       return
     }
@@ -420,52 +496,60 @@ export class Automation {
 
   private async select(ws: string, state: AutomationState, settings: AutomationSettings) {
     const now = this.now()
-    const lists = await Promise.all(this.deps.sources(settings).map((s) => s.list(ws).then((inputs) => ({ source: s, inputs })).catch(() => ({ source: s, inputs: [] }))))
-    const inputs = lists.flatMap((l) => l.inputs)
+    const lists = await Promise.all(this.deps.sources(settings).map((s) => s.list(ws).catch(() => [] as CandidateInput[])))
+    const inputs = lists.flat()
     const ctx = await this.deps.selection(ws)
     const selection = selectCandidates(inputs, { ...ctx, candidates: state.candidates, day: state.day, settings, now, today: localDay(now) })
-    return { selection, inputs, lists }
+    return { selection, inputs }
   }
 
+  /** Sets a run up and starts its driver. The check and the claim happen before the first await: one run at a time. */
   private async startRun(ws: string, state: AutomationState, trigger: AutomationRun['trigger'], only?: string[]): Promise<void> {
-    if (this.loop) return
-    const settings = await this.deps.settings()
-    const now = this.now()
-    const run: AutomationRun = {
-      id: `a-${localDay(now).replace(/-/g, '')}-${randomBytes(3).toString('hex')}`,
-      startedAt: now.toISOString(),
-      status: 'running',
-      trigger,
-      costUsd: 0,
-      pageLoads: 0,
-      candidates: []
-    }
-    this.inputs.clear()
-    const { selection, inputs } = await this.select(ws, state, settings)
-    for (const input of inputs) this.inputs.set(input.key, input)
-    if (only) {
-      run.candidates = only.filter((k) => state.candidates[k])
-    } else {
-      for (const c of selection.skipped) {
-        const prior = state.candidates[c.key]
-        if (prior && (SETTLED_STEPS.has(prior.step) || WORKING_STEPS.has(prior.step))) continue
-        state.candidates[c.key] = { ...c, automationRunId: run.id }
+    if (this.loop || this.starting) return
+    this.starting = true
+    try {
+      const settings = await this.deps.settings()
+      const now = this.now()
+      const run: AutomationRun = {
+        id: `a-${localDay(now).replace(/-/g, '')}-${randomBytes(3).toString('hex')}`,
+        startedAt: now.toISOString(),
+        status: 'running',
+        trigger,
+        costUsd: 0,
+        pageLoads: 0,
+        candidates: []
       }
-      for (const c of selection.picked) {
-        state.candidates[c.key] = { ...c, automationRunId: run.id }
-        run.candidates.push(c.key)
+      this.inputs.clear()
+      const { selection, inputs } = await this.select(ws, state, settings)
+      if (state !== this.state) return
+      for (const input of inputs) this.inputs.set(input.key, input)
+      if (only) {
+        run.candidates = only.filter((k) => state.candidates[k])
+      } else {
+        for (const c of selection.skipped) {
+          const prior = state.candidates[c.key]
+          if (prior && (SETTLED_STEPS.has(prior.step) || WORKING_STEPS.has(prior.step))) continue
+          state.candidates[c.key] = { ...c, automationRunId: run.id }
+        }
+        for (const c of selection.picked) {
+          state.candidates[c.key] = { ...c, automationRunId: run.id }
+          run.candidates.push(c.key)
+        }
       }
+      this.stopRequested = false
+      this.abort = new AbortController()
+      state.run = run
+      await this.log(ws, run.id, null, 'run', 'start', `${trigger === 'now' ? 'Run now' : 'Run window'}: ${run.candidates.length} job${run.candidates.length === 1 ? '' : 's'} picked.`)
+      if (!only) for (const c of selection.skipped) await this.log(ws, run.id, c, 'skipped', 'skip', c.reasons[0] ?? 'Skipped.')
+      await this.save(ws, state)
+      this.loop = this.drive(ws, state, run)
+        .catch((err: unknown) => console.error('Automation run failed:', err))
+        .finally(() => {
+          this.loop = null
+        })
+    } finally {
+      this.starting = false
     }
-    this.stopRequested = false
-    state.run = run
-    await this.log(ws, run.id, null, 'run', 'start', `${trigger === 'now' ? 'Run now' : 'Run window'}: ${run.candidates.length} job${run.candidates.length === 1 ? '' : 's'} picked.`)
-    if (!only) for (const c of selection.skipped) await this.log(ws, run.id, c, 'skipped', 'skip', c.reasons[0] ?? 'Skipped.')
-    await this.save(ws, state)
-    this.loop = this.drive(ws, state, run)
-      .catch((err: unknown) => console.error('Automation run failed:', err))
-      .finally(() => {
-        this.loop = null
-      })
   }
 
   private async drive(ws: string, state: AutomationState, run: AutomationRun): Promise<void> {
@@ -475,7 +559,7 @@ export class Automation {
       for (let i = 0; i < run.candidates.length; i++) {
         const c = state.candidates[run.candidates[i]]
         if (!c || c.step !== 'selected') continue
-        const end = await this.process(ws, state, run, c)
+        const end = await this.guarded(ws, state, run, c)
         if (end) {
           status = end.status
           why = end.message
@@ -486,6 +570,7 @@ export class Automation {
       status = 'stopped'
       why = err instanceof RunEnded ? err.message : `Stopped: ${message(err)}`
     }
+    this.active = null
     if (state !== this.state) return
     run.status = status
     run.message = why
@@ -499,6 +584,34 @@ export class Automation {
     await this.log(ws, run.id, null, 'run', 'info', `Run ${status === 'finished' ? 'finished' : 'ended'}: ${ready} ready to submit, ${needs} need you, ${money(run.costUsd)} tailoring.${why ? ` ${why}` : ''}`)
     await this.save(ws, state)
     if (ready || needs) this.deps.notify?.('Huntgry Automation', `${ready} ready to submit · ${needs} need you`)
+  }
+
+  /**
+   * One candidate inside a failure boundary: anything a step throws (an unreadable profile while scoring, a
+   * prepared file that cannot be written…) leaves the job in Needs you at the step it was in, logged once, and the
+   * run goes on. Stop and workspace switches still end the run; a spent page allowance leaves the job Selected.
+   */
+  private async guarded(ws: string, state: AutomationState, run: AutomationRun, c: AutomationCandidate): Promise<{ status: AutomationRun['status']; message: string } | void> {
+    this.active = null
+    try {
+      return await this.process(ws, state, run, c)
+    } catch (err) {
+      if (err instanceof RunEnded || state !== this.state) throw err
+      if (err instanceof PageBoundError) return this.waitForPages(ws, state, c)
+      const step = this.active ?? 'saving'
+      if (c.step === 'needs-you') return
+      await this.failed(ws, state, run, c, step, `${AUTOMATION_STEP_LABEL[step]} failed: ${message(err)}`)
+    }
+  }
+
+  /** The run's Jobright page allowance is spent: the job waits, Selected, for the next run. */
+  private async waitForPages(ws: string, state: AutomationState, c: AutomationCandidate): Promise<void> {
+    const settings = await this.deps.settings()
+    c.step = 'selected'
+    if (this.active && this.active !== 'saving') c.retryFrom = c.retryFrom ?? this.active
+    c.reasons = [`Waits for the next run: at most ${settings.maxExplorePageLoads} Jobright pages per run.`, ...c.reasons.filter((r) => !r.startsWith('Waits for'))]
+    c.updatedAt = this.now().toISOString()
+    await this.save(ws, state)
   }
 
   /**
@@ -516,15 +629,7 @@ export class Automation {
         await this.log(ws, run.id, null, 'run', 'info', r.message)
         await this.save(ws, state)
       }
-      await new Promise<void>((resolve) => {
-        const done = () => {
-          this.wakers.delete(done)
-          clearTimeout(t)
-          resolve()
-        }
-        const t = setTimeout(done, this.deps.tickMs ?? 60_000)
-        this.wakers.add(done)
-      })
+      await this.sleep()
     }
     if (run.status !== 'running') {
       run.status = 'running'
@@ -533,26 +638,61 @@ export class Automation {
     }
   }
 
+  /** Until the next tick or wake. */
+  private sleep(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const done = () => {
+        this.wakers.delete(done)
+        clearTimeout(t)
+        resolve()
+      }
+      const t = setTimeout(done, this.deps.tickMs ?? 60_000)
+      this.wakers.add(done)
+    })
+  }
+
   private async checkAlive(ws: string, state: AutomationState): Promise<void> {
     if (this.stopRequested || state !== this.state) throw new RunEnded(this.stopped ? 'Huntgry is quitting.' : 'Stopped by you.')
     const current = await this.deps.workspace().catch(() => null)
     if (current !== ws) throw new RunEnded('Stopped: the workspace changed.')
   }
 
-  /** Before each step: pause, and the window (a window run holds when it closes; Run now ignores it). */
-  private async gate(ws: string, state: AutomationState, run: AutomationRun): Promise<void> {
-    await this.hold(ws, state, run, async () => {
-      if (state.paused) return { status: 'paused', message: 'Paused by you: the next step waits for Resume.' }
-      if (run.trigger === 'window') {
-        const settings = await this.deps.settings()
-        const now = this.now()
-        if (!isOpen(settings.window, now)) {
-          const at = nextOpen(settings.window, now)
-          return { status: 'waiting', message: `The run window closed; continues at ${at ? timeOf(at) : 'its next opening'}.` }
-        }
+  /** Paused, or a window run outside its window: why the run may not go on now, or `null`. */
+  private async restriction(state: AutomationState, run: AutomationRun): Promise<{ status: 'paused' | 'waiting'; message: string } | null> {
+    if (state.paused) return { status: 'paused', message: 'Paused by you: the next step waits for Resume.' }
+    if (run.trigger === 'window') {
+      const settings = await this.deps.settings()
+      const now = this.now()
+      if (!isOpen(settings.window, now)) {
+        const at = nextOpen(settings.window, now)
+        return { status: 'waiting', message: `The run window closed; continues at ${at ? timeOf(at) : 'its next opening'}.` }
       }
-      return null
+    }
+    return null
+  }
+
+  /**
+   * Before each step: pause and the window, and what the step itself waits for (another pipeline, the user's apply
+   * session), checked together, so the step starts only when all of them allow it at the same moment.
+   */
+  private async gate(ws: string, state: AutomationState, run: AutomationRun, waitFor?: () => string | null): Promise<void> {
+    await this.hold(ws, state, run, async () => {
+      const r = await this.restriction(state, run)
+      if (r) return r
+      const blocked = waitFor?.()
+      return blocked ? { status: 'waiting', message: blocked } : null
     })
+  }
+
+  /** The run's page allowance, counted on `run.pageLoads`. */
+  private pages(run: AutomationRun, settings: AutomationSettings): PageBudget {
+    return {
+      take: () => {
+        if (run.pageLoads >= settings.maxExplorePageLoads) return false
+        run.pageLoads++
+        return true
+      }
+    }
   }
 
   /**
@@ -564,23 +704,20 @@ export class Automation {
     const from = c.retryFrom
     c.retryFrom = undefined
     const start = from ? ORDER.indexOf(from) : 0
+    const retry = from !== undefined
     run.current = c.key
     const at = (step: AutomationStep) => ORDER.indexOf(step) >= start
+    const pages = this.pages(run, settings)
+    const pagesLeft = () => run.pageLoads < settings.maxExplorePageLoads
 
-    // Saving an Explore row (and, while connected, its employer link: one Jobright page).
+    // Saving an Explore row (its employer link is the next step's, so a failed lookup is reported there).
     if (!c.jobId) {
       await this.gate(ws, state, run)
-      if (run.pageLoads >= settings.maxExplorePageLoads) {
-        c.reasons = [`Waits for the next run: at most ${settings.maxExplorePageLoads} Jobright pages per run.`, ...c.reasons.filter((r) => !r.startsWith('Waits for'))]
-        await this.save(ws, state)
-        return
-      }
       const input = this.inputs.get(c.key)
       const source = input ? this.deps.sources(settings).find((s) => s.id === input.source) : undefined
       if (!input || !source) return this.failed(ws, state, run, c, 'saving', 'This job is no longer on its list.')
       await this.begin(ws, state, run, c, 'saving', 'Saving to Jobs.')
       try {
-        if (await this.deps.linkConnected().catch(() => false)) run.pageLoads++
         const jobId = await source.materialize(ws, input)
         this.rekey(state, run, c, jobId)
         await this.done(ws, state, run, c, 'Saved to Jobs.')
@@ -595,21 +732,24 @@ export class Automation {
       const job = await this.deps.findJob(ws, jobId)
       if (!job) return this.failed(ws, state, run, c, 'link', 'This job is no longer saved.')
       if (this.deps.onJobright(job)) {
-        await this.begin(ws, state, run, c, 'link', 'Looking up the employer link on Jobright.')
         if (!(await this.deps.linkConnected().catch(() => false))) {
+          await this.begin(ws, state, run, c, 'link', 'Looking up the employer link on Jobright.')
           await this.done(ws, state, run, c, 'Jobright is not connected: the job keeps its Jobright link.', 'skip')
-        } else if (run.pageLoads >= settings.maxExplorePageLoads) {
-          await this.done(ws, state, run, c, `No lookup: at most ${settings.maxExplorePageLoads} Jobright pages per run.`, 'skip')
         } else {
-          run.pageLoads++
-          const changed = await this.deps.resolveLink(ws, jobId).catch(() => false)
+          if (!pagesLeft()) throw new PageBoundError()
+          await this.begin(ws, state, run, c, 'link', 'Looking up the employer link on Jobright.')
+          let outcome: LinkOutcome
+          try {
+            outcome = await this.deps.resolveLink(ws, jobId, pages)
+          } catch (err) {
+            if (err instanceof PageBoundError) throw err
+            return this.failed(ws, state, run, c, 'link', `Couldn't look up the employer link: ${message(err)}`)
+          }
+          if (outcome === 'failed') return this.failed(ws, state, run, c, 'link', "Couldn't load the job's Jobright page to read its employer link.")
           // Signed out or no link given is not a failure: the description and the fill go on with the Jobright page.
-          await this.done(ws, state, run, c, changed ? 'Employer link found.' : 'No employer link (signed out, or Jobright gives none).', changed ? 'ok' : 'skip')
+          if (outcome === 'resolved') await this.done(ws, state, run, c, 'Employer link found.')
+          else await this.done(ws, state, run, c, outcome === 'signed-out' ? 'No employer link: Jobright says you are signed out.' : 'No employer link: Jobright gives none for this job.', 'skip')
         }
-      } else if (job.source === 'jobright' && job.boardUrl && job.url !== job.boardUrl) {
-        // Saving it to Jobs while connected already looked the link up (#146): said here, so the log reads in order.
-        await this.begin(ws, state, run, c, 'link', 'Looking up the employer link on Jobright.')
-        await this.done(ws, state, run, c, 'Employer link found when it was saved to Jobs.')
       }
     }
 
@@ -618,13 +758,14 @@ export class Automation {
       const job = await this.deps.findJob(ws, jobId)
       if (!job) return this.failed(ws, state, run, c, 'description', 'This job is no longer saved.')
       if (!job.descriptionComplete) {
+        if (job.source === 'jobright' && !pagesLeft()) throw new PageBoundError()
         await this.begin(ws, state, run, c, 'description', 'Reading the full description.')
         try {
-          if (job.source === 'jobright') run.pageLoads++
-          const full = await this.deps.fetchDetails(ws, jobId)
+          const full = await this.deps.fetchDetails(ws, jobId, pages)
           if (!full.descriptionComplete) return this.failed(ws, state, run, c, 'description', 'Only part of the posting could be read.')
           await this.done(ws, state, run, c, full.descriptionSource === 'jobright-summary' ? "Read Jobright's summary (the employer page has no description)." : 'Read the full description.')
         } catch (err) {
+          if (err instanceof PageBoundError) throw err
           return this.failed(ws, state, run, c, 'description', `Couldn't read the description: ${message(err)}`)
         }
       }
@@ -652,63 +793,87 @@ export class Automation {
     }
 
     if (at('tailoring')) {
-      await this.gate(ws, state, run)
-      // Per day: the jobs that entered tailoring today, across runs.
-      const today = localDay(this.now())
-      if (state.day.date !== today) state.day = { date: today, started: 0 }
-      if (state.day.started >= settings.perDay) {
-        const reason = `Cap: ${settings.perDay} a day.`
-        for (const key of run.candidates) {
-          const other = state.candidates[key]
-          if (other && other.step === 'selected') {
-            other.step = 'skipped'
-            other.reasons = [reason, ...other.reasons.filter((r) => !r.startsWith('Cap:'))]
-            other.updatedAt = this.now().toISOString()
+      // A job interrupted while tailoring: its queue item is followed again rather than tailored a second time.
+      const kept = retry && c.queueItemId ? this.deps.tailor.item(c.queueItemId) : null
+      const follow = kept === 'working' || (kept !== null && kept.status === 'done' && (kept.outcome === 'unreviewed' || kept.outcome === 'approved'))
+      // Everything the launch waits for, checked together right before it.
+      await this.gate(ws, state, run, follow ? undefined : () => this.deps.tailor.blocked(ws))
+      if (!follow) {
+        // Per company, with what is ready, in flight and applied now (an explicit Retry too).
+        const ctx = await this.deps.selection(ws)
+        const held = companyHeld(ctx.applications, state.candidates, this.now(), c.key).get(normCompany(c.company))?.size ?? 0
+        if (normCompany(c.company) && held >= settings.perCompany) {
+          const reason = `Cap: ${settings.perCompany} per company.`
+          if (retry) {
+            // The retry keeps its place: still Needs you at tailoring, until a place frees up.
+            this.fail(c, 'tailoring', `${reason} Retry when a place frees up.`)
+            await this.log(ws, run.id, c, 'tailoring', 'skip', reason)
+          } else {
+            c.step = 'skipped'
+            c.reasons = [reason, ...c.reasons.filter((r) => !r.startsWith('Cap:'))]
+            c.updatedAt = this.now().toISOString()
+            await this.log(ws, run.id, c, 'tailoring', 'skip', reason)
           }
+          await this.save(ws, state)
+          return
         }
-        await this.save(ws, state)
-        return { status: 'stopped-cap', message: `Daily cap reached (${settings.perDay} jobs today).` }
+        // Per run cost: the next job would likely cost the median of recent runs.
+        const median = (await this.deps.tailor.medianCostUsd(ws).catch(() => null)) ?? 0
+        if (run.costUsd + median > settings.maxCostUsd) {
+          await this.log(ws, run.id, c, 'tailoring', 'skip', `Cost cap: ${money(run.costUsd)} spent + ~${money(median)} for the next job is over ${money(settings.maxCostUsd)}.`)
+          if (retry) c.retryFrom = 'tailoring'
+          return { status: 'stopped-cost', message: `Cost cap reached (${money(run.costUsd)} of ${money(settings.maxCostUsd)}).` }
+        }
+        // Per day, on the local day of the launch itself (after every wait).
+        const today = localDay(this.now())
+        if (state.day.date !== today) state.day = { date: today, started: 0 }
+        if (state.day.started >= settings.perDay) {
+          const reason = `Cap: ${settings.perDay} a day.`
+          for (const key of run.candidates) {
+            const other = state.candidates[key]
+            if (other && other.step === 'selected') {
+              other.step = 'skipped'
+              other.reasons = [reason, ...other.reasons.filter((r) => !r.startsWith('Cap:'))]
+              other.updatedAt = this.now().toISOString()
+            }
+          }
+          if (retry) this.fail(c, 'tailoring', `${reason} Retry tomorrow.`)
+          await this.save(ws, state)
+          return { status: 'stopped-cap', message: `Daily cap reached (${settings.perDay} jobs today).` }
+        }
       }
-      // Per run cost: the next job would likely cost the median of recent runs.
-      const median = (await this.deps.tailor.medianCostUsd(ws).catch(() => null)) ?? 0
-      if (run.costUsd + median > settings.maxCostUsd) {
-        await this.log(ws, run.id, c, 'tailoring', 'skip', `Cost cap: ${money(run.costUsd)} spent + ~${money(median)} for the next job is over ${money(settings.maxCostUsd)}.`)
-        return { status: 'stopped-cost', message: `Cost cap reached (${money(run.costUsd)} of ${money(settings.maxCostUsd)}).` }
-      }
-      await this.hold(ws, state, run, async () => {
-        const blocked = this.deps.tailor.blocked(ws)
-        return blocked ? { status: 'waiting', message: blocked } : null
-      })
-      await this.begin(ws, state, run, c, 'tailoring', 'Tailoring through the unattended pipeline.')
+      await this.begin(ws, state, run, c, 'tailoring', follow ? 'Following the tailoring job still in the queue.' : 'Tailoring through the unattended pipeline.')
       let result: TailorResult
       try {
-        const { itemId } = await this.deps.tailor.start(ws, jobId, { automationRunId: run.id, coverLetter: settings.coverLetter })
-        c.queueItemId = itemId
-        state.day.started++
-        await this.save(ws, state)
-        result = await this.deps.tailor.wait(itemId)
+        if (!follow) {
+          // The day is charged with the launch, before anything can wait.
+          state.day.started++
+          const { itemId } = await this.deps.tailor.start(ws, jobId, { automationRunId: run.id, coverLetter: settings.coverLetter, ...(retry ? { retry: true } : {}) })
+          c.queueItemId = itemId
+          await this.save(ws, state)
+        }
+        result = await this.waitTailoring(ws, state, run, c.queueItemId as string)
       } catch (err) {
         return this.failed(ws, state, run, c, 'tailoring', `Couldn't start tailoring: ${message(err)}`)
       }
-      if (result.runId) {
-        c.runId = result.runId
-        const cost = await this.deps.tailor.runCostUsd(ws, result.runId).catch(() => 0)
-        c.costUsd = cost
-        run.costUsd = Math.round((run.costUsd + cost) * 100) / 100
-      }
+      const cost = c.queueItemId ? await this.deps.tailor.costUsd(ws, c.queueItemId).catch(() => 0) : 0
+      run.costUsd = Math.round((run.costUsd + cost) * 100) / 100
+      c.costUsd = cost
+      if (result.runId) c.runId = result.runId
       if (result.applicationId) c.applicationId = result.applicationId
-      if (result.status === 'cancelled' && this.stopRequested) {
+      if (result.status === 'cancelled' && (this.stopRequested || result.aborted)) {
         c.step = 'selected'
+        if (retry) c.retryFrom = 'tailoring'
         await this.log(ws, run.id, c, 'tailoring', 'info', 'Tailoring stopped with the run; the job waits for the next one.')
         await this.save(ws, state)
-        throw new RunEnded('Stopped by you.')
+        throw new RunEnded(this.stopped ? 'Huntgry is quitting.' : 'Stopped by you.')
       }
       if (result.status !== 'done' || !result.applicationId) {
         const why =
           result.status === 'needs-reply'
             ? 'The tailoring run stopped with a question.'
             : result.status === 'cancelled'
-              ? 'Tailoring was cancelled.'
+              ? `Tailoring was cancelled${result.error ? `: ${result.error}` : '.'}`
               : `Tailoring failed${result.error ? `: ${result.error}` : '.'}`
         return this.failed(ws, state, run, c, 'tailoring', why)
       }
@@ -719,9 +884,8 @@ export class Automation {
     }
 
     // Filling: the form in a hidden tab, never submitted, never while the user has an apply session.
-    await this.gate(ws, state, run)
     if (!c.applicationId) return this.failed(ws, state, run, c, 'filling', 'No application to fill.')
-    await this.hold(ws, state, run, async () => (this.deps.apply.busy() ? { status: 'waiting', message: 'Waiting for your apply session to end.' } : null))
+    await this.gate(ws, state, run, () => (this.deps.apply.busy() ? 'Waiting for your apply session to end.' : null))
     await this.begin(ws, state, run, c, 'filling', 'Filling the application form (it is not submitted).')
     let outcome: PrepareOutcome
     try {
@@ -741,6 +905,48 @@ export class Automation {
     await this.save(ws, state)
   }
 
+  /**
+   * Waits for the tailoring item. Meanwhile Pause and the window hold the pipeline itself: a retry or a usage-limit
+   * reset that falls while paused or outside the window does not start; the turn already running ends as it would.
+   */
+  private async waitTailoring(ws: string, state: AutomationState, run: AutomationRun, itemId: string): Promise<TailorResult> {
+    const signal = (this.abort ??= new AbortController()).signal
+    let done = false
+    let held = false
+    const watch = (async () => {
+      while (!done && !signal.aborted) {
+        const r = await this.restriction(state, run).catch(() => null)
+        if (done) break
+        if (r && !held) {
+          held = true
+          run.status = r.status
+          run.message = r.message
+          await this.deps.tailor.pause(ws).catch(() => undefined)
+          await this.log(ws, run.id, null, 'run', 'info', r.message)
+          await this.save(ws, state)
+        } else if (!r && held) {
+          held = false
+          run.status = 'running'
+          run.message = undefined
+          await this.deps.tailor.resume(ws).catch(() => undefined)
+          await this.save(ws, state)
+        }
+        await this.sleep()
+      }
+    })()
+    try {
+      return await this.deps.tailor.wait(itemId, signal)
+    } finally {
+      done = true
+      this.wake()
+      await watch
+      if (held) {
+        // Its job ended while held: the next step's gate holds the run itself from here.
+        await this.deps.tailor.resume(ws).catch(() => undefined)
+      }
+    }
+  }
+
   /** An Explore row saved to Jobs: its record moves to the saved job's id. */
   private rekey(state: AutomationState, run: AutomationRun, c: AutomationCandidate, jobId: string): void {
     const old = c.key
@@ -757,6 +963,7 @@ export class Automation {
 
   private async begin(ws: string, state: AutomationState, run: AutomationRun, c: AutomationCandidate, step: AutomationStep, text: string): Promise<void> {
     await this.checkAlive(ws, state)
+    this.active = step
     c.step = step
     c.updatedAt = this.now().toISOString()
     await this.log(ws, run.id, c, step, 'start', text)
@@ -801,6 +1008,8 @@ export class Automation {
 
   private async save(ws: string, state: AutomationState): Promise<void> {
     if (state !== this.state) return
+    // userData holds what controls spending; the workspace file mirrors it for display.
+    await this.deps.writeTrusted(ws, { enabled: state.enabled, day: { ...state.day } })
     await this.deps.writeState(ws, state)
     this.deps.emit(state)
   }

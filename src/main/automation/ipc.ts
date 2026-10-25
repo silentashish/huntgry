@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { matchOf } from '@shared/automation-select'
 import {
@@ -17,9 +17,11 @@ import { defaultAgent } from '../cli/start'
 import { requireCurrentWorkspace, settingsFile } from '../current-workspace'
 import { emit, onEvent } from '../events'
 import { linkDeps, exploreDeps } from '../explore/deps'
+import { exploreSource } from '../explore/source'
 import { resolveJobrightCopies } from '../explore/employer-link'
 import { addExplore, readCache, toJob } from '../explore/service'
 import { loadAndExtract } from '../jobs/loader'
+import type { Loader } from '../jobs/service'
 import { readPrefs } from '../jobs/prefs'
 import { fetchDetails, updateJob } from '../jobs/service'
 import { findCanonical, listJobs } from '../jobs/store'
@@ -30,10 +32,10 @@ import { queue } from '../queue/ipc'
 import { approveReview, reviewDetail } from '../review/service'
 import { reviewDepsFor } from '../review/ipc'
 import { inspectWorkspace } from '../workspace/inspect'
-import { Automation } from './service'
+import { Automation, PageBoundError, type LinkOutcome, type PageBudget } from './service'
 import { readAutomationSettings, updateAutomationSettings } from './settings'
 import { exploreCandidates, jobsSource, type CandidateSource } from './sources'
-import { appendLog, readLog, readPrepared, readState, writePrepared, writeState } from './store'
+import { appendLog, readLog, readPrepared, readState, readTrusted, writePrepared, writeState, writeTrusted } from './store'
 import { pipelineTailor } from './tailor'
 
 const workspace = async () => (await requireCurrentWorkspace()).path
@@ -45,6 +47,36 @@ async function signalsOf(ws: string) {
   return profileSignals((await readProfile(join(inspection.path, inspection.masterProfile))).profile)
 }
 
+/** Jobright's hosts (the mock's too in e2e): the pages the run's allowance counts. */
+const jobrightHost = (url: string): boolean => {
+  try {
+    return exploreSource(app.isPackaged).hosts.includes(new URL(url).host.toLowerCase())
+  } catch {
+    return false
+  }
+}
+
+/** The posting loader with the run's Jobright allowance in front of it: every Jobright page takes one, aliases too. */
+const counted =
+  (pages: PageBudget): Loader =>
+  (url, extract) => {
+    if (jobrightHost(url) && !pages.take()) return Promise.reject(new PageBoundError())
+    return loadAndExtract(url, extract)
+  }
+
+/** The allowance, remembering whether it refused a page. */
+const watched = (pages: PageBudget): PageBudget & { refused: boolean } => {
+  const w = {
+    refused: false,
+    take: () => {
+      const ok = pages.take()
+      if (!ok) w.refused = true
+      return ok
+    }
+  }
+  return w
+}
+
 const jobs = jobsSource({ listJobs })
 const explore = exploreCandidates({
   // The cache as it is: Automation never fetches the list (no refresh on a timer, #154 Q4).
@@ -53,9 +85,13 @@ const explore = exploreCandidates({
     return (await readCache(ws, deps.sourceUrl, deps.hosts))?.jobs ?? []
   },
   toJob,
-  saved: findCanonical,
-  add: (ws, id) => addExplore(ws, id, exploreDeps())
+  savedJobs: listJobs,
+  // Saved without the employer-link lookup: the link step does it, counted and with its failure reported.
+  add: (ws, id) => addExplore(ws, id, { ...exploreDeps(), link: undefined })
 })
+
+/** Where Automation keeps what controls spending, per workspace (`store.ts` `trustedFile`). */
+const trustedRoot = () => join(app.getPath('userData'), 'automation')
 
 /** The app's one Automation, over the app's services. */
 export const automation = new Automation({
@@ -69,8 +105,26 @@ export const automation = new Automation({
   findJob: findCanonical,
   linkConnected: () => linkDeps().connected(),
   onJobright: (job) => job.source === 'jobright' && !!job.boardUrl && job.url === job.boardUrl,
-  resolveLink: (ws, id) => resolveJobrightCopies(ws, id, linkDeps()),
-  fetchDetails: (ws, id) => fetchDetails(ws, id, loadAndExtract),
+  resolveLink: async (ws, id, pages) => {
+    const budget = watched(pages)
+    const outcomes: LinkOutcome[] = []
+    await resolveJobrightCopies(ws, id, { ...linkDeps(), load: counted(budget) }, (o) => outcomes.push(o))
+    if (outcomes.includes('resolved')) return 'resolved'
+    // A page refused for the allowance is not a lookup that failed: the job waits for the next run.
+    if (budget.refused) throw new PageBoundError()
+    for (const o of ['failed', 'signed-out', 'no-link'] as const) if (outcomes.includes(o)) return o
+    return 'skipped'
+  },
+  fetchDetails: async (ws, id, pages) => {
+    const budget = watched(pages)
+    try {
+      return await fetchDetails(ws, id, counted(budget))
+    } catch (err) {
+      // fetchDetails reports a refused page as a load that failed; it is the allowance.
+      if (budget.refused) throw new PageBoundError()
+      throw err
+    }
+  },
   score: async (ws, job) => {
     const scored = scoreJob(job, await signalsOf(ws))
     return { ...(scored.excluded ? { excluded: scored.excluded } : {}), match: matchOf(scored.match) }
@@ -103,6 +157,8 @@ export const automation = new Automation({
   },
   readState,
   writeState,
+  readTrusted: (ws) => readTrusted(trustedRoot(), ws),
+  writeTrusted: (ws, usage) => writeTrusted(trustedRoot(), ws, usage),
   appendLog,
   writePrepared,
   readPrepared,
