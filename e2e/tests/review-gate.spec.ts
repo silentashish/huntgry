@@ -5,7 +5,7 @@ import { withFakeAgents } from '../fixtures/fake-agent'
 import { expect, test } from '../fixtures/servers/fixture'
 import { Dashboard } from '../pages/dashboard'
 import { Shell } from '../pages/shell'
-import { TailorPage } from '../pages/tailor'
+import { pastedFolder, TailorPage } from '../pages/tailor'
 
 /**
  * #31 × #63: an unattended result stays out of Apply until it is approved on
@@ -17,8 +17,10 @@ import { TailorPage } from '../pages/tailor'
  */
 test.use({ workspace: 'mocks', prepare: withFakeAgents({ script: 'normal' }) })
 
-const JOB = { company: 'Gate Co', role: 'Platform Engineer', jobId: 'GT-31' }
-const FOLDER = 'platform-engineer/gate-co/gt-31'
+const JOB = { company: 'Gate Co', role: 'Platform Engineer' }
+const DESCRIPTION = `# ${JOB.role}\n\n${JOB.company} is hiring a Platform Engineer for its core team. Go.`
+// The pasted job's folder (its job id hashes the posting URL, which holds the mock server's port).
+let FOLDER = ''
 const REASON = 'Apply: This result is Unreviewed: approve it on the Review page first.'
 
 /**
@@ -46,14 +48,14 @@ test('an Unreviewed result blocks Apply with the reason on the Tailor run, the D
   const shell = new Shell(app.window)
   await shell.goTo('tailor')
   const tailor = new TailorPage(app.window)
-  await tailor.start({ jobUrl: `${mock.origin}/greenhouse/`, ...JOB, description: `# ${JOB.role}\n\n${JOB.company} is hiring. Go.` })
-  await tailor.expectStatus('Waiting for you')
-  await tailor.reply('Approved')
+  const job = { jobUrl: `${mock.origin}/greenhouse/`, ...JOB, description: DESCRIPTION }
+  FOLDER = pastedFolder(job)
+  await tailor.start(job)
+  await tailor.expectStatus('Finished', 30_000)
   await expect(tailor.outputLine(FOLDER)).toBeVisible()
-  await expect(tailor.outputButton('Apply')).toBeEnabled()
 
-  // The pipeline marks the result Unreviewed: the open run's Apply is disabled at once, with the reason.
-  await setReview(app.userData, app.workspace!, 'unreviewed')
+  // Every result goes through the verify gate (#158): the Tailor-page run's result is Unreviewed, Apply is
+  // disabled, with the reason.
   await expect(tailor.outputButton('Apply')).toBeDisabled()
   await expect(tailor.applyReason).toHaveText(REASON)
 

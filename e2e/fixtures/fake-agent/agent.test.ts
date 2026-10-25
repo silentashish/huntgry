@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -21,27 +21,27 @@ import { extractText, getDocumentProxy } from 'unpdf'
  */
 
 const SHIM = join(__dirname, 'agent.mjs')
-const FIRST = [
-  'Follow the resume-tailor skill (SKILL.md) to tailor my resume and cover letter for this job.',
-  '',
-  'Company: Acme Corp',
-  'Role: Staff Engineer',
-  'Job id: A-42',
-  'Cover letter: no, resume only',
-  '',
-  'Job description (save it verbatim as job-description.md):',
-  '',
-  '<job_description>',
-  'Build the platform.',
-  '</job_description>'
-].join('\n')
+/** The first message as buildFirstPrompt writes it since #158: the job description is a saved file. */
+const firstMessage = (jdPath: string) =>
+  [
+    'Follow the resume-tailor skill (SKILL.md) to tailor my resume and cover letter for this job.',
+    '',
+    'Company: Acme Corp',
+    'Role: Staff Engineer',
+    'Job id: A-42',
+    'Cover letter: no, resume only',
+    `Job description: saved at ${jdPath}. Read it there and pass this path to build.py --jd; do not write it out again.`
+  ].join('\n')
 
 let home: string
 let cwd: string
+let FIRST: string
 
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), 'fake-agent-home-'))
   cwd = await mkdtemp(join(tmpdir(), 'fake-agent-ws-'))
+  await writeFile(join(cwd, 'saved-jd.md'), '# Staff Engineer\n\nBuild the platform.\n')
+  FIRST = firstMessage(join(cwd, 'saved-jd.md'))
 })
 afterEach(async () => {
   await rm(home, { recursive: true, force: true })
@@ -99,8 +99,8 @@ async function builtFiles(): Promise<string[]> {
 }
 
 describe('fake claude', () => {
-  it('speaks stream-json: init with a session, content, one result per turn, files on approval', async () => {
-    const out = await run('claude', ['-p', '--input-format', 'stream-json'], [claudeLine(FIRST), claudeLine('Approved, go ahead.')])
+  it('speaks stream-json: init with a session, content, one result per turn, and builds without asking (#158)', async () => {
+    const out = await run('claude', ['-p', '--input-format', 'stream-json'], [claudeLine(FIRST), claudeLine('Make it shorter.')])
     expect(out.code).toBe(0)
     const sig = signals('claude', out.events)
     // The runner learns the session from `system/init`; hook chatter is dropped.
@@ -112,13 +112,15 @@ describe('fake claude', () => {
     expect(sig.every((s) => s.type !== 'turn-end' || !s.error)).toBe(true)
 
     const t = buildTranscript(out.events, 'claude')
-    expect(t.map((i) => i.kind)).toEqual(['assistant', 'tool', 'assistant', 'result', 'assistant', 'tool', 'assistant', 'result'])
+    // Turn 1 builds; the follow-up rebuilds.
+    expect(t.map((i) => i.kind)).toEqual(['assistant', 'tool', 'assistant', 'tool', 'assistant', 'result', 'assistant', 'assistant', 'tool', 'assistant', 'result'])
     expect(t[1]).toMatchObject({ name: 'Read', status: 'ok', output: 'profile text' })
-    expect(t[2]).toMatchObject({ text: expect.stringMatching(/Do you approve/) })
-    expect(t[3]).toMatchObject({ kind: 'result', ok: true })
-    expect(t[5]).toMatchObject({ name: 'Bash', status: 'ok' })
-    expect(t[6]).toMatchObject({ text: expect.stringContaining(join(cwd, 'staff-engineer/acme-corp/a-42')) })
-    expect(await builtFiles()).toEqual(['build-report.json', 'job-description.md', 'resume.pdf', 'resume_data.json'])
+    expect(t[3]).toMatchObject({ name: 'Bash', status: 'ok' })
+    expect(t[4]).toMatchObject({ text: expect.stringContaining(join(cwd, 'staff-engineer/acme-corp/a-42')) })
+    expect(t[5]).toMatchObject({ kind: 'result', ok: true })
+    expect(t.some((i) => 'text' in i && /approve|\?$/i.test(String(i.text)))).toBe(false)
+    expect(await builtFiles()).toEqual(['build-report.json', 'job-description.md', 'resume.pdf', 'resume_data.json', 'tailoring-notes.md'])
+    expect(await readFile(join(cwd, 'staff-engineer/acme-corp/a-42/tailoring-notes.md'), 'utf8')).toContain('<!-- resume-tailor notes v2 -->')
     // A PDF a parser accepts: one page, the text inside, a cross-reference table and a trailer with /Size.
     const pdf = await readFile(join(cwd, 'staff-engineer/acme-corp/a-42/resume.pdf'))
     expect(pdf.subarray(0, 8).toString()).toBe('%PDF-1.4')
@@ -133,13 +135,22 @@ describe('fake claude', () => {
       expect(info).toMatch(/^Pages:\s+1$/m)
     }
     expect(JSON.parse(await readFile(join(cwd, 'staff-engineer/acme-corp/a-42/build-report.json'), 'utf8'))).toMatchObject({ ok: true })
-    expect(await readFile(join(cwd, 'staff-engineer/acme-corp/a-42/job-description.md'), 'utf8')).toContain('Build the platform.')
+    // Copied from the saved file, byte for byte (build.py --jd).
+    expect(await readFile(join(cwd, 'staff-engineer/acme-corp/a-42/job-description.md'), 'utf8')).toBe('# Staff Engineer\n\nBuild the platform.\n')
+  })
+
+  it('asks only for a missing prerequisite with FAKE_AGENT_SCRIPT=ask: the nudge gets the question again, an answer builds', async () => {
+    const out = await run('claude', [], [claudeLine(FIRST), claudeLine('Nobody can answer. Follow the skill to the end now.'), claudeLine('Staff Engineer.')], { FAKE_AGENT_SCRIPT: 'ask' })
+    const texts = buildTranscript(out.events, 'claude').filter((i) => i.kind === 'assistant').map((i) => (i as { text: string }).text)
+    expect(texts.filter((x) => x.endsWith('?'))).toHaveLength(2)
+    expect(await builtFiles()).toContain('tailoring-notes.md')
   })
 
   it('reuses the session id it is resumed with and writes the job it remembered', async () => {
     const first = await run('claude', [], [claudeLine(FIRST)])
     const init = signals('claude', first.events).find((s) => s.type === 'init') as { sessionId: string }
-    const second = await run('claude', ['--resume', init.sessionId], [claudeLine('approve')])
+    await rm(join(cwd, 'staff-engineer'), { recursive: true })
+    const second = await run('claude', ['--resume', init.sessionId], [claudeLine('make it shorter')])
     const again = signals('claude', second.events).find((s) => s.type === 'init') as { sessionId: string }
     expect(again.sessionId).toBe(init.sessionId)
     expect(await builtFiles()).toContain('resume.pdf')
@@ -168,7 +179,7 @@ describe('fake claude', () => {
   it('pauses between events with FAKE_AGENT_SCRIPT=slow', async () => {
     const started = Date.now()
     const out = await run('claude', [], [claudeLine(FIRST)], { FAKE_AGENT_SCRIPT: 'slow', FAKE_AGENT_SLOW_MS: '120' })
-    // Three pauses in the first turn.
+    // At least three pauses in the first turn.
     expect(Date.now() - started).toBeGreaterThanOrEqual(3 * 120)
     expect(signals('claude', out.events).filter((s) => s.type === 'turn-end')).toHaveLength(1)
   })
@@ -185,13 +196,14 @@ describe('fake codex', () => {
       usage: { inputTokens: 1200, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 80, reasoningTokens: 0 },
       usageScope: 'session'
     })
-    expect(sig.filter((s) => s.type === 'keep' && s.content)).toHaveLength(4)
     const t = buildTranscript(first.events, 'codex')
-    expect(t.map((i) => i.kind)).toEqual(['assistant', 'tool', 'assistant', 'result'])
+    expect(t.map((i) => i.kind)).toEqual(['assistant', 'tool', 'assistant', 'tool', 'assistant', 'result'])
     expect(t[1]).toMatchObject({ name: 'Bash', status: 'ok', output: 'profile text' })
+    expect(await builtFiles()).toContain('tailoring-notes.md')
 
+    await rm(join(cwd, 'staff-engineer'), { recursive: true })
     const thread = (sig[0] as { sessionId: string }).sessionId
-    const second = await run('codex', ['exec', 'resume', thread, '--json', '-'], ['Approved'])
+    const second = await run('codex', ['exec', 'resume', thread, '--json', '-'], ['Make it shorter'])
     expect(signals('codex', second.events)[0]).toEqual({ type: 'init', sessionId: thread })
     expect(await builtFiles()).toContain('resume.pdf')
   })
@@ -211,7 +223,7 @@ describe('fake agy', () => {
     const out = await run(
       'agy',
       ['--input-format', 'stream-json', '--output-format', 'stream-json', '--print='],
-      [agyLine(`<huntgry_instructions>\ncontext\n</huntgry_instructions>\n\n${FIRST}`), agyLine('I approve.')]
+      [agyLine(`<huntgry_instructions>\ncontext\n</huntgry_instructions>\n\n${FIRST}`), agyLine('Make it shorter.')]
     )
     expect(out.code).toBe(0)
     const sig = signals('antigravity', out.events)
@@ -220,7 +232,7 @@ describe('fake agy', () => {
     expect(ends).toHaveLength(2)
     expect(ends[0]).toMatchObject({ usage: { inputTokens: 1500, outputTokens: 90 }, error: undefined })
     const t = buildTranscript(out.events, 'antigravity')
-    expect(t.map((i) => i.kind)).toEqual(['assistant', 'tool', 'assistant', 'result', 'assistant', 'tool', 'assistant', 'result'])
+    expect(t.map((i) => i.kind)).toEqual(['assistant', 'tool', 'assistant', 'tool', 'assistant', 'result', 'assistant', 'assistant', 'tool', 'assistant', 'result'])
     expect(t[0]).toMatchObject({ text: 'Gap analysis for staff-engineer at acme-corp (job a-42): reading the master profile first.' })
     expect(t[1]).toMatchObject({ name: 'view_file', status: 'ok' })
     expect(await builtFiles()).toContain('resume_data.json')

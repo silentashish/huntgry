@@ -188,9 +188,11 @@ test.describe('tailoring', () => {
 
     const shell = new Shell(app.window)
     await shell.expectActive('tailor')
-    await expect(app.window.getByLabel('Company')).toHaveValue('Tyrell Robotics')
-    await expect(app.window.getByLabel('Role')).toHaveValue('Infrastructure Engineer')
-    await expect(app.window.getByLabel('Job id')).toHaveValue('mock-employer-103')
+    // The saved job is queued as it is (#158): its role and company come with it, not from form fields.
+    await expect(app.window.getByText('Prefilled from your saved job')).toBeVisible()
+    await expect(app.window.getByText('Infrastructure Engineer at Tyrell Robotics.', { exact: false })).toBeVisible()
+    await expect(app.window.getByLabel('Company')).toHaveCount(0)
+    await expect(app.window.getByLabel('Job id')).toHaveCount(0)
     await expect(app.window.getByLabel('Job posting URL')).toHaveValue(`${mock.origin}/postings/employer/103`)
     const description = app.window.getByLabel('Job description')
     await expect(description).toHaveValue(/^# Infrastructure Engineer\n/)
@@ -203,7 +205,7 @@ test.describe('tailoring', () => {
     expect(saved.tailoredAt).toEqual(expect.any(String))
   })
 
-  test('ticking two jobs and "Tailor all" opens the queue view with both', async ({ app }) => {
+  test('ticking two jobs and "Tailor all" plans both for the pipeline', async ({ app }) => {
     // The confirm button needs an agent that is ready: a fake `claude` in the sandbox bin and the skill under the sandbox HOME.
     const fake = join(app.sandbox.bin, 'claude')
     await writeFile(
@@ -222,26 +224,12 @@ test.describe('tailoring', () => {
     await jobs.tailorAllButton.click()
     const modal = app.window.getByRole('dialog', { name: 'Tailor 2 jobs' })
     await expect(modal).toBeVisible()
-    await expect(modal).toContainText("1 of 2 have only the board's summary")
-    await modal.getByRole('button', { name: 'Tailor 2 jobs' }).click()
-
-    await new Shell(app.window).expectActive('tailor')
-    await expect(app.window.getByRole('heading', { name: 'Tailoring queue' })).toBeVisible()
-    // Each queued job is listed (the queue panel and the run list both name it).
-    await expect(app.window.getByText('Infrastructure Engineer · Tyrell Robotics').first()).toBeVisible()
-    await expect(app.window.getByText('Staff Backend Engineer · Initech').first()).toBeVisible()
-
-    // Queue execution is #48's; here the runs only have to be over before teardown. The fake `claude` exits at once,
-    // so both items leave the queued/running states; the environment check's preflight child (`python3`) is waited
-    // for by `closeApp` as well, so nothing the app spawned can outlive the sandbox.
-    await expect
-      .poll(async () => {
-        const state = await app.window.evaluate(() =>
-          (window as unknown as { huntgry: { queue: { state(): Promise<{ items: Array<{ status: string }> }> } } }).huntgry.queue.state()
-        )
-        return state.items.map((i) => i.status)
-      }, { timeout: 30_000 })
-      .toEqual(expect.arrayContaining([expect.stringMatching(/^(done|failed|cancelled)$/), expect.stringMatching(/^(done|failed|cancelled)$/)]))
+    // One flow (#158): no "approve each run" mode, the plan step comes first.
+    await expect(modal).not.toContainText('approve it there')
+    await modal.getByRole('button', { name: 'Continue' }).click()
+    await expect(modal.getByRole('heading', { name: 'Plan' })).toBeVisible({ timeout: 15_000 })
+    await modal.getByRole('button', { name: 'Cancel' }).click()
+    await expect(modal).toBeHidden()
     await expect.poll(() => spawnedChildren(app.electronApp.process().pid!), { timeout: 30_000 }).toEqual([])
   })
 })
@@ -277,13 +265,15 @@ test.describe('Scent score and bulk actions (#111)', () => {
     await expect(jobs.drawer).toContainText('Title: Backend Engineer')
   })
 
-  test('"Run unattended" in the selection bar opens Tailor all unattended, and Cancel keeps the selection', async ({ app }) => {
+  test('"Tailor all" in the selection bar opens the plan step, with no "Approve each run" mode (#158); Cancel keeps the selection', async ({ app }) => {
     const jobs = await openJobs(app)
     await jobs.select('Infrastructure Engineer').check()
-    await jobs.selectionBar.getByRole('button', { name: 'Run unattended' }).click()
+    await expect(jobs.selectionBar.getByRole('button', { name: 'Run unattended' })).toHaveCount(0)
+    await jobs.tailorAllButton.click()
     const modal = app.window.getByRole('dialog', { name: 'Tailor 1 job' })
     await expect(modal).toBeVisible()
-    await expect(modal.getByRole('radio', { name: 'Run unattended' })).toBeChecked()
+    await expect(modal.getByRole('radio', { name: /Approve each run|Run unattended/ })).toHaveCount(0)
+    await expect(modal).not.toContainText('approve it there')
     await expect(modal.getByRole('button', { name: 'Continue' })).toBeVisible()
     // The agents are one radio group: arrow keys move the choice.
     const agents = modal.getByRole('radiogroup', { name: 'Agent' })

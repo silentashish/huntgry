@@ -8,7 +8,8 @@ import { expect, test } from '../fixtures/servers/fixture'
 import { evaluateInTab, expectTabLoaded } from '../fixtures/tabs'
 import { BrowserPage } from '../pages/browser'
 import { Shell } from '../pages/shell'
-import { TailorPage } from '../pages/tailor'
+import { pastedFolder, TailorPage } from '../pages/tailor'
+import { approveResult } from '../fixtures/review'
 
 /**
  * Auto-apply on Workday (#65) against the mock Workday on 127.0.0.1
@@ -135,7 +136,6 @@ test.describe('apply on Workday', () => {
     mock
   }, testInfo) => {
     const posting = `${mock.origin}${WORKDAY_POSTING}`
-    const folder = 'software-engineer/acme/jr-1001'
     // Facts the user saved earlier: sponsorship and the EEO answers (#136 answers them on the answer-only steps).
     await seedAnswers(app.sandbox.userData, app.workspace!, {
       needsSponsorship: 'no',
@@ -148,16 +148,19 @@ test.describe('apply on Workday', () => {
     // Tailor a resume for the Workday posting with the scripted agent, then press the run's Apply.
     await new Shell(app.window).goTo('tailor')
     const tailor = new TailorPage(app.window)
-    await tailor.jobUrl.fill(posting)
-    await tailor.start({
+    const job = {
+      jobUrl: posting,
       description: '# Software Engineer\n\nAcme is hiring a Software Engineer. TypeScript, Go, PostgreSQL.',
       company: 'Acme',
-      role: 'Software Engineer',
-      jobId: 'JR-1001'
-    })
-    await tailor.expectStatus('Waiting for you')
-    await tailor.reply('Approved')
+      role: 'Software Engineer'
+    }
+    const folder = pastedFolder(job)
+    await tailor.start(job)
+    await tailor.expectStatus('Finished', 30_000)
     await expect(tailor.outputLine(folder)).toContainText('resume.pdf')
+    // Every result waits for Review (#158); approved, Apply opens.
+    await approveResult(app.window, folder)
+    await expect(tailor.outputButton('Apply')).toBeEnabled()
     const resumeFile = join(app.workspace!, folder, 'resume.pdf')
     const resumeBytes = (await stat(resumeFile)).size
     const resumeSha = createHash('sha256').update(await readFile(resumeFile)).digest('hex')

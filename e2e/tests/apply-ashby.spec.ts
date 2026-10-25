@@ -8,7 +8,8 @@ import { expect, test } from '../fixtures/servers/fixture'
 import { evaluateInTab, expectTabLoaded } from '../fixtures/tabs'
 import { BrowserPage } from '../pages/browser'
 import { Shell } from '../pages/shell'
-import { TailorPage } from '../pages/tailor'
+import { pastedFolder, TailorPage } from '../pages/tailor'
+import { approveResult } from '../fixtures/review'
 
 /**
  * Auto-apply on Ashby (#64) against the mock Ashby on 127.0.0.1
@@ -98,21 +99,23 @@ test.describe('apply on Ashby', () => {
     mock
   }, testInfo) => {
     const posting = `${mock.origin}/ashby/`
-    const folder = 'software-engineer/acme/as-7'
+    const job = {
+      jobUrl: posting,
+      description: '# Software Engineer\n\nAcme is hiring a Software Engineer. TypeScript, Go, PostgreSQL.',
+      company: 'Acme',
+      role: 'Software Engineer'
+    }
+    const folder = pastedFolder(job)
 
     // Tailor a resume for the Ashby posting with the scripted agent, then press the run's Apply.
     await new Shell(app.window).goTo('tailor')
     const tailor = new TailorPage(app.window)
-    await tailor.jobUrl.fill(posting)
-    await tailor.start({
-      description: '# Software Engineer\n\nAcme is hiring a Software Engineer. TypeScript, Go, PostgreSQL.',
-      company: 'Acme',
-      role: 'Software Engineer',
-      jobId: 'AS-7'
-    })
-    await tailor.expectStatus('Waiting for you')
-    await tailor.reply('Approved')
+    await tailor.start(job)
+    await tailor.expectStatus('Finished', 30_000)
     await expect(tailor.outputLine(folder)).toContainText('resume.pdf')
+    // Every result waits for Review (#158); approved, Apply opens.
+    await approveResult(app.window, folder)
+    await expect(tailor.outputButton('Apply')).toBeEnabled()
     const resume = join(app.workspace!, folder, 'resume.pdf')
     const resumeBytes = (await stat(resume)).size
     const resumeSha = createHash('sha256').update(await readFile(resume)).digest('hex')
