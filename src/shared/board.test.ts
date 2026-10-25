@@ -151,6 +151,19 @@ describe('buildBoard', () => {
     expect(card(board, 'app:software-engineer/acme/c')).toMatchObject({ job: { id: 'url:c' } })
   })
 
+  it("keeps the application a working queue item supersedes on the queue card, so it stays reachable (#161)", () => {
+    const board = buildBoard({
+      jobs: [job('a'), job('b')],
+      queue: [item('a', 'url:a', 'running'), item('b', 'url:b', 'queued')],
+      applications: [app('a1', { notes: 'Recruiter: Dana' }, { jobUrl: 'https://jobs.example.com/a' })],
+      now: NOW
+    })
+    expect(layout(board)).toEqual({ tailoring: ['queue:q-a', 'queue:q-b'] })
+    expect(card(board, 'queue:q-a')).toMatchObject({ kind: 'queue', app: { id: 'software-engineer/acme/a1' } })
+    // A queue item with no application behind it has none.
+    expect(card(board, 'queue:q-b')).toMatchObject({ kind: 'queue', app: null })
+  })
+
   it('finds the queue item of a job through its aliases and prefers a working item over a failed one', () => {
     const board = buildBoard({
       jobs: [job('a', { aliases: ['indeed:a'] })],

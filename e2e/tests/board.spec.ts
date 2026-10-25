@@ -378,6 +378,44 @@ test.describe('applications on the board (#161)', () => {
 })
 
 /**
+ * A re-run (#161 review): Acme's generated application has a saved job and a queued item for it,
+ * so its card is the queue card in Tailoring. The application must stay reachable from it.
+ */
+const ACME_JOB = savedJob({ id: 'url:e2e-161-acme', title: 'Senior Software Engineer', company: 'Acme', url: 'https://jobs.example.com/acme/4821' })
+const rerun: Preparer = {
+  async prepare({ workspace }) {
+    await seedJobs(workspace!, [ACME_JOB])
+    // Queued, not running: a running item found at startup was interrupted and is handed back.
+    await seedQueue(workspace!, [{ job: ACME_JOB, status: 'queued' }])
+  }
+}
+
+test.describe('an application being re-tailored (#161)', () => {
+  test.use({ prepare: rerun })
+
+  test('its queue card opens the application drawer, and search still finds the application', async ({ app }) => {
+    // Not openBoard: Acme's card is the queue card now, in a past (folded) week of Tailoring.
+    await new Shell(app.window).goTo('board')
+    const page = new BoardPage(app.window)
+    await page.expectIn('tailoring', DEMO.acme)
+    const card = page.card(DEMO.acme)
+    await expect(card).toHaveAttribute('data-kind', 'queue')
+
+    // The application's fields are searched through the queue card (its folder's job id here).
+    await page.search.fill('acme-4821')
+    await expect.poll(() => page.titles('tailoring')).toEqual([DEMO.acme])
+    await page.search.fill('')
+
+    await card.hover()
+    await card.getByRole('button', { name: 'Open the application' }).click()
+    await expect(page.drawer.getByRole('heading', { level: 2 })).toContainText('Acme')
+    // The toolbar's Resume button (the empty preview panel has an "Open resume" link too).
+    await expect(page.drawer.getByRole('button', { name: 'Open resume', exact: true }).first()).toBeVisible()
+    await expect(page.drawer.getByRole('combobox', { name: 'Status' })).toHaveValue('Generated')
+  })
+})
+
+/**
  * 57 Applied applications, 8 a week over 8 weeks (#160), a Rejected one from 500 days ago and a
  * saved Jobright job, on top of the board above.
  */

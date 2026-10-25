@@ -100,6 +100,17 @@ describe('matchesBoardFilter', () => {
     expect(applicationSearchText(req)).toContain('REQ-4711')
   })
 
+  it("searches the application a working queue item superseded, as the Dashboard table did (#161)", () => {
+    const saved = job({ id: 'url:9', source: 'url', company: 'Umbrella', title: 'Data Engineer' })
+    const superseded = app('Umbrella', { jobId: 'REQ-9', jobUrl: saved.url }, { status: 'generated', notes: 'Recruiter: Dana' })
+    const rerun: QueueItem = { ...queued, id: 'q-9', jobId: saved.id, title: 'Data Engineer · Umbrella' }
+    const b = buildBoard({ jobs: [saved], applications: [superseded], queue: [rerun], now: NOW })
+    const only = b.columns.flatMap((c) => c.cards)
+    expect(only.map((c) => c.key)).toEqual(['queue:q-9'])
+    expect(matchesBoardFilter(only[0], { ...EMPTY_BOARD_FILTER, text: 'dana' })).toBe(true)
+    expect(matchesBoardFilter(only[0], { ...EMPTY_BOARD_FILTER, text: 'req-9' })).toBe(true)
+  })
+
   it('keeps only the chosen sources; a card with no known source is left out', () => {
     expect(titles({ text: '', sources: ['jobright'] })).toEqual(['Hooli · Remote'])
     expect(titles({ text: '', sources: ['url', 'pasted'] }).sort()).toEqual(['Acme · Remote', 'Globex'])

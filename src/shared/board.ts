@@ -51,7 +51,16 @@ interface CardBase {
 
 export type BoardCard =
   | (CardBase & { kind: 'job'; job: Job })
-  | (CardBase & { kind: 'queue'; item: QueueItem; job: Job | null })
+  | (CardBase & {
+      kind: 'queue'
+      item: QueueItem
+      job: Job | null
+      /**
+       * The `generated` application this working item supersedes (a re-run), or `null`: the card
+       * stands for both, so the application stays reachable (#161, its drawer and its search fields).
+       */
+      app: ApplicationRecord | null
+    })
   | (CardBase & { kind: 'application'; app: ApplicationRecord; job: Job | null })
 
 export interface BoardColumn {
@@ -126,7 +135,7 @@ function jobCard(job: Job): BoardCard {
   }
 }
 
-function queueCard(item: QueueItem, job: Job | null): BoardCard {
+function queueCard(item: QueueItem, job: Job | null, app: ApplicationRecord | null = null): BoardCard {
   const [title, company] = item.title.split(' · ')
   return {
     kind: 'queue',
@@ -137,7 +146,8 @@ function queueCard(item: QueueItem, job: Job | null): BoardCard {
     at: item.updatedAt,
     url: job?.url || null,
     item,
-    job
+    job,
+    app
   }
 }
 
@@ -197,7 +207,7 @@ export function buildBoard({ jobs, applications, queue, now = new Date(), keepAr
     const item = itemOf.get(job)
     const working = item && WORKING.has(item.status)
     if (app && (app.tracking.status !== 'generated' || !working)) cards.push(applicationCard(app, job))
-    else if (item) cards.push(queueCard(item, job))
+    else if (item) cards.push(queueCard(item, job, app ?? null))
     else cards.push(jobCard(job))
   }
   for (const app of applications) if (!claimed.has(app)) cards.push(applicationCard(app, null))

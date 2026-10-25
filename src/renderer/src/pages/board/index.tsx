@@ -337,6 +337,7 @@ export function BoardPage({ params }: { params?: PageParams['board'] }) {
                               onTailor={() => card.kind === 'job' && setTailorJob(card.job)}
                               onFollow={() => follow(card)}
                               onApply={() => card.kind === 'application' && applier.apply(card.app)}
+                              onOpenApplication={() => card.kind === 'queue' && card.app && setOpenAppId(card.app.id)}
                               applying={applier.busy}
                             />
                           ))}

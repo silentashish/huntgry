@@ -27,6 +27,7 @@ Nothing the table did could be lost on the way, so the first step was an invento
 | Archived filter (every archived application) | **Show N older** in the Archived column (new) |
 | Sort (newest, oldest, company) | Not carried over: cards are ordered by their last change, in week groups (#160) |
 | Click a row → drawer | Click a card → the same `ApplicationDrawer` |
+| A row while its job is re-tailored | The queue card that stands for the job carries the application (`card.app`): its **Open the application** button opens the drawer, and search matches the application's fields |
 
 Every action already existed in the drawer the Board opens (the Board has reused the Dashboard's
 drawer since #85). Three things were missing: archived applications older than a week (the Board drops
@@ -65,6 +66,11 @@ into the Board, and somewhere for the stat tiles to go.
 - **Removed**: `ApplicationsTable.tsx` (and its `StatusMenu`), `filter.ts` and `filter.test.ts`,
   and the table's CSS. `isReadyToApply` and `countByStatus` moved to `summary.ts`, which is all that
   still used them; `readyToApply` keeps the newest-first order the table's filter gave it.
+- **Re-runs** (review of this PR): while a saved job has a working queue item, its card is the
+  queue card and the `generated` application it supersedes had no card at all, so its files,
+  status and build were out of reach for as long as the item ran or waited for a reply. The queue
+  card now carries that application (`app` in `src/shared/board.ts`); its **Open the application**
+  button opens the drawer, and `cardSearchText` adds the application's fields.
 - **Board cards** carry `data-kind` (`job`, `queue`, `application`) so tests can tell an
   application from a saved job of the same company.
 
@@ -86,6 +92,7 @@ flowchart LR
   C --> AP[Apply, on Ready to apply]
   C --> M[Move to menu, drag: status]
   C -->|click| D[Application drawer]
+  Q[Queue card of a re-run] -->|Open the application| D
   D --> D1[Apply in browser, or the reason it is blocked]
   D --> D2[Resume / Cover letter PDFs]
   D --> D3[Posting: in-app Browser]

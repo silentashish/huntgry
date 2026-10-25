@@ -62,7 +62,7 @@ beforeAll(() => {
 
 let container: HTMLDivElement
 let root: Root
-const handlers = { onOpen: vi.fn(), onMove: vi.fn(), onTailor: vi.fn(), onApply: vi.fn() }
+const handlers = { onOpen: vi.fn(), onMove: vi.fn(), onTailor: vi.fn(), onApply: vi.fn(), onOpenApplication: vi.fn() }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -132,6 +132,21 @@ describe('BoardCardView menu and keyboard', () => {
       button('Tailor')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
     expect(handlers.onOpen).toHaveBeenCalledTimes(1)
+  })
+
+  it('a queue card re-running an application opens that application; others have no such button (#161)', () => {
+    const item = { id: 'q-1', jobId: job.id, title: 'Backend Engineer · Acme', options: { coverLetter: false, dateStyle: 'right' as const }, agent: 'claude' as const, status: 'running' as const, runId: null, attempts: 1, createdAt: '2026-10-06T00:00:00.000Z', updatedAt: '2026-10-06T00:00:00.000Z' }
+    const rerun = { ...app, jobUrl: job.url }
+    render(only({ jobs: [job], applications: [rerun], queue: [item] }))
+    const open = button('Open the application')
+    expect(open).toBeDefined()
+    act(() => open!.click())
+    expect(handlers.onOpenApplication).toHaveBeenCalledTimes(1)
+    // The card's own click still follows the run.
+    expect(handlers.onOpen).not.toHaveBeenCalled()
+
+    render(only({ jobs: [job], queue: [item] }))
+    expect(button('Open the application')).toBeUndefined()
   })
 
   it('Apply waits while an Apply is starting', () => {

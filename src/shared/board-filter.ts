@@ -54,7 +54,11 @@ export function cardSearchText(card: BoardCard): string[] {
   const out = [card.title, card.subtitle]
   if (card.job) out.push(card.job.company, card.job.title)
   if (card.kind === 'application') out.push(...applicationSearchText(card.app))
-  if (card.kind === 'queue') out.push(card.item.title)
+  if (card.kind === 'queue') {
+    out.push(card.item.title)
+    // A re-run stands for the application it supersedes, which is searched as before (#161).
+    if (card.app) out.push(...applicationSearchText(card.app))
+  }
   return out
 }
 

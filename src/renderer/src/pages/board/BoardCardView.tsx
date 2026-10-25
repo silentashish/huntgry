@@ -7,6 +7,7 @@ import {
   IconClipboardCheck,
   IconDotsVertical,
   IconEyeOff,
+  IconFileText,
   IconSend,
   IconSparkles,
   IconTerminal2
@@ -35,6 +36,8 @@ interface Props {
   onFollow(): void
   /** Ready to apply: start auto-apply in the in-app browser. */
   onApply(): void
+  /** A queue card re-running an application (`card.app`): open that application's drawer (#161). */
+  onOpenApplication?(): void
   /** An Apply is starting (the page's `useApply` is busy): the Apply button waits. */
   applying?: boolean
   /**
@@ -53,7 +56,22 @@ function scrollBox(el: HTMLElement): HTMLElement | null {
 }
 
 /** One job on the Board (Figma Kanban card): company, role, Scent, where it stands, its next step and Move to. */
-export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDragEnd, onOpen, onMove, onTailor, onFollow, onApply, applying, compact }: Props) {
+export function BoardCardView({
+  card,
+  scent,
+  dragging,
+  lead,
+  onDragStart,
+  onDragEnd,
+  onOpen,
+  onMove,
+  onTailor,
+  onFollow,
+  onApply,
+  onOpenApplication,
+  applying,
+  compact
+}: Props) {
   const targets = moveTargets(card)
   const company = companyOf(card)
   const meta = cardMeta(card)
@@ -128,6 +146,16 @@ export function BoardCardView({ card, scent, dragging, lead, onDragStart, onDrag
           {targets.length > 0 && (
             <div onClick={stop}>
               <MoveMenu card={card} targets={targets} onMove={onMove} />
+            </div>
+          )}
+          {card.kind === 'queue' && card.app && onOpenApplication && (
+            // A re-run: the card stands for the earlier result too, whose files and tracking stay one click away.
+            <div onClick={stop}>
+              <Tooltip label="Open the application: the earlier result's files, status and build" multiline maw={240} openDelay={400}>
+                <ActionIcon variant="subtle" color="gray" size={22} aria-label="Open the application" className={classes.cardMenu} onClick={onOpenApplication}>
+                  <IconFileText size={14} />
+                </ActionIcon>
+              </Tooltip>
             </div>
           )}
         </div>
