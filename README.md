@@ -33,6 +33,16 @@
 There is no Huntgry server and no database: the workspace is a folder on your computer, and the resumes are written by
 the agent CLI you already use.
 
+## Install
+
+Download the build for your computer from the
+[latest release](https://github.com/silentashish/huntgry/releases/latest): a `.dmg` for macOS (Apple silicon
+or Intel), an installer for Windows, an AppImage for Linux. The builds are not signed with an Apple Developer ID
+yet, so macOS asks you to allow the first launch in System Settings → Privacy & Security → **Open Anyway**.
+[docs/install.md](docs/install.md) walks through each OS, checking the download against `SHA256SUMS.txt`, and
+what Huntgry installs for you on first launch (Claude Code, the resume-tailor skill, its Python modules); it
+also explains how a release is cut.
+
 ## Screenshots
 
 <table>
@@ -51,6 +61,7 @@ Screenshots come from the real app with the fictional e2e demo data; regenerate 
 ## Contents
 
 - [What it does](#what-it-does)
+- [Install](#install)
 - [Screenshots](#screenshots)
 - [Initial Idea](#initial-idea)
 - [Development](#development)
@@ -109,7 +120,7 @@ npm run test:e2e:ui  # the same suite in Playwright's UI mode
 npm run typecheck    # tsc for main/preload (node), renderer (web), in-page autofill code (page) and e2e
 npm run build        # typecheck + production bundles in out/
 npm start            # preview the production build
-npm run dist         # packaged app (Huntgry.app / dmg / zip) in release/ via electron-builder
+npm run dist         # packaged app for this OS in release/ via electron-builder (releases: docs/install.md)
 npm run icons        # regenerate resources/icon.png + icon.icns from resources/icon.svg
 npm run screenshots  # build, then retake the README screenshots in docs/assets/screenshots/
 ```
