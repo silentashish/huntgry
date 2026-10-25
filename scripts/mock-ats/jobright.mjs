@@ -23,6 +23,17 @@ export const JOBRIGHT_JOBS = [
   { id: 'e2e0000000000000000000c1', company: 'Tailspin Toys', site: 'https://tailspin.example.com', title: 'Frontend Engineer, New Grad', location: 'Denver, CO, United States', work: 'Hybrid', daysAgo: 3 }
 ]
 
+/**
+ * Automation's e2e (#154): Contoso's summary asks for skills of the mocks workspace's profile, so once its
+ * description is read (#148's fallback) it scores above the default threshold. Only the qualifications change.
+ */
+const SUMMARY_QUALIFICATIONS = {
+  e2e0000000000000000000a3: {
+    mustHave: ['A degree in computer science or equivalent experience.', 'Go and Python services on AWS.', 'PostgreSQL and Docker.'],
+    niceToHave: ['Terraform.']
+  }
+}
+
 const mdDate = (d) => `${MONTHS[d.getMonth()]} ${d.getDate()}`
 
 /** The README, with one malformed row (a link to another host) that the app must drop. */
@@ -85,7 +96,7 @@ export function jobrightPostingPage(id, { signedIn = false, employerOrigin = '' 
   const summary = {
     jobSummary: `Jobright's summary: ${company} is looking for a ${job.title} to join a small team shipping production software.`,
     coreResponsibilities: ['Write and test firmware and services with a mentor.', 'Take part in design reviews and on-call handovers.'],
-    qualifications: { mustHave: ['A degree in computer science or equivalent experience.', 'C, C++ or Go.'], niceToHave: ['Experience with real-time systems.'] }
+    qualifications: SUMMARY_QUALIFICATIONS[job.id] ?? { mustHave: ['A degree in computer science or equivalent experience.', 'C, C++ or Go.'], niceToHave: ['Experience with real-time systems.'] }
   }
   const jobResult = { jobId: job.id, isCompanySiteLink: !!job.employer, ...summary, ...(employer ? { applyLink: employer, originalUrl: employer } : {}) }
   const next = { props: { pageProps: { logined: signedIn, dataSource: { jobResult } } } }

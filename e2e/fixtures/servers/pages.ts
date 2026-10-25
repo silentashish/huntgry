@@ -150,6 +150,7 @@ const APPLY_ONLY = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><
 <p><label for="li">LinkedIn profile URL</label> <input id="li" name="linkedin"></p>
 <p><label for="au">Are you legally authorized to work in the United States? *</label> <select id="au" name="authorized"><option>Yes</option><option>No</option></select></p>
 <p><label for="sp">Will you now or in the future require visa sponsorship? *</label> <select id="sp" name="sponsorship"><option>Yes</option><option>No</option></select></p>
+<p><label for="wi">What interests you about this role?</label> <textarea id="wi" name="interests"></textarea></p>
 <p><button type="submit">Submit application</button></p>
 </form></main></body></html>`
 
