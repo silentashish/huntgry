@@ -19,8 +19,8 @@
 - **Board and Dashboard**: every saved job and application in one place, from *To do* to *Offer*, with build
   results, PDFs, posting links and status tracking. See [Board](#board) and [Workspace](#workspace).
 - **Tailor**: runs the [resume-tailor skill](https://github.com/silentashish/claude-resume-generator-skill)
-  through Claude Code, Codex or Antigravity to write a resume and cover letter for one job, or a queue of them,
-  attended or unattended. See [Tailoring a resume](#tailoring-a-resume).
+  through Claude Code, Codex or Antigravity to write a resume and cover letter for one job, or a queue of them.
+  Every run goes to the end and you check the result on **Review**. See [Tailoring a resume](#tailoring-a-resume).
 - **Browser and Apply**: opens postings in a sandboxed in-app browser, fills Greenhouse, Lever and generic forms
   from your master profile and attaches the tailored PDFs. You review and submit. See [Browser](#browser) and
   [Applying](#applying).
@@ -38,7 +38,7 @@ the agent CLI you already use.
 <table>
   <tr>
     <td width="50%"><img src="docs/assets/screenshots/board.png" alt="Board: jobs as cards in Kanban columns from To do to Ready to apply"><br><sub><b>Board</b>: every job as a card, from saved to signed.</sub></td>
-    <td width="50%"><img src="docs/assets/screenshots/tailor.png" alt="Tailor: a run of the resume-tailor skill waiting for the user's approval"><br><sub><b>Tailor</b>: a run waiting for your approval of its reframings.</sub></td>
+    <td width="50%"><img src="docs/assets/screenshots/tailor.png" alt="Tailor: a finished run of the resume-tailor skill"><br><sub><b>Tailor</b>: a run that went to the end; its result waits on Review.</sub></td>
   </tr>
   <tr>
     <td colspan="2"><img src="docs/assets/screenshots/apply.png" alt="Browser with the Apply panel: a Lever form filled from the master profile"><br><sub><b>Apply</b>: a form filled from your master profile in the in-app browser; you review it and press Submit.</sub></td>
@@ -280,25 +280,28 @@ address outright; packaged builds ignore it too.
 (`claude`), Codex (`codex`) or Antigravity (`agy`) — in the open
 workspace: paste a job description, or give an employer or ATS posting URL (job board URLs
 such as Indeed cannot be read directly; paste those), pick the agent (the
-default one from **Settings** is preselected), follow its gap analysis, answer
-its approval question, and open the resulting `resume.pdf` / `cover.pdf`. Runs are kept in
-`<workspace>/.huntgry/runs/` and can be reopened and continued after a restart.
+default one from **Settings** is preselected) and press **Start tailoring**. The job is saved in
+**Jobs** and queued like any other; the run goes to the end without asking (it stops only when a
+prerequisite is missing), uses the bridges it can make honestly from your master profile, lists each
+one in `tailoring-notes.md`, and builds `resume.pdf` / `cover.pdf`. Huntgry saves the job description
+for the run, so the model never retypes it. Runs are kept in `<workspace>/.huntgry/runs/` and can be
+continued afterwards ("make it shorter"). Huntgry needs resume-tailor v5; Settings offers the update
+(older copies still work).
 
 To tailor several jobs at once, tick them on **Jobs** and press **Tailor all**. Huntgry
 queues one run per job in `<workspace>/.huntgry/queue.json` and starts them itself, two at a
 time by default (up to four), a couple of seconds apart. The queue is shown at the top of
-**Tailor**. Each run still stops at the approval step: it shows **Needs your reply**, and the
-next job starts in its place. Jobs with only a board summary (Indeed) are skipped with a note.
+**Tailor**. Jobs with only a board summary (Indeed) are skipped with a note.
 **Tailor all** picks one agent for the batch; each queued job can switch to another agent
 until it starts, so one job can go to Claude and the next to Codex.
 After a restart the queue is paused until you press **Resume**.
 
-**Run unattended** (the second mode of **Tailor all**) tailors up to 100 jobs without anyone
-answering: each run uses only your master-profile facts and your *standing approvals*, leaves every
-other reframing out, lists it in `review-notes.md`, and builds and verifies in one go. Results land
-as **Unreviewed** on the new **Review** page (and cannot be auto-applied until you approve them);
-approving ticked reframings saves them as standing approvals, which later unattended runs may reuse
-and which **Settings** lists. Review decisions and standing approvals are kept with the app's data
+**Tailor all** plans the batch first and then runs it as a pipeline of up to 100 jobs. Every result,
+from **Tailor all** or the Tailor page, goes through a verify gate and lands as **Unreviewed** on the
+**Review** page, which shows the reframings the run used, the gaps it left open and its decisions (it
+cannot be applied until you approve it); ticking a reframing saves it as a standing approval, which
+later runs get as the preferred wording and which **Settings** lists. See
+[docs/changes/158-single-flow.md](docs/changes/158-single-flow.md). Review decisions and standing approvals are kept with the app's data
 (`~/Library/Application Support/Huntgry/review/`), outside the workspace, so an agent (which can write
 the workspace) can never approve its own result. The pipeline pauses on a usage limit until the
 agent's reset time (or switches the jobs that have not started to a fallback agent), retries transient failures and stalls with backoff, keeps the
