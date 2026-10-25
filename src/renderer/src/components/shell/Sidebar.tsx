@@ -9,6 +9,7 @@ import {
   IconLayoutDashboard,
   IconLayoutKanban,
   IconMoon,
+  IconRobot,
   IconSearch,
   IconSettings,
   IconSparkles,
@@ -20,6 +21,8 @@ import {
 } from '@tabler/icons-react'
 import { PAGE_LABEL, PAGES, type NavPage } from '../../navigation'
 import { THEME_PREFERENCE_LABELS, THEME_PREFERENCES, useThemePreference, type ThemePreference } from '../../theme'
+import { useAutomationState } from '../automation/useAutomation'
+import { automationBadge } from '../../pages/automation/view'
 import { usePipeline } from '../queue/usePipeline'
 import { PawLogo, ProgressBar, StatusPill } from '../ui'
 import { pipelineMini } from './pipelineMini'
@@ -36,6 +39,7 @@ const NAV_ICON: Record<NavPage, Icon> = {
   browser: IconWorld,
   tailor: IconSparkles,
   review: IconClipboardCheck,
+  automation: IconRobot,
   profile: IconUser,
   settings: IconSettings
 }
@@ -55,7 +59,7 @@ interface Props {
 
 /**
  * The sidebar (Figma 5:3): paw and version, the "Sniff anything…" button that opens the ⌘K palette, the
- * 9 pages with counts on Tailor and Review, the unattended pipeline while one runs, the System / Light /
+ * 10 pages with counts on Tailor, Review and Automation (#154: ready to submit, warning when a job needs you), the unattended pipeline while one runs, the System / Light /
  * Dark toggle and the workspace with its switch.
  */
 export function Sidebar({ current, onNavigate, onOpenPipeline, onOpenPalette, mod, workspacePath, onSwitchWorkspace }: Props) {
@@ -64,9 +68,11 @@ export function Sidebar({ current, onNavigate, onOpenPipeline, onOpenPalette, mo
   const mini = pipelineMini(pipeline)
   const { preference, setPreference } = useThemePreference()
   const tailor = tailorBadge(counts)
-  const badges: Partial<Record<NavPage, { count: number; label: string } | null>> = {
+  const automation = automationBadge(useAutomationState())
+  const badges: Partial<Record<NavPage, { count: number; label: string; tone?: 'accent' | 'warning' } | null>> = {
     tailor,
-    review: counts.review ? { count: counts.review, label: `${counts.review} waiting for review` } : null
+    review: counts.review ? { count: counts.review, label: `${counts.review} waiting for review` } : null,
+    automation
   }
 
   return (
@@ -107,7 +113,7 @@ export function Sidebar({ current, onNavigate, onOpenPipeline, onOpenPalette, mo
               <span className={classes.navLabel}>{PAGE_LABEL[page]}</span>
               {badge && (
                 <>
-                  <span className={classes.count} aria-hidden title={badge.label}>
+                  <span className={classes.count} data-tone={badge.tone} aria-hidden title={badge.label}>
                     {badge.count}
                   </span>
                   <VisuallyHidden> ({badge.label})</VisuallyHidden>

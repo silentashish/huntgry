@@ -9,8 +9,8 @@ describe('navigation', () => {
     expect(PAGES).toContain('profile')
   })
 
-  it('has 8 sidebar entries: the Knowledge graph is a view of Profile (#108)', () => {
-    expect(PAGES).toEqual(['dashboard', 'board', 'jobs', 'explore', 'browser', 'tailor', 'review', 'profile', 'settings'])
+  it('has 10 sidebar entries: the Knowledge graph is a view of Profile (#108), Automation follows Review (#154)', () => {
+    expect(PAGES).toEqual(['dashboard', 'board', 'jobs', 'explore', 'browser', 'tailor', 'review', 'automation', 'profile', 'settings'])
     expect(PAGES as readonly string[]).not.toContain('graph')
   })
 
@@ -66,6 +66,12 @@ describe('navigation', () => {
   it('draws only the Board wide, without the max width but with padding (#90)', () => {
     expect([...WIDE]).toEqual(['board'])
     for (const page of WIDE) expect(FULL_BLEED.has(page)).toBe(false)
+  })
+
+  it('lists Automation right after Review and opens it on a candidate (#154)', () => {
+    expect(PAGES.indexOf('automation')).toBe(PAGES.indexOf('review') + 1)
+    expect(paramsFor(locationOf('automation', { key: 'jobright:a3' }), 'automation')?.key).toBe('jobright:a3')
+    expect(locationOf('automation')).toEqual({ page: 'automation', params: undefined })
   })
 
   it('allows omitting params where they are optional', () => {

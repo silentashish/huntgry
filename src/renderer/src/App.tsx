@@ -9,6 +9,7 @@ import { ProfileSetup } from './components/ProfileSetup'
 import { AppLayout } from './components/shell/AppLayout'
 import { WorkspacePicker } from './components/WorkspacePicker'
 import { locationOf, paramsFor, type Location } from './navigation'
+import { AutomationPage } from './pages/automation'
 import { BoardPage } from './pages/board'
 import { BrowserPage } from './pages/browser'
 import { DashboardPage } from './pages/dashboard'
@@ -95,6 +96,8 @@ export function App() {
                 return <TailorPage params={paramsFor(location, 'tailor')} />
               case 'review':
                 return <ReviewPage params={paramsFor(location, 'review')} />
+              case 'automation':
+                return <AutomationPage params={paramsFor(location, 'automation')} />
               case 'settings':
                 return <SettingsPage />
               case 'profile':

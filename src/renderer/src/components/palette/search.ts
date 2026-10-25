@@ -38,6 +38,8 @@ export type PaletteCommand =
   | { kind: 'paste-job' }
   | { kind: 'toggle-theme' }
   | { kind: 'switch-workspace' }
+  /** Automation's controls (#154): pause, resume, run now. */
+  | { kind: 'automation'; action: 'pause' | 'resume' | 'run-now' }
 
 /** Icon names; the component maps them to Tabler icons. */
 export type PaletteIcon =
@@ -207,7 +209,8 @@ export function searchPalette(items: readonly PaletteItem[], query: string, opti
 
 /** Before anything is typed: the pages, the general actions and the runs that are live. */
 function shownWithoutQuery(item: PaletteItem): boolean {
-  if (item.group === 'actions') return true
+  // Automation's controls only when asked for, so the empty palette keeps its short list.
+  if (item.group === 'actions') return !item.id.startsWith('automation:')
   if (item.group === 'goto') return item.id.startsWith('page:')
   if (item.group === 'runs') return item.keywords?.includes('active') ?? false
   return false
@@ -229,6 +232,7 @@ const PAGE_KEYWORDS: Record<NavPage, string> = {
   browser: 'tabs web posting apply',
   tailor: 'runs resume agent claude codex antigravity queue',
   review: 'unattended results approve',
+  automation: 'auto overnight unattended ready to submit autofill prepare',
   profile: 'master profile resume experience',
   settings: 'preferences agents pricing remote'
 }
@@ -311,7 +315,10 @@ export function paletteItems(data: PaletteData): PaletteItem[] {
       shortcut: `${data.mod} ⇧ L`,
       command: { kind: 'toggle-theme' }
     },
-    { id: 'action:workspace', group: 'actions', title: 'Switch workspace', keywords: 'folder open', icon: 'workspace', command: { kind: 'switch-workspace' } }
+    { id: 'action:workspace', group: 'actions', title: 'Switch workspace', keywords: 'folder open', icon: 'workspace', command: { kind: 'switch-workspace' } },
+    { id: 'automation:pause', group: 'actions', title: 'Pause automation', keywords: 'automation hold stop overnight', icon: 'automation', command: { kind: 'automation', action: 'pause' } },
+    { id: 'automation:resume', group: 'actions', title: 'Resume automation', keywords: 'automation continue overnight', icon: 'automation', command: { kind: 'automation', action: 'resume' } },
+    { id: 'automation:run-now', group: 'actions', title: 'Run automation now', keywords: 'automation start prepare applications', icon: 'automation', command: { kind: 'automation', action: 'run-now' } }
   )
 
   // Applications first, so jobs can find theirs.

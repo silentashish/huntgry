@@ -49,6 +49,8 @@ export interface PageParams {
     | undefined
   /** Unattended results to review (#31); opens on one application when given. */
   review: { applicationId?: string } | undefined
+  /** Automation (#154): high-match jobs prepared unattended up to Submit; `key` highlights one candidate. */
+  automation: { key?: string } | undefined
   /**
    * The Knowledge graph lives in Profile now (#95, #108). Kept so callers can still `navigate('graph', …)`:
    * `locationOf` turns it into `profile` with `{ view: 'graph', nodeId }`, so no location is ever on `graph`.
@@ -99,7 +101,7 @@ export type Location = { [P in Page]: { page: P; params: PageParams[P] } }[Page]
 /** Pages with an entry in the sidebar; `graph` is a view of Profile (#95). */
 export type NavPage = Exclude<Page, 'graph'>
 
-/** Navbar order: 9 entries (the Knowledge graph moved into Profile; Explore follows Jobs, #142). */
+/** Navbar order: 10 entries (the Knowledge graph moved into Profile; Explore follows Jobs, #142; Automation follows Review, #154). */
 export const PAGES: readonly NavPage[] = [
   'dashboard',
   'board',
@@ -108,6 +110,7 @@ export const PAGES: readonly NavPage[] = [
   'browser',
   'tailor',
   'review',
+  'automation',
   'profile',
   'settings'
 ]
@@ -121,6 +124,7 @@ export const PAGE_LABEL: Record<NavPage, string> = {
   browser: 'Browser',
   tailor: 'Tailor',
   review: 'Review',
+  automation: 'Automation',
   profile: 'Profile',
   settings: 'Settings'
 }
