@@ -1,6 +1,6 @@
 import { requiresClearance, sponsorshipOf } from './job-filters'
 import type { Job } from './jobs-types'
-import { displaySkill, mentions, mentionsAffirmatively, normalizeSkill, skillKey, TECH_VOCABULARY } from './skills'
+import { displaySkill, mentions, mentionsAffirmatively, normalizeSkill, skillKey, SLASH_NAMES, TECH_VOCABULARY } from './skills'
 
 /**
  * Match score (#149): how much of what a job asks for the master profile has evidence for, out of 100.
@@ -112,13 +112,24 @@ const round = (n: number) => Math.round(n * 100) / 100
 const FILLER =
   /\b(?:programming|language|languages|development|developer|framework|frameworks|library|libraries|skills?|experience|proficiency|knowledge|expertise|tools?|platform|basics|fundamentals|concepts|in|of|with|and|using)\b/gi
 
-/** Every name a requirement could go by: the whole, outside and inside its parentheses, each side of a slash. */
+/**
+ * The sides of a slash when they name alternative skills ("React/Vue", "AWS / GCP"), else the name whole.
+ * A compound name is one skill: `CI/CD`, `TCP/IP`, `PL/SQL` (`SLASH_NAMES`), and any whose side is one or
+ * two letters ("I/O"), so `CD` alone is never evidence of `CI/CD`.
+ */
+function slashSides(name: string): string[] {
+  if (!name.includes('/')) return [name]
+  const lower = name.toLowerCase()
+  if (SLASH_NAMES.some((n) => lower.includes(n.toLowerCase()))) return [name]
+  const sides = name.split(/\s*\/\s*/).map((n) => n.trim())
+  return sides.every((n) => n.replace(/[^A-Za-z0-9+#]/g, '').length >= 3) ? sides : [name]
+}
+
+/** Every name a requirement could go by: the whole, outside and inside its parentheses, each alternative of a slash. */
 function spellings(name: string): string[] {
   const outside = name.replace(/\([^)]*\)/g, ' ')
   const inside = [...name.matchAll(/\(([^)]*)\)/g)].map((m) => m[1])
-  return [...new Set([name, outside, ...inside].flatMap((n) => n.split(/\s*\/\s*/)).map((n) => n.trim()))].filter(
-    (n) => n.length > 0
-  )
+  return [...new Set([name, outside, ...inside].flatMap(slashSides).map((n) => n.trim()))].filter((n) => n.length > 0)
 }
 
 /** Keys a requirement matches on: each spelling as is, and without filler words. */

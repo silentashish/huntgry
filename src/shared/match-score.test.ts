@@ -45,6 +45,16 @@ describe('matchScore', () => {
       expect(r.score).toBe(Math.round((6 / 7) * 100))
     })
 
+    it('keeps compound slash names whole: CD is not CI/CD, IP is not TCP/IP, but React/Vue is either', () => {
+      const core = (skill: string): MatchJob => job('', { jdCoreSkills: [{ skill, score: 3, type: 'hard_skill' }] })
+      expect(matchScore(core('TCP/IP'), profile({ skills: ['IP'] })).score).toBe(0)
+      expect(matchScore(core('CI/CD'), profile({ skills: ['CD'] })).score).toBe(0)
+      expect(matchScore(core('I/O'), profile({ skills: ['IO'] })).score).toBe(0)
+      expect(matchScore(core('CI/CD'), profile({ skills: ['CI/CD'] })).score).toBe(100)
+      expect(matchScore(core('TCP/IP'), profile({ skills: [], evidence: 'Debugged TCP/IP stacks.' })).score).toBe(100)
+      expect(matchScore(core('React/Vue'), profile({ skills: ['Vue'] })).score).toBe(100)
+    })
+
     it('does not confuse Java with JavaScript', () => {
       const r = matchScore(job('Strong Java and Spring Boot.'), profile({ skills: ['JavaScript'] }))
       expect(names(r.matched)).toEqual([])
