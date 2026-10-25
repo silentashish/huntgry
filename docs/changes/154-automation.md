@@ -59,8 +59,10 @@ posting is read. Order: scored jobs by match, then newest; then Explore rows by 
 
 **Caps.**
 
-- *Per company* (default 2): Automation's ready and in-flight jobs plus applications created in the last
-  30 days, per normalized company name, each counted once.
+- *Per company* (default 2): Automation's ready and in-flight jobs, its submissions of the last 30 days, and
+  applications created in the last 30 days, per normalized company name, each counted once
+  (`companyHeld`). Checked at selection and again right before each tailoring launch (a Retry too; a
+  capped Retry stays in Needs you until a place frees up).
 - *Per day* (default 10): jobs entering tailoring on the local day, across runs. Selection counts the
   jobs it can score now; an Explore row is checked again when it reaches tailoring, and the run then
   ends as `stopped-cap`, leaving the rest skipped with "Cap: 10 a day." (not final; tomorrow they count
@@ -69,18 +71,27 @@ posting is read. Order: scored jobs by match, then newest; then Explore rows by 
   unattended runs* must stay under the cap, otherwise the run ends `stopped-cost` and the jobs not
   started stay **Selected**. Costs are estimated from tokens for every agent
   (`RunSummary.totals.estimatedCostUsd`), so Codex and Antigravity runs count too.
-- *Jobright pages per run* (default 20): saving a row, its link and its summary each count one.
+- *Jobright pages per run* (default 20): enforced at the loader. Every Jobright page the link lookup and
+  the description load (aliases and #148's summary fallback included) takes one, and the loader refuses
+  the page once the allowance is spent. That job then waits, Selected, for the next run, from the step it
+  was at.
+- *Day and enable switch in userData*: today's count and the run window switch are kept per workspace
+  under `<userData>/automation/<sha256(workspace)>.json`. `automation.json` in the workspace only mirrors
+  them, so an agent writing there can neither turn the window on nor give back the day's allowance.
 
 **Per job, one at a time, every step once** (`Automation.process`):
 
-1. *Saving*: an Explore row goes through Explore's **Add to Jobs** (`addExplore`), which also looks up
-   the employer link while Jobright is connected. The record moves to the saved job's id.
+1. *Saving*: an Explore row goes through Explore's **Add to Jobs** (`addExplore`), without its link
+   lookup (the next step does it, counted, with its failure reported). The record moves to the saved
+   job's id.
 2. *Link*: `resolveJobrightCopies` for a `jobright` job whose link is still the Jobright page, only
-   while connected. Signed out or "no link" is logged and the job goes on.
+   while connected. Signed out or "no link" is logged and the job goes on; a lookup that **failed**
+   (the page did not load) is Needs you.
 3. *Description*: `fetchDetails` when the posting is not complete (#148's summary fallback inside).
 4. *Scoring*: the match on the full description. Below the threshold, too few requirements or a gate:
    **Skipped** for good, with the reason.
-5. *Tailoring*: one pipeline per job (`pipeline.start` with `origin: 'automation'`,
+5. *Tailoring* (Pause, the window, the other pipeline, the company, cost and daily caps are all checked
+   together right before the launch, and the day is the launch's local day): one pipeline per job (`pipeline.start` with `origin: 'automation'`,
    `resumeAfterRestart: false`, the queue's own concurrency). The pipeline's verify gate, bounded
    retries, usage-limit waits and stall watchdog apply as to any pipeline. Only `done` + Unreviewed goes
    on; needs attention, a question, a failure or a cancel is **Needs you**.
@@ -88,10 +99,18 @@ posting is read. Order: scored jobs by match, then newest; then Explore rows by 
    is the user's, a bot wall, no form, an error, the 3-minute timeout) is **Needs you** with the page's
    reason.
 
+While a job is tailoring, Pause and the window closing pause Automation's own pipeline, so a retry or a
+usage-limit reset that falls outside the window does not start (the turn already running ends as it
+would); the pipeline resumes at the next opening or on Resume. A job's cost adds up every attempt of its
+queue item (all runs of its batch). Any error inside a step (an unreadable profile while scoring, a
+prepared file that cannot be written) leaves the job in Needs you at that step.
+
 **No retry anywhere in Automation.** A failed step sets `needs-you`, `failedStep` and `error`, logs one
 `fail` line and the run goes on with the next job. Later ticks and runs leave the job alone (unit test:
 three more ticks and runs, zero calls). **Retry step** makes exactly one more attempt from the failed
-step; **Dismiss** is Jobs' Dismiss. The pipeline's own bounded retries (#31) are the only retries.
+step, after the job being worked on when a run is going; a tailoring Retry of a result that needs
+attention passes the pipeline's "tailored before" guard (one attempt, the same verify gate).
+**Dismiss** is Jobs' Dismiss. The pipeline's own bounded retries (#31) are the only retries.
 Waiting is not retrying: a run holds, with the reason on the page, while the window is closed, while
 paused, while another pipeline runs, while the queue is paused with jobs of its own (starting a pipeline
 would unpause them), and while the user has an apply session open.
@@ -105,9 +124,10 @@ these differences:
   and its timers keep running while hidden;
 - **no file is attached** (`deferUploads`): Greenhouse's S3 widget, Lever's parser and Workday's autosave
   send the file to the employer before Submit, and the user has not reviewed the resume yet;
-- it waits until the fill **and its model calls** (`learn`: mapping, drafts, their refills) are done, then
-  snapshots the report, the drafts and this application's AI answers, ends the session and closes the
-  tab;
+- it waits until the fill **and its model calls** (`learn`: mapping, drafts, their refills) are done, under
+  **one deadline** (3 minutes) for the whole prepare, then snapshots the report, the drafts and this
+  application's AI answers, ends the session and closes the tab;
+- a page that opens a new tab is not followed: that tab is closed and the job is left to the user;
 - the session never reaches the renderer (`current()` is `null` while it runs), and Automation never
   starts one while the user has a session. The user's own Apply ends a prepare, never the reverse.
 
@@ -124,17 +144,20 @@ the job becomes **Submitted**.
 the window is open, **once per opening**. A window run holds when the window closes and continues at the
 next opening. **Run now** ignores the window, not the caps. **Pause** holds before the next step and
 pauses Automation's own pipeline (`pipeline.pause` only when its origin is Automation). **Stop** ends the
-run; a job being tailored is stopped and goes back to Selected. A run the app's quit interrupted ends on
-the next start, and a job that was mid-step goes to Needs you ("Interrupted"), unless its tailoring is
-still alive in the queue. A workspace switch stops the run.
+run; a job being tailored is stopped and goes back to Selected. Only one run starts at a time (the start is claimed before
+its first await). A run the app's quit interrupted ends on the next start, and a job that was mid-step
+goes to Needs you ("Interrupted"); a job interrupted while tailoring keeps its queue item, and Retry
+follows that item instead of tailoring again. A workspace switch aborts the run's waits and stops its
+pipeline.
 
 **Step log.** Every step's start, ok, skip and fail is appended to `.huntgry/automation-log.jsonl` with
 the time, the job and a message. A torn last line (a crash mid-append) is skipped on read and never glued
 to the next entry. The page shows the latest 200, filterable by job.
 
-**Trust.** Settings and caps live in `userData/settings.json`, like the review decisions (#31's
-authority): an agent writing into the workspace cannot raise a cap. The state and the log are in the
-workspace, where the user can read them.
+**Trust.** Settings and caps live in `userData/settings.json`, and the run window switch and today's count
+in `<userData>/automation/`, like the review decisions (#31's authority): an agent writing into the
+workspace can neither raise a cap nor reset its use. The state and the log are in the workspace, where
+the user can read them.
 
 **Never submits.** Automation only calls `ApplyService`; the build guard
 (`src/shared/autofill/guard.test.ts`) now scans every module under `src/main/automation` too.
@@ -194,7 +217,7 @@ The product decisions from the context research (§8), with the default taken:
 | Q1 | Apply gate vs unattended prefill | A main-only `prepare` may fill an **Unreviewed** result (not needs attention, not drifted) in a hidden tab, never submitting, **uploads deferred** to the user's click. The user-visible open still needs approval: **Review & submit** is that approval. | Also attach the resume during prepare (closer to "filled form", but sends an unreviewed resume to the employer). |
 | Q2 | Record "applied" on the confirmation page | **Only** for a session opened from a Ready to submit card (the user pressed Submit, the confirmation proves it). Manual applies keep "Mark as applied". | Keep it manual everywhere. |
 | Q3 | Threshold | **Match ≥ 80 with ≥ 4 requirements**, editable on the page. Re-run on the owner's workspace: 19 of the 54 saved jobs with requirements reach it (same as #149); none of the 799 Explore rows can be scored without loading its page. | — |
-| Q4 | Unattended Jobright page loads | Only rows that pass the title/Relevant pre-filter, at most **20 pages per run**, through the existing loader (its per-host gap), and the Explore list is **never refreshed on a timer** (Automation reads the cache as it is). | Explore candidates only after the user adds them to Jobs (switch the Explore source off on the page). |
+| Q4 | Unattended Jobright page loads | Only rows that pass the title/Relevant pre-filter, at most **20 pages per run** counted at the loader (aliases and fallbacks included), through the existing loader (its per-host gap), and the Explore list is **never refreshed on a timer** (Automation reads the cache as it is). | Explore candidates only after the user adds them to Jobs (switch the Explore source off on the page). |
 | Q5 | Sidebar position | **After Review** (…, Tailor, Review, Automation, Profile, Settings). The explore → browser → tailor adjacency tests stay. | Right after Explore. |
 | Q6 | "Relevant's exclusions" | Relevant's exclusions + title/skill `matched` + the saved Jobs filters + the match gates. | Also require Relevant score ≥ 40. |
 | Q7 | Per-company window | Ready + in flight + applications created in the **last 30 days**. | Only within one run. |
@@ -204,6 +227,10 @@ The product decisions from the context research (§8), with the default taken:
 
 Other decisions:
 
+- **A retry inside one job can pass the cost cap by that job's own retries.** The cap is checked before
+  each launch with the median cost; the pipeline's bounded retries (at most 2 automatic retries per job,
+  #31) run inside one launch and are counted once they end. The pipeline's own budget counts Claude's
+  figure only, so it is not used for this.
 - **One pipeline per job**, not one batch. Automation decides before each launch (cost cap, daily cap,
   pause, window), which a batch's queue would have started already. The pipeline record stays the single
   owner of the queue's unattended hooks; Automation observes `queue:changed`. Cost: a "pipeline finished"
