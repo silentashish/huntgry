@@ -5,6 +5,7 @@ import type { Page } from '@playwright/test'
 import { withFakeAgents } from '../fixtures/fake-agent'
 import { expect, test, type MockServer } from '../fixtures/servers/fixture'
 import { clickLinkInTab, evaluateInTab, expectInTab, expectTabLoaded, listTabs, pressSubmitInTab } from '../fixtures/tabs'
+import { BoardPage } from '../pages/board'
 import { BrowserPage } from '../pages/browser'
 import { Shell } from '../pages/shell'
 import { pastedFolder, TailorPage } from '../pages/tailor'
@@ -72,11 +73,11 @@ async function expectGreenhouseFilled(app: { electronApp: Parameters<typeof eval
   }
 }
 
-/** Starts Apply from a Dashboard row and waits for the Browser page. */
-async function applyFromDashboard(page: Page, company: string): Promise<BrowserPage> {
+/** Starts Apply from an application's drawer on the Board (#161) and waits for the Browser page. */
+async function applyFromBoard(page: Page, company: string): Promise<BrowserPage> {
   const shell = new Shell(page)
-  await shell.goTo('dashboard')
-  await page.getByRole('row').filter({ hasText: company }).getByRole('button', { name: 'Apply', exact: true }).click()
+  await shell.goTo('board')
+  await new BoardPage(page).applyFrom(company)
   await shell.expectActive('browser')
   return new BrowserPage(page)
 }
@@ -167,8 +168,8 @@ test.describe('apply with the generated resume', () => {
     })
   }
 
-  test('Dashboard row → Apply on Lever: attached through the résumé parser, contact values kept', async ({ app, mock }) => {
-    const browser = await applyFromDashboard(app.window, 'Lever Mock')
+  test('Board card → drawer → Apply on Lever: attached through the résumé parser, contact values kept', async ({ app, mock }) => {
+    const browser = await applyFromBoard(app.window, 'Lever Mock')
     await expectTabLoaded(app.electronApp, '/lever/', 'Acme - Software Engineer')
     await browser.apply.expectStatus('Filled: review and submit')
     await expect(app.window.getByText('resume.pdf', { exact: true }).locator('..')).toContainText('Attached')
@@ -178,9 +179,9 @@ test.describe('apply with the generated resume', () => {
   })
 
   test('drawer → "Apply in browser" on Greenhouse fills and attaches the same way', async ({ app, mock }) => {
-    await new Shell(app.window).goTo('dashboard')
-    await app.window.getByRole('row').filter({ hasText: 'Greenhouse Mock' }).getByText('Greenhouse Mock').click()
-    await app.window.getByRole('dialog').getByRole('button', { name: 'Apply in browser' }).click()
+    await new Shell(app.window).goTo('board')
+    const drawer = await new BoardPage(app.window).openApplication('Greenhouse Mock')
+    await drawer.getByRole('button', { name: 'Apply in browser' }).click()
     await new Shell(app.window).expectActive('browser')
     const browser = new BrowserPage(app.window)
     await browser.apply.expectStatus('Filled: review and submit')
@@ -193,7 +194,7 @@ test.describe('apply with the generated resume', () => {
     app,
     mock
   }) => {
-    const browser = await applyFromDashboard(app.window, 'Company Embed Mock')
+    const browser = await applyFromBoard(app.window, 'Company Embed Mock')
     // The company page on the other origin injects the iframe 800 ms after load; Huntgry opens it in the tab.
     await expect
       .poll(async () => (await listTabs(app.electronApp)).map((t) => t.url.replace(/^https?:\/\/[^/]+|\?.*$/g, '')))
@@ -206,7 +207,7 @@ test.describe('apply with the generated resume', () => {
   })
 
   test('a posting whose Apply opens a new tab: the session follows the form there', async ({ app, mock }) => {
-    const browser = await applyFromDashboard(app.window, 'Popup Mock')
+    const browser = await applyFromBoard(app.window, 'Popup Mock')
     await expectTabLoaded(app.electronApp, '/company/posting-popup', 'Software Engineer - Acme')
     await browser.apply.expectStatus('Ready to fill')
     await expect(app.window.getByText(/Open it with the page's own Apply button/)).toBeVisible()
@@ -220,7 +221,7 @@ test.describe('apply with the generated resume', () => {
   })
 
   test("a posting whose Apply link opens the form in the same tab: filled once the user follows it", async ({ app, mock }) => {
-    const browser = await applyFromDashboard(app.window, 'Link Mock')
+    const browser = await applyFromBoard(app.window, 'Link Mock')
     await expectTabLoaded(app.electronApp, '/company/posting-link', 'Software Engineer - Acme')
     await browser.apply.expectStatus('Ready to fill')
     await expect(app.window.getByText(/Open it with the page's own Apply button/)).toBeVisible()

@@ -90,7 +90,7 @@ describe('matchesBoardFilter', () => {
     expect(matchesBoardFilter(card('Data Engineer'), { text: 'initech', sources: [] })).toBe(true)
   })
 
-  it("searches an application's job id, as the Dashboard table does (#161 reuses this)", () => {
+  it("searches an application's job id, as the Dashboard table did (#161)", () => {
     const req = app('Umbrella', { jobId: 'REQ-4711', jobTitle: 'Data Engineer', role: 'Data Engineer' })
     const board = buildBoard({ jobs: [], applications: [req], queue: [], now: NOW })
     const umbrella = board.columns.flatMap((c) => c.cards)[0]
@@ -98,6 +98,17 @@ describe('matchesBoardFilter', () => {
     expect(cardSearchText(umbrella).filter((s) => s.includes('4711'))).toEqual(['REQ-4711'])
     expect(matchesBoardFilter(umbrella, { text: 'req-4711', sources: [] })).toBe(true)
     expect(applicationSearchText(req)).toContain('REQ-4711')
+  })
+
+  it("searches the application a working queue item superseded, as the Dashboard table did (#161)", () => {
+    const saved = job({ id: 'url:9', source: 'url', company: 'Umbrella', title: 'Data Engineer' })
+    const superseded = app('Umbrella', { jobId: 'REQ-9', jobUrl: saved.url }, { status: 'generated', notes: 'Recruiter: Dana' })
+    const rerun: QueueItem = { ...queued, id: 'q-9', jobId: saved.id, title: 'Data Engineer · Umbrella' }
+    const b = buildBoard({ jobs: [saved], applications: [superseded], queue: [rerun], now: NOW })
+    const only = b.columns.flatMap((c) => c.cards)
+    expect(only.map((c) => c.key)).toEqual(['queue:q-9'])
+    expect(matchesBoardFilter(only[0], { ...EMPTY_BOARD_FILTER, text: 'dana' })).toBe(true)
+    expect(matchesBoardFilter(only[0], { ...EMPTY_BOARD_FILTER, text: 'req-9' })).toBe(true)
   })
 
   it('keeps only the chosen sources; a card with no known source is left out', () => {

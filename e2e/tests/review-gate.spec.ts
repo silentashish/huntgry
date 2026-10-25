@@ -3,14 +3,14 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { withFakeAgents } from '../fixtures/fake-agent'
 import { expect, test } from '../fixtures/servers/fixture'
-import { Dashboard } from '../pages/dashboard'
+import { BoardPage } from '../pages/board'
 import { Shell } from '../pages/shell'
 import { pastedFolder, TailorPage } from '../pages/tailor'
 
 /**
  * #31 × #63: an unattended result stays out of Apply until it is approved on
  * the Review page, at every Apply entry point (the Tailor run's Apply button,
- * the Dashboard row, the application drawer), each with the reason; the
+ * the Board card, the application drawer), each with the reason; the
  * main-process gate in ApplyService.open() is covered by the unit tests.
  * The review state is recorded where main keeps it (userData), never in huntgry.json, which an
  * agent can write: a forged "approved" there unlocks nothing.
@@ -44,7 +44,7 @@ async function touch(workspace: string, review?: unknown): Promise<void> {
   await writeFile(file, JSON.stringify(tracking, null, 2))
 }
 
-test('an Unreviewed result blocks Apply with the reason on the Tailor run, the Dashboard row and the drawer', async ({ app, mock }) => {
+test('an Unreviewed result blocks Apply with the reason on the Tailor run, the Board card and the drawer', async ({ app, mock }) => {
   const shell = new Shell(app.window)
   await shell.goTo('tailor')
   const tailor = new TailorPage(app.window)
@@ -59,24 +59,29 @@ test('an Unreviewed result blocks Apply with the reason on the Tailor run, the D
   await expect(tailor.outputButton('Apply')).toBeDisabled()
   await expect(tailor.applyReason).toHaveText(REASON)
 
-  const dashboard = new Dashboard(app.window)
-  await shell.goTo('dashboard')
-  await expect(dashboard.row(JOB.company).getByRole('button', { name: 'Apply', exact: true })).toBeDisabled()
-  await expect(dashboard.row(JOB.company)).toContainText('Unreviewed')
-  const drawer = await dashboard.open(JOB.company)
+  // On the Board (#161): the card waits in Needs review with no Apply, and the drawer's Apply is disabled.
+  const board = new BoardPage(app.window)
+  await shell.goTo('board')
+  const card = await board.application(JOB.company)
+  await expect(card).toContainText('Unreviewed')
+  await expect(card.getByRole('button', { name: 'Apply', exact: true })).toHaveCount(0)
+  await expect(board.column('review').locator('article[data-kind="application"]')).toHaveCount(1)
+  const drawer = await board.openApplication(JOB.company)
   await expect(drawer.getByRole('button', { name: 'Apply in browser' })).toBeDisabled()
-  await dashboard.closeDrawer()
+  await board.closeDrawer()
 
   // An agent writing "approved" into the workspace's huntgry.json changes nothing.
   await touch(app.workspace!, { state: 'approved', runId: '20261005-000000-aaaaaa', at: new Date().toISOString() })
   // Give the watcher time to re-list (a forged state would show up by then).
   await app.window.waitForTimeout(1500)
-  await expect(dashboard.row(JOB.company).getByRole('button', { name: 'Apply', exact: true })).toBeDisabled()
-  await expect(dashboard.row(JOB.company)).toContainText('Unreviewed')
+  await expect(card).toContainText('Unreviewed')
+  await expect((await board.openApplication(JOB.company)).getByRole('button', { name: 'Apply in browser' })).toBeDisabled()
+  await board.closeDrawer()
 
   // Approved on the Review page (main records it): every entry point allows Apply again.
   await setReview(app.userData, app.workspace!, 'approved')
-  await expect(dashboard.row(JOB.company).getByRole('button', { name: 'Apply', exact: true })).toBeEnabled()
-  await expect((await dashboard.open(JOB.company)).getByRole('button', { name: 'Apply in browser' })).toBeEnabled()
-  await dashboard.closeDrawer()
+  await expect(card).toContainText('Approved')
+  await expect(card.getByRole('button', { name: 'Apply', exact: true })).toBeEnabled()
+  await expect((await board.openApplication(JOB.company)).getByRole('button', { name: 'Apply in browser' })).toBeEnabled()
+  await board.closeDrawer()
 })

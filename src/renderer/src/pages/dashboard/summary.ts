@@ -1,6 +1,8 @@
 import type { ApplicationRecord, ApplicationStatus } from '@shared/applications-types'
+import type { BoardColumnId } from '@shared/board'
 import type { UsageDay, UsageFilter, UsageRange } from '@shared/usage-types'
-import { isReadyToApply } from './filter'
+import { applyBlocker } from '../../components/apply/blocker'
+import type { PageParams } from '../../navigation'
 
 /** Pure helpers behind the Dashboard header, "Needs you" strip, stat tiles and usage bars (#109). */
 
@@ -43,9 +45,35 @@ export function needsYouLine(things: number): string {
   return `${things} thing${things === 1 ? '' : 's'} need${things === 1 ? 's' : ''} you before the hunt moves on.`
 }
 
-/** Generated results that could be applied to now: not applied yet, resume built, posting known, review passed. */
+/** Generated, not applied yet, and Apply is possible: resume built, posting known, review passed. */
+export function isReadyToApply(a: ApplicationRecord): boolean {
+  return a.tracking.status === 'generated' && applyBlocker(a) === null
+}
+
+/** Generated results that could be applied to now, newest first. */
 export function readyToApply(apps: readonly ApplicationRecord[]): ApplicationRecord[] {
-  return apps.filter(isReadyToApply)
+  return apps.filter(isReadyToApply).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+
+/** Applications per status, for the stat tiles. */
+export function countByStatus(apps: readonly ApplicationRecord[]): Record<ApplicationStatus, number> {
+  const counts = { generated: 0, applied: 0, interviewing: 0, offer: 0, rejected: 0, archived: 0 }
+  for (const a of apps) counts[a.tracking.status]++
+  return counts
+}
+
+/**
+ * The Board column a stat tile opens (#161): its status's column, Ready to apply for Generated
+ * (what is left to do with a generated result), none for Total, which opens the whole Board.
+ */
+export function kpiColumn(key: KpiKey): BoardColumnId | undefined {
+  if (key === 'total') return undefined
+  return key === 'generated' ? 'ready' : key
+}
+
+/** Where "Apply" in the "Needs you" strip goes: the one result's drawer on the Board, else the Board's Ready to apply. */
+export function applyLocation(ready: readonly ApplicationRecord[]): NonNullable<PageParams['board']> {
+  return ready.length === 1 ? { applicationId: ready[0].id } : { column: 'ready' }
 }
 
 /** "A, B and 2 more" for a list of names. */

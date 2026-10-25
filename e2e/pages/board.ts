@@ -32,6 +32,8 @@ export class BoardPage {
   /** The search box and the source filter above the columns (#160). */
   readonly search: Locator
   readonly sourceFilter: Locator
+  /** The application drawer (and the saved job's drawer) a card opens. */
+  readonly drawer: Locator
 
   constructor(readonly page: Page) {
     this.heading = page.getByRole('heading', { name: 'Board', level: 2 })
@@ -40,6 +42,63 @@ export class BoardPage {
     this.addButton = this.column('todo').getByRole('button', { name: 'Add', exact: true })
     this.search = page.getByRole('textbox', { name: 'Search the board' })
     this.sourceFilter = page.getByRole('combobox', { name: 'Source', exact: true })
+    this.drawer = page.getByRole('dialog')
+  }
+
+  /**
+   * An application's card by its company (the card's subtitle), wherever it is: the board is
+   * searched for the company and every folded week opened (#161: what the Dashboard table's rows were).
+   */
+  async application(company: string): Promise<Locator> {
+    await this.search.fill(company)
+    const card = this.page.locator('article[data-kind="application"]').filter({ has: this.page.getByText(company, { exact: true }) })
+    await expect(async () => {
+      await this.openAllWeeks()
+      await expect(card).toHaveCount(1, { timeout: 1000 })
+    }).toPass()
+    return card
+  }
+
+  /** Opens the drawer of an application by clicking its card's title (hovered first, for a compact card). */
+  async openApplication(company: string): Promise<Locator> {
+    const card = await this.application(company)
+    await card.hover()
+    await card.getByRole('heading', { level: 4 }).click()
+    await expect(this.drawer).toBeVisible()
+    await expect(this.drawer.getByRole('heading', { level: 2 })).toContainText(company)
+    // The drawer slides in from the right: wait until it stops, so a hover lands where it aims.
+    const left = async () => (await this.drawer.boundingBox())?.x
+    await expect
+      .poll(async () => {
+        const before = await left()
+        await this.page.waitForTimeout(100)
+        return before !== undefined && before === (await left())
+      })
+      .toBe(true)
+    return this.drawer
+  }
+
+  /** Starts Apply for an application from its drawer ("Apply in browser"); the Browser page opens. */
+  async applyFrom(company: string): Promise<void> {
+    const drawer = await this.openApplication(company)
+    await drawer.getByRole('button', { name: 'Apply in browser' }).click()
+  }
+
+  async closeDrawer(): Promise<void> {
+    await this.page.keyboard.press('Escape')
+    await expect(this.drawer).toBeHidden()
+  }
+
+  /** Picks a value in a Mantine Select (the drawer's Status): open it, click the option, wait for the value. */
+  async pick(select: Locator, value: string): Promise<void> {
+    await select.click()
+    await this.page.getByRole('option', { name: value, exact: true }).click()
+    await expect(select).toHaveValue(value)
+  }
+
+  /** A tooltip with this text. A disabled control gets no mouseleave, so its tooltip may stay open: match by text. */
+  tooltip(text: string | RegExp): Locator {
+    return this.page.getByRole('tooltip', { name: text }).filter({ visible: true })
   }
 
   /** A week group of a column, by its label ("This week", "Last week", "Oct 5 – 11"). */

@@ -3,6 +3,7 @@ import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, test } from '../fixtures/app'
 import { fakeAgents, withFakeAgents } from '../fixtures/fake-agent'
+import { BoardPage } from '../pages/board'
 import { Shell } from '../pages/shell'
 import { SettingsPage } from '../pages/settings'
 import { openedPaths, pastedFolder, stubOpenPath, TailorPage } from '../pages/tailor'
@@ -89,9 +90,9 @@ test.describe('tailor with the fake agents', () => {
     const shell = new Shell(app.window)
     await shell.goTo('jobs')
     await expect(app.window.getByText('Staff Engineer', { exact: true }).first()).toBeVisible()
-    // The dashboard lists the new application next to the demo ones.
-    await shell.goTo('dashboard')
-    await expect(app.window.getByText('Acme Corp', { exact: true }).first()).toBeVisible()
+    // The Board lists the new application next to the demo ones (#161: no longer the Dashboard).
+    await shell.goTo('board')
+    await expect(await new BoardPage(app.window).application('Acme Corp')).toBeVisible()
   })
 
   test('a failing agent shows the error state and the run stays in .huntgry/runs', async ({ app }) => {

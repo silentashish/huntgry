@@ -37,6 +37,12 @@ describe('KpiTile', () => {
     expect(html).toContain('>24<')
   })
 
+  it('is a plain button, not a toggle, when clickable without a selected state', () => {
+    const html = render(<KpiTile label="Applied" value={3} onClick={() => {}} />)
+    expect(html).toMatch(/<button[^>]*type="button"/)
+    expect(html).not.toContain('aria-pressed')
+  })
+
   it('is a plain block otherwise, with its sub line', () => {
     const html = render(<KpiTile label="Est. API cost" value="$14.20" sub="$0.37/run" size="sm" />)
     expect(html).not.toContain('<button')

@@ -151,6 +151,19 @@ describe('buildBoard', () => {
     expect(card(board, 'app:software-engineer/acme/c')).toMatchObject({ job: { id: 'url:c' } })
   })
 
+  it("keeps the application a working queue item supersedes on the queue card, so it stays reachable (#161)", () => {
+    const board = buildBoard({
+      jobs: [job('a'), job('b')],
+      queue: [item('a', 'url:a', 'running'), item('b', 'url:b', 'queued')],
+      applications: [app('a1', { notes: 'Recruiter: Dana' }, { jobUrl: 'https://jobs.example.com/a' })],
+      now: NOW
+    })
+    expect(layout(board)).toEqual({ tailoring: ['queue:q-a', 'queue:q-b'] })
+    expect(card(board, 'queue:q-a')).toMatchObject({ kind: 'queue', app: { id: 'software-engineer/acme/a1' } })
+    // A queue item with no application behind it has none.
+    expect(card(board, 'queue:q-b')).toMatchObject({ kind: 'queue', app: null })
+  })
+
   it('finds the queue item of a job through its aliases and prefers a working item over a failed one', () => {
     const board = buildBoard({
       jobs: [job('a', { aliases: ['indeed:a'] })],
@@ -193,6 +206,27 @@ describe('buildBoard', () => {
     expect(board.hiddenArchived).toBe(3)
     // An archived card is dated by when it was archived.
     expect(card(board, 'app:software-engineer/acme/fresh').at).toBe(archived(1))
+  })
+
+  it('keeps every archived card, however old, with keepArchived (#161: what the Dashboard table listed)', () => {
+    const daysAgo = (days: number) => new Date(NOW.getTime() - days * 24 * 60 * 60 * 1000).toISOString()
+    const input = {
+      jobs: [job('j-stale', { dismissed: true, dismissedAt: daysAgo(30) })],
+      queue: [],
+      applications: [
+        app('fresh', { status: 'archived' as const, archivedAt: daysAgo(1) }),
+        app('stale', { status: 'archived' as const, archivedAt: daysAgo(90) })
+      ],
+      now: NOW
+    }
+    expect(buildBoard(input).hiddenArchived).toBe(2)
+    const all = buildBoard({ ...input, keepArchived: true })
+    expect(all.hiddenArchived).toBe(0)
+    expect(layout(all)).toEqual({
+      archived: ['app:software-engineer/acme/fresh', 'job:url:j-stale', 'app:software-engineer/acme/stale']
+    })
+    // Dated by when they were archived, like the recent ones.
+    expect(card(all, 'app:software-engineer/acme/stale').at).toBe(daysAgo(90))
   })
 })
 

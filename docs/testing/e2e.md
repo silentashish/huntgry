@@ -127,13 +127,14 @@ production yet"; the applications are
 | `frontend-engineer/wayne/wy-3` | rejected | no posting URL (Apply blocked); asks for React, GraphQL |
 
 so the insights card lists Kafka (2 jobs), Airflow, GraphQL, React and Spark, notes Kubernetes,
-and the graph overlay has five job nodes. The table on the Dashboard is ordered by file mtime,
-which a fresh copy does not fix: specs address rows by company, never by position.
+and the graph overlay has five job nodes. Board cards are ordered by when they last changed (file
+mtime for most), which a fresh copy does not fix: specs address applications by company or title,
+never by position.
 
 **Extending `demo`:** add a `<role>/<company>/<job-id>/` folder with at least one marker file
 (`job-description.md`, `resume_data.json`, `build-report.json`, `resume.pdf`, `cover_data.json`),
 write the text files by hand, and add a `write(...)` line to `generate.mts` for each binary
-(`applicationPdf`, `coverPdf`, `pagePreview`). Then update the README table: the dashboard,
+(`applicationPdf`, `coverPdf`, `pagePreview`). Then update the README table: the dashboard, board,
 graph and insights specs assert the counts and gaps it lists, so a new job description that
 mentions a technology from `src/shared/skills.ts` (`TECH_VOCABULARY`, which includes words like
 "on-call") changes the expected gap list. Run `node e2e/fixtures/generate.mts` and check
@@ -257,7 +258,7 @@ application's own `resume.pdf`. Company-site flows: `/greenhouse/redirect-compan
 800 ms after load (a token older than 30 s redirects to `/embed/job_board?error=true`);
 `/company/posting-popup` and `/company/posting-link` show only an "Apply now" link (new tab / same
 tab). `e2e/tests/apply-generated.spec.ts` covers Tailor → Apply on Greenhouse and Lever, the
-Dashboard and drawer entry points, the redirect + late embed, and both link cases; `clickLinkInTab` is how the test (never the
+Board drawer entry point, the redirect + late embed, and both link cases; `clickLinkInTab` is how the test (never the
 app) presses a site's own link, and `expectInTab` polls an expression in a tab.
 
 **The mock Workday** (`/workday/`, `scripts/mock-ats/workday.mjs`) is a client-rendered flow at one URL:
@@ -325,9 +326,8 @@ was needed; tabs in the strip are told apart from the "New tab" action by their 
 matching only the visible input, `entry(title)` for accordion headers, `unsavedBadge`,
 `savedBadge`, `leaveDialog`, `save()`), `Shell` (`SHELL_PAGES`, `navLink(page)`, `goTo(page)`,
 `expectActive(page)` (checks `aria-current="page"`, Mantine's `data-active` and the page
-heading), `currentEntries`, `switchWorkspaceButton`), `Dashboard` (`rows`, `row(company)`,
-`rowStatus`, `pickStatus(select, status)`, `statCard(label)`, `statusFilter`, `searchInput`,
-`open(company)` → the drawer, `tooltip(text)`, `expectCompanies([...])`), `InsightsCard`
+heading), `currentEntries`, `switchWorkspaceButton`), `Dashboard` (`statCard(label)`, `statValue(label)`,
+`needsYou`, `emptyState`; it lists no applications since #161), `InsightsCard`
 (`gap(skill)`, `haveThis(skill)` → the evidence modal, `notMe(skill)`, `dismissedToggle`,
 `emptyBadge(section)`, `openButton`), `GraphPage` (`showView('Graph' | 'Skills')`,
 `nodeLabels()` from the "Jump to…" list, `toggleJobsOverlay(on)`, `skillRow(skill)`,
@@ -343,12 +343,15 @@ for the PATH-isolation assertion), `JobsPage`, `BrowserPage` with `ApplyPanel` (
 servers" above), and `BoardPage` (#85: `column(id)` (a `region` named after the column), `cards(id)`,
 `card(title)` (an `article` named by its title), `expectIn(id, title)`, `titles(id)`,
 `moveTo(title, id)` / `moveTargets(title)` through the card's Move to menu, `drag(title, id)` for
-HTML5 drag and drop, `addLink(url)`). `board.spec.ts` seeds its own queue, review and archived
+HTML5 drag and drop, `addLink(url)`, and since #161 `application(company)` (searches the board for
+the company and opens folded weeks), `openApplication(company)` → the drawer once it has stopped
+sliding in, `applyFrom(company)`, `pick(select, value)`, `tooltip(text)`). `board.spec.ts` seeds its own queue, review and archived
 folders on top of `demo` and uses the mock server for the pasted link.
 
-The dashboard's search box, status filter and sort select carry `aria-label`s (`Search
-applications`, `Filter by status`, `Sort applications`) added for the tests, since a placeholder
-is not a stable name (the multi-select's disappears once a value is picked).
+The Board's search box and source filter carry `aria-label`s (`Search the board`, `Source`)
+for the tests, since a placeholder is not a stable name (the multi-select's disappears once a value
+is picked). Cards carry `data-kind` (`job`, `queue`, `application`), so an application is not
+confused with a saved job of the same company.
 
 Mantine details the page objects already handle, so a new spec does not rediscover them:
 Select and MultiSelect inputs are `role=combobox` and their options `role=option`, but the option

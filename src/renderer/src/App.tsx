@@ -84,7 +84,7 @@ export function App() {
               case 'dashboard':
                 return <DashboardPage />
               case 'board':
-                return <BoardPage />
+                return <BoardPage params={paramsFor(location, 'board')} />
               case 'jobs':
                 return <JobsPage key={paramsFor(location, 'jobs')?.reload} openId={paramsFor(location, 'jobs')?.openId} />
               case 'explore':

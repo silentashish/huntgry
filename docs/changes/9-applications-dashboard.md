@@ -2,6 +2,8 @@
 
 Issue: [silentashish/huntgry#9](https://github.com/silentashish/huntgry/issues/9) · Epic: #1 · Follows #7
 
+> Since #161 the Dashboard no longer lists applications: they are browsed on the Board, whose application drawer has every row action described here. See [161-board-replaces-dashboard-list.md](161-board-replaces-dashboard-list.md).
+
 ## Context & problem
 
 The diagram's **Custom Dashboard with all the generated resume + link to job board**.

@@ -4,8 +4,9 @@ import type { JobSourceId } from './jobs-types'
 
 /**
  * The Board's search and source filter (#160). It narrows every column at once, and the column
- * counts are taken after it. Pure, for tests; #161 moves the Dashboard table's search here, so
- * new criteria (the Archived filter, a status) are added as fields of `BoardFilter`.
+ * counts are taken after it. Pure, for tests. It replaced the Dashboard table's search (#161);
+ * the table's Archived filter is `buildBoard`'s `keepArchived`, as older archived cards are not on
+ * the board to filter.
  */
 
 /** The sources the Board filters on, in menu order. */
@@ -43,7 +44,7 @@ export function cardSource(card: BoardCard): BoardSource | null {
   return null
 }
 
-/** The text an application is searched by: the Dashboard table's fields, company, role, job title, job id and notes. */
+/** The text an application is searched by: the fields the Dashboard table searched, company, role, job title, job id and notes. */
 export function applicationSearchText(app: ApplicationRecord): string[] {
   return [app.company, app.role, app.jobTitle, app.jobId, app.tracking.notes]
 }
@@ -53,7 +54,11 @@ export function cardSearchText(card: BoardCard): string[] {
   const out = [card.title, card.subtitle]
   if (card.job) out.push(card.job.company, card.job.title)
   if (card.kind === 'application') out.push(...applicationSearchText(card.app))
-  if (card.kind === 'queue') out.push(card.item.title)
+  if (card.kind === 'queue') {
+    out.push(card.item.title)
+    // A re-run stands for the application it supersedes, which is searched as before (#161).
+    if (card.app) out.push(...applicationSearchText(card.app))
+  }
   return out
 }
 

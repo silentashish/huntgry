@@ -15,7 +15,10 @@ export interface KpiTileProps {
   accent?: boolean
   /** `md`: the Dashboard stat tiles (default). `sm`: compact sunken tiles (run metrics, job facts). */
   size?: 'sm' | 'md'
-  /** Makes the tile a toggle button (`aria-pressed` = `selected`). */
+  /**
+   * Makes the tile a button: a toggle (`aria-pressed` = `selected`) when `selected` is given, else
+   * a plain button that goes somewhere (the Dashboard's tiles open the Board, #161).
+   */
   onClick?: () => void
   'aria-label'?: string
   className?: string
@@ -39,7 +42,7 @@ export function KpiTile({ label, value, sub, selected, accent, size = 'md', onCl
   }
   if (onClick) {
     return (
-      <button type="button" {...common} aria-pressed={!!selected} onClick={onClick}>
+      <button type="button" {...common} aria-pressed={selected === undefined ? undefined : selected} onClick={onClick}>
         {body}
       </button>
     )

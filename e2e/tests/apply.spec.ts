@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import type { Page } from '@playwright/test'
 import { expect, test } from '../fixtures/servers/fixture'
 import { evaluateInTab, expectTabLoaded, listTabs, pressSubmitInTab } from '../fixtures/tabs'
+import { BoardPage } from '../pages/board'
 import { BrowserPage } from '../pages/browser'
 import { Shell } from '../pages/shell'
 
@@ -20,16 +21,17 @@ const exists = (path: string) => access(path).then(() => true, () => false)
 const tracking = async (workspace: string, id: string) => JSON.parse(await readFile(join(workspace, id, 'huntgry.json'), 'utf8'))
 const today = () => new Date().toISOString().slice(0, 10)
 
-/** The Apply button of a Dashboard row (rows are named by the humanized company folder). */
-function applyButton(page: Page, company: string) {
-  return page.getByRole('row').filter({ hasText: company }).getByRole('button', { name: 'Apply', exact: true })
+/** The Apply button of an application's drawer on the Board (#161; cards are found by the humanized company folder). */
+async function applyButton(page: Page, company: string) {
+  await new Shell(page).goTo('board')
+  const drawer = await new BoardPage(page).openApplication(company)
+  return drawer.getByRole('button', { name: 'Apply in browser' })
 }
 
-/** Starts Apply from the Dashboard row and waits for the Browser page with the session's tab. */
-async function applyFromDashboard(page: Page, company: string, urlPart: string): Promise<BrowserPage> {
+/** Starts Apply from the application's drawer on the Board and waits for the Browser page with the session's tab. */
+async function applyFromBoard(page: Page, company: string, urlPart: string): Promise<BrowserPage> {
   const shell = new Shell(page)
-  await shell.expectActive('dashboard')
-  await applyButton(page, company).click()
+  await (await applyButton(page, company)).click()
   await shell.expectActive('browser')
   const browser = new BrowserPage(page)
   await expect(browser.address).toHaveValue(new RegExp(urlPart.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')))
@@ -37,11 +39,11 @@ async function applyFromDashboard(page: Page, company: string, urlPart: string):
 }
 
 test.describe('apply', () => {
-  test('Apply from a Dashboard row fills the Lever form, the test submits it, "Mark as applied" updates huntgry.json', async ({
+  test('Apply from a Board card\'s drawer fills the Lever form, the test submits it, "Mark as applied" updates huntgry.json', async ({
     app,
     mock
   }) => {
-    const browser = await applyFromDashboard(app.window, 'Lever Mock', `${mock.origin}/lever/`)
+    const browser = await applyFromBoard(app.window, 'Lever Mock', `${mock.origin}/lever/`)
     await expectTabLoaded(app.electronApp, '/lever/', 'Acme - Software Engineer')
     await expect(browser.apply.endButton).toBeVisible()
     await expect(app.window.getByText('Software Engineer · Lever Mock')).toBeVisible()
@@ -104,7 +106,7 @@ test.describe('apply', () => {
   })
 
   test('a generic form gets resume.pdf and cover.pdf; "Not yet" leaves huntgry.json alone', async ({ app, mock }) => {
-    const browser = await applyFromDashboard(app.window, 'Generic Mock', `${mock.origin}/generic-cover/`)
+    const browser = await applyFromBoard(app.window, 'Generic Mock', `${mock.origin}/generic-cover/`)
     await expectTabLoaded(app.electronApp, '/generic-cover/', 'Apply - Software Engineer - Example Co')
     await browser.apply.expectStatus('Filled: review and submit')
     await expect(app.window.getByText('Unknown site (generic matching)')).toBeVisible()
@@ -137,7 +139,7 @@ test.describe('apply', () => {
   })
 
   test('the Greenhouse form is recognised and its confirmation page detected', async ({ app, mock }) => {
-    const browser = await applyFromDashboard(app.window, 'Greenhouse Mock', `${mock.origin}/greenhouse/`)
+    const browser = await applyFromBoard(app.window, 'Greenhouse Mock', `${mock.origin}/greenhouse/`)
     await expectTabLoaded(app.electronApp, '/greenhouse/', 'Job Application for Software Engineer at Acme')
     await browser.apply.expectStatus('Filled: review and submit')
     await expect(app.window.getByText('Greenhouse', { exact: true })).toBeVisible()
@@ -158,16 +160,17 @@ test.describe('apply', () => {
   })
 
   test('an application already marked as applied asks first', async ({ app, mock }) => {
-    await applyButton(app.window, 'Applied Mock').click()
+    const apply = await applyButton(app.window, 'Applied Mock')
+    await apply.click()
     const question = app.window.getByRole('dialog', { name: 'Already applied' })
     await expect(question).toBeVisible()
     await expect(question).toContainText('You marked this application as applied on 2026-09-20. Open the apply page anyway?')
     await question.getByRole('button', { name: 'Cancel' }).click()
     await expect(question).toBeHidden()
-    await new Shell(app.window).expectActive('dashboard')
+    await new Shell(app.window).expectActive('board')
     expect(await listTabs(app.electronApp)).toEqual([])
 
-    await applyButton(app.window, 'Applied Mock').click()
+    await apply.click()
     await question.getByRole('button', { name: 'Open apply page' }).click()
     await new Shell(app.window).expectActive('browser')
     await expect(new BrowserPage(app.window).address).toHaveValue(`${mock.origin}/lever/`)
@@ -179,7 +182,7 @@ test.describe('apply', () => {
     mock
   }) => {
     // #63: a posting URL that redirects (a Greenhouse board → the company's site) lands on the posting's site.
-    const browser = await applyFromDashboard(app.window, 'Redirect Mock', `${mock.altOrigin}/lever/`)
+    const browser = await applyFromBoard(app.window, 'Redirect Mock', `${mock.altOrigin}/lever/`)
     await expectTabLoaded(app.electronApp, `${mock.altOrigin}/lever/`, 'Acme - Software Engineer')
     await browser.apply.expectStatus('Filled: review and submit')
     expect(await evaluateInTab<string>(app.electronApp, '/lever/', 'document.querySelector(\'input[name="email"]\').value')).toBe(
@@ -207,13 +210,10 @@ test.describe('apply', () => {
   })
 
   test('an application without resume.pdf cannot apply, and the reason is shown', async ({ app }) => {
-    const button = applyButton(app.window, 'No Resume Mock')
+    const button = await applyButton(app.window, 'No Resume Mock')
     await expect(button).toBeDisabled()
     await button.hover({ force: true })
     await expect(app.window.getByText('No resume.pdf yet: build the resume in Tailor first.')).toBeVisible()
-    // The application drawer says the same on its own Apply button.
-    await app.window.getByRole('row').filter({ hasText: 'No Resume Mock' }).getByText('No Resume Mock').click()
-    await expect(app.window.getByRole('dialog').getByRole('button', { name: 'Apply in browser' })).toBeDisabled()
   })
 
   test('a second Apply while one is opening is refused', async ({ app, mock }) => {

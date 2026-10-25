@@ -6,6 +6,7 @@ import { WORKDAY_POSTING } from '../../scripts/mock-ats/workday.mjs'
 import { withFakeAgents } from '../fixtures/fake-agent'
 import { expect, test } from '../fixtures/servers/fixture'
 import { evaluateInTab, expectTabLoaded } from '../fixtures/tabs'
+import { BoardPage } from '../pages/board'
 import { BrowserPage } from '../pages/browser'
 import { Shell } from '../pages/shell'
 import { pastedFolder, TailorPage } from '../pages/tailor'
@@ -304,8 +305,8 @@ test.describe('apply on Workday', () => {
     mock
   }) => {
     const shell = new Shell(app.window)
-    await shell.expectActive('dashboard')
-    await app.window.getByRole('row').filter({ hasText: 'Workday Mock' }).getByRole('button', { name: 'Apply', exact: true }).click()
+    await shell.goTo('board')
+    await new BoardPage(app.window).applyFrom('Workday Mock')
     await shell.expectActive('browser')
     const browser = new BrowserPage(app.window)
     const panel = browser.apply
