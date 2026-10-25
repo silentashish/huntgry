@@ -1,4 +1,4 @@
-import { readFile, readdir } from 'node:fs/promises'
+import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, test } from '../fixtures/servers/fixture'
 import { ExplorePage } from '../pages/explore'
@@ -194,6 +194,26 @@ test.describe('Explore (#142, #169)', () => {
     await new Shell(app.window).goTo('jobs')
     await new Shell(app.window).goTo('explore')
     await expect(explore.matchBadge('Backend Engineer I')).toHaveAccessibleName('Match 80 of 100')
+    expect(apiFetches(mock.requests)).toBe(1)
+    expect(mock.requests.filter((r) => r.startsWith('/jobs/info/'))).toEqual([])
+
+    // The master profile gains Kafka: opened again, the same cached rows score against it.
+    const profileFile = join(app.workspace!, 'master-profile.md')
+    const profile = await readFile(profileFile, 'utf8')
+    expect(profile).toContain('- Languages: Go, Python, TypeScript, SQL')
+    await writeFile(profileFile, profile.replace('- Languages: Go, Python, TypeScript, SQL', '- Languages: Go, Python, TypeScript, SQL, Kafka'))
+    await new Shell(app.window).goTo('jobs')
+    await new Shell(app.window).goTo('explore')
+    await expect(explore.matchBadge('Backend Engineer I')).toHaveAccessibleName('Match 100 of 100')
+    await expect(explore.matchBadge('Software Engineer, New Grad')).toHaveAccessibleName('Match 25 of 100')
+    await explore.matchBadge('Backend Engineer I').hover()
+    await expect(explore.tooltip).toContainText('You have: Go, Python, Kafka')
+    await expect(explore.tooltip).not.toContainText('Missing')
+    await app.window.mouse.move(0, 0)
+    await explore.sortBy('Best match')
+    await explore.minMatch.fill('90')
+    // Backend Engineer I (now 100) ties Contoso and keeps its listed place before it.
+    await expect.poll(() => explore.listedTitles()).toEqual(['Backend Engineer I', 'Embedded Software Engineer'])
     expect(apiFetches(mock.requests)).toBe(1)
     expect(mock.requests.filter((r) => r.startsWith('/jobs/info/'))).toEqual([])
   })

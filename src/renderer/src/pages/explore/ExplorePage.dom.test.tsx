@@ -29,18 +29,25 @@ const deferred = <T,>(): Deferred<T> => {
 
 const calls = { list: [] as { category: string; d: Deferred<ExploreList> }[], refresh: [] as { category: string; d: Deferred<ExploreList> }[] }
 
-/** The master profile the page scores against: a Backend Engineer with Go and Python. */
-const profile = (() => {
+/** A master profile: a Backend Engineer with these skills. */
+const profileWith = (skills: string[]) => {
   const p = emptyProfile()
   p.contact.headline = 'Backend Engineer'
-  p.skills = [{ category: 'Languages', items: ['Go', 'Python'] }]
+  p.skills = [{ category: 'Languages', items: skills }]
   return p
-})()
+}
+/** What `api.profile.read` answers (Go and Python unless a test edits it), and how often it was read. */
+const profileState = { profile: profileWith(['Go', 'Python']), reads: 0 }
 
 vi.mock('../../api', () => ({
   api: {
     jobs: { list: async () => [] },
-    profile: { read: async () => ({ profile }) },
+    profile: {
+      read: async () => {
+        profileState.reads++
+        return { profile: profileState.profile }
+      }
+    },
     explore: {
       account: async () => ({ connected: true, checkedAt: null }),
       list: (category: string) => {
@@ -103,6 +110,8 @@ let root: Root
 beforeEach(() => {
   calls.list.length = 0
   calls.refresh.length = 0
+  profileState.profile = profileWith(['Go', 'Python'])
+  profileState.reads = 0
   localStorage.clear()
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -253,6 +262,61 @@ describe('Match score badges (#150)', () => {
     expect(titles()).toEqual(['Backend Engineer I at Northwind', 'Frontend Developer at Northwind'])
     await typeMinMatch('')
     expect(titles()).toEqual(['Backend Engineer I at Northwind', 'Frontend Developer at Northwind', 'Data Wrangler at Northwind'])
+  })
+})
+
+describe('Match scores follow the master profile (#150)', () => {
+  const badges = () => [...container.querySelectorAll('[aria-label="Jobright jobs"] li [role="img"]')].map((b) => b.getAttribute('aria-label'))
+  const cached: ExploreList = {
+    jobs: [job('Frontend Developer', '1. Experience with Go, Java and React.'), job('Data Wrangler', '1. Experience with Python, Java, Kotlin and Scala.')],
+    fetchedAt: new Date().toISOString(),
+    category: 'newgrad:us:swe',
+    source: 'api'
+  }
+  const remount = () =>
+    act(() => {
+      root.unmount()
+      root = createRoot(container)
+      root.render(
+        <MantineProvider env="test">
+          <ExplorePage />
+        </MantineProvider>
+      )
+    })
+
+  it('re-scores the same cached rows after the profile is edited and Explore is opened again', async () => {
+    await settle(() => calls.list[0].d.resolve(cached))
+    expect(badges()).toEqual(['Match 33 of 100', 'Match 25 of 100'])
+    await pickOption('Sort', 'Best match')
+    expect(titles()).toEqual(['Frontend Developer at Northwind', 'Data Wrangler at Northwind'])
+
+    // The profile gains Java, Kotlin and Scala (edited on the Profile page; leaving Explore unmounts it).
+    profileState.profile = profileWith(['Go', 'Python', 'Java', 'Kotlin', 'Scala'])
+    remount()
+    expect(calls.list).toHaveLength(2)
+    await settle(() => calls.list[1].d.resolve(cached))
+    expect(profileState.reads).toBe(2)
+    // Only the list read from the cache and the profile: no refresh, nothing else per row.
+    expect(calls.refresh).toHaveLength(0)
+    expect(badges()).toEqual(['Match 67 of 100', 'Match 100 of 100'])
+
+    const badge = container.querySelector<HTMLElement>('[aria-label="Match 100 of 100"]')!
+    await act(async () => {
+      badge.focus()
+      await new Promise((r) => setTimeout(r, 250))
+    })
+    expect(document.body.textContent).toContain('You have: Java, Kotlin, Python, Scala')
+    await act(async () => badge.blur())
+
+    // Best match and Match ≥ N use the new scores.
+    await pickOption('Sort', 'Best match')
+    expect(titles()).toEqual(['Data Wrangler at Northwind', 'Frontend Developer at Northwind'])
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Min. match"]')!
+    await settle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '70')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(titles()).toEqual(['Data Wrangler at Northwind'])
   })
 })
 
