@@ -213,6 +213,16 @@ describe('matchScore', () => {
       expect(matchScore(job('PhD required.'), profile({ degrees: [{ degree: 'PhD', field: 'Physics' }] })).gates).toEqual([])
     })
 
+    it('reads a dotted degree as one sentence with what follows it', () => {
+      expect(matchScore(job('Ph.D. in Computer Science required. Python.'), profile()).gates).toEqual([
+        { kind: 'degree', reason: 'Asks for a PhD' }
+      ])
+      const s = profile({ degrees: [{ degree: 'B.S.', field: 'Computer Science' }] })
+      expect(matchScore(job('B.S. in Chemistry required. Python.'), s).gates).toEqual([
+        { kind: 'degree', reason: 'Asks for a degree in chemistry or a life science' }
+      ])
+    })
+
     it('fails a minimum of years the profile is more than a year short of', () => {
       const r = matchScore(job('7+ years of professional software experience with Python.'), profile({ years: 4 }))
       expect(r.gates).toEqual([{ kind: 'years', reason: 'Asks for 7+ years of experience (you have 4)' }])

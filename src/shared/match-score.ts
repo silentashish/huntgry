@@ -167,6 +167,9 @@ const HEADING = /^\s*(?:#{1,6}\s+.{1,80}|\*\*[^*]{1,80}\*\*:?|[^.!?]{1,60}:)\s*$
 const PREFERRED =
   /\b(?:prefer\w*|a plus|pluses|nice[\s-]to[\s-]haves?|bonus(?:es)?|desir\w*|good[\s-]to[\s-]haves?|ideally|not required|optional)\b/i
 
+/** Sentence ends, except after an abbreviation's period: "Ph.D. in Computer Science required" is one sentence. */
+const SENTENCE_END = /(?<=[.!?;])(?<!\b(?:Ph\.D|B\.Sc?|M\.Sc?|B\.A|M\.A|B\.E|M\.E|e\.g|i\.e|U\.S|vs)\.)\s+/
+
 /** A description as sentences, each marked preferred when it or its section says so. Headings are dropped. */
 function sentences(description: string): { text: string; preferred: boolean }[] {
   const out: { text: string; preferred: boolean }[] = []
@@ -177,7 +180,7 @@ function sentences(description: string): { text: string; preferred: boolean }[] 
       section = PREFERRED.test(line)
       continue
     }
-    for (const text of line.split(/(?<=[.!?;])\s+/)) {
+    for (const text of line.split(SENTENCE_END)) {
       if (text.trim()) out.push({ text, preferred: section || PREFERRED.test(text) })
     }
   }
