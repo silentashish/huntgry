@@ -50,7 +50,7 @@ also explains how a release is cut.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/assets/screenshots/board.png" alt="Board: jobs as cards in Kanban columns from To do to Ready to apply"><br><sub><b>Board</b>: every job as a card, from saved to signed.</sub></td>
+    <td width="50%"><img src="docs/assets/screenshots/board.png" alt="Board: jobs as cards in Kanban columns from To do through Applied and Interviewing"><br><sub><b>Board</b>: every job as a card, from saved to signed.</sub></td>
     <td width="50%"><img src="docs/assets/screenshots/tailor.png" alt="Tailor: a finished run of the resume-tailor skill"><br><sub><b>Tailor</b>: a run that went to the end; its result waits on Review.</sub></td>
   </tr>
   <tr>
