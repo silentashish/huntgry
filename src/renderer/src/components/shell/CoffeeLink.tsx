@@ -38,9 +38,11 @@ export function CoffeeLink() {
         }
       }}
     >
-      <div role="status" aria-live="polite" className={classes.coffeeLive}>
+      {/* A polite live region without role="status": pages own the window's status region (notices, errors), and a
+          second one would make them ambiguous. Always rendered, so the bubble is announced when it is inserted. */}
+      <div aria-live="polite" className={classes.coffeeLive}>
         {nudging && (
-          <div ref={bubbleRef} className={classes.coffeeBubble} data-leaving={leaving ? 'true' : undefined}>
+          <div ref={bubbleRef} role="note" className={classes.coffeeBubble} data-leaving={leaving ? 'true' : undefined}>
             <span className={classes.coffeeBubbleText}>
               <strong>Enjoying Huntgry?</strong> It&rsquo;s free and made by one person. A coffee keeps it going.
             </span>
