@@ -39,7 +39,7 @@ afterEach(() => {
 const stored = (): NudgeState | null => parseNudgeState(localStorage.getItem(NUDGE_STORAGE_KEY))
 const seed = (state: NudgeState) => localStorage.setItem(NUDGE_STORAGE_KEY, JSON.stringify(state))
 const mount = () => act(() => root.render(<CoffeeLink />))
-const bubble = () => container.querySelector('[role="status"]')?.textContent ?? ''
+const bubble = () => container.querySelector('[aria-live="polite"]')?.textContent ?? ''
 const link = () => container.querySelector('a')!
 const dismissButton = () => container.querySelector<HTMLButtonElement>('button[aria-label="Dismiss coffee reminder"]')
 const item = () => container.firstElementChild as HTMLElement
@@ -211,5 +211,14 @@ describe('Buy me a coffee', () => {
     expect(bubble()).toBe('')
     expect(document.activeElement).toBe(outside)
     outside.remove()
+  })
+
+  it('adds no status role, which the pages use for their own notices, and announces the bubble politely', () => {
+    localStorage.setItem(NUDGE_FORCE_KEY, '1')
+    mount()
+    expect(container.querySelector('[role="status"], output')).toBeNull()
+    act(() => vi.advanceTimersByTime(2_000))
+    expect(container.querySelector('[role="status"], output')).toBeNull()
+    expect(container.querySelector('[aria-live="polite"] [role="note"]')?.textContent).toContain('Enjoying Huntgry?')
   })
 })

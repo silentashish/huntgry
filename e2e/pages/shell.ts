@@ -42,7 +42,7 @@ export class Shell {
     this.paletteInput = this.palette.getByRole('combobox', { name: 'Sniff anything' })
     this.paletteResults = this.palette.getByRole('listbox', { name: 'Results' })
     this.coffeeLink = this.navbar.getByRole('link', { name: /^Buy me a coffee/ })
-    this.coffeeBubble = this.navbar.getByRole('status').filter({ hasText: 'Enjoying Huntgry?' })
+    this.coffeeBubble = this.navbar.getByRole('note').filter({ hasText: 'Enjoying Huntgry?' })
   }
 
   /** A sidebar entry: a button named by its label (then the count badge's text, if any). */
