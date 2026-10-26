@@ -41,6 +41,11 @@ const seed = (state: NudgeState) => localStorage.setItem(NUDGE_STORAGE_KEY, JSON
 const mount = () => act(() => root.render(<CoffeeLink />))
 const bubble = () => container.querySelector('[role="status"]')?.textContent ?? ''
 const link = () => container.querySelector('a')!
+const dismissButton = () => container.querySelector<HTMLButtonElement>('button[aria-label="Dismiss coffee reminder"]')
+const item = () => container.firstElementChild as HTMLElement
+/** The pointer moves onto / off the item (React builds mouseenter / mouseleave from mouseover / mouseout). */
+const pointerIn = () => act(() => item().dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })))
+const pointerOut = () => act(() => item().dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body })))
 /** To the moment the nudge is tried in this session (`Math.random` is 0.5). */
 const DELAY = nudgeDelay(0.5)
 const waitForTry = () => act(() => vi.advanceTimersByTime(DELAY - (Date.now() - NOW)))
@@ -128,6 +133,32 @@ describe('Buy me a coffee', () => {
     mount()
     // The moment for this session has passed, so the remounted sidebar tries right away.
     act(() => vi.advanceTimersByTime(0))
+    expect(bubble()).toBe('')
+  })
+
+  it('keeps the bubble up while focus is in it, even after the pointer leaves', () => {
+    seed({ firstSeenAt: NOW - 10 * DAY, launches: 4, lastNudgeAt: null, lastEngagedAt: null })
+    mount()
+    waitForTry()
+    pointerIn()
+    act(() => dismissButton()!.focus())
+    pointerOut()
+    act(() => vi.advanceTimersByTime(NUDGE_RULES.bubbleMs + 1_000))
+    expect(bubble()).toContain('Enjoying Huntgry?')
+    expect(document.activeElement).toBe(dismissButton())
+  })
+
+  it('keeps the bubble up while the pointer is on it, even after focus leaves', () => {
+    seed({ firstSeenAt: NOW - 10 * DAY, launches: 4, lastNudgeAt: null, lastEngagedAt: null })
+    mount()
+    waitForTry()
+    act(() => dismissButton()!.focus())
+    pointerIn()
+    act(() => dismissButton()!.blur())
+    act(() => vi.advanceTimersByTime(NUDGE_RULES.bubbleMs + 1_000))
+    expect(bubble()).toContain('Enjoying Huntgry?')
+    pointerOut()
+    act(() => vi.advanceTimersByTime(1_000))
     expect(bubble()).toBe('')
   })
 })

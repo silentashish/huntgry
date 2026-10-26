@@ -15,11 +15,11 @@ export function CoffeeLink() {
   return (
     <div
       className={classes.coffee}
-      onMouseEnter={() => hold(true)}
-      onMouseLeave={() => hold(false)}
-      onFocus={() => hold(true)}
+      onMouseEnter={() => hold('hover', true)}
+      onMouseLeave={() => hold('hover', false)}
+      onFocus={() => hold('focus', true)}
       onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) hold(false)
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) hold('focus', false)
       }}
       onKeyDown={(e) => {
         if (e.key === 'Escape' && nudging) {

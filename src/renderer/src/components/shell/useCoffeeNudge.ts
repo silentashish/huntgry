@@ -78,8 +78,8 @@ export interface CoffeeNudge {
   leaving: boolean
   /** The link was clicked or the bubble closed: hide it and back off for `engagedCooldownMs`. */
   engage(): void
-  /** The pointer or focus is on the item or its bubble: keep the bubble up until it leaves. */
-  hold(held: boolean): void
+  /** The pointer is over, or focus is in, the item or its bubble: keep the bubble up until both have left. */
+  hold(by: 'hover' | 'focus', held: boolean): void
 }
 
 const FADE_MS = 400
@@ -88,7 +88,8 @@ const FADE_MS = 400
 export function useCoffeeNudge(): CoffeeNudge {
   const [nudging, setNudging] = useState(false)
   const [leaving, setLeaving] = useState(false)
-  const held = useRef(false)
+  const held = useRef({ hover: false, focus: false })
+  const isHeld = (): boolean => held.current.hover || held.current.focus
   const expired = useRef(false)
   const timers = useRef<number[]>([])
 
@@ -118,7 +119,7 @@ export function useCoffeeNudge(): CoffeeNudge {
       setNudging(true)
       later(() => {
         expired.current = true
-        if (!held.current) fadeOut()
+        if (!isHeld()) fadeOut()
       }, NUDGE_RULES.bubbleMs)
     }
 
@@ -151,9 +152,9 @@ export function useCoffeeNudge(): CoffeeNudge {
   }, [])
 
   const hold = useCallback(
-    (h: boolean) => {
-      held.current = h
-      if (!h && expired.current) {
+    (by: 'hover' | 'focus', h: boolean) => {
+      held.current = { ...held.current, [by]: h }
+      if (!isHeld() && expired.current) {
         expired.current = false
         fadeOut()
       }
