@@ -49,7 +49,7 @@ stateDiagram-v2
 ### Accessibility
 
 - The link is named "Buy me a coffee (opens in your browser)", is in the tab order and shows the ember focus ring.
-- The bubble is inside a `role="status"` (polite) live region that is always rendered, so screen readers hear it without focus moving. Its close button ("Dismiss coffee reminder") is reachable with Tab; Escape inside the item closes it too. It never takes focus.
+- The bubble (`role="note"`) is inside an `aria-live="polite"` region that is always rendered, so screen readers hear it without focus moving. The region deliberately has no `role="status"`: pages use the window's status region for their own notices (the profile editor's save notice, profile setup's error, the workspace picker), and e2e page objects find them with `getByRole('status')`; a second, always-present status region from the sidebar made those ambiguous (the first CI run failed with a strict-mode violation in `profile-editor.spec.ts` and `profile-setup.spec.ts`). Its close button ("Dismiss coffee reminder") is reachable with Tab; Escape inside the item closes it too. It never takes focus.
 - The bubble stays while the pointer is over the item or focus is in it (either one), and comes back if either arrives while it is fading, so a focused close button is never removed under the user.
 - Closing it while focus is inside the bubble (its button or Escape) moves focus to the link; closing it with the pointer while focus is elsewhere leaves focus alone.
 - `prefers-reduced-motion: reduce`: no wiggle, no steam, no pop or fade; the bubble and the static ember highlight only.
