@@ -25,6 +25,7 @@ import { useAutomationState } from '../automation/useAutomation'
 import { automationBadge } from '../../pages/automation/view'
 import { usePipeline } from '../queue/usePipeline'
 import { PawLogo, ProgressBar, StatusPill } from '../ui'
+import { CoffeeLink } from './CoffeeLink'
 import { pipelineMini } from './pipelineMini'
 import { tailorBadge } from './counts'
 import { useNavCounts } from './useNavCounts'
@@ -59,8 +60,8 @@ interface Props {
 
 /**
  * The sidebar (Figma 5:3): paw and version, the "Sniff anything…" button that opens the ⌘K palette, the
- * 10 pages with counts on Tailor, Review and Automation (#154: ready to submit, warning when a job needs you), the unattended pipeline while one runs, the System / Light /
- * Dark toggle and the workspace with its switch.
+ * 10 pages with counts on Tailor, Review and Automation (#154: ready to submit, warning when a job needs you), the unattended pipeline while one runs,
+ * "Buy me a coffee" (#185), the System / Light / Dark toggle and the workspace with its switch.
  */
 export function Sidebar({ current, onNavigate, onOpenPipeline, onOpenPalette, mod, workspacePath, onSwitchWorkspace }: Props) {
   const counts = useNavCounts()
@@ -141,6 +142,7 @@ export function Sidebar({ current, onNavigate, onOpenPipeline, onOpenPalette, mo
       )}
 
       <div className={classes.bottom}>
+        <CoffeeLink />
         <div className={classes.theme} role="group" aria-label="Theme">
           {THEME_PREFERENCES.map((p) => {
             const ThemeIcon = THEME_ICON[p]
