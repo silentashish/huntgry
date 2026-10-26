@@ -97,13 +97,22 @@ export function useCoffeeNudge(): CoffeeNudge {
     timers.current.push(window.setTimeout(fn, ms))
   }, [])
 
+  /** The pending removal at the end of the fade, cancelled if the item is hovered or focused during it. */
+  const fading = useRef<number | null>(null)
+  const stopFade = useCallback(() => {
+    if (fading.current !== null) window.clearTimeout(fading.current)
+    fading.current = null
+  }, [])
+
   const fadeOut = useCallback(() => {
+    stopFade()
     setLeaving(true)
-    later(() => {
+    fading.current = window.setTimeout(() => {
+      fading.current = null
       setNudging(false)
       setLeaving(false)
     }, FADE_MS)
-  }, [later])
+  }, [stopFade])
 
   useEffect(() => {
     const { startedAt } = startSession()
@@ -141,25 +150,33 @@ export function useCoffeeNudge(): CoffeeNudge {
     return () => {
       for (const t of timers.current) window.clearTimeout(t)
       timers.current = []
+      stopFade()
       if (onVisible) document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [later, fadeOut])
+  }, [later, fadeOut, stopFade])
 
   const engage = useCallback(() => {
     update((state) => recordEngaged(state, Date.now()))
+    stopFade()
     setNudging(false)
     setLeaving(false)
-  }, [])
+  }, [stopFade])
 
   const hold = useCallback(
     (by: 'hover' | 'focus', h: boolean) => {
       held.current = { ...held.current, [by]: h }
+      // Caught mid-fade: bring the bubble back, and fade it again once the pointer and focus have left.
+      if (isHeld() && fading.current !== null) {
+        stopFade()
+        setLeaving(false)
+        expired.current = true
+      }
       if (!isHeld() && expired.current) {
         expired.current = false
         fadeOut()
       }
     },
-    [fadeOut]
+    [fadeOut, stopFade]
   )
 
   return { nudging, leaving, engage, hold }

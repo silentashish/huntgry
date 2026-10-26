@@ -161,4 +161,21 @@ describe('Buy me a coffee', () => {
     act(() => vi.advanceTimersByTime(1_000))
     expect(bubble()).toBe('')
   })
+
+  it('brings a fading bubble back when focus moves into it, and fades it once focus leaves', () => {
+    seed({ firstSeenAt: NOW - 10 * DAY, launches: 4, lastNudgeAt: null, lastEngagedAt: null })
+    mount()
+    waitForTry()
+    act(() => vi.advanceTimersByTime(NUDGE_RULES.bubbleMs + 100))
+    expect(container.querySelector('[data-leaving]')).not.toBeNull()
+    act(() => dismissButton()!.focus())
+    act(() => vi.advanceTimersByTime(1_000))
+    expect(bubble()).toContain('Enjoying Huntgry?')
+    expect(container.querySelector('[data-leaving]')).toBeNull()
+    expect(document.activeElement).toBe(dismissButton())
+
+    act(() => dismissButton()!.blur())
+    act(() => vi.advanceTimersByTime(1_000))
+    expect(bubble()).toBe('')
+  })
 })
