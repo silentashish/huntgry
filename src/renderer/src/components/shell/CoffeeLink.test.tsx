@@ -103,4 +103,31 @@ describe('Buy me a coffee', () => {
     act(() => vi.advanceTimersByTime(2_000))
     expect(bubble()).toContain('Enjoying Huntgry?')
   })
+
+  it('keeps a click in memory when it cannot be saved, so the pending nudge does not play', () => {
+    seed({ firstSeenAt: NOW - 10 * DAY, launches: 4, lastNudgeAt: null, lastEngagedAt: null })
+    mount()
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    act(() => link().dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })))
+    waitForTry()
+    expect(bubble()).toBe('')
+  })
+
+  it('keeps a played nudge in memory when it cannot be saved, so a remounted sidebar does not play it again', () => {
+    seed({ firstSeenAt: NOW - 10 * DAY, launches: 4, lastNudgeAt: null, lastEngagedAt: null })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    mount()
+    waitForTry()
+    expect(bubble()).toContain('Enjoying Huntgry?')
+    act(() => root.unmount())
+    root = createRoot(container)
+    mount()
+    // The moment for this session has passed, so the remounted sidebar tries right away.
+    act(() => vi.advanceTimersByTime(0))
+    expect(bubble()).toBe('')
+  })
 })

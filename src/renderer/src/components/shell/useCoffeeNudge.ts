@@ -46,7 +46,11 @@ function forced(): boolean {
   }
 }
 
-/** When this renderer started; one launch is counted per load, even if the sidebar mounts again (workspace switch, StrictMode). */
+/**
+ * When this renderer started and the schedule state as of now. One launch is counted per load, even if the sidebar
+ * mounts again (workspace switch, StrictMode). The in-memory state is the one that counts: storage is only where it
+ * is saved for the next launch, so a failed write never undoes a nudge or a click within this session.
+ */
 let session: { startedAt: number; state: NudgeState } | null = null
 
 function startSession(): { startedAt: number; state: NudgeState } {
@@ -57,6 +61,14 @@ function startSession(): { startedAt: number; state: NudgeState } {
     session = { startedAt, state }
   }
   return session
+}
+
+/** Applies `change` to the session's state and saves the result. */
+function update(change: (state: NudgeState) => NudgeState): NudgeState {
+  const current = startSession()
+  current.state = change(current.state)
+  write(current.state)
+  return current.state
 }
 
 export interface CoffeeNudge {
@@ -99,9 +111,8 @@ export function useCoffeeNudge(): CoffeeNudge {
 
     const play = (): void => {
       const now = Date.now()
-      const state = read() ?? session!.state
-      if (!force && !shouldNudge(state, now, startedAt)) return
-      write(recordNudge(state, now))
+      if (!force && !shouldNudge(startSession().state, now, startedAt)) return
+      update((state) => recordNudge(state, now))
       expired.current = false
       setLeaving(false)
       setNudging(true)
@@ -134,8 +145,7 @@ export function useCoffeeNudge(): CoffeeNudge {
   }, [later, fadeOut])
 
   const engage = useCallback(() => {
-    const state = read() ?? startSession().state
-    write(recordEngaged(state, Date.now()))
+    update((state) => recordEngaged(state, Date.now()))
     setNudging(false)
     setLeaving(false)
   }, [])
