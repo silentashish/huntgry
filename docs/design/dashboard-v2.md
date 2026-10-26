@@ -1,117 +1,190 @@
-# Dashboard v2 — design proposal
+# Dashboard redesign: stats and charts (round 2)
 
 Issue: [#181](https://github.com/silentashish/huntgry/issues/181) · Epic [#180](https://github.com/silentashish/huntgry/issues/180) · Review: [#182](https://github.com/silentashish/huntgry/issues/182) · Implementation: [#183](https://github.com/silentashish/huntgry/issues/183)
 
-Figma: [Huntgry — Product & Website Design](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc), pages **🖥 App · Light** and **🖥 App · Dark**, frames named `Dashboard v2 …`, to the right of the current Dashboard frames.
+Figma: [Huntgry — Product & Website Design](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc), pages **🖥 App · Light** and **🖥 App · Dark**, frames named `Dashboard v3 …`, under the round-1 frames (`Dashboard v2 …`, kept for history).
 
 | Frame | Light | Dark |
 | --- | --- | --- |
-| Wide (1440) | [62:2](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=62-2) | [63:789](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=63-789) |
-| Narrow (1100) | [63:3](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=63-3) | [63:1306](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=63-1306) |
-| Empty (first hunt) | [63:520](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=63-520) | [63:1823](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=63-1823) |
+| Wide (1440) | [67:2](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=67-2) | [67:674](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=67-674) |
+| Narrow (1024) | [67:1346](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=67-1346) | [67:2018](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=67-2018) |
+| Empty (cold start) | [66:2691](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=66-2691) | [66:2865](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=66-2865) |
 
-## Why
+## What changed since round 1
 
-Since #161 moved the applications table to the Board, the Dashboard is a stack of leftovers
-([today's page](../changes/assets/161-dashboard-after.png)):
+The owner asked for a Dashboard that **summarises the hunt with stats and charts** (totals, companies,
+where things stand) rather than one that lists specific jobs. Round 1's job lists are gone, and with
+them most of the review findings:
 
-- Under the six stat tiles sits one row of unequal cards: the tall Master profile card beside a
-  short Strongest evidence card, with an empty third column and a large hole under it.
-- Six identical tiles give every status the same weight and say nothing about progress between
-  stages.
-- Usage, a secondary card, is the widest block on the page and mostly empty when there were no runs.
-- What was added since has no place on the home page: Explore's match scores (#150), Automation
-  (#154), the Board's weeks (#160).
-
-The new page answers three questions, top to bottom: **what needs me**, **how is the hunt going**,
-**what should I do next**. Reference material (profile gaps, evidence, usage) moves to a rail and a
-compact strip.
+| Round-1 block | Round 2 | Review finding it settles |
+| --- | --- | --- |
+| Pipeline funnel with "share of previous stage" bars | **Where they stand** donut of *current* statuses, which sum to the total | Codex and Antigravity (high): current-status counts are partitions, not cohort milestones |
+| Fresh matches (top Explore rows) | Removed. The Dashboard never reads Explore | Codex (medium), Antigravity (high): no cache-only Explore API; staleness |
+| This week (latest change per application, with times) | **Activity** chart: resumes built per week (`createdAt`) and applications sent per week (`appliedAt`, a date) | Codex and Antigravity (high): fabricated times and history |
+| Automation card absorbing Last pipeline, "$3.90 of $10 today" | Removed. **Last pipeline** stays today's card, unchanged | Codex and Antigravity (medium): per-run cap; manual pipelines |
+| Master profile "top 3 + Show all · 3 marked not me" | Today's **ProfileInsightsCard**, unchanged (show all, show dismissed and restore, empty-section links, "Already in your Gaps & notes") | Codex and Antigravity (medium): "nothing is dropped" was not true |
+| Compact Usage strip | Today's **UsageCard**, unchanged | — |
+| First-hunt frame with the profile done and Explore as step 2 | True cold start: empty profile, today's FirstHunt steps (Add a job / Open Jobs), every other card shown by its own data | Codex (medium) |
 
 ## Layout
 
 | Light, 1440 | Dark, 1440 |
 | --- | --- |
-| ![Dashboard v2, light, 1440](assets/dashboard-v2-light.png) | ![Dashboard v2, dark, 1440](assets/dashboard-v2-dark.png) |
+| ![Dashboard v3, light, 1440](assets/dashboard-v3-light.png) | ![Dashboard v3, dark, 1440](assets/dashboard-v3-dark.png) |
 
-| Narrow 1100, light | Narrow 1100, dark |
+| Narrow 1024, light | Narrow 1024, dark |
 | --- | --- |
-| ![Dashboard v2, narrow, light](assets/dashboard-v2-narrow-light.png) | ![Dashboard v2, narrow, dark](assets/dashboard-v2-narrow-dark.png) |
+| ![Dashboard v3, narrow, light](assets/dashboard-v3-narrow-light.png) | ![Dashboard v3, narrow, dark](assets/dashboard-v3-narrow-dark.png) |
 
-| Empty (first hunt), light | Empty (first hunt), dark |
+| Empty (cold start), light | Empty (cold start), dark |
 | --- | --- |
-| ![Dashboard v2, empty, light](assets/dashboard-v2-empty-light.png) | ![Dashboard v2, empty, dark](assets/dashboard-v2-empty-dark.png) |
+| ![Dashboard v3, empty, light](assets/dashboard-v3-empty-light.png) | ![Dashboard v3, empty, dark](assets/dashboard-v3-empty-dark.png) |
 
 From top to bottom:
 
-1. **Header** (unchanged): date eyebrow, greeting, "N things need you", Refresh, New tailored resume.
-2. **Needs you** (unchanged behaviour, new layout): one equal-width card per thing that needs the
-   user (runs waiting for a reply, results to review, ready to apply), each with its action.
-   Cards with nothing to show are not drawn; with none, the strip is gone.
-3. **Pipeline** (replaces the six tiles): the four forward stages, Generated → Applied →
-   Interviewing → Offer, each with its count, a bar for how many of the stage before reached it,
-   and one line of context. The total is the "24 tracked" badge; Rejected and Archived are in the
-   footer. Every stage, the badge and the footer counts open the Board on their column, as the
-   tiles do today (`kpiColumn`). The "scan stopped early" warning sits under it.
-4. **Two columns** (wide): a main column and a 360 px rail.
-   - **Fresh matches** (new, main column): the top five of today's Explore rows by match score,
-     with matched skills (green) and missing ones (−), and **Add to Jobs**. `≈78` is a title-only
-     estimate (README fallback rows, #150). **Open Explore** goes to the full list.
-   - **This week** (new, main column): what changed in the last seven days, grouped by day:
-     applied, reviewed, resume built (with the re-score from #151), status moves, rejections.
-     A row opens the application's drawer on the Board. **Open Board** goes to the Board.
-   - **Automation** (rail, new; absorbs Last pipeline): whether Automation runs, its rule (Match
-     ≥ N), progress and today's spend; below a divider, the last unattended pipeline exactly as
-     the Last pipeline card shows it today, with **Review N results**.
-   - **Master profile** (rail): the top three gaps with **I have this** / dismiss, and
-     **Show all N** for the rest.
-   - **Strongest evidence** (rail, unchanged).
-5. **Usage** (compact strip): runs, active time, tokens, estimated cost and a 30-day sparkline in
-   one row. **Details** expands the full Usage card of today (range, agent filter, Export CSV,
-   chart, runs).
+1. **Header** (unchanged).
+2. **Needs you** (today's `NeedsYouStrip`): one card per item, equal heights. Below 1280 px they stack
+   one per row, so a long line never wraps into a tall card.
+3. **Stat cards**, six in a row (3 × 2 below 1280 px):
+   - **Tracked**: every application. "+N this week", and a 12-week sparkline of resumes built.
+   - **Sent**: applications whose status is applied, interviewing, offer or rejected. "+N this week",
+     and a 12-week sparkline of the `appliedAt` dates.
+   - **Response rate**: (interviewing + offer + rejected) ÷ sent, with a split bar of the three parts.
+   - **Interviewing** and **Offers**: current counts, the companies (`listNames`), and a bar of their
+     share of Tracked.
+   - **Companies**: distinct companies, applications per company, and a strip of one bar per company.
 
-**Narrow (below ~1280 px window):** the rail drops under the main column as a two-column grid; the
-Pipeline stages and Needs-you cards stay in one row.
+   Tracked, Sent, Interviewing and Offers open the Board as the tiles do today (`kpiColumn`; Sent opens
+   Applied). Rejected and Archived counts are in the donut, whose rows also open the Board.
+4. **Activity** (line chart, wide) and **Where they stand** (donut).
+   - Activity has two series on one axis, resumes built and applications sent per week, with a
+     4 wk / 12 wk / All range. Hovering or focusing a week shows a crosshair and a tooltip with both
+     counts.
+   - Where they stand shows all six statuses. Its legend rows (count, share) are buttons that open the
+     Board column.
+5. **Top companies**, **Match scores**, **Saved jobs**, three equal cards (two per row below 1280 px):
+   - Top companies: the eight companies with the most applications, each a bar stacked by status in the
+     donut's colours and order, then "+N more companies with M applications".
+   - Match scores: a histogram of `tracking.match.profileFit` (< 60, 60s, 70s, 80s, 90+), the median, and
+     "N applications have no score yet".
+   - Saved jobs: saved jobs (dismissed ones left out) by source, then not tailored yet, remote, and with
+     a salary.
+6. Today's cards, unchanged: **Master profile** (ProfileInsightsCard), with **Last pipeline** and
+   **Strongest evidence** in a 420 px column beside it (side by side below 1280 px), then **Usage**.
 
-**Empty (no applications yet):** the three-step **Your first hunt** card (profile done → pick a job
-in Explore → tailor), then **Your first matches** (the first row offers **Tailor**), Master profile
-and Strongest evidence. Pipeline, This week, Automation and Usage are hidden until there is
-something to show.
+**Below ~1000 px window** (the app's minimum is 900): chart pairs stack to one column, and the donut's
+legend goes under the ring (as in the narrow frame's donut card).
 
-## Inventory: today's Dashboard → v2
+**Empty (no applications):** each block shows by its own data, as `index.tsx` does today.
+- Needs you shows whenever it has items.
+- FirstHunt (its three steps, Add a job / Open Jobs with the saved count) shows only with no applications.
+- The stat cards and the Activity, Where they stand, Top companies and Match scores charts are hidden.
+  In their place is the **No applications yet** card, with today's Add a job / Tailor for a job and a
+  faint, decorative preview of the charts.
+- Saved jobs shows as soon as one job is saved.
+- Last pipeline shows whenever a pipeline has run, even if it built nothing.
+- Master profile always shows.
+- Usage shows when there is usage (`hideWhenEmpty`).
 
-| Today | v2 |
+The frame draws the true cold start: empty profile, nothing saved, no runs.
+
+## Data: every number, and where it comes from
+
+The Dashboard keeps its two existing reads, `api.applications.list()` and `api.jobs.list()`; FirstHunt
+already makes the second. It adds no store, no IPC and no network call. The calculations live in pure
+functions in `summary.ts` (or a new `stats.ts`), unit-tested on fixtures.
+
+| Number | Rule |
 | --- | --- |
-| Header, Refresh, New tailored resume | Kept |
-| Error alert, loader | Kept |
-| Needs you strip (reply / review / apply) | Kept, one card per item |
-| Stat tiles: Total, Generated, Applied, Interviewing, Offer, Rejected → Board column | Pipeline card: four stages + total badge + Rejected in the footer, same Board links |
-| "Scan stopped early" warning | Kept, under Pipeline |
-| Last pipeline card | Lower half of the Automation card (its own card when Automation was never turned on) |
-| Profile insights card (all gaps) | Master profile card: top three gaps, **Show all N** expands |
-| Strongest evidence card | Kept, in the rail |
-| Usage card | Compact strip; **Details** expands the full card |
-| First hunt (empty state) | Kept as three step cards, plus Your first matches |
-| — | **New:** Fresh matches, This week, Automation status, Archived count |
+| Tracked | `applications.length`, archived included |
+| This week | From Monday 00:00 local time, the same bucket as the chart's last week |
+| Tracked +N | `createdAt` this week |
+| Sent | status ∈ {applied, interviewing, offer, rejected} |
+| Sent +N, Sent sparkline, Activity "sent" | `tracking.appliedAt` (`YYYY-MM-DD`, read as a local date). Main sets it the first time the status becomes applied; an application that skipped Applied has none, is not on the line, and the chart's footnote then says "N sent without a date". |
+| Activity "built", Tracked sparkline | `createdAt` (the folder's creation time) per week |
+| Response rate | (interviewing + offer + rejected) ÷ Sent; "—" while Sent is 0. Tooltip: "By current status: a rejection counts as hearing back." It is a share of current statuses, not a history. |
+| Interviewing, Offers | Current counts; share = count ÷ Tracked |
+| Companies | Distinct `company`, trimmed and compared case-insensitively; "N applications each" = Tracked ÷ Companies, one decimal |
+| Where they stand | Counts per status; they sum to Tracked |
+| Top companies | Count per company, highest first, ties alphabetical; eight rows; segments by current status |
+| Match scores | `tracking.match.profileFit` of applications that have `match`; median of those |
+| Saved jobs | `jobs.filter(j => !j.dismissed)`; sources `jobright` → Explore, `indeed`, `hiring.cafe`, `url` → Posting link, `pasted` (the Board's `BOARD_SOURCE_LABEL` says Jobright and Link; #183 picks one wording for both); not tailored = no `tailoredAt`; remote = `remote` or `workplaceType === 'remote'`; with a salary = non-empty `salary` |
 
-Nothing is dropped.
+When the scan was truncated (`list.truncated`), today's warning shows under the stat cards, and every
+chart's footnote adds "may be incomplete".
 
-## Data each new block uses (no new storage)
+Board links: the Board takes only `column` and `applicationId` today (`PageParams['board']`). A company
+row opening the Board filtered by that company needs a `text` filter parameter (`BoardFilter.text`);
+#183 adds it, or the rows stay plain text. The Board hides archived cards a week after they were
+archived (`ARCHIVE_TTL_DAYS`), so Archived on the Board can show fewer cards than the donut counts. The
+donut's tooltip for Archived says so.
 
-- **Fresh matches:** the Explore list Huntgry already caches (`.huntgry/explore/`) and the #150
-  scores. The Dashboard reads the cache only and never fetches: with no cache, the card says
-  "Open Explore to load today's list".
-- **This week:** each application's latest change (`statusChangedAt`, `appliedAt`, review state,
-  `match.at`), so one row per application per week. A full event history would need an event log;
-  that is out of scope.
-- **Pipeline bars:** "reached" counts, for example Applied = applications that are applied,
-  interviewing, offer or rejected after applying, as a share of the previous stage.
-- **Automation:** `useAutomationState()` from #154.
+## Colour
+
+The charts use one categorical palette for the statuses, in this order, in every chart. I checked it
+with the dataviz palette validator (lightness band, chroma, CVD separation of adjacent pairs, normal
+vision, contrast against the card surface):
+
+| Status | Light (on #ffffff) | Dark (on #0b0f15) |
+| --- | --- | --- |
+| Generated | ink-300 `#8494a8` (neutral) | ink-400 `#5b6b80` (neutral) |
+| Applied | blue-600 `#3470e0` | blue-500 `#4f8dff` |
+| Interviewing | ember-600 `#e66e0a` | ember-600 `#e66e0a` |
+| Offer | trail-600 `#0e9e85` | trail-600 `#0e9e85` |
+| Rejected | red-600 `#d23a40` | red-500 `#f2555a` |
+| Archived | ink-100 `#d9e0e8` (neutral) | ink-600 `#2a3645` (neutral) |
+
+- Applied, Interviewing, Offer and Rejected pass every check in both modes. The worst adjacent pair is
+  Offer ↔ Rejected: ΔE 9.5 (deutan) in light, 9.9 (protan) in dark.
+- The Board pills use violet for Interviewing and green for Offer. The validator fails violet next to
+  blue (ΔE 0.6 under deuteranopia), so the charts use ember and trail. The pills keep their colours,
+  since they always carry a text label.
+- Single-series charts (sparklines, Saved jobs, Match scores, Usage) use the neutral ink or blue, so no
+  colour means two things.
+- Text never takes a series colour. Small text (axis ticks, footnotes, legend shares) uses
+  `--hg-text-muted` in light (5.4:1 on white) and `--hg-text-secondary` in dark (`#8494a8`, 6.2:1). It
+  never uses `--hg-text-muted` in dark (3.5:1).
+- Every colour has a label beside it (legend rows with counts, direct labels on the histogram), so no
+  meaning rests on colour alone.
+
+## Interaction and accessibility
+
+- Stat cards that link are today's `KpiTile` buttons, with labels like "Sent: 16, 3 this week. Open on
+  the Board". Response rate and Companies are not buttons.
+- Every chart is a `<figure>` with a heading and an `aria-label` summary, for example "Activity, 12
+  weeks: 24 resumes built, 16 applications sent". A visually hidden `<table>` of the same numbers
+  follows it.
+- Sparklines, the companies strip and the empty state's preview are `aria-hidden`.
+- Activity: the plot is one focusable element, and ← / → move the highlighted week. The tooltip follows
+  the pointer or the focus, and an `aria-live="polite"` region reads the week. The range control is a
+  Mantine `SegmentedControl`.
+- Donut legend rows are buttons, for example "Applied: 8, 33%. Open on the Board". Hovering a row lifts
+  its segment, and hovering a segment highlights its row.
+- Focus order follows the DOM, the same at every width: header, Needs you, stat cards, Activity, Where
+  they stand, Top companies, Match scores, Saved jobs, Master profile, Last pipeline, Strongest
+  evidence, Usage. Each card is a `<section>` named by its heading.
+
+## Implementation notes for #183
+
+- The charts are small SVG components in `components/charts/`: `Sparkline`, `LineChart`, `Donut`,
+  `StackedBar`, `Histogram`. They are drawn with the tokens above. UsageCard already draws its own bars,
+  so no chart library is added. Recharts through `@mantine/charts` is the alternative (question 3).
+- Each chart's data comes from a pure function, for example `weeklySeries(apps, range, now)`,
+  `statusCounts`, `topCompanies(apps, 8)`, `fitHistogram`, `savedJobStats(jobs)`. Unit tests cover week
+  edges (Sunday 23:59 vs Monday 00:00), applications without `appliedAt`, and duplicate company names
+  that differ only in case.
+- e2e: the Dashboard spec checks Tracked and the donut counts against the fixture workspace, a legend
+  row opening its Board column, and the cold start hiding the charts.
 
 ## Questions for the reviewers
 
-1. Does the Pipeline funnel read better than six equal tiles? Is a share of the previous stage the
-   right bar, or would counts alone be clearer?
-2. Fresh matches on the home page: useful, or a duplicate of Explore? Five rows, or three?
-3. This week shows only the latest change per application. Is that honest enough without an event log?
-4. Merging Last pipeline into Automation: clearer, or two ideas in one card?
-5. Hierarchy and density: anything that should move up, down or out?
+1. Is the response-rate rule (current interviewing + offer + rejected ÷ sent) honest enough with its
+   tooltip, or should the card be dropped until there is a status history?
+2. Main sets `appliedAt` the first time the status becomes applied (`src/main/applications/tracking.ts`).
+   An application moved straight from Generated to Interviewing or Rejected has no date, so it counts in
+   Sent but not on the Activity line; the footnote names how many. Is that enough, or should main also
+   set `appliedAt` when a status skips Applied?
+3. Hand-drawn SVG charts or `@mantine/charts`: is the bundle size worth the hover and tooltip code we
+   would not have to write?
+4. Is the order right for the owner's goal of a summary first: stats, then status and activity, then
+   companies, scores and saved jobs, then today's cards?
