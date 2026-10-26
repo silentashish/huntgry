@@ -11,9 +11,9 @@ Huntgry is free. The only place that offers a way to support it is the Buy Me a 
 | Area | Files | What |
 | --- | --- | --- |
 | Schedule | `components/shell/coffee.ts` | `COFFEE_URL`, `NUDGE_RULES` and the pure functions `shouldNudge(state, now, sessionStartedAt)`, `nudgeDelay(random)`, `recordLaunch`, `recordNudge`, `recordEngaged`, `parseNudgeState`. |
-| Hook | `components/shell/useCoffeeNudge.ts` | Counts one launch per renderer load, picks a random moment into the session, asks `shouldNudge` then, waits for the window to be in front, plays the nudge, fades the bubble after 9 s (later if the pointer or focus is on it). Reads and writes `localStorage["huntgry-coffee-nudge"]`, like the colour scheme (`huntgry-color-scheme`) and the Board's folds. |
+| Hook | `components/shell/useCoffeeNudge.ts` | Counts one launch per renderer load, picks a random moment into the session, asks `shouldNudge` then, waits for the window to be in front, plays the nudge, fades the bubble after 9 s (later while the pointer or focus is on it; hover and focus are tracked separately, and either one arriving during the 400 ms fade cancels it). Keeps the schedule state in memory for the session and saves it to `localStorage["huntgry-coffee-nudge"]`, like the colour scheme (`huntgry-color-scheme`) and the Board's folds; a failed save never undoes a nudge or a click within the session. |
 | Link | `components/shell/CoffeeLink.tsx`, `Sidebar.tsx`, `shell.module.css` | A compact row above the theme toggle: ember coffee cup, "Buy me a coffee", an external-link glyph. It is a plain `<a href target="_blank" rel="noreferrer">`. While nudging: ember-soft highlight, the cup wiggles twice, three steam wisps rise, and an "Enjoying Huntgry?" bubble pops up above it with a close button. |
-| Tests | `coffee.test.ts`, `CoffeeLink.test.tsx`, `e2e/tests/shell.spec.ts`, `e2e/pages/shell.ts` | The schedule's rules and edges; the link's attributes and accessible name; no nudge on a first launch; the nudge at the scheduled moment without focus moving; fade-out; dismissal and click recorded; the force flag; in the app, the click going to `shell.openExternal` with the app window left alone. |
+| Tests | `coffee.test.ts`, `CoffeeLink.test.tsx`, `e2e/tests/shell.spec.ts`, `e2e/pages/shell.ts` | The schedule's rules and edges; the link's attributes and accessible name; no nudge on a first launch; the nudge at the scheduled moment without focus moving; fade-out; dismissal and click recorded; the force flag; back-off kept when storage throws; hover and focus holding the bubble independently; a fade cancelled by focus; focus returned to the link on keyboard close; in the app, the click going to `shell.openExternal` with the app window left alone. |
 
 ### Opening the page
 
@@ -50,6 +50,8 @@ stateDiagram-v2
 
 - The link is named "Buy me a coffee (opens in your browser)", is in the tab order and shows the ember focus ring.
 - The bubble is inside a `role="status"` (polite) live region that is always rendered, so screen readers hear it without focus moving. Its close button ("Dismiss coffee reminder") is reachable with Tab; Escape inside the item closes it too. It never takes focus.
+- The bubble stays while the pointer is over the item or focus is in it (either one), and comes back if either arrives while it is fading, so a focused close button is never removed under the user.
+- Closing it while focus is inside the bubble (its button or Escape) moves focus to the link; closing it with the pointer while focus is elsewhere leaves focus alone.
 - `prefers-reduced-motion: reduce`: no wiggle, no steam, no pop or fade; the bubble and the static ember highlight only.
 
 ## Screenshots
