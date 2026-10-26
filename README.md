@@ -567,4 +567,6 @@ Huntgry is a free, personal project. If it saved you an evening of rewriting res
 
 <a href="https://buymeacoffee.com/silentashish"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy me a coffee"></a>
 
+The same link is at the bottom of the app's sidebar. Once in a while (at most weekly, never in your first sessions) its cup wiggles and asks; close the bubble and it stays quiet for two months. See [docs/changes/185-buy-me-a-coffee.md](docs/changes/185-buy-me-a-coffee.md).
+
 Bug reports and ideas are just as welcome in [Issues](https://github.com/silentashish/huntgry/issues).

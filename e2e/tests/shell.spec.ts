@@ -3,6 +3,7 @@ import { BoardPage } from '../pages/board'
 import { Dashboard } from '../pages/dashboard'
 import { ProfileEditor } from '../pages/profile-editor'
 import { SHELL_PAGES, Shell, type ShellPage } from '../pages/shell'
+import { stubOpenExternal } from '../fixtures/tabs'
 
 test.use({ workspace: 'demo' })
 
@@ -53,6 +54,44 @@ test.describe('app shell', () => {
     await expect(shell.themeButton('Light')).toHaveAttribute('aria-pressed', 'false')
     await shell.themeButton('System').click()
     await expect(shell.themeButton('System')).toHaveAttribute('aria-pressed', 'true')
+  })
+})
+
+test.describe('Buy me a coffee (#185)', () => {
+  test('opens the Buy Me a Coffee page in the system browser, never in the app window', async ({ app }) => {
+    const shell = new Shell(app.window)
+    await shell.expectActive('dashboard')
+    await expect(shell.coffeeLink).toBeVisible()
+    await expect(shell.coffeeLink).toHaveAttribute('href', 'https://buymeacoffee.com/silentashish')
+    // A fresh install (first launch) is never nudged.
+    await expect(shell.coffeeBubble).toHaveCount(0)
+
+    const appUrl = app.window.url()
+    const opened = await stubOpenExternal(app.electronApp)
+    await shell.coffeeLink.focus()
+    await app.window.keyboard.press('Enter')
+    await expect.poll(opened).toEqual(['https://buymeacoffee.com/silentashish'])
+    expect(app.window.url()).toBe(appUrl)
+    expect(app.electronApp.windows()).toHaveLength(1)
+    await shell.expectActive('dashboard')
+  })
+
+  test('the nudge shows without taking focus and closes for good', async ({ app }) => {
+    const shell = new Shell(app.window)
+    await shell.expectActive('dashboard')
+    // The dev override plays it a moment after launch, whatever the schedule says.
+    await app.window.evaluate(() => localStorage.setItem('huntgry-coffee-nudge-force', '1'))
+    await app.window.reload()
+    await shell.expectActive('dashboard')
+    await expect(shell.coffeeBubble).toBeVisible()
+    await expect(shell.coffeeLink).toHaveAttribute('data-nudge', 'true')
+    await expect(shell.coffeeBubble.getByRole('button', { name: 'Dismiss coffee reminder' })).not.toBeFocused()
+
+    await shell.coffeeBubble.getByRole('button', { name: 'Dismiss coffee reminder' }).click()
+    await expect(shell.coffeeBubble).toHaveCount(0)
+    await expect(shell.coffeeLink).not.toHaveAttribute('data-nudge')
+    const stored = await app.window.evaluate(() => JSON.parse(localStorage.getItem('huntgry-coffee-nudge') ?? 'null'))
+    expect(stored).toMatchObject({ launches: 2, lastEngagedAt: expect.any(Number) })
   })
 })
 
