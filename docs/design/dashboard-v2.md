@@ -7,7 +7,7 @@ Figma: [Huntgry — Product & Website Design](https://www.figma.com/design/zhNcc
 | Frame | Light | Dark |
 | --- | --- | --- |
 | Wide (1440) | [68:2](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=68-2) | [68:712](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=68-712) |
-| Narrow (1024) | [68:1422](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=68-1422) | [68:2132](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=68-2132) |
+| Narrow (1024) | [69:2](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=69-2) | [69:714](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=69-714) |
 | Empty (cold start) | [66:2691](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=66-2691) | [66:2865](https://www.figma.com/design/zhNccc831dRnOhj2tmqqkc/?node-id=66-2865) |
 
 ## What changed since round 1
@@ -70,7 +70,8 @@ From top to bottom:
    - Top companies: the eight companies with the most applications, each a bar stacked by status in the
      donut's colours and order, then "+N more companies with M applications".
      - **Chart / Table** toggle (visible, keyboard-operable) in the card header. The Table view lists each
-       company with a count per status (six columns), so the breakdown never rests on colour alone.
+       company with a count per status (six columns), so the breakdown never rests on colour alone. Its
+       company names are buttons that open the same filtered Board as the chart rows.
      - In the Chart view each row is a button. Pointer hover and keyboard focus show the same tooltip
        ("Stripe · 3 applications: 1 Generated, 1 Applied, 1 Interviewing"), and the button opens the
        Board filtered by that company.
@@ -82,7 +83,7 @@ From top to bottom:
 6. Today's cards, unchanged: **Master profile** (ProfileInsightsCard), with **Last pipeline** and
    **Strongest evidence** in a 420 px column beside it (side by side below 1280 px), then **Usage**.
    The frames draw Usage with its real controls: 7 days / 30 days / All time, the agent select, Export
-   CSV, Breakdown, each KPI's sub-line, and the cost/tokens toggle above the day chart. The unpriced and
+   CSV, Breakdown (on a second header row at narrow widths), each KPI's sub-line, and the cost/tokens toggle above the day chart. The unpriced and
    incomplete-turn notes and the Breakdown panel are unchanged too.
 
 **Below ~1000 px window** (the app's minimum is 900): chart pairs stack to one column, and the donut's
@@ -182,7 +183,7 @@ vision, contrast against the card surface):
 
 - The charts are small SVG components in `components/charts/`: `Sparkline`, `LineChart`, `Donut`,
   `StackedBar`, `Histogram`. They are drawn with the tokens above. UsageCard already draws its own bars,
-  so no chart library is added. Recharts through `@mantine/charts` is the alternative (question 3).
+  so no chart library is added. Recharts through `@mantine/charts` is the alternative (settled in **Decisions from round 2**).
 - Each chart's data comes from a pure function, for example `weeklySeries(apps, range, now)`,
   `statusCounts`, `topCompanies(apps, 8)`, `fitHistogram`, `savedJobStats(jobs)`. Unit tests cover week
   edges (Sunday 23:59 vs Monday 00:00), applications without `appliedAt`, and duplicate company names
