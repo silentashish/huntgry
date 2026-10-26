@@ -30,6 +30,9 @@ export class Shell {
   readonly palette: Locator
   readonly paletteInput: Locator
   readonly paletteResults: Locator
+  /** "Buy me a coffee" at the bottom of the sidebar (#185), and its occasional "Enjoying Huntgry?" bubble. */
+  readonly coffeeLink: Locator
+  readonly coffeeBubble: Locator
 
   constructor(readonly page: Page) {
     this.navbar = page.getByRole('navigation')
@@ -38,6 +41,8 @@ export class Shell {
     this.palette = page.getByRole('dialog', { name: 'Sniff' })
     this.paletteInput = this.palette.getByRole('combobox', { name: 'Sniff anything' })
     this.paletteResults = this.palette.getByRole('listbox', { name: 'Results' })
+    this.coffeeLink = this.navbar.getByRole('link', { name: /^Buy me a coffee/ })
+    this.coffeeBubble = this.navbar.getByRole('status').filter({ hasText: 'Enjoying Huntgry?' })
   }
 
   /** A sidebar entry: a button named by its label (then the count badge's text, if any). */
