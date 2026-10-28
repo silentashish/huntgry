@@ -162,6 +162,20 @@ describe('Jobs tabs (#189)', () => {
     expect(document.body.textContent).not.toMatch(/scent/i)
   })
 
+  it('a tab navigation that names no job (⌘K) does not reopen the drawer seen before', async () => {
+    const saved = toJob(row, new Date())
+    state.saved = [saved]
+    await open({ tab: 'saved', openId: saved.id })
+    const drawer = () => document.body.querySelector('[role="dialog"]')
+    expect(drawer()?.textContent).toContain('Software Engineer, New Grad')
+    // The palette's "Jobs → Discover", then "Jobs → Saved": the page stays mounted.
+    await open({ tab: 'discover' })
+    expect(currentTab()).toBe('discover')
+    await open({ tab: 'saved' })
+    expect(currentTab()).toBe('saved')
+    expect(drawer()).toBeNull()
+  })
+
   it('stays on Discover after saving the first job there', async () => {
     await open()
     expect(currentTab()).toBe('discover')

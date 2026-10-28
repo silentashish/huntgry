@@ -33,10 +33,11 @@ export function JobsPage({ params }: { params?: PageParams['jobs'] }) {
     api.jobs.list().then(setJobs, (err) => setError(errorText(err)))
   }, [])
 
-  // Every navigation here (a tab, a saved job to open) is followed, also while the page stays on screen.
+  // Every navigation here (a tab, a saved job to open) is followed, also while the page stays on screen; one that
+  // names no job closes the drawer, so ⌘K's "Jobs → Saved" never reopens the job looked at before.
   useEffect(() => {
     setPinned(null)
-    if (params?.openId) setOpenId(params.openId)
+    setOpenId(params?.openId ?? null)
   }, [params])
 
   const tab = pinned ?? jobsTab(params, jobs ? savedCount(jobs) : null)
@@ -45,10 +46,7 @@ export function JobsPage({ params }: { params?: PageParams['jobs'] }) {
   }, [pinned, tab])
 
   const upsert = (list: Job[]) => setJobs((cur) => mergeJobs(cur ?? [], list))
-  const showTab = (t: JobsTab) => {
-    setOpenId(null)
-    navigate('jobs', { tab: t })
-  }
+  const showTab = (t: JobsTab) => navigate('jobs', { tab: t })
   /** Saved, with `job`'s drawer open: Discover's "Saved ✓", and a job just added. */
   const openSaved = (job: Job) => navigate('jobs', { tab: 'saved', openId: job.id })
 
