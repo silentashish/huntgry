@@ -86,9 +86,16 @@ describe('cardMatch', () => {
     expect(match.value).toBeLessThanOrEqual(100)
   })
 
-  it('without a score: a check for tailored work, else the company initial', () => {
-    const empty = profileSignals(emptyProfile())
-    expect(cardMatch(only({ jobs: [job] }), empty, NOW)).toEqual({ mode: 'initial', letter: 'A' })
+  it('scores a profile with skills but no headline or role, as Saved and the drawer do (#189)', () => {
+    const skillsOnly = { ...profileSignals(emptyProfile()), skills: ['Go'] }
+    const goJob = { ...job, description: 'Requirements: Go.' }
+    const expected = jobMatch(goJob, skillsOnly, undefined, NOW)
+    expect(expected).toMatchObject({ kind: 'exact', score: 100 })
+    expect(cardMatch(only({ jobs: [goJob] }), skillsOnly, NOW)).toEqual({ mode: 'score', value: 100, estimate: false, reasons: matchNotes(expected) })
+  })
+
+  it('without a score (the profile not read yet): a check for tailored work, else the company initial', () => {
+    expect(cardMatch(only({ jobs: [job] }), null, NOW)).toEqual({ mode: 'initial', letter: 'A' })
     expect(cardMatch(only({ jobs: [{ ...job, tailoredAt: '2026-10-06T10:00:00Z' }] }), null, NOW)).toEqual({ mode: 'done' })
     expect(cardMatch(only({ applications: [app()] }), signals, NOW)).toEqual({ mode: 'done' })
     expect(cardMatch(only({ queue: [item()] }), signals, NOW)).toEqual({ mode: 'initial', letter: 'I' })

@@ -1,7 +1,7 @@
 import type { BoardCard, BoardColumnId } from '@shared/board'
 import { sponsorshipOf, workplaceOf } from '@shared/job-filters'
 import { jobMatch } from '@shared/explore-score'
-import { hasRelevanceSignals, type ProfileSignals } from '@shared/job-relevance'
+import type { ProfileSignals } from '@shared/job-relevance'
 import { REVIEW_STATE_LABEL, type ReviewState } from '@shared/review-types'
 import { AGENT_LABEL, type AgentId } from '@shared/runner-types'
 import type { QueueItemStatus } from '@shared/queue-types'
@@ -30,8 +30,8 @@ export const COLUMN_TONE: Record<BoardColumnId, UiTone> = {
 
 /**
  * The match ring of a card: the job's match score (#149, `jobMatch`: the number the Jobs page shows, #189) when
- * the card knows its saved job and the master profile has something to match on, with what it is made of;
- * otherwise a check for work already tailored, or the company's initial.
+ * the card knows its saved job and the master profile is read (the rule Saved and Discover use), with what it is
+ * made of; otherwise a check for work already tailored, or the company's initial.
  */
 export type CardMatch =
   | { mode: 'score'; value: number; estimate: boolean; reasons: string[] }
@@ -40,7 +40,7 @@ export type CardMatch =
 
 export function cardMatch(card: BoardCard, signals: ProfileSignals | null, now = new Date()): CardMatch {
   const job = card.job
-  if (job && signals && hasRelevanceSignals(signals)) {
+  if (job && signals) {
     const match = jobMatch(job, signals, undefined, now)
     return { mode: 'score', value: match.score, estimate: match.kind === 'estimate', reasons: matchNotes(match) }
   }
