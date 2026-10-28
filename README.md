@@ -251,23 +251,27 @@ review state. See [docs/changes/161-board-replaces-dashboard-list.md](docs/chang
 
 ## Finding jobs
 
-**Jobs** holds the postings you add: give a posting URL (the page is opened once in a hidden
-browser window and its JSON-LD or text read), or paste the description. Huntgry does not
-search job boards (#78). Saved jobs live in `<workspace>/.huntgry/jobs/`; ones found by the
-old hiring.cafe / Indeed search are still listed. **Tailor resume** sends a job to the Tailor
-page with its saved description, company, role and job id.
+**Jobs** has two tabs: **Discover**, the jobs Huntgry lists for you, and **Saved (n)**, the jobs you
+keep. It opens on Saved when you have saved jobs and on Discover when you have none. One **Add job**
+button in the header, on both tabs, takes a posting's link (the page is opened once in a hidden
+browser window and its JSON-LD or text read) or its pasted text, for boards Huntgry cannot read.
+Huntgry does not search job boards (#78). Saved jobs live in `<workspace>/.huntgry/jobs/`; ones
+found by the old hiring.cafe / Indeed search are still listed. **Tailor resume** sends a job to the
+Tailor page with its saved description, company, role and job id. See
+[docs/changes/189-jobs-tabs.md](docs/changes/189-jobs-tabs.md).
 
-Jobs opens on **Relevant**: the saved jobs that fit your master profile (headline and roles,
+Saved opens on **Relevant**: the saved jobs that fit your master profile (headline and roles,
 skills, seniority, location), best first, with the reasons on each card. Filters for visa sponsorship, workplace, seniority, date posted and
 minimum salary apply to any list and are kept in `<workspace>/.huntgry/jobs-prefs.json`. If your
 Work authorization says you need a sponsor, Relevant leaves out postings that say they won't
 sponsor.
 
-The skills part of that score is the job's **match score**: the share of the skills the posting asks
+Every job shows one number, its **match score**: the share of the skills the posting asks
 for (Jobright's extracted skills when a job has them, else the ones its description names) that your
 master profile has evidence for. Must-haves such as a degree in another field, years you don't have,
-a clearance or "no sponsorship" when you need it cap it at 40. Explore, re-scoring and Automation
-build on the same engine. See [docs/changes/149-match-score.md](docs/changes/149-match-score.md).
+a clearance or "no sponsorship" when you need it cap it at 40. A Discover row, the same job on
+Saved, its drawer, its Board card and Automation all show the same number; Relevant ranks with it as
+one part of the fit. See [docs/changes/149-match-score.md](docs/changes/149-match-score.md).
 
 After a run builds a resume, Huntgry scores it again against the same requirements: the Board card,
 the application drawer and Review show **Profile fit 82 · Resume 74 (90% surfaced)** and the skills
@@ -275,30 +279,31 @@ your profile has that the resume left out. The resume selects from the profile a
 it, so the resume can't beat the fit; the score is kept in the application's `huntgry.json`. See
 [docs/changes/151-rescore-after-tailoring.md](docs/changes/151-rescore-after-tailoring.md).
 
-**Explore** lists Jobright's new-grad and internship jobs from the API behind
+**Discover** (the Explore page before #189) lists Jobright's new-grad and internship jobs from the API behind
 [newgrad-jobs.com](https://www.newgrad-jobs.com), one category at a time (New grad · US · Software
 Engineering by default, remembered), grouped by the day they were posted, today first, with days
 past the newest seven folded under **Earlier**. Rows show pay, industry, company size and H1B
-sponsorship, and filter by text, work model, H1B and minimum salary. Huntgry asks for a category
+sponsorship, and filter by text, workplace, visa sponsorship and minimum salary (named as on Saved). Huntgry asks for a category
 only when the workspace has no copy of it and when you click **Refresh**: at most 1,000 rows, in two
 requests. It keeps a copy per category in `<workspace>/.huntgry/explore/`. That API is undocumented
-and Jobright's own: when it fails, Explore shows Jobright's public GitHub list
+and Jobright's own: when it fails, Discover shows Jobright's public GitHub list
 ([jobright-ai/2026-Software-Engineer-New-Grad](https://github.com/jobright-ai/2026-Software-Engineer-New-Grad))
-instead and says so. **Add to Jobs** saves a row as a `jobright` job. See
+instead and says so. **Save** keeps a row as a `jobright` job; the row then reads **Saved ✓**, and
+clicking it opens the job on the Saved tab. See
 [docs/changes/142-explore.md](docs/changes/142-explore.md) and
 [docs/changes/169-explore-newgrad-api.md](docs/changes/169-explore-newgrad-api.md).
 
-Every Explore row shows its **match score** against your master profile, read from the
+Every Discover row shows its **match score** against your master profile, read from the
 qualifications Jobright lists for it. Hover or focus the score to see the skills you have, the ones
 you're missing and any must-have you don't meet. Rows from the GitHub fallback have no
 qualifications, so they show a title-only estimate marked "≈". Sort by **Best match** or keep only
-rows with **Match ≥ N**. Nothing is loaded to score a row, and a job you add keeps the
-qualifications, so Jobs and Automation score it the same way. See
+rows with **Match ≥ N**. Nothing is loaded to score a row, and a job you save keeps the
+qualifications, so Saved and Automation score it the same way. See
 [docs/changes/150-explore-match-score.md](docs/changes/150-explore-match-score.md).
 
 Jobright shows the employer's own posting link only to signed-in users. Sign in once under
-**Settings → Jobright → Connect Jobright** (Explore links there until you do). After that, a job you
-add from Explore, or whose full description you fetch, links the employer's posting, with the
+**Settings → Jobright → Connect Jobright** (Discover links there until you do). After that, a job you
+save from Discover, or whose full description you fetch, links the employer's posting, with the
 Jobright page kept as its board link. You sign in on Jobright's own page, so Huntgry never sees
 your password. See [docs/changes/146-jobright-employer-link.md](docs/changes/146-jobright-employer-link.md).
 
@@ -353,11 +358,11 @@ address outright; packaged builds ignore it too.
 
 ## Automation
 
-**Automation** (sidebar, after Review) prepares applications for the jobs that match well while you are away,
-and stops before Submit. It picks candidates from your saved Jobs and the cached Explore list: Match ≥ 80 with at
+**Automation** (sidebar, last under Hunt) prepares applications for the jobs that match well while you are away,
+and stops before Submit. It picks candidates from your saved jobs and the cached Discover list: Match ≥ 80 with at
 least 4 requirements and no failed must-have (degree, years, clearance, sponsorship), not excluded by Relevant,
-passing your Jobs filters, not applied to or tailored before. For each one, one at a time, it saves an Explore row
-to Jobs, looks up the employer link (while Jobright is connected), reads the full description, scores it again,
+passing your Jobs filters, not applied to or tailored before. For each one, one at a time, it saves a Discover row
+to Saved, looks up the employer link (while Jobright is connected), reads the full description, scores it again,
 tailors it through the unattended pipeline, and fills the application form in a hidden tab, with AI-drafted
 answers marked and **no file attached and nothing submitted**. The job then waits in **Ready to submit** (also a
 Board column). **Review & submit** approves the result and opens the filled form in Browser with the resume
