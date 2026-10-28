@@ -81,7 +81,7 @@ export function Controls({ settings, save }: { settings: AutomationSettings; sav
         {num('perCompany', 'Per company', { description: 'Ready, in flight, applied (30 days)' })}
         {num('perDay', 'Per day', { description: 'Jobs entering tailoring' })}
         {num('maxCostUsd', 'Cost cap per run', { prefix: '$', decimalScale: 2, description: 'Tailoring cost' })}
-        {num('maxExplorePageLoads', 'Jobright pages per run', { description: 'For Explore rows' })}
+        {num('maxExplorePageLoads', 'Jobright pages per run', { description: 'For Discover rows' })}
       </div>
       <Group mt="lg" gap="lg" align="flex-end" wrap="wrap">
         <div>
@@ -103,7 +103,7 @@ export function Controls({ settings, save }: { settings: AutomationSettings; sav
           </>
         )}
         <Checkbox label="Saved jobs" checked={draft.sources.jobs} onChange={(e) => set({ sources: { ...draft.sources, jobs: e.currentTarget.checked } })} />
-        <Checkbox label="Explore" checked={draft.sources.explore} onChange={(e) => set({ sources: { ...draft.sources, explore: e.currentTarget.checked } })} />
+        <Checkbox label="Discover" checked={draft.sources.explore} onChange={(e) => set({ sources: { ...draft.sources, explore: e.currentTarget.checked } })} />
         <Switch label="Cover letters" checked={draft.coverLetter} onChange={(e) => set({ coverLetter: e.currentTarget.checked })} />
       </Group>
     </SectionCard>

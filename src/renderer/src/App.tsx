@@ -13,7 +13,6 @@ import { AutomationPage } from './pages/automation'
 import { BoardPage } from './pages/board'
 import { BrowserPage } from './pages/browser'
 import { DashboardPage } from './pages/dashboard'
-import { ExplorePage } from './pages/explore'
 import { JobsPage } from './pages/jobs'
 import { ProfilePage } from './pages/profile'
 import { ReviewPage } from './pages/review'
@@ -80,16 +79,14 @@ export function App() {
           onSwitchWorkspace={switchWorkspace}
         >
           {(location) => {
-            // `graph` never gets here: navigation sends it to Profile's graph view (#108).
+            // `graph` and `explore` never get here: navigation sends them to Profile's graph view (#108) and Jobs → Discover (#189).
             switch (location.page) {
               case 'dashboard':
                 return <DashboardPage />
               case 'board':
                 return <BoardPage params={paramsFor(location, 'board')} />
               case 'jobs':
-                return <JobsPage key={paramsFor(location, 'jobs')?.reload} openId={paramsFor(location, 'jobs')?.openId} />
-              case 'explore':
-                return <ExplorePage />
+                return <JobsPage key={paramsFor(location, 'jobs')?.reload} params={paramsFor(location, 'jobs')} />
               case 'browser':
                 return <BrowserPage params={paramsFor(location, 'browser')} />
               case 'tailor':

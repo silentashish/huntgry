@@ -1,12 +1,15 @@
 import { expect, type Locator, type Page } from '@playwright/test'
+import { Shell } from './shell'
 
 /**
- * The Explore page (#142, #169): Jobright's list of one category, its posted-day buttons (older days under
- * "Earlier"), filters, the source it shows, per-row Add to Jobs, and each row's match score (#150) with its sort and
- * "Match ≥ N" filter.
+ * Jobs → Discover (#189; the Explore page of #142, #169): Jobright's list of one category, its posted-day buttons
+ * (older days under "Earlier"), filters, the source it shows, per-row Save / "Saved ✓", and each row's match score
+ * (#150) with its sort and "Match ≥ N" filter.
  */
-export class ExplorePage {
+export class DiscoverTab {
   readonly heading: Locator
+  /** The Jobs page's tab switch (a Mantine SegmentedControl: radios named "Discover" and "Saved (n)"). */
+  readonly tab: Locator
   readonly refreshButton: Locator
   readonly filterInput: Locator
   readonly days: Locator
@@ -32,7 +35,8 @@ export class ExplorePage {
   readonly tooltip: Locator
 
   constructor(readonly page: Page) {
-    this.heading = page.getByRole('heading', { name: 'Explore', level: 2 })
+    this.heading = page.getByRole('heading', { name: 'Jobs', level: 2 })
+    this.tab = page.getByRole('radiogroup', { name: 'Jobs view' }).getByRole('radio', { name: 'Discover', exact: true })
     this.refreshButton = page.getByRole('button', { name: 'Refresh', exact: true }).first()
     this.filterInput = page.getByRole('textbox', { name: 'Filter Jobright jobs' })
     this.days = page.getByRole('group', { name: 'Posted day' })
@@ -43,11 +47,19 @@ export class ExplorePage {
     this.source = page.getByLabel('List source')
     this.fallback = page.getByRole('alert').filter({ hasText: "Showing Jobright's GitHub list instead" })
     this.earlier = this.days.getByRole('button', { name: /^Earlier, / })
-    this.h1bFilter = page.getByRole('combobox', { name: 'H1B sponsorship' })
+    this.h1bFilter = page.getByRole('combobox', { name: 'Visa sponsorship' })
     this.minSalary = page.getByRole('textbox', { name: 'Min. salary / year' })
     this.minMatch = page.getByRole('textbox', { name: 'Min. match' })
     this.sort = page.getByRole('combobox', { name: 'Sort' })
     this.tooltip = page.getByRole('tooltip')
+  }
+
+  /** Opens Jobs from the sidebar and its Discover tab (the page may open on Saved). */
+  async open(): Promise<void> {
+    await new Shell(this.page).goTo('jobs')
+    await this.tab.locator('xpath=following-sibling::label[1]').click()
+    await expect(this.tab).toBeChecked()
+    await expect(this.days.or(this.page.getByRole('heading', { name: 'No jobs to discover yet' }))).toBeVisible()
   }
 
   /** Picks a category by its label ("Data Analysis"; the first one with that label is New grad · US). */
@@ -57,7 +69,8 @@ export class ExplorePage {
     await expect(this.category).toHaveValue(label)
   }
 
-  async filterH1b(option: 'Any H1B' | 'Sponsors H1B' | 'H1B not ruled out'): Promise<void> {
+  /** The visa select, in the Saved tab's words (#189) over Jobright's H1B field. */
+  async filterH1b(option: 'Visa: any' | 'Visa: only sponsors' | 'Visa: hide “no sponsorship”'): Promise<void> {
     await this.h1bFilter.click()
     await this.page.getByRole('option', { name: option, exact: true }).click()
     await expect(this.h1bFilter).toHaveValue(option)
@@ -84,8 +97,8 @@ export class ExplorePage {
     await expect(this.day(label)).toHaveAttribute('aria-pressed', 'true')
   }
 
-  /** A work-model segment (a Mantine SegmentedControl radio; its label is clicked). */
-  async workModel(name: 'Any' | 'Remote' | 'Hybrid' | 'On Site'): Promise<void> {
+  /** A workplace segment (a Mantine SegmentedControl radio; its label is clicked), in the Saved tab's words (#189). */
+  async workModel(name: 'Any' | 'Remote' | 'Hybrid' | 'Onsite'): Promise<void> {
     const radio = this.page.getByRole('radio', { name, exact: true })
     await radio.locator('xpath=following-sibling::label[1]').click()
     await expect(radio).toBeChecked()
@@ -104,11 +117,13 @@ export class ExplorePage {
     return this.list.getByRole('listitem').filter({ has: this.page.getByRole('button', { name: title, exact: true }) })
   }
 
+  /** "Save": keeps the row's job on the Saved tab. */
   addButton(title: string): Locator {
-    return this.row(title).getByRole('button', { name: 'Add to Jobs' })
+    return this.row(title).getByRole('button', { name: 'Save', exact: true })
   }
 
+  /** "Saved ✓" (#189): the row is saved; clicking it opens the job on the Saved tab. */
   addedButton(title: string): Locator {
-    return this.row(title).getByRole('button', { name: 'Added' })
+    return this.row(title).getByRole('button', { name: 'Saved', exact: true })
   }
 }

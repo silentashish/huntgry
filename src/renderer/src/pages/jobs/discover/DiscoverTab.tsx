@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Alert, Button, Loader, NumberInput, SegmentedControl, Select, TextInput } from '@mantine/core'
 import {
   IconAlertTriangle,
@@ -10,14 +10,16 @@ import {
   IconRefresh,
   IconSearch
 } from '@tabler/icons-react'
-import { scoreRows } from '@shared/explore-score'
+import { jobMatch, scoreRows } from '@shared/explore-score'
 import { WORK_MODELS, type ExploreJob, type ExploreList, type JobrightAccount } from '@shared/explore-types'
 import { profileSignals, type ProfileSignals } from '@shared/job-relevance'
 import type { Job } from '@shared/jobs-types'
 import { emptyProfile } from '@shared/master-profile'
-import { api, errorText } from '../../api'
-import { CompanyAvatar, EmptyState, MonoLabel, PageHeader, StatusPill } from '../../components/ui'
-import { useNavigation } from '../../navigation'
+import { api, errorText } from '../../../api'
+import { CompanyAvatar, EmptyState, MonoLabel, StatusPill } from '../../../components/ui'
+import { useNavigation } from '../../../navigation'
+import { MatchBadge } from '../MatchBadge'
+import type { TabHeader } from '../tabs'
 import {
   addedJobs,
   CATEGORY_STORAGE_KEY,
@@ -44,24 +46,43 @@ import {
   type H1bFilter,
   type WorkModelFilter
 } from './view'
-import { MatchBadge } from './MatchBadge'
-import classes from './explore.module.css'
+import classes from './discover.module.css'
 
 const WORK_TONE = { Remote: 'trail', Hybrid: 'neutral', 'On Site': 'neutral' } as const
+/** Jobright's work models in the Saved tab's words (#189: "Onsite", as its Workplace filter says). */
+const WORK_LABEL = { Remote: 'Remote', Hybrid: 'Hybrid', 'On Site': 'Onsite' } as const
 const H1B_TONE = { Yes: 'success', No: 'neutral', 'Not Sure': 'neutral' } as const
+
+/** The visa select in the Saved tab's words (#189), over Jobright's H1B field. */
+const VISA_OPTIONS: { value: H1bFilter; label: string }[] = [
+  { value: 'all', label: 'Visa: any' },
+  { value: 'not-no', label: 'Visa: hide “no sponsorship”' },
+  { value: 'yes', label: 'Visa: only sponsors' }
+]
 
 const CATEGORY_OPTIONS = categoryOptions()
 
+interface Props {
+  /** The saved jobs (the page's list, shared with the Saved tab): a row already among them reads "Saved ✓". */
+  saved: readonly Job[]
+  /** A row was saved: the page adds it to its list. */
+  onSaved(job: Job): void
+  /** "Saved ✓" was clicked: the page switches to the Saved tab and opens the job. */
+  onOpenSaved(job: Job): void
+  /** Draws the page header and the tab switch (the page's), with this tab's eyebrow, subtitle and actions. */
+  header(h: TabHeader): ReactNode
+}
+
 /**
- * Explore (#142, #169): Jobright's jobs of one category from the newgrad-jobs API (the GitHub README when the API
- * fails), grouped by posted day (today first, days past the newest seven folded), cached in the workspace. Every row
- * shows its match score against the master profile (#150), and can be added to the Jobs page in one click.
+ * Jobs → Discover (#189; the Explore page of #142, #169): Jobright's jobs of one category from the newgrad-jobs API
+ * (the GitHub README when the API fails), grouped by posted day (today first, days past the newest seven folded),
+ * cached in the workspace. Every row shows its match score against the master profile (#150), and is saved in one
+ * click; a saved row reads "Saved ✓" and opens on the Saved tab.
  */
-export function ExplorePage() {
+export function DiscoverTab({ saved, onSaved, onOpenSaved, header }: Props) {
   const { navigate } = useNavigation()
   const [category, setCategory] = useState(readCategory)
   const [list, setList] = useState<ExploreList | null>(null)
-  const [saved, setSaved] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -79,7 +100,6 @@ export function ExplorePage() {
   const request = useRef(0)
 
   useEffect(() => {
-    api.jobs.list().then(setSaved, () => undefined)
     api.explore.account().then(setAccount, () => undefined)
     // Read on every visit: the page is left to edit the profile, so the scores follow its latest version.
     api.profile.read().then(
@@ -151,8 +171,7 @@ export function ExplorePage() {
     setAdding((s) => new Set(s).add(row.id))
     setError(null)
     try {
-      const job = await api.explore.add(row.id, category)
-      setSaved((cur) => [...cur.filter((j) => j.id !== job.id), job])
+      onSaved(await api.explore.add(row.id, category))
     } catch (err) {
       setError(errorText(err))
     } finally {
@@ -197,11 +216,10 @@ export function ExplorePage() {
 
   return (
     <div className={classes.page}>
-      <PageHeader
-        eyebrow={`Jobright · ${categoryLabel(category)} · ${jobs.length.toLocaleString('en-US')} jobs`}
-        title="Explore"
-        subtitle="New-grad and internship jobs from Jobright's newgrad-jobs list. Add any of them to Jobs."
-        actions={
+      {header({
+        eyebrow: `Jobright · ${categoryLabel(category)} · ${jobs.length.toLocaleString('en-US')} jobs`,
+        subtitle: "New-grad and internship jobs from Jobright's newgrad-jobs list. Save any of them to keep it on the Saved tab.",
+        actions: (
           <>
             <MonoLabel size="sm" tone="muted">
               {shownList ? updatedAgo(shownList.fetchedAt, now) : ''}
@@ -210,8 +228,8 @@ export function ExplorePage() {
               Refresh
             </Button>
           </>
-        }
-      />
+        )
+      })}
 
       <div className={classes.row}>
         <Select
@@ -254,7 +272,7 @@ export function ExplorePage() {
         >
           <div className={classes.connectBody}>
             <span>
-              Jobs from this list link Jobright's page. Connect your Jobright account once and jobs you add link the
+              Jobs from this list link Jobright's page. Connect your Jobright account once and jobs you save link the
               employer's posting instead.
             </span>
             <Button size="xs" variant="default" onClick={() => navigate('settings', { section: 'jobright' })}>
@@ -277,7 +295,7 @@ export function ExplorePage() {
           className={classes.empty}
           compact
           icon={<IconCompass size={22} />}
-          title="No jobs to explore yet"
+          title="No jobs to discover yet"
           description="Huntgry reads Jobright's newgrad-jobs list. Refresh to try again."
           actions={
             <Button variant="default" leftSection={<IconRefresh size={16} />} loading={refreshing} onClick={() => void refresh()}>
@@ -314,27 +332,23 @@ export function ExplorePage() {
               onChange={(e) => set('text', e.currentTarget.value)}
             />
             <SegmentedControl
-              aria-label="Work model"
+              aria-label="Workplace"
               value={filters.workModel}
               onChange={(v) => set('workModel', v as WorkModelFilter)}
-              data={[{ value: 'all', label: 'Any' }, ...WORK_MODELS.map((w) => ({ value: w, label: w }))]}
+              data={[{ value: 'all', label: 'Any' }, ...WORK_MODELS.map((w) => ({ value: w, label: WORK_LABEL[w] }))]}
             />
             <Select
-              w={170}
-              aria-label="H1B sponsorship"
-              title={readme ? 'The GitHub list has no H1B details' : undefined}
+              w={190}
+              aria-label="Visa sponsorship"
+              title={readme ? 'The GitHub list has no H1B details' : 'H1B sponsorship, as Jobright reports it'}
               disabled={readme}
-              data={[
-                { value: 'all', label: 'Any H1B' },
-                { value: 'yes', label: 'Sponsors H1B' },
-                { value: 'not-no', label: 'H1B not ruled out' }
-              ]}
+              data={VISA_OPTIONS}
               value={filters.h1b}
               onChange={(v) => set('h1b', (v ?? 'all') as H1bFilter)}
               allowDeselect={false}
             />
             <NumberInput
-              w={170}
+              w={150}
               aria-label="Min. salary / year"
               placeholder="Min. salary / year"
               title={readme ? 'The GitHub list has no salaries' : undefined}
@@ -382,9 +396,11 @@ export function ExplorePage() {
             <ul className={classes.list} aria-label="Jobright jobs">
               {rows.map((r) => {
                 const savedJob = added.get(r.id)
+                // A saved row shows its saved job's score, the number on Saved (#189), also once its full posting is fetched.
+                const score = savedJob && signals ? jobMatch(savedJob, signals) : scores.get(r.id)
                 return (
                   <li key={r.id} className={classes.job} aria-label={`${r.title} at ${r.company}`}>
-                    {scores.get(r.id) ? <MatchBadge score={scores.get(r.id)!} /> : <CompanyAvatar name={r.company} />}
+                    {score ? <MatchBadge score={score} /> : <CompanyAvatar name={r.company} />}
                     <div className={classes.body}>
                       <button
                         type="button"
@@ -409,16 +425,16 @@ export function ExplorePage() {
                           H1B: {r.h1b}
                         </StatusPill>
                       )}
-                      {r.workModel && <StatusPill tone={WORK_TONE[r.workModel]}>{r.workModel}</StatusPill>}
+                      {r.workModel && <StatusPill tone={WORK_TONE[r.workModel]}>{WORK_LABEL[r.workModel]}</StatusPill>}
                       {savedJob ? (
                         <Button
                           size="xs"
                           variant="subtle"
-                          leftSection={<IconCheck size={14} />}
-                          title="Open it on the Jobs page"
-                          onClick={() => navigate('jobs', { reload: Date.now(), openId: savedJob.id })}
+                          rightSection={<IconCheck size={14} aria-hidden />}
+                          title="Open it on the Saved tab"
+                          onClick={() => onOpenSaved(savedJob)}
                         >
-                          Added
+                          Saved
                         </Button>
                       ) : (
                         <Button
@@ -428,7 +444,7 @@ export function ExplorePage() {
                           loading={adding.has(r.id)}
                           onClick={() => void add(r)}
                         >
-                          Add to Jobs
+                          Save
                         </Button>
                       )}
                     </div>

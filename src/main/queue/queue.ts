@@ -117,7 +117,7 @@ export const QUEUE_FILE = 'queue.json'
 
 export const INTERRUPTED = 'Huntgry was closed while this job was starting or running. Retry it.'
 /** Bulk runs never start from a board summary: nobody is there to notice the resume was tailored to a snippet. */
-export const PASTE_HINT = 'Open the posting, add its description with "Paste a job" on the Jobs page, and tailor that job.'
+export const PASTE_HINT = 'Open the posting, paste its text into "Add job" on the Jobs page, and tailor that job.'
 const RATE_LIMIT = /temporarily limiting requests|rate.?limit|too many requests|\b429\b|overloaded/i
 /** A used-up quota (Antigravity answers 429 too) does not clear in seconds: no automatic retry. */
 const QUOTA = /quota/i

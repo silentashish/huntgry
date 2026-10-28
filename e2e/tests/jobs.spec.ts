@@ -46,7 +46,7 @@ test.describe('relevant jobs and filters (#73)', () => {
     // Both seeded jobs fit "Backend Engineer" with Go: the closer title first.
     await expect(jobs.segment('Relevant')).toHaveAccessibleName('Relevant (2)')
     await expect.poll(() => jobs.listedTitles()).toEqual(['Staff Backend Engineer', 'Infrastructure Engineer'])
-    // Each row has its Scent score and says why it fits (#111).
+    // Each row has its match score (#189: the number Discover shows) and says why it fits (#111).
     await expect(jobs.scoreRing('Staff Backend Engineer')).toBeVisible()
     expect(await jobs.reasons('Staff Backend Engineer')).toEqual([
       'Title: Backend Engineer',
@@ -99,7 +99,11 @@ test.describe('relevant jobs and filters (#73)', () => {
 test.describe('adding jobs', () => {
   test('add by URL saves the posting (JSON-LD and plain-text pages) and opens it', async ({ app, mock }) => {
     const jobs = await openJobs(app)
+    await jobs.addJobButton.click()
     await expect(jobs.addButton).toBeDisabled()
+    // A link: no title or company to fill.
+    await jobs.addJobInput.fill(`${mock.origin}/postings/lever-style`)
+    await expect(jobs.addJobModal.getByLabel('Company')).toHaveCount(0)
     await jobs.addByUrl(`${mock.origin}/postings/lever-style`)
     await expect(jobs.drawer).toBeVisible()
     await expect(jobs.drawer.getByText('Software Engineer', { exact: true }).first()).toBeVisible()
@@ -122,19 +126,18 @@ test.describe('adding jobs', () => {
     await expect(app.window.getByText('4 of 4 saved jobs')).toBeVisible()
   })
 
-  test('"Paste a job" saves the pasted description', async ({ app }) => {
+  test('"Add job" saves a pasted description from the same box as a link (#189)', async ({ app }) => {
     const jobs = await openJobs(app)
-    await jobs.pasteButton.click()
-    await expect(jobs.pasteModal).toBeVisible()
-    await expect(jobs.pasteModal.getByRole('button', { name: 'Save job' })).toBeDisabled()
-    await jobs.pasteModal.getByLabel('Title').fill('Robotics Software Engineer')
-    await jobs.pasteModal.getByLabel('Company').fill('Wayne Enterprises')
-    await jobs.pasteModal
-      .getByLabel('Job description')
-      .fill('Wayne Enterprises is hiring a Robotics Software Engineer for its Gotham lab. Remote within the US.\n\nRequirements: C++, ROS, five years.')
-    await jobs.pasteModal.getByRole('button', { name: 'Save job' }).click()
+    await jobs.addJobButton.click()
+    await expect(jobs.addJobModal).toBeVisible()
+    await expect(jobs.addButton).toBeDisabled()
+    // Text, not a link: the title, company and link fields appear.
+    await jobs.addJobInput.fill('Wayne Enterprises is hiring a Robotics Software Engineer for its Gotham lab. Remote within the US.\n\nRequirements: C++, ROS, five years.')
+    await jobs.addJobModal.getByLabel('Title').fill('Robotics Software Engineer')
+    await jobs.addJobModal.getByLabel('Company').fill('Wayne Enterprises')
+    await jobs.addButton.click()
 
-    await expect(jobs.pasteModal).toBeHidden()
+    await expect(jobs.addJobModal).toBeHidden()
     await expect(jobs.drawer.getByText('Robotics Software Engineer', { exact: true }).first()).toBeVisible()
     await expect(jobs.drawer).toContainText('Wayne Enterprises')
     await expect(jobs.drawer.getByText('Pasted', { exact: true })).toBeVisible()
@@ -242,7 +245,7 @@ test('"Open posting" from the drawer lands on the Browser page with the posting 
   await expect(new BrowserPage(app.window).address).toHaveValue(`${mock.origin}/postings/lever-style`)
 })
 
-test.describe('Scent score and bulk actions (#111)', () => {
+test.describe('Match score and bulk actions (#111, #189)', () => {
   test('the Filters button folds the filter fields away and back', async ({ app }) => {
     const jobs = await openJobs(app)
     const button = app.window.getByRole('button', { name: /^Filters/ })
@@ -257,11 +260,12 @@ test.describe('Scent score and bulk actions (#111)', () => {
     await expect(jobs.sponsorshipFilter).toBeVisible()
   })
 
-  test('the job drawer shows the Scent score and why the job fits', async ({ app }) => {
+  test('the job drawer shows the match score and why the job fits', async ({ app }) => {
     const jobs = await openJobs(app, 'Relevant')
     await jobs.openJob('Staff Backend Engineer')
-    await expect(jobs.drawer.getByRole('img', { name: /^Scent \d+ of 100$/ })).toBeVisible()
-    await expect(jobs.drawer).toContainText(/(Strong|Fair|Faint) scent/)
+    await expect(jobs.drawer.getByRole('img', { name: /^Match / })).toBeVisible()
+    await expect(jobs.drawer).toContainText(/(Strong|Fair|Faint) match|Title-only estimate/)
+    await expect(jobs.drawer).not.toContainText(/scent/i)
     await expect(jobs.drawer).toContainText('Title: Backend Engineer')
   })
 

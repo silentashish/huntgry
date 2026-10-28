@@ -1,314 +1,126 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Alert, Anchor, Button, Checkbox, Loader, SegmentedControl, Text, TextInput } from '@mantine/core'
-import { IconBriefcase, IconClipboardCheck, IconFilter, IconLink, IconPlus, IconSearch, IconSparkles } from '@tabler/icons-react'
-import { activeFilterCount, DEFAULT_FILTERS, type JobFilters } from '@shared/job-filters'
-import { hasRelevanceSignals, profileSignals, type ProfileSignals } from '@shared/job-relevance'
-import { DEFAULT_JOBS_PREFS, type JobsPrefs } from '@shared/jobs-prefs'
-import { tailorPrefillFor, type Job } from '@shared/jobs-types'
-import { emptyProfile } from '@shared/master-profile'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Alert, Button, Center, SegmentedControl } from '@mantine/core'
+import { IconBookmark, IconCompass, IconPlus } from '@tabler/icons-react'
+import type { Job } from '@shared/jobs-types'
 import { api, errorText } from '../../api'
-import { useQueue } from '../../components/queue/useQueue'
-import { EmptyState, MonoLabel, PageHeader } from '../../components/ui'
-import { useNavigation } from '../../navigation'
-import { BulkTailorModal } from './BulkTailorModal'
-import { JobDrawer } from './JobDrawer'
-import { JobFiltersBar } from './JobFiltersBar'
-import { JobRow } from './JobRow'
-import { prepareTailor } from './handoff'
-import { PasteModal } from './PasteModal'
-import { SelectionBar } from './SelectionBar'
+import { PageHeader } from '../../components/ui'
+import { useNavigation, type JobsTab, type PageParams } from '../../navigation'
+import { AddJobModal } from './AddJobModal'
+import { DiscoverTab } from './discover/DiscoverTab'
 import { mergeJobs } from './merge'
-import { activeQueueItems, selectable, selectAll, selectAllState, selectedJobs, toggle } from './selection'
-import { defaultShow, scentView, visibleJobs, type Show } from './view'
-import classes from './jobs.module.css'
-
-const isUrl = (s: string) => /^https?:\/\//i.test(s.trim())
+import { SavedTab } from './SavedTab'
+import { jobsTab, savedCount, type TabHeader } from './tabs'
 
 /**
- * Jobs added by URL or pasted; a job can be sent to the Tailor page. Opens on the saved jobs relevant to the
- * master profile, each with its Scent score and why it fits. Huntgry does not search job boards (#78).
+ * The Jobs page (#189: Explore merged into Jobs) with two tabs, Discover · Saved, picked by `params.tab` so each is
+ * deep-linkable (the Profile page's view switch, #95). Discover is Jobright's daily list (#142), Saved the jobs you
+ * keep (#78). Both share the saved list, so a Discover row saved a moment ago reads "Saved ✓" and is on Saved, and
+ * one "Add job" dialog (a link or a posting's text) on both. Huntgry does not search job boards itself (#78).
  */
-export function JobsPage({ openId: initialOpenId }: { openId?: string } = {}) {
+export function JobsPage({ params }: { params?: PageParams['jobs'] }) {
   const { navigate } = useNavigation()
   const [jobs, setJobs] = useState<Job[] | null>(null)
-  const [url, setUrl] = useState('')
-  const [adding, setAdding] = useState(false)
-  const [pasteOpen, setPasteOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [filter, setFilter] = useState('')
-  const [filtersOpen, setFiltersOpen] = useState(true)
-  /** `null` until the user picks a segment: then the default (Relevant when the profile allows) applies. */
-  const [pickedShow, setShow] = useState<Show | null>(null)
-  const [openId, setOpenId] = useState<string | null>(initialOpenId ?? null)
-  /** Saved per workspace: the list filters. */
-  const [prefs, setPrefsState] = useState<JobsPrefs | null>(null)
-  /** What the master profile says to match jobs on; `null` while loading (an unreadable profile gives no signals). */
-  const [signals, setSignals] = useState<ProfileSignals | null>(null)
-  /** Jobs ticked for "Tailor all". */
-  const [selection, setSelection] = useState<Set<string>>(new Set())
-  /** The Tailor all modal, and the mode it opens in. */
-  const [bulk, setBulk] = useState(false)
-  const [dismissing, setDismissing] = useState(false)
-  const [queue] = useQueue()
+  const [addOpen, setAddOpen] = useState(false)
+  const [openId, setOpenId] = useState<string | null>(params?.openId ?? null)
+  /**
+   * The tab on screen once known. Without `tab` or `openId` the page opens on Saved when there is a saved job and on
+   * Discover when there is none; that choice then stays, so saving the first job on Discover does not switch tabs.
+   */
+  const [pinned, setPinned] = useState<JobsTab | null>(null)
 
   useEffect(() => {
     api.jobs.list().then(setJobs, (err) => setError(errorText(err)))
-    api.jobs.prefs().then(setPrefsState, () => setPrefsState(DEFAULT_JOBS_PREFS))
-    api.profile.read().then(
-      (doc) => setSignals(profileSignals(doc.profile)),
-      () => setSignals(profileSignals(emptyProfile()))
-    )
   }, [])
 
+  // Every navigation here (a tab, a saved job to open) is followed, also while the page stays on screen.
+  useEffect(() => {
+    setPinned(null)
+    if (params?.openId) setOpenId(params.openId)
+  }, [params])
+
+  const tab = pinned ?? jobsTab(params, jobs ? savedCount(jobs) : null)
+  useEffect(() => {
+    if (pinned === null && tab !== null) setPinned(tab)
+  }, [pinned, tab])
+
   const upsert = (list: Job[]) => setJobs((cur) => mergeJobs(cur ?? [], list))
-  const canRelevant = signals !== null && hasRelevanceSignals(signals)
-  const show: Show = pickedShow ?? defaultShow(canRelevant)
-  const filters = prefs?.filters ?? DEFAULT_FILTERS
-
-  function savePrefs(patch: { filters?: JobFilters }) {
-    setPrefsState((p) => ({ ...(p ?? DEFAULT_JOBS_PREFS), ...patch }))
-    api.jobs.setPrefs(patch).catch((err) => setError(errorText(err)))
+  const showTab = (t: JobsTab) => {
+    setOpenId(null)
+    navigate('jobs', { tab: t })
   }
+  /** Saved, with `job`'s drawer open: Discover's "Saved ✓", and a job just added. */
+  const openSaved = (job: Job) => navigate('jobs', { tab: 'saved', openId: job.id })
 
-  async function addUrl() {
-    setAdding(true)
-    setError(null)
-    try {
-      const job = await api.jobs.addByUrl(url.trim())
-      upsert([job])
-      setUrl('')
-      setOpenId(job.id)
-    } catch (err) {
-      setError(errorText(err))
-    } finally {
-      setAdding(false)
-    }
-  }
-
-  /** Sends a job to the Tailor form with everything saved about it (see `prepareTailor`). */
-  async function tailor(job: Job) {
-    navigate('tailor', tailorPrefillFor(await prepareTailor(job, (j) => upsert([j]))))
-  }
-
-  // One scoring pass: every job's Scent score, and the Relevant list ranked from the same scores.
-  const { scores, relevant } = useMemo(() => scentView(jobs ?? [], signals), [jobs, signals])
-  const shown = useMemo(
-    () => visibleJobs({ jobs: jobs ?? [], show, relevant, filters, text: filter }),
-    [jobs, show, relevant, filters, filter]
-  )
-
-  // A new filter is a new list: start the selection over.
-  useEffect(() => setSelection(new Set()), [filter, show, filters])
-
-  const selected = selectedJobs(selection, shown)
-  const allState = selectAllState(selection, shown)
-  const queued = useMemo(() => activeQueueItems(queue?.items ?? []), [queue])
-  const queueItemOf = (j: Job) => queued.get(j.id) ?? j.aliases?.map((a) => queued.get(a)).find(Boolean)
-  const filterCount = activeFilterCount(filters)
-
-  const open = (jobs ?? []).find((j) => j.id === openId) ?? null
-
-  /** Dismisses every selected job (#92); the ones that saved stay dismissed even if another fails. */
-  async function dismissSelected() {
-    setDismissing(true)
-    setError(null)
-    const results = await Promise.allSettled(selected.map((j) => api.jobs.update(j.id, { dismissed: true })))
-    upsert(results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : [])))
-    const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
-    if (failed.length > 0) setError(`${failed.length} job(s) could not be dismissed: ${errorText(failed[0].reason)}`)
-    setSelection(new Set())
-    setDismissing(false)
-  }
-
-  const afterBulk = () => {
-    setBulk(false)
-    setSelection(new Set())
-    navigate('tailor', { view: 'queue' })
-  }
-
-  return (
-    <div className={classes.page}>
+  const header = ({ eyebrow, subtitle, actions }: TabHeader) => (
+    <>
       <PageHeader
-        eyebrow={`The scent board · ${jobs?.length ?? 0} saved`}
+        eyebrow={eyebrow}
         title="Jobs"
-        subtitle={
-          canRelevant
-            ? 'Ranked by how strongly each posting smells like your master profile.'
-            : 'Postings you added by URL or pasted, newest first.'
-        }
+        subtitle={subtitle}
         actions={
           <>
-            <Button variant="default" leftSection={<IconClipboardCheck size={16} />} onClick={() => setPasteOpen(true)}>
-              Paste a job
-            </Button>
-            <Button
-              variant="primary"
-              leftSection={<IconSparkles size={16} />}
-              disabled={selected.length === 0}
-              title={selected.length === 0 ? 'Tick the jobs to tailor first' : undefined}
-              onClick={() => setBulk(true)}
-            >
-              {selected.length > 0 ? `Tailor all (${selected.length})` : 'Tailor all'}
+            {actions}
+            <Button variant="default" leftSection={<IconPlus size={16} />} onClick={() => setAddOpen(true)}>
+              Add job
             </Button>
           </>
         }
       />
-
-      {signals && !canRelevant && (
-        <Alert variant="light" color="info" title="See the jobs that fit you">
-          <Text size="sm">
-            Add a headline or a role to your{' '}
-            <Anchor component="button" type="button" size="sm" onClick={() => navigate('profile', { section: 'contact' })}>
-              master profile
-            </Anchor>{' '}
-            and the Jobs page opens on the jobs relevant to it, ranked by title, skills, seniority and location.
-          </Text>
-        </Alert>
-      )}
-
+      <SegmentedControl
+        aria-label="Jobs view"
+        style={{ alignSelf: 'flex-start' }}
+        value={tab ?? 'saved'}
+        onChange={(v) => showTab(v as JobsTab)}
+        data={[
+          { value: 'discover', label: <TabLabel icon={<IconCompass size={14} aria-hidden />} text="Discover" /> },
+          {
+            value: 'saved',
+            label: <TabLabel icon={<IconBookmark size={14} aria-hidden />} text={jobs ? `Saved (${savedCount(jobs)})` : 'Saved'} />
+          }
+        ]}
+      />
       {error && (
-        <Alert color="danger" variant="light" withCloseButton onClose={() => setError(null)}>
+        <Alert color="danger" variant="light" title="The saved jobs could not be read" withCloseButton onClose={() => setError(null)}>
           {error}
         </Alert>
       )}
+    </>
+  )
 
-      <div className={classes.row}>
-        <TextInput
-          className={classes.grow}
-          leftSection={<IconLink size={16} />}
-          placeholder="Add a job by its posting URL (company careers page, Greenhouse, Lever, Ashby, Workday …)"
-          value={url}
-          onChange={(e) => setUrl(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === 'Enter' && isUrl(url) && !adding && void addUrl()}
-        />
-        <Button variant="secondary" leftSection={<IconPlus size={16} />} onClick={addUrl} loading={adding} disabled={!isUrl(url)}>
-          Add
-        </Button>
-      </div>
-
-      {jobs === null || prefs === null || signals === null ? (
-        <Loader />
-      ) : jobs.length === 0 ? (
-        <EmptyState
-          className={classes.empty}
-          compact
-          icon={<IconBriefcase size={22} />}
-          title="No saved jobs yet"
-          description="Add a posting by its URL above, or paste one."
-          actions={
-            <Button variant="default" leftSection={<IconClipboardCheck size={16} />} onClick={() => setPasteOpen(true)}>
-              Paste a job
-            </Button>
-          }
-        />
+  return (
+    <>
+      {tab === 'discover' ? (
+        <DiscoverTab saved={jobs ?? []} onSaved={(j) => upsert([j])} onOpenSaved={openSaved} header={header} />
       ) : (
-        <>
-          <div className={classes.row}>
-            <SegmentedControl
-              value={show}
-              onChange={(v) => setShow(v as Show)}
-              data={[
-                ...(canRelevant ? [{ value: 'relevant', label: `Relevant (${relevant.length})` }] : []),
-                { value: 'all', label: 'All' },
-                { value: 'new', label: 'Not tailored' },
-                { value: 'tailored', label: 'Tailored' },
-                { value: 'dismissed', label: 'Dismissed' }
-              ]}
-            />
-            <TextInput
-              className={classes.grow}
-              leftSection={<IconSearch size={16} />}
-              placeholder="Filter by title, company, location, technology"
-              aria-label="Filter saved jobs"
-              value={filter}
-              onChange={(e) => setFilter(e.currentTarget.value)}
-            />
-            <Button
-              variant="default"
-              leftSection={<IconFilter size={16} />}
-              aria-expanded={filtersOpen}
-              aria-controls="jobs-filters"
-              onClick={() => setFiltersOpen((o) => !o)}
-            >
-              {filterCount > 0 ? `Filters · ${filterCount}` : 'Filters'}
-            </Button>
-          </div>
-          <JobFiltersBar
-            filters={filters}
-            onChange={(f) => savePrefs({ filters: f })}
-            open={filtersOpen}
-            footer={
-              <div className={classes.selectAll}>
-                <Checkbox
-                  size="xs"
-                  label={`Select all shown (${shown.filter(selectable).length})`}
-                  checked={allState === 'all'}
-                  indeterminate={allState === 'some'}
-                  disabled={!shown.some(selectable)}
-                  onChange={() => setSelection(allState === 'all' ? new Set() : selectAll(selection, shown))}
-                />
-                <span className={classes.dot} aria-hidden>
-                  ·
-                </span>
-                <MonoLabel>
-                  {shown.length} of {jobs.length} saved jobs
-                </MonoLabel>
-              </div>
-            }
-          />
-          {show === 'relevant' && shown.length === 0 && (
-            <p className={classes.note}>
-              {relevant.length === 0
-                ? 'No saved job matches your master profile yet. Add one by URL or paste it.'
-                : 'No relevant job passes these filters.'}
-            </p>
-          )}
-          <ul className={classes.list} aria-label="Saved jobs">
-            {shown.map((j) => (
-              <JobRow
-                key={j.id}
-                job={j}
-                score={scores.get(j.id)}
-                queueItem={queueItemOf(j)}
-                selected={selection.has(j.id)}
-                selectable={selectable(j)}
-                onToggle={() => setSelection((sel) => toggle(sel, j.id))}
-                onOpen={() => setOpenId(j.id)}
-              />
-            ))}
-          </ul>
-        </>
+        // While the saved jobs load (and no tab was asked for), Saved draws its loader.
+        <SavedTab
+          jobs={error ? [] : jobs}
+          onUpsert={upsert}
+          openId={openId}
+          onOpen={setOpenId}
+          onDiscover={() => showTab('discover')}
+          header={header}
+        />
       )}
-
-      <SelectionBar
-        count={selected.length}
-        dismissing={dismissing}
-        onTailor={() => setBulk(true)}
-        onDismiss={() => void dismissSelected()}
-        onClear={() => setSelection(new Set())}
-      />
-      <BulkTailorModal
-        jobs={selected}
-        opened={bulk}
-        onClose={() => setBulk(false)}
-        onStarted={afterBulk}
-      />
-      <JobDrawer
-        job={open}
-        score={open ? scores.get(open.id) : undefined}
-        onClose={() => setOpenId(null)}
-        onChange={(j) => upsert([j])}
-        onTailor={tailor}
-      />
-      <PasteModal
-        opened={pasteOpen}
-        onClose={() => setPasteOpen(false)}
+      <AddJobModal
+        opened={addOpen}
+        onClose={() => setAddOpen(false)}
         onSaved={(j) => {
           upsert([j])
-          setPasteOpen(false)
-          setOpenId(j.id)
+          setAddOpen(false)
+          openSaved(j)
         }}
       />
-    </div>
+    </>
+  )
+}
+
+function TabLabel({ icon, text }: { icon: ReactNode; text: string }) {
+  return (
+    <Center inline style={{ gap: 6 }}>
+      {icon}
+      <span>{text}</span>
+    </Center>
   )
 }
