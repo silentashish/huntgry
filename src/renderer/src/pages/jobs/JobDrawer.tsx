@@ -10,26 +10,29 @@ import {
   IconWorld,
   IconX
 } from '@tabler/icons-react'
+import type { RowScore } from '@shared/explore-score'
 import type { JobScore } from '@shared/job-relevance'
 import { canFetchDetails, canRefetchDetails, JOBRIGHT_SUMMARY_NOTE, type Job } from '@shared/jobs-types'
 import { api, errorText } from '../../api'
 import { KpiTile, MonoLabel, ScoreRing, StatusPill, toneStyle, type UiTone } from '../../components/ui'
 import { useNavigation } from '../../navigation'
-import { jobFacts, jobMeta, scentDisplay, SOURCE_LABEL, sponsorshipPill, workplacePill } from './labels'
+import { jobFacts, jobMeta, matchDisplay, matchNotes, RELEVANT_LEFT_OUT, SOURCE_LABEL, sponsorshipPill, workplacePill } from './labels'
 import classes from './jobs.module.css'
 
 interface Props {
   job: Job | null
-  /** The job's Scent score (the Jobs page passes it; without one the drawer leaves the score box out). */
-  score?: JobScore
+  /** The job's match score (#189: the number its row shows); without one the drawer leaves the score box out. */
+  match?: RowScore
+  /** The job's relevance (#73): why it fits, or why Relevant leaves it out. */
+  relevance?: JobScore
   onClose(): void
   onChange(job: Job): void
   /** Resolves once the job has been handed to the Tailor page (after fetching its full posting, when possible). */
   onTailor(job: Job): Promise<void>
 }
 
-/** One job: the Scent score and why, what to do with it, its facts and the full description (Figma Jobs — Job drawer). */
-export function JobDrawer({ job, score, onClose, onChange, onTailor }: Props) {
+/** One job: the match score and why, what to do with it, its facts and the full description (Figma Jobs — Job drawer). */
+export function JobDrawer({ job, match, relevance, onClose, onChange, onTailor }: Props) {
   const { navigate } = useNavigation()
   const [busy, setBusy] = useState<'details' | 'dismiss' | 'tailor' | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -82,7 +85,7 @@ export function JobDrawer({ job, score, onClose, onChange, onTailor }: Props) {
               </ActionIcon>
             </Drawer.Header>
             <Drawer.Body className={classes.drawerBody}>
-              {score && <ScentBox score={score} />}
+              {match && <MatchBox match={match} relevance={relevance} />}
               <div className={classes.actions}>
                 <Button
                   variant="primary"
@@ -142,7 +145,7 @@ export function JobDrawer({ job, score, onClose, onChange, onTailor }: Props) {
               {!job.descriptionComplete && (
                 <Notice tone="info" icon={<IconInfoCircle size={18} />}>
                   {job.source === 'indeed'
-                    ? 'Indeed search results include only a snippet, and its job pages need a human check. Tailor resume sends this snippet with the job’s details; for a better resume, open the posting and paste the full description on the Tailor page (or with “Paste a job”).'
+                    ? 'Indeed search results include only a snippet, and its job pages need a human check. Tailor resume sends this snippet with the job’s details; for a better resume, open the posting and paste the full description on the Tailor page (or with “Add job”).'
                     : job.source === 'jobright'
                       ? 'Jobright’s list gives only the title, company and location. Fetch full description (or Tailor resume) reads the posting from Jobright’s page; if Jobright asks for a human check, open the posting and paste the description.'
                       : 'This is the job board’s summary, not the full posting. Tailor resume fetches the full description from the employer’s page first, and falls back to this summary if it cannot.'}
@@ -182,23 +185,32 @@ function Pills({ job }: { job: Job }) {
   )
 }
 
-/** "Strong scent" with the score and every reason it fits; a job Relevant leaves out says why, in neutral. */
-function ScentBox({ score }: { score: JobScore }) {
-  const scent = scentDisplay(score)
+/**
+ * "Strong match" with the match score (#189: the number the row shows), what it is made of and why the job fits; a
+ * job Relevant leaves out says why, in neutral.
+ */
+function MatchBox({ match, relevance }: { match: RowScore; relevance?: JobScore }) {
+  const display = matchDisplay(match)
+  const tone = relevance?.excluded ? 'neutral' : display.tone
+  const estimate = match.kind === 'estimate'
   return (
-    <div className={classes.scent} style={toneStyle(scent.tone)} data-tone={scent.tone}>
-      <ScoreRing value={score.score} size="lg" tone={scent.tone} />
-      <div className={classes.scentText}>
-        <span className={classes.scentLabel}>{scent.label}</span>
-        {scent.excluded && (
-          <p className={classes.scentExcluded}>
+    <div className={classes.matchBox} style={toneStyle(tone)} data-tone={tone}>
+      <ScoreRing
+        value={match.score}
+        size="lg"
+        tone={tone}
+        aria-label={estimate ? `Match about ${match.score} of 100, a title-only estimate` : `Match ${match.score} of 100`}
+      />
+      <div className={classes.matchText}>
+        <span className={classes.matchLabel}>{display.label}</span>
+        {relevance?.excluded && (
+          <p className={classes.matchExcluded}>
             <IconEyeOff size={14} aria-hidden />
-            {scent.excluded}
+            {RELEVANT_LEFT_OUT}: {relevance.excluded}
           </p>
         )}
-        <p className={classes.scentReasons}>
-          {score.reasons.length > 0 ? score.reasons.join(' · ') : 'Nothing in the posting matches your master profile yet.'}
-        </p>
+        <p className={classes.matchReasons}>{matchNotes(match).join(' · ')}</p>
+        {relevance && relevance.reasons.length > 0 && <p className={classes.matchReasons}>Why it fits: {relevance.reasons.join(' · ')}</p>}
       </div>
     </div>
   )

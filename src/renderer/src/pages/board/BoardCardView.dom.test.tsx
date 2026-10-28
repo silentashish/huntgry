@@ -7,7 +7,7 @@ import type { ApplicationRecord } from '@shared/applications-types'
 import { buildBoard, type BoardCard } from '@shared/board'
 import type { Job } from '@shared/jobs-types'
 import { BoardCardView } from './BoardCardView'
-import { cardScent } from './card'
+import { cardMatch } from './card'
 
 /** The Board card in a DOM (#110): the Move to menu by card kind, the current column, Enter to open, Apply busy. */
 
@@ -81,7 +81,7 @@ function render(card: BoardCard, applying = false) {
       <MantineProvider env="test">
         <BoardCardView
           card={card}
-          scent={cardScent(card, null)}
+          match={cardMatch(card, null)}
           dragging={false}
           onDragStart={() => undefined}
           onDragEnd={() => undefined}

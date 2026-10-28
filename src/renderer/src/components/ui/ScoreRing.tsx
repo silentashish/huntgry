@@ -4,25 +4,25 @@ import { MonoLabel } from './MonoLabel'
 import { toneStyle, type UiTone } from './tones'
 import classes from './ui.module.css'
 
-/** Strong scent (≥ 80) is Ember, a fair one (≥ 60) warning yellow, the rest neutral. */
+/** A strong match (≥ 80) is Ember, a fair one (≥ 60) warning yellow, the rest neutral. */
 export function scoreTone(value: number): UiTone {
   if (value >= 80) return 'accent'
   if (value >= 60) return 'warning'
   return 'neutral'
 }
 
-/** "Strong scent" / "Fair scent" / "Faint scent", for drawers and tooltips. */
+/** "Strong match" / "Fair match" / "Faint match", for drawers and tooltips (#189: "match", not "scent"). */
 export function scoreLabel(value: number): string {
-  if (value >= 80) return 'Strong scent'
-  if (value >= 60) return 'Fair scent'
-  return 'Faint scent'
+  if (value >= 80) return 'Strong match'
+  if (value >= 60) return 'Fair match'
+  return 'Faint match'
 }
 
 const clamp = (n: number): number => Math.max(0, Math.min(100, Math.round(n)))
 
 export interface ScoreRingProps {
   /**
-   * `score`: the Scent score 0–100 inside the ring (default). `done`: a check in a success ring
+   * `score`: the match score 0–100 inside the ring (default). `done`: a check in a success ring
    * (already tailored / applied). `initial`: a letter in a neutral ring (no score yet).
    */
   mode?: 'score' | 'done' | 'initial'
@@ -34,18 +34,18 @@ export interface ScoreRingProps {
   size?: 'sm' | 'md' | 'lg'
   /** Override the colour picked from the score. */
   tone?: UiTone
-  /** Mono caption under the ring, e.g. "scent". */
+  /** Mono caption under the ring, e.g. "match". */
   caption?: ReactNode
-  /** Accessible name; defaults to "Scent 92 of 100", "Done" or the letter. */
+  /** Accessible name; defaults to "Match 92 of 100", "Done" or the letter. */
   'aria-label'?: string
   className?: string
 }
 
-/** The Scent score ring of Jobs, the job drawer and the Board (Figma Jobs — Relevant). */
+/** The match score ring of the job drawer and the Board (Figma Jobs — Relevant). */
 export function ScoreRing({ mode = 'score', value = 0, letter, size = 'md', tone, caption, className, ...rest }: ScoreRingProps) {
   const score = clamp(value)
   const resolved: UiTone = tone ?? (mode === 'done' ? 'success' : mode === 'initial' ? 'neutral' : scoreTone(score))
-  const label = rest['aria-label'] ?? (mode === 'done' ? 'Done' : mode === 'initial' ? (letter ?? '?') : `Scent ${score} of 100`)
+  const label = rest['aria-label'] ?? (mode === 'done' ? 'Done' : mode === 'initial' ? (letter ?? '?') : `Match ${score} of 100`)
   const iconSize = size === 'lg' ? 24 : size === 'md' ? 18 : 14
   const content = mode === 'done' ? <IconCheck size={iconSize} stroke={2.5} aria-hidden /> : mode === 'initial' ? Array.from(letter ?? '?').slice(0, 2).join('') : score
   return (

@@ -169,7 +169,7 @@ describe('TailorQueue', () => {
     jobs.set('url:z', job('url:z'))
     await queue.enqueue({ jobIds: ['indeed:x', 'hiring.cafe:y', 'url:z'], options })
     const s = await until((st) => statuses(st).join() === 'failed,needs-reply,needs-reply')
-    expect(s.items[0].error).toMatch(/human check.*Paste a job/)
+    expect(s.items[0].error).toMatch(/human check.*Add job/)
     expect(started.map((x) => x.params.jobId)).toEqual(['y', 'z'])
     // The summary-only hiring.cafe job had its full posting fetched first.
     expect(fetched).toEqual(['hiring.cafe:y'])

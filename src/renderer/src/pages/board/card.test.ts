@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { ApplicationRecord } from '@shared/applications-types'
 import { buildBoard, type BoardCard } from '@shared/board'
-import { profileSignals, scoreJob, type ProfileSignals } from '@shared/job-relevance'
+import { jobMatch } from '@shared/explore-score'
+import { profileSignals, type ProfileSignals } from '@shared/job-relevance'
 import type { Job } from '@shared/jobs-types'
 import { emptyProfile } from '@shared/master-profile'
 import type { QueueItem } from '@shared/queue-types'
-import { ago, cardMeta, cardPills, cardScent, companyOf, span } from './card'
+import { matchNotes } from '../jobs/labels'
+import { ago, cardMatch, cardMeta, cardPills, companyOf, span } from './card'
 
 const NOW = new Date('2026-10-07T12:00:00Z')
 
@@ -73,22 +75,30 @@ const signals: ProfileSignals = {
   years: 6
 }
 
-describe('cardScent', () => {
-  it('is the job relevance score (0–100) when the card has a job and the profile has signals', () => {
+describe('cardMatch', () => {
+  it('is the job match score (0–100), the number the Jobs page shows (#189), when the card has a job and the profile has signals', () => {
     const card = only({ jobs: [job] })
-    const scent = cardScent(card, signals, NOW)
-    expect(scent).toEqual({ mode: 'score', value: scoreJob(job, signals, NOW).score, reasons: expect.any(Array) })
-    if (scent.mode !== 'score') throw new Error('no score')
-    expect(scent.value).toBeGreaterThanOrEqual(0)
-    expect(scent.value).toBeLessThanOrEqual(100)
+    const match = cardMatch(card, signals, NOW)
+    const expected = jobMatch(job, signals, undefined, NOW)
+    expect(match).toEqual({ mode: 'score', value: expected.score, estimate: expected.kind === 'estimate', reasons: matchNotes(expected) })
+    if (match.mode !== 'score') throw new Error('no score')
+    expect(match.value).toBeGreaterThanOrEqual(0)
+    expect(match.value).toBeLessThanOrEqual(100)
   })
 
-  it('without a score: a check for tailored work, else the company initial', () => {
-    const empty = profileSignals(emptyProfile())
-    expect(cardScent(only({ jobs: [job] }), empty, NOW)).toEqual({ mode: 'initial', letter: 'A' })
-    expect(cardScent(only({ jobs: [{ ...job, tailoredAt: '2026-10-06T10:00:00Z' }] }), null, NOW)).toEqual({ mode: 'done' })
-    expect(cardScent(only({ applications: [app()] }), signals, NOW)).toEqual({ mode: 'done' })
-    expect(cardScent(only({ queue: [item()] }), signals, NOW)).toEqual({ mode: 'initial', letter: 'I' })
+  it('scores a profile with skills but no headline or role, as Saved and the drawer do (#189)', () => {
+    const skillsOnly = { ...profileSignals(emptyProfile()), skills: ['Go'] }
+    const goJob = { ...job, description: 'Requirements: Go.' }
+    const expected = jobMatch(goJob, skillsOnly, undefined, NOW)
+    expect(expected).toMatchObject({ kind: 'exact', score: 100 })
+    expect(cardMatch(only({ jobs: [goJob] }), skillsOnly, NOW)).toEqual({ mode: 'score', value: 100, estimate: false, reasons: matchNotes(expected) })
+  })
+
+  it('without a score (the profile not read yet): a check for tailored work, else the company initial', () => {
+    expect(cardMatch(only({ jobs: [job] }), null, NOW)).toEqual({ mode: 'initial', letter: 'A' })
+    expect(cardMatch(only({ jobs: [{ ...job, tailoredAt: '2026-10-06T10:00:00Z' }] }), null, NOW)).toEqual({ mode: 'done' })
+    expect(cardMatch(only({ applications: [app()] }), signals, NOW)).toEqual({ mode: 'done' })
+    expect(cardMatch(only({ queue: [item()] }), signals, NOW)).toEqual({ mode: 'initial', letter: 'I' })
   })
 })
 

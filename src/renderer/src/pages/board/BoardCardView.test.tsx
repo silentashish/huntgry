@@ -6,7 +6,7 @@ import { buildBoard, type BoardCard } from '@shared/board'
 import type { Job } from '@shared/jobs-types'
 import type { QueueItem } from '@shared/queue-types'
 import { BoardCardView } from './BoardCardView'
-import { cardScent, type Scent } from './card'
+import { cardMatch, type CardMatch } from './card'
 
 // The preload bridge does not exist here; a card only calls it through its handlers.
 vi.mock('../../api', () => ({ api: {}, errorText: String }))
@@ -65,12 +65,12 @@ const only = (input: Parameters<typeof buildBoard>[0]): BoardCard => {
 }
 
 const noop = () => undefined
-const render = (card: BoardCard, scent: Scent = cardScent(card, null), compact = false) =>
+const render = (card: BoardCard, match: CardMatch = cardMatch(card, null), compact = false) =>
   renderToStaticMarkup(
     <MantineProvider>
       <BoardCardView
         card={card}
-        scent={scent}
+        match={match}
         dragging={false}
         onDragStart={noop}
         onDragEnd={noop}
@@ -94,14 +94,14 @@ describe('BoardCardView', () => {
     expect(html).toContain('draggable="true"')
     // The company avatar and, without a profile to score against, the company's initial in the ring.
     expect(html).toContain('role="img" aria-label="Acme"')
-    expect(html).toContain('aria-label="No Scent score yet"')
+    expect(html).toContain('aria-label="No match score yet"')
     expect(html).toContain('Remote')
   })
 
-  it('shows the Scent score in the ring when there is one', () => {
+  it('shows the match score in the ring when there is one', () => {
     const card = only({ jobs: [job], applications: [], queue: [] })
-    const html = render(card, { mode: 'score', value: 87, reasons: ['Remote'] })
-    expect(html).toContain('aria-label="Scent 87 of 100"')
+    const html = render(card, { mode: 'score', value: 87, estimate: false, reasons: ['Remote'] })
+    expect(html).toContain('aria-label="Match 87 of 100"')
     expect(html).toMatch(/>87</)
   })
 
@@ -143,7 +143,7 @@ describe('BoardCardView', () => {
 
   it('a card of an older week (#160) adds one line with the company, the title and the score, and keeps the full card and Move to', () => {
     const card = only({ jobs: [job], applications: [], queue: [] })
-    const html = render(card, { mode: 'score', value: 87, reasons: [] }, true)
+    const html = render(card, { mode: 'score', value: 87, estimate: false, reasons: [] }, true)
     expect(html).toContain('data-compact="true"')
     expect(html).toContain('Acme · Backend Engineer')
     expect(html).toMatch(/>87<\/span><\/div>/)

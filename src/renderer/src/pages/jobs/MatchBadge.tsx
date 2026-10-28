@@ -1,7 +1,7 @@
 import { Tooltip } from '@mantine/core'
 import type { RowScore } from '@shared/explore-score'
 import { scoreTone, toneStyle } from '../../components/ui'
-import classes from './explore.module.css'
+import classes from './match.module.css'
 
 const names = (skills: readonly { skill: string }[]) => skills.map((s) => s.skill).join(', ')
 
@@ -37,7 +37,7 @@ function Details({ score }: { score: RowScore }) {
 
 /**
  * A row's match score (#150): the exact score from its qualifications, or "≈ N" for a title-only estimate. Hover
- * or focus shows what it is made of.
+ * or focus shows what it is made of. The one score of a job on both Jobs tabs (#189): Discover rows and Saved rows.
  */
 export function MatchBadge({ score }: { score: RowScore }) {
   const estimate = score.kind === 'estimate'

@@ -122,7 +122,7 @@ test.describe('a job with only the board summary', () => {
     const row = tailor.queueRow(label(SNIPPET))
     await expect(row.getByText('Failed', { exact: true })).toBeVisible({ timeout: 20_000 })
     await expect(row).toContainText('Indeed shows full job descriptions only after a human check.')
-    await expect(row).toContainText('Open the posting, add its description with "Paste a job" on the Jobs page, and tailor that job.')
+    await expect(row).toContainText('Open the posting, paste its text into "Add job" on the Jobs page, and tailor that job.')
     await expect(row.getByRole('button', { name: 'Retry' })).toBeVisible()
     await expect(tailor.queueRow(label(TWO)).getByText('Unreviewed', { exact: true })).toBeVisible({ timeout: 20_000 })
     // Only one agent was ever started, for the job with a description.

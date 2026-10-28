@@ -3,11 +3,13 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MantineProvider } from '@mantine/core'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { toJob } from '@shared/explore-score'
 import type { ExploreJob, ExploreList } from '@shared/explore-types'
+import type { Job } from '@shared/jobs-types'
 import { emptyProfile } from '@shared/master-profile'
 
 /**
- * The Explore page in a DOM (#169): list and Refresh requests that overlap. The newest one wins, and when it
+ * Jobs → Discover in a DOM (#169, #189; the Explore page): list and Refresh requests that overlap. The newest one wins, and when it
  * settles the loader and the Refresh spinner both go, whichever request started them. And the rows' match score
  * badges (#150): exact from the qualifications, "≈" from the title, details on focus, Match ≥ N and the sort.
  */
@@ -39,7 +41,7 @@ const profileWith = (skills: string[]) => {
 /** What `api.profile.read` answers (Go and Python unless a test edits it), and how often it was read. */
 const profileState = { profile: profileWith(['Go', 'Python']), reads: 0 }
 
-vi.mock('../../api', () => ({
+vi.mock('../../../api', () => ({
   api: {
     jobs: { list: async () => [] },
     profile: {
@@ -67,9 +69,25 @@ vi.mock('../../api', () => ({
   },
   errorText: (e: unknown) => (e instanceof Error ? e.message : String(e))
 }))
-vi.mock('../../navigation', () => ({ useNavigation: () => ({ navigate: () => undefined }) }))
+vi.mock('../../../navigation', () => ({ useNavigation: () => ({ navigate: () => undefined }) }))
 
-const { ExplorePage } = await import('./index')
+const { DiscoverTab } = await import('./DiscoverTab')
+
+/** What the page gives the tab: the saved jobs, and what was saved or opened. */
+const page = { saved: [] as Job[], onSaved: vi.fn(), onOpenSaved: vi.fn() }
+const tab = () => (
+  <DiscoverTab
+    saved={page.saved}
+    onSaved={page.onSaved}
+    onOpenSaved={page.onOpenSaved}
+    header={(h) => (
+      <header>
+        {h.eyebrow}
+        {h.actions}
+      </header>
+    )}
+  />
+)
 
 const today = (() => {
   const d = new Date()
@@ -113,13 +131,16 @@ beforeEach(() => {
   profileState.profile = profileWith(['Go', 'Python'])
   profileState.reads = 0
   localStorage.clear()
+  page.saved = []
+  page.onSaved.mockReset()
+  page.onOpenSaved.mockReset()
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
   act(() =>
     root.render(
       <MantineProvider env="test">
-        <ExplorePage />
+        {tab()}
       </MantineProvider>
     )
   )
@@ -160,7 +181,7 @@ describe('Explore requests that overlap', () => {
     await settle(() => calls.refresh[0].d.reject(new Error('The newgrad-jobs API answered HTTP 500 for the Jobright jobs.')))
     expect(loader()).toBeNull()
     expect(container.textContent).toContain('The newgrad-jobs API answered HTTP 500')
-    expect(container.textContent).toContain('No jobs to explore yet')
+    expect(container.textContent).toContain('No jobs to discover yet')
     await settle(() => calls.list[0].d.reject(new Error('stale')))
     expect(container.textContent).not.toContain('stale')
   })
@@ -279,7 +300,7 @@ describe('Match scores follow the master profile (#150)', () => {
       root = createRoot(container)
       root.render(
         <MantineProvider env="test">
-          <ExplorePage />
+          {tab()}
         </MantineProvider>
       )
     })
@@ -328,3 +349,43 @@ async function pickOption(aria: string, label: string) {
   if (!option) throw new Error(`No option ${label}`)
   await settle(() => (option as HTMLElement).click())
 }
+
+describe('A saved row (#189)', () => {
+  const row = job('Backend Engineer I', '1. Experience with Go and Python.')
+  const list: ExploreList = { jobs: [row, job('Data Wrangler')], fetchedAt: new Date().toISOString(), category: 'newgrad:us:swe', source: 'api' }
+  const rerender = () => act(() => root.render(<MantineProvider env="test">{tab()}</MantineProvider>))
+  const button = (name: string) => [...container.querySelectorAll('button')].filter((b) => b.textContent?.trim() === name)
+
+  it('reads "Saved" with a check and opens its saved job on the Saved tab', async () => {
+    const saved = toJob(row, new Date())
+    page.saved = [saved]
+    rerender()
+    await settle(() => calls.list[0].d.resolve(list))
+    expect(button('Saved')).toHaveLength(1)
+    expect(button('Save')).toHaveLength(1)
+    expect(container.textContent).not.toContain('Added')
+    await settle(() => button('Saved')[0].click())
+    expect(page.onOpenSaved).toHaveBeenCalledWith(saved)
+  })
+
+  it('shows the score of its saved job: a fetched full posting changes it on both tabs', async () => {
+    page.saved = [{ ...toJob(row, new Date()), description: 'Go, Python, Java and Kotlin.' }]
+    rerender()
+    await settle(() => calls.list[0].d.resolve(list))
+    const badges = [...container.querySelectorAll('[aria-label="Jobright jobs"] li [role="img"]')].map((b) => b.getAttribute('aria-label'))
+    expect(badges[0]).toBe('Match 50 of 100')
+  })
+
+  it('filters and sorts by that score, not the cached row score (Match ≥ 80 hides the 50)', async () => {
+    const strong = job('Backend Engineer I', '1. Experience with Go and Python.')
+    page.saved = [{ ...toJob(strong, new Date()), description: 'Go, Python, Java and Kotlin.' }]
+    rerender()
+    await settle(() => calls.list[0].d.resolve({ ...list, jobs: [strong, job('Platform Engineer', '1. Experience with Go, Python and Java.')] }))
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Min. match"]')!
+    await settle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '60')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(titles()).toEqual(['Platform Engineer at Northwind'])
+  })
+})

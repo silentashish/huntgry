@@ -82,7 +82,7 @@ export function sectionsOf(state: AutomationState | null): Sections {
   }
 }
 
-export const SOURCE_LABEL: Record<string, string> = { jobs: 'Saved jobs', explore: 'Explore' }
+export const SOURCE_LABEL: Record<string, string> = { jobs: 'Saved jobs', explore: 'Discover' }
 
 export const sourceLabel = (source: string) => SOURCE_LABEL[source] ?? source
 

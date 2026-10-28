@@ -14,10 +14,10 @@ const render = (ui: ReactElement): string =>
 
 describe('PageHeader', () => {
   it('renders the eyebrow, an h2 title, the subtitle and the actions', () => {
-    const html = render(<PageHeader eyebrow="The scent board · 31 saved" title="Jobs" subtitle="Ranked by scent." actions={<Button variant="primary">Tailor all (3)</Button>} />)
-    expect(html).toContain('The scent board · 31 saved')
+    const html = render(<PageHeader eyebrow="Saved jobs · 31 saved" title="Jobs" subtitle="Ranked by match." actions={<Button variant="primary">Tailor all (3)</Button>} />)
+    expect(html).toContain('Saved jobs · 31 saved')
     expect(html).toMatch(/<h2[^>]*>Jobs<\/h2>/)
-    expect(html).toContain('Ranked by scent.')
+    expect(html).toContain('Ranked by match.')
     expect(html).toContain('data-variant="primary"')
   })
 
@@ -78,10 +78,10 @@ describe('ScoreRing', () => {
   })
 
   it('shows the clamped score with an accessible name and caption', () => {
-    const html = render(<ScoreRing value={104.4} caption="scent" />)
-    expect(html).toContain('aria-label="Scent 100 of 100"')
+    const html = render(<ScoreRing value={104.4} caption="match" />)
+    expect(html).toContain('aria-label="Match 100 of 100"')
     expect(html).toContain('>100<')
-    expect(html).toContain('scent')
+    expect(html).toContain('match')
   })
 
   it('has a done mode with a check and an initial mode with a letter', () => {

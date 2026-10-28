@@ -78,7 +78,7 @@ export function SettingsPage() {
     void check()
   }, [check])
 
-  // A card below the agent check (Jobright, Remote control…) opened by name, e.g. from Explore's "Connect Jobright"
+  // A card below the agent check (Jobright, Remote control…) opened by name, e.g. from Discover's "Connect Jobright"
   // (#146): the shell scrolls to it at once, then the cards drawn after the check push it down; bring it back.
   const { location } = useNavigation()
   const linkedSection = location.page === 'settings' ? location.params?.section : undefined

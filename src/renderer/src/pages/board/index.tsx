@@ -19,6 +19,7 @@ import {
   type BoardFilter,
   type BoardSource
 } from '@shared/board-filter'
+import { jobMatch } from '@shared/explore-score'
 import { profileSignals, type ProfileSignals } from '@shared/job-relevance'
 import { tailorPrefillFor, type Job } from '@shared/jobs-types'
 import { emptyProfile } from '@shared/master-profile'
@@ -32,10 +33,10 @@ import { ApplicationDrawer } from '../dashboard/ApplicationDrawer'
 import { BulkTailorModal } from '../jobs/BulkTailorModal'
 import { JobDrawer } from '../jobs/JobDrawer'
 import { mergeJobs } from '../jobs/merge'
-import { PasteModal } from '../jobs/PasteModal'
+import { AddJobModal } from '../jobs/AddJobModal'
 import { prepareTailor } from '../jobs/handoff'
 import { BoardCardView } from './BoardCardView'
-import { cardScent, COLUMN_TONE, type Scent } from './card'
+import { cardMatch, COLUMN_TONE, type CardMatch } from './card'
 import { useFolds } from './folds'
 import { foldKey, isFolded, weekGroups, type WeekGroup } from './weeks'
 import classes from './board.module.css'
@@ -62,7 +63,7 @@ export function BoardPage({ params }: { params?: PageParams['board'] }) {
   const [url, setUrl] = useState('')
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
-  const [pasteOpen, setPasteOpen] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
   const [dragging, setDragging] = useState<BoardCard | null>(null)
   const [over, setOver] = useState<BoardColumnId | null>(null)
   const [openJobId, setOpenJobId] = useState<string | null>(null)
@@ -91,7 +92,7 @@ export function BoardPage({ params }: { params?: PageParams['board'] }) {
       setSubmitting(false)
     }
   }
-  /** What the master profile says to score jobs on (the Scent ring); `null` until read. */
+  /** What the master profile says to score jobs on (the match ring); `null` until read. */
   const [signals, setSignals] = useState<ProfileSignals | null>(null)
   const [filter, setFilter] = useState<BoardFilter>(EMPTY_BOARD_FILTER)
   const [folds, setFold] = useFolds()
@@ -158,9 +159,9 @@ export function BoardPage({ params }: { params?: PageParams['board'] }) {
     lanes.current?.querySelector(`[data-column="${focus}"]`)?.scrollIntoView({ block: 'nearest', inline: 'start', behavior: 'smooth' })
   }, [drawn, focus])
   // Scored once per board, not on every drag-state render.
-  const scents = useMemo(() => {
+  const matches = useMemo(() => {
     const now = new Date()
-    return new Map<string, Scent>(board?.columns.flatMap((c) => c.cards.map((card) => [card.key, cardScent(card, signals, now)] as const)) ?? [])
+    return new Map<string, CardMatch>(board?.columns.flatMap((c) => c.cards.map((card) => [card.key, cardMatch(card, signals, now)] as const)) ?? [])
   }, [board, signals])
   // The tailor modal re-plans whenever its job list changes: keep the array stable.
   const tailorJobs = useMemo(() => (tailorJob ? [tailorJob] : []), [tailorJob])
@@ -224,8 +225,8 @@ export function BoardPage({ params }: { params?: PageParams['board'] }) {
             <Button variant="subtle" leftSection={<IconRefresh size={16} />} onClick={load}>
               Refresh
             </Button>
-            <Button variant="primary" leftSection={<IconPlus size={16} />} onClick={() => setPasteOpen(true)}>
-              Paste a job
+            <Button variant="primary" leftSection={<IconPlus size={16} />} onClick={() => setAddOpen(true)}>
+              Add job
             </Button>
           </>
         }
@@ -317,7 +318,7 @@ export function BoardPage({ params }: { params?: PageParams['board'] }) {
                               Add
                             </Button>
                           </Group>
-                          <button type="button" className={classes.pasteLink} onClick={() => setPasteOpen(true)}>
+                          <button type="button" className={classes.pasteLink} onClick={() => setAddOpen(true)}>
                             or paste the description
                           </button>
                           {addError && (
@@ -346,7 +347,7 @@ export function BoardPage({ params }: { params?: PageParams['board'] }) {
                             <BoardCardView
                               key={card.key}
                               card={card}
-                              scent={scents.get(card.key) ?? { mode: 'initial', letter: '?' }}
+                              match={matches.get(card.key) ?? { mode: 'initial', letter: '?' }}
                               lead={card.key === lead}
                               compact={!week.current}
                               dragging={dragging?.key === card.key}
@@ -378,6 +379,7 @@ export function BoardPage({ params }: { params?: PageParams['board'] }) {
 
       <JobDrawer
         job={openJob}
+        match={openJob && signals ? jobMatch(openJob, signals) : undefined}
         onClose={() => setOpenJobId(null)}
         onChange={(j) => upsert([j])}
         onTailor={async (job) => navigate('tailor', tailorPrefillFor(await prepareTailor(job, (j) => upsert([j]))))}
@@ -395,12 +397,12 @@ export function BoardPage({ params }: { params?: PageParams['board'] }) {
         onClose={() => setTailorJob(null)}
         onStarted={() => setTailorJob(null)}
       />
-      <PasteModal
-        opened={pasteOpen}
-        onClose={() => setPasteOpen(false)}
+      <AddJobModal
+        opened={addOpen}
+        onClose={() => setAddOpen(false)}
         onSaved={(j) => {
           upsert([j])
-          setPasteOpen(false)
+          setAddOpen(false)
         }}
       />
       {applier.modal}

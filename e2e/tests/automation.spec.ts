@@ -8,7 +8,7 @@ import { evaluateInTab, expectTabLoaded, pressSubmitInTab } from '../fixtures/ta
 import { AutomationPage } from '../pages/automation'
 import { BoardPage } from '../pages/board'
 import { BrowserPage } from '../pages/browser'
-import { ExplorePage } from '../pages/explore'
+import { DiscoverTab } from '../pages/discover'
 import { SettingsPage } from '../pages/settings'
 import { Shell } from '../pages/shell'
 
@@ -83,10 +83,11 @@ test('prepares a high-match Explore job up to Submit, skips thin matches, and le
 
   await automationSettings(app.userData)
   await connectJobright(app.window, app)
-  // Explore's list is cached once the page opens; Automation reads the cache, it never fetches the list.
+  // Discover's list is cached once the tab opens; Automation reads the cache, it never fetches the list.
   const shell = new Shell(app.window)
-  await shell.goTo('explore')
-  await expect.poll(() => new ExplorePage(app.window).listedTitles()).toHaveLength(3)
+  const explore = new DiscoverTab(app.window)
+  await explore.open()
+  await expect.poll(() => explore.listedTitles()).toHaveLength(3)
   // A saved job whose link is a posting page: the fill stops there.
   await seedJobs(ws, [{ ...WALLED, url: `${mock.origin}/postings/employer/102` }])
 

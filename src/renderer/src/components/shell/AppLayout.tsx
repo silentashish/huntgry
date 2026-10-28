@@ -109,7 +109,8 @@ export function AppLayout({ workspacePath, initialLocation, profile = null, onSw
   }, [section, location])
 
   const fullBleed = FULL_BLEED.has(location.page)
-  const current = location.page === 'graph' ? null : (location.page as NavPage)
+  // `graph` and `explore` never get here (`redirect`); the cast is for the type only.
+  const current = location.page === 'graph' || location.page === 'explore' ? null : (location.page as NavPage)
 
   return (
     <NavigationContext.Provider value={nav}>

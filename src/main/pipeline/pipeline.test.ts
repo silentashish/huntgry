@@ -688,7 +688,7 @@ describe('Pipeline', { timeout: 30_000 }, () => {
       ['url:nope', 'This job is no longer saved.'],
       ['url:gone', 'Dismissed jobs are not tailored.'],
       ['url:tailored-before', 'Tailored before (untick "Skip jobs tailored before" to include it).'],
-      ['indeed:x', expect.stringMatching(/human check.*Paste a job/)],
+      ['indeed:x', expect.stringMatching(/human check.*Add job/)],
       ['url:queued', 'Already in the queue.']
     ])
     expect(plan.blockers).toEqual([])

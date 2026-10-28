@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { RowScore } from '@shared/explore-score'
+import { scoreRows, toJob, type RowScore } from '@shared/explore-score'
+import type { ProfileSignals } from '@shared/job-relevance'
 import type { ExploreJob } from '@shared/explore-types'
 import type { Job } from '@shared/jobs-types'
 import {
@@ -11,6 +12,7 @@ import {
   dayLabel,
   defaultDay,
   effectiveFilters,
+  effectiveScores,
   matchRows,
   NO_FILTERS,
   readCategory,
@@ -204,3 +206,26 @@ describe('matchRows (#150)', () => {
   })
 })
 
+
+describe('effectiveScores (#189: a saved row filters and sorts by the number it shows)', () => {
+  const signals: ProfileSignals = { titles: ['Software Engineer'], skills: ['Go', 'Python'], location: '', remote: false, needsSponsorship: false, years: 0 }
+  const summary = row('aaaaaa1', '2026-10-21', { qualifications: '1. Go and Python.' })
+  const other = row('aaaaaa2', '2026-10-21', { qualifications: '1. Go, Python and Java.' })
+  // The saved job's full posting asks for more than the cached summary: 50, not 100.
+  const saved: Job = { ...toJob(summary, NOW), description: 'Go, Python, Java and Kotlin.' }
+  const rowScores = scoreRows([summary, other], signals, NOW)
+  const scores = effectiveScores(rowScores, addedJobs([saved]), signals)
+
+  it("takes a saved row's saved-job score and leaves the others as scored", () => {
+    expect(rowScores.get('aaaaaa1')?.score).toBe(100)
+    expect(scores.get('aaaaaa1')?.score).toBe(50)
+    expect(scores.get('aaaaaa2')).toBe(rowScores.get('aaaaaa2'))
+    expect(effectiveScores(rowScores, addedJobs([saved]), null)).toEqual(rowScores)
+  })
+
+  it('so Match ≥ N and Best match use the shown number', () => {
+    const list = [summary, other]
+    expect(matchRows(list, scores, { sort: 'newest', minMatch: 80 }).map((r) => r.id)).toEqual([])
+    expect(matchRows(list, scores, { sort: 'match', minMatch: null }).map((r) => r.id)).toEqual(['aaaaaa2', 'aaaaaa1'])
+  })
+})

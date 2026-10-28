@@ -1,12 +1,12 @@
 import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, test } from '../fixtures/servers/fixture'
-import { ExplorePage } from '../pages/explore'
+import { DiscoverTab } from '../pages/discover'
 import { JobsPage } from '../pages/jobs'
 import { Shell } from '../pages/shell'
 
 /**
- * Explore (#142, #169) against the mock Jobright on 127.0.0.1: the newgrad-jobs API
+ * Jobs → Discover (#189; Explore, #142, #169) against the mock Jobright on 127.0.0.1: the newgrad-jobs API
  * (`POST /jobright/swan/mini-sites/list`) and its README fallback (`/jobright/README.md`), both dated relative to
  * today, from `scripts/mock-ats/jobright.mjs`. The app is pointed there by `HUNTGRY_EXPLORE_API_URL` and
  * `HUNTGRY_EXPLORE_SOURCE_URL`, so jobright.ai and GitHub are never reached.
@@ -25,15 +25,15 @@ const shot = async (page: import('@playwright/test').Page, name: string) => {
   if (process.env.HUNTGRY_DOC_SHOTS) await page.screenshot({ path: join(__dirname, '../../docs/changes/150-images', `${name}.png`) })
 }
 
-async function openExplore(window: import('@playwright/test').Page): Promise<ExplorePage> {
-  await new Shell(window).goTo('explore')
-  const explore = new ExplorePage(window)
+async function openExplore(window: import('@playwright/test').Page): Promise<DiscoverTab> {
+  const explore = new DiscoverTab(window)
+  await explore.open()
   await expect(explore.heading).toBeVisible()
   return explore
 }
 
-test.describe('Explore (#142, #169)', () => {
-  test('lists from the API, today first, filters, adds a job and opens it on the Jobs page', async ({ app, mock }) => {
+test.describe('Jobs → Discover (#142, #169, #189)', () => {
+  test('lists from the API, today first, filters, saves a job and opens it on the Saved tab', async ({ app, mock }) => {
     const explore = await openExplore(app.window)
 
     // The API list: today's jobs are the default view; its malformed entries (a bad id, no title) are dropped.
@@ -65,7 +65,7 @@ test.describe('Explore (#142, #169)', () => {
     // Another day, then the text and work-model filters.
     await explore.pickDay('Yesterday')
     await expect.poll(() => explore.listedTitles()).toEqual(['Associate Data Engineer', 'Platform Engineer, Early Career'])
-    await explore.workModel('On Site')
+    await explore.workModel('Onsite')
     await expect.poll(() => explore.listedTitles()).toEqual(['Platform Engineer, Early Career'])
     await explore.workModel('Any')
     await explore.filterInput.fill('associate')
@@ -76,18 +76,18 @@ test.describe('Explore (#142, #169)', () => {
     await explore.pickDay('Today')
 
     // H1B and minimum salary ($60/hr is $124,800 a year); filters never call the API.
-    await explore.filterH1b('Sponsors H1B')
+    await explore.filterH1b('Visa: only sponsors')
     await expect.poll(() => explore.listedTitles()).toEqual(['Software Engineer, New Grad'])
-    await explore.filterH1b('H1B not ruled out')
+    await explore.filterH1b('Visa: hide “no sponsorship”')
     await expect.poll(() => explore.listedTitles()).toEqual(['Software Engineer, New Grad', 'Embedded Software Engineer'])
     await explore.minSalary.fill('130000')
     await expect.poll(() => explore.listedTitles()).toEqual(['Software Engineer, New Grad'])
     await explore.minSalary.fill('')
-    await explore.filterH1b('Any H1B')
+    await explore.filterH1b('Visa: any')
     await expect.poll(() => explore.listedTitles()).toHaveLength(3)
     expect(apiFetches(mock.requests)).toBe(1)
 
-    // Add to Jobs: saved through the jobs store as a jobright job, exactly as before (plus the API's pay).
+    // Save: saved through the jobs store as a jobright job, exactly as before (plus the API's pay).
     await explore.addButton('Backend Engineer I').click()
     await expect(explore.addedButton('Backend Engineer I')).toBeVisible()
     const saved = JSON.parse(await readFile(jobFile(app.workspace!, 'e2e0000000000000000000a2'), 'utf8'))
@@ -106,10 +106,14 @@ test.describe('Explore (#142, #169)', () => {
     // Nothing was loaded to add it.
     expect(mock.requests.filter((r) => r.startsWith('/jobs/info/'))).toEqual([])
 
-    // Added opens the job on the Jobs page.
+    // "Saved ✓" switches to the Saved tab and opens the job (#189), with the match score its row showed.
+    const rowScore = await explore.matchBadge('Backend Engineer I').getAttribute('aria-label')
+    expect(rowScore).toMatch(/^Match \d+ of 100$/)
     await explore.addedButton('Backend Engineer I').click()
     const jobs = new JobsPage(app.window)
+    await expect(jobs.tab).toBeChecked()
     await expect(jobs.drawer).toBeVisible()
+    await expect(jobs.drawer.getByRole('img', { name: rowScore! })).toBeVisible()
     await expect(jobs.drawer.getByText('Backend Engineer I', { exact: true }).first()).toBeVisible()
     await expect(jobs.drawer.getByText('Jobright', { exact: true })).toBeVisible()
 
@@ -120,8 +124,8 @@ test.describe('Explore (#142, #169)', () => {
     await jobs.show('All')
     await expect(jobs.card('Backend Engineer I')).toBeVisible()
 
-    // Reopening Explore is served from the cache; the row stays Added and adding is idempotent.
-    await new Shell(app.window).goTo('explore')
+    // Back on Discover the list is served from the cache; the row stays "Saved ✓" and saving is idempotent.
+    await explore.open()
     await expect(explore.addedButton('Backend Engineer I')).toBeVisible()
     expect(apiFetches(mock.requests)).toBe(1)
     const files = (await readdir(join(app.workspace!, '.huntgry/jobs'))).filter((n) => n.startsWith('jobright-'))
@@ -191,8 +195,8 @@ test.describe('Explore (#142, #169)', () => {
     expect(saved.descriptionComplete).toBe(false)
 
     // Reopening Explore scores again from the cache, without fetching anything.
-    await new Shell(app.window).goTo('jobs')
-    await new Shell(app.window).goTo('explore')
+    await new Shell(app.window).goTo('dashboard')
+    await explore.open()
     await expect(explore.matchBadge('Backend Engineer I')).toHaveAccessibleName('Match 80 of 100')
     expect(apiFetches(mock.requests)).toBe(1)
     expect(mock.requests.filter((r) => r.startsWith('/jobs/info/'))).toEqual([])
@@ -202,8 +206,8 @@ test.describe('Explore (#142, #169)', () => {
     const profile = await readFile(profileFile, 'utf8')
     expect(profile).toContain('- Languages: Go, Python, TypeScript, SQL')
     await writeFile(profileFile, profile.replace('- Languages: Go, Python, TypeScript, SQL', '- Languages: Go, Python, TypeScript, SQL, Kafka'))
-    await new Shell(app.window).goTo('jobs')
-    await new Shell(app.window).goTo('explore')
+    await new Shell(app.window).goTo('dashboard')
+    await explore.open()
     await expect(explore.matchBadge('Backend Engineer I')).toHaveAccessibleName('Match 100 of 100')
     await expect(explore.matchBadge('Software Engineer, New Grad')).toHaveAccessibleName('Match 25 of 100')
     await explore.matchBadge('Backend Engineer I').hover()
@@ -231,8 +235,8 @@ test.describe('Explore (#142, #169)', () => {
     await oldest.click()
     await expect.poll(() => explore.listedTitles()).toEqual(['Software Engineer I, Team 10'])
 
-    await new Shell(app.window).goTo('jobs')
-    await new Shell(app.window).goTo('explore')
+    await new Shell(app.window).goTo('dashboard')
+    await explore.open()
     await expect(explore.earlier).toHaveAttribute('aria-expanded', 'true')
     await explore.earlier.click()
     await expect(explore.days.getByRole('button')).toHaveCount(8)
@@ -256,8 +260,8 @@ test.describe('Explore (#142, #169)', () => {
     await expect(explore.addedButton('Junior Data Analyst')).toBeVisible()
 
     // Remembered when the page is opened again; both categories are served from their caches.
-    await new Shell(app.window).goTo('jobs')
-    await new Shell(app.window).goTo('explore')
+    await new Shell(app.window).goTo('dashboard')
+    await explore.open()
     await expect(explore.category).toHaveValue('Data Analysis')
     await expect.poll(() => explore.listedTitles()).toEqual(['Junior Data Analyst'])
     await explore.pickCategory('Software Engineering')
@@ -282,7 +286,7 @@ test.describe('Explore (#142, #169)', () => {
     await expect(explore.minSalary).toBeDisabled()
     await expect(explore.earlier).toHaveCount(0)
     await expect.poll(() => explore.listedTitles()).toHaveLength(3)
-    // The README rows are the same jobs: Add to Jobs works on them too.
+    // The README rows are the same jobs: Save works on them too.
     await explore.addButton('Software Engineer, New Grad').click()
     await expect(explore.addedButton('Software Engineer, New Grad')).toBeVisible()
 
@@ -342,19 +346,22 @@ test.describe('Explore (#142, #169)', () => {
     })
   })
 
-  test('Explore sits between Jobs and Browser and opens from the ⌘K palette', async ({ app }) => {
+  test('Explore is no sidebar entry any more: the ⌘K palette opens Jobs on Discover (#189)', async ({ app }) => {
     const shell = new Shell(app.window)
     await shell.expectActive('dashboard')
-    const labels = await shell.navbar.getByRole('button').evaluateAll((bs) => bs.map((b) => (b.textContent ?? '').trim()))
-    const at = (name: string) => labels.findIndex((l) => l.startsWith(name))
-    expect(at('Explore')).toBeGreaterThan(0)
-    expect(at('Explore')).toBe(at('Jobs') + 1)
-    expect(at('Browser')).toBe(at('Explore') + 1)
+    await expect(shell.navbar.getByRole('button', { name: /^Explore/ })).toHaveCount(0)
+    await shell.openPalette()
+    await shell.paletteInput.fill('discover')
+    await expect(shell.paletteOption('Jobs → Discover')).toHaveAttribute('aria-selected', 'true')
+    await app.window.keyboard.press('Enter')
+    await shell.expectActive('jobs')
+    const explore = new DiscoverTab(app.window)
+    await expect(explore.tab).toBeChecked()
+    await expect.poll(() => explore.listedTitles()).toHaveLength(3)
+    // The old page's name still finds it.
     await shell.openPalette()
     await shell.paletteInput.fill('explore')
-    await expect(shell.paletteOption('Explore')).toHaveAttribute('aria-selected', 'true')
-    await app.window.keyboard.press('Enter')
-    await shell.expectActive('explore')
+    await expect(shell.paletteOption('Jobs → Discover')).toBeVisible()
   })
 
   test('with no cache and both sources unreachable, the page shows the error, not a blank page', async ({ app, mock }) => {
@@ -363,7 +370,7 @@ test.describe('Explore (#142, #169)', () => {
     const explore = await openExplore(app.window)
     await expect(explore.error).toContainText('The newgrad-jobs API answered HTTP 500')
     await expect(explore.error).toContainText('GitHub answered HTTP 500')
-    await expect(app.window.getByRole('heading', { name: 'No jobs to explore yet' })).toBeVisible()
+    await expect(app.window.getByRole('heading', { name: 'No jobs to discover yet' })).toBeVisible()
     mock.jobright.api.status = 200
     await explore.refreshButton.click()
     await expect.poll(() => explore.listedTitles()).toHaveLength(3)

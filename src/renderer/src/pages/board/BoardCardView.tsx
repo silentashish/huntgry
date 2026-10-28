@@ -16,13 +16,13 @@ import { BOARD_COLUMNS, BOARD_COLUMN_LABEL, moveTargets, type BoardCard, type Bo
 import { CompanyAvatar, MonoLabel, ScoreRing, StatusPill, scoreLabel } from '../../components/ui'
 import { applyBlocker } from '../../components/apply/blocker'
 import { ResumeMatch } from '../../components/match/ResumeMatch'
-import { cardMeta, cardPills, companyOf, type Scent } from './card'
+import { cardMeta, cardPills, companyOf, type CardMatch } from './card'
 import classes from './board.module.css'
 
 interface Props {
   card: BoardCard
-  /** The Scent ring (see `cardScent`); worked out by the page once per board. */
-  scent: Scent
+  /** The match ring (see `cardMatch`); worked out by the page once per board. */
+  match: CardMatch
   /** The card is being dragged. */
   dragging: boolean
   /** The top card of To do: its Tailor button is the solid one (Figma). */
@@ -58,10 +58,10 @@ function scrollBox(el: HTMLElement): HTMLElement | null {
   return null
 }
 
-/** One job on the Board (Figma Kanban card): company, role, Scent, where it stands, its next step and Move to. */
+/** One job on the Board (Figma Kanban card): company, role, match score, where it stands, its next step and Move to. */
 export function BoardCardView({
   card,
-  scent,
+  match,
   dragging,
   lead,
   onDragStart,
@@ -144,7 +144,7 @@ export function BoardCardView({
             // Shown instead of the head text and the rest of the card until it is hovered or focused.
             <div className={classes.compactLine} aria-hidden>
               <span className={classes.compactText}>{[company, card.title].filter(Boolean).join(' · ')}</span>
-              {scent.mode === 'score' && <MonoLabel size="xs">{scent.value}</MonoLabel>}
+              {match.mode === 'score' && <MonoLabel size="xs">{match.estimate ? `≈${match.value}` : match.value}</MonoLabel>}
             </div>
           )}
           {targets.length > 0 && (
@@ -168,7 +168,7 @@ export function BoardCardView({
         {card.kind === 'application' && <ResumeMatch match={card.app.tracking.match} compact className={classes.match} />}
 
         <div className={classes.foot}>
-          <Ring scent={scent} />
+          <Ring match={match} />
           <MonoLabel size="xs" className={classes.meta} title={meta}>
             {meta}
           </MonoLabel>
@@ -181,19 +181,24 @@ export function BoardCardView({
   )
 }
 
-function Ring({ scent }: { scent: Scent }) {
-  if (scent.mode === 'score') {
-    const why = [scoreLabel(scent.value), ...scent.reasons].join(' · ')
+function Ring({ match }: { match: CardMatch }) {
+  if (match.mode === 'score') {
+    const why = [match.estimate ? 'Title-only estimate' : scoreLabel(match.value), ...match.reasons].join(' · ')
     return (
       <Tooltip label={why} multiline maw={260} openDelay={300}>
         <span>
-          <ScoreRing value={scent.value} size="sm" />
+          <ScoreRing
+            value={match.value}
+            size="sm"
+            tone={match.estimate ? 'neutral' : undefined}
+            aria-label={match.estimate ? `Match about ${match.value} of 100, a title-only estimate` : undefined}
+          />
         </span>
       </Tooltip>
     )
   }
-  if (scent.mode === 'done') return <ScoreRing mode="done" size="sm" aria-label="Tailored" />
-  return <ScoreRing mode="initial" letter={scent.letter} size="sm" aria-label="No Scent score yet" />
+  if (match.mode === 'done') return <ScoreRing mode="done" size="sm" aria-label="Tailored" />
+  return <ScoreRing mode="initial" letter={match.letter} size="sm" aria-label="No match score yet" />
 }
 
 function Pills({ card }: { card: BoardCard }) {

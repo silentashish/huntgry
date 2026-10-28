@@ -1,17 +1,21 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 
 /**
- * The Jobs page: add by URL, paste, the saved-job list with its segments (Relevant, All, …), filters and
- * selection, the job drawer and "Tailor all".
+ * Jobs → Saved (#189): "Add job" (a link or a posting's text, in one dialog), the saved-job list with its segments
+ * (Relevant, All, …), filters and selection, the job drawer and "Tailor all".
  */
 export class JobsPage {
-  readonly urlInput: Locator
+  /** The page's tab switch: Saved (n). */
+  readonly tab: Locator
+  /** "Add job" in the page header, on both tabs. */
+  readonly addJobButton: Locator
+  /** The "Add job" dialog, its one box (a link or a posting's text) and its Save button. */
+  readonly addJobModal: Locator
+  readonly addJobInput: Locator
   readonly addButton: Locator
-  readonly pasteButton: Locator
   readonly filterInput: Locator
   /** The job drawer (a Mantine Drawer: `role="dialog"`). */
   readonly drawer: Locator
-  readonly pasteModal: Locator
   /** The bar that appears once a job is ticked. */
   readonly selectionBar: Locator
   readonly tailorAllButton: Locator
@@ -21,12 +25,13 @@ export class JobsPage {
   readonly relevantHint: Locator
 
   constructor(readonly page: Page) {
-    this.urlInput = page.getByPlaceholder(/^Add a job by its posting URL/)
-    this.addButton = page.getByRole('button', { name: 'Add', exact: true })
-    this.pasteButton = page.getByRole('button', { name: 'Paste a job' })
+    this.tab = page.getByRole('radiogroup', { name: 'Jobs view' }).getByRole('radio', { name: /^Saved \(\d+\)$/ })
+    this.addJobButton = page.getByRole('button', { name: 'Add job', exact: true })
+    this.addJobModal = page.getByRole('dialog', { name: 'Add job' })
+    this.addJobInput = this.addJobModal.getByRole('textbox', { name: 'Link or posting text' })
+    this.addButton = this.addJobModal.getByRole('button', { name: 'Save job' })
     this.filterInput = page.getByRole('textbox', { name: 'Filter saved jobs' })
     this.drawer = page.getByRole('dialog').filter({ has: page.getByRole('button', { name: 'Tailor resume' }) })
-    this.pasteModal = page.getByRole('dialog', { name: 'Paste a job' })
     this.selectionBar = page.getByLabel('Selected jobs')
     this.tailorAllButton = this.selectionBar.getByRole('button', { name: 'Tailor all' })
     this.sponsorshipFilter = page.getByRole('combobox', { name: 'Visa sponsorship' })
@@ -73,9 +78,15 @@ export class JobsPage {
     return this.page.getByRole('list', { name: 'Saved jobs' }).getByRole('listitem', { name: title, exact: true })
   }
 
-  /** The Scent score ring of a saved-job row, e.g. "Scent 72 of 100". */
+  /** The match score badge of a saved-job row (#189: the number Discover shows), e.g. "Match 72 of 100". */
   scoreRing(title: string): Locator {
-    return this.card(title).getByRole('img', { name: /^Scent \d+ of 100$/ })
+    return this.card(title).getByRole('img', { name: /^Match / })
+  }
+
+  /** Shows the Saved tab (the page opens on Discover when nothing is saved). */
+  async openSaved(): Promise<void> {
+    await this.tab.locator('xpath=following-sibling::label[1]').click()
+    await expect(this.tab).toBeChecked()
   }
 
   /** Why a saved job fits the profile, as listed on its row ("Title: Backend Engineer", "Skills: Go", …). */
@@ -110,8 +121,10 @@ export class JobsPage {
     await expect(this.drawer).toBeHidden()
   }
 
+  /** Adds a job by its link through "Add job" (the dialog stays open, with the error, when it fails). */
   async addByUrl(url: string): Promise<void> {
-    await this.urlInput.fill(url)
+    if (!(await this.addJobModal.isVisible())) await this.addJobButton.click()
+    await this.addJobInput.fill(url)
     await this.addButton.click()
   }
 }

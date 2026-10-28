@@ -35,7 +35,7 @@ export type PaletteCommand =
   | { kind: 'apply'; applicationId: string }
   | { kind: 'open-file'; applicationId: string; file: string }
   | { kind: 'reveal'; applicationId: string }
-  | { kind: 'paste-job' }
+  | { kind: 'add-job' }
   | { kind: 'toggle-theme' }
   | { kind: 'switch-workspace' }
   /** Automation's controls (#154): pause, resume, run now. */
@@ -46,6 +46,7 @@ export type PaletteIcon =
   | NavPage
   | 'graph'
   | 'skills'
+  | 'discover'
   | 'queue'
   | 'job'
   | 'application'
@@ -227,8 +228,8 @@ const PAGE_KEYWORDS: Record<NavPage, string> = {
   dashboard: 'home summary stats needs you usage',
   // Applications are browsed on the Board since the Dashboard table went (#161).
   board: 'kanban columns applications resumes to do applied interviewing offer archived',
-  jobs: 'saved postings relevant scent',
-  explore: 'jobright new grad daily list discover github',
+  // Discover is the old Explore page (#189).
+  jobs: 'saved postings relevant match discover explore jobright',
   browser: 'tabs web posting apply',
   tailor: 'runs resume agent claude codex antigravity queue',
   review: 'unattended results approve',
@@ -287,6 +288,15 @@ export function paletteItems(data: PaletteData): PaletteItem[] {
       icon: 'graph',
       command: nav(locationOf('graph'))
     },
+    {
+      id: 'view:discover',
+      group: 'goto',
+      title: 'Jobs → Discover',
+      keywords: 'explore jobright new grad daily list github',
+      icon: 'discover',
+      command: nav(locationOf('jobs', { tab: 'discover' }))
+    },
+    { id: 'view:saved', group: 'goto', title: 'Jobs → Saved', keywords: 'saved postings relevant tailor all', icon: 'job', command: nav(locationOf('jobs', { tab: 'saved' })) },
     { id: 'view:skills', group: 'goto', title: 'Profile → Skills', keywords: 'skills table evidence', icon: 'skills', command: nav(locationOf('profile', { view: 'skills' })) },
     { id: 'view:queue', group: 'goto', title: 'Tailor → Queue', keywords: 'bulk unattended pipeline', icon: 'queue', command: nav(locationOf('tailor', { view: 'queue' })) }
   )
@@ -304,7 +314,7 @@ export function paletteItems(data: PaletteData): PaletteItem[] {
   // General actions.
   items.push(
     { id: 'action:tailor', group: 'actions', title: 'New tailored resume', keywords: 'tailor run start', icon: 'tailor', command: nav(locationOf('tailor')) },
-    { id: 'action:paste', group: 'actions', title: 'Paste a job', keywords: 'add job description', icon: 'paste', command: { kind: 'paste-job' } },
+    { id: 'action:add-job', group: 'actions', title: 'Add job', keywords: 'paste link url posting description save', icon: 'paste', command: { kind: 'add-job' } },
     {
       id: 'action:theme',
       group: 'actions',

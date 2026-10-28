@@ -1,15 +1,17 @@
 import type { BoardCard, BoardColumnId } from '@shared/board'
 import { sponsorshipOf, workplaceOf } from '@shared/job-filters'
-import { hasRelevanceSignals, scoreJob, type ProfileSignals } from '@shared/job-relevance'
+import { jobMatch } from '@shared/explore-score'
+import type { ProfileSignals } from '@shared/job-relevance'
 import { REVIEW_STATE_LABEL, type ReviewState } from '@shared/review-types'
 import { AGENT_LABEL, type AgentId } from '@shared/runner-types'
 import type { QueueItemStatus } from '@shared/queue-types'
 import type { UiTone } from '../../components/ui'
+import { matchNotes } from '../jobs/labels'
 import { QUEUE_STATUS_LABEL } from '../tailor/status'
 
 /**
  * What a Board card shows (#110), worked out from the card alone so it can be tested without
- * rendering: the Scent ring, the status pills and the mono meta line.
+ * rendering: the match ring, the status pills and the mono meta line.
  */
 
 /** The dot before each column's name (Figma Board lanes). */
@@ -27,20 +29,20 @@ export const COLUMN_TONE: Record<BoardColumnId, UiTone> = {
 }
 
 /**
- * The Scent ring of a card: the job's relevance score (already 0–100, `scoreJob`) when the card
- * knows its saved job and the master profile has something to match on; otherwise a check for
- * work already tailored, or the company's initial.
+ * The match ring of a card: the job's match score (#149, `jobMatch`: the number the Jobs page shows, #189) when
+ * the card knows its saved job and the master profile is read (the rule Saved and Discover use), with what it is
+ * made of; otherwise a check for work already tailored, or the company's initial.
  */
-export type Scent =
-  | { mode: 'score'; value: number; reasons: string[] }
+export type CardMatch =
+  | { mode: 'score'; value: number; estimate: boolean; reasons: string[] }
   | { mode: 'done' }
   | { mode: 'initial'; letter: string }
 
-export function cardScent(card: BoardCard, signals: ProfileSignals | null, now = new Date()): Scent {
+export function cardMatch(card: BoardCard, signals: ProfileSignals | null, now = new Date()): CardMatch {
   const job = card.job
-  if (job && signals && hasRelevanceSignals(signals)) {
-    const { score, reasons } = scoreJob(job, signals, now)
-    return { mode: 'score', value: score, reasons }
+  if (job && signals) {
+    const match = jobMatch(job, signals, undefined, now)
+    return { mode: 'score', value: match.score, estimate: match.kind === 'estimate', reasons: matchNotes(match) }
   }
   if (card.kind === 'application' || job?.tailoredAt) return { mode: 'done' }
   const name = companyOf(card) || card.title

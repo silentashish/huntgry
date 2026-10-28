@@ -30,7 +30,7 @@ import {
 import type { MasterProfile } from '@shared/master-profile'
 import { api, errorText } from '../../api'
 import { useNavigation } from '../../navigation'
-import { PasteModal } from '../../pages/jobs/PasteModal'
+import { AddJobModal } from '../../pages/jobs/AddJobModal'
 import { prepareTailor } from '../../pages/jobs/handoff'
 import { tailorPrefillFor } from '@shared/jobs-types'
 import { useThemePreference } from '../../theme'
@@ -43,7 +43,6 @@ const ICONS: Record<PaletteIcon, Icon> = {
   dashboard: IconLayoutDashboard,
   board: IconLayoutKanban,
   jobs: IconBriefcase,
-  explore: IconCompass,
   browser: IconWorld,
   tailor: IconSparkles,
   review: IconClipboardCheck,
@@ -52,6 +51,7 @@ const ICONS: Record<PaletteIcon, Icon> = {
   settings: IconSettings,
   graph: IconChartDots3,
   skills: IconListDetails,
+  discover: IconCompass,
   queue: IconListCheck,
   job: IconBriefcase,
   application: IconFileText,
@@ -86,7 +86,7 @@ interface Props {
 
 /**
  * "Sniff", the ⌘K command palette (#108, Figma 17:352): jump to a page, job, application, run, profile entry
- * or Settings section, and run actions (Tailor, Open posting, Apply, Paste a job, Switch theme). Arrow keys
+ * or Settings section, and run actions (Tailor, Open posting, Apply, Add job, Switch theme). Arrow keys
  * move, Enter opens, Tab jumps to the next group, Escape closes; focus stays inside while it is open.
  */
 export function CommandPalette({ opened, onClose, profile, onSwitchWorkspace, guarded }: Props) {
@@ -94,7 +94,7 @@ export function CommandPalette({ opened, onClose, profile, onSwitchWorkspace, gu
   const { resolved, setPreference } = useThemePreference()
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
-  const [pasteOpen, setPasteOpen] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { apply, confirmOpen, modal: applyModal } = useApply(setError)
   const data = usePaletteData(opened)
@@ -122,7 +122,7 @@ export function CommandPalette({ opened, onClose, profile, onSwitchWorkspace, gu
   // The in-app browser is a native view drawn above the page: hide it while something here covers it,
   // and show it again only if the Browser page is still the one on screen. Choosing another page closes
   // the palette in the same commit: the Browser page hides its view as it unmounts, and must stay hidden.
-  const covering = opened || pasteOpen || confirmOpen || error !== null
+  const covering = opened || addOpen || confirmOpen || error !== null
   const onBrowser = location.page === 'browser'
   const here = useRef(location)
   here.current = location
@@ -152,8 +152,8 @@ export function CommandPalette({ opened, onClose, profile, onSwitchWorkspace, gu
         return void api.applications.openFile(command.applicationId, command.file).catch((err) => setError(errorText(err)))
       case 'reveal':
         return void api.applications.reveal(command.applicationId).catch((err) => setError(errorText(err)))
-      case 'paste-job':
-        return setPasteOpen(true)
+      case 'add-job':
+        return setAddOpen(true)
       case 'toggle-theme':
         return setPreference(resolved === 'dark' ? 'light' : 'dark')
       case 'switch-workspace':
@@ -263,13 +263,13 @@ export function CommandPalette({ opened, onClose, profile, onSwitchWorkspace, gu
         </Modal.Content>
       </Modal.Root>
 
-      <PasteModal
-        opened={pasteOpen}
-        onClose={() => setPasteOpen(false)}
-        onSaved={() => {
-          setPasteOpen(false)
+      <AddJobModal
+        opened={addOpen}
+        onClose={() => setAddOpen(false)}
+        onSaved={(job) => {
+          setAddOpen(false)
           // A fresh `reload` remounts the Jobs page (also when it is the page on screen), so it lists the new job.
-          navigate('jobs', { reload: Date.now() })
+          navigate('jobs', { reload: Date.now(), tab: 'saved', openId: job.id })
         }}
       />
       {applyModal}

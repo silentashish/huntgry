@@ -57,7 +57,7 @@ export function JobrightCard() {
   return (
     <SettingsCard
       title="Jobright"
-      description="Jobright shows the employer's own posting link only to signed-in users. Sign in once and jobs you add from Explore link the employer's posting, so Fetch full description and autofill use the real page."
+      description="Jobright shows the employer's own posting link only to signed-in users. Sign in once and jobs you save from Jobs → Discover link the employer's posting, so Fetch full description and autofill use the real page."
       actions={status}
     >
       <Text size="sm" c="dimmed" mb="sm">

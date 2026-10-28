@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, test } from '../fixtures/servers/fixture'
-import { ExplorePage } from '../pages/explore'
+import { DiscoverTab } from '../pages/discover'
 import { JobsPage } from '../pages/jobs'
 import { SettingsPage } from '../pages/settings'
 import { Shell } from '../pages/shell'
@@ -18,8 +18,8 @@ const jobFile = (workspace: string) => join(workspace, '.huntgry/jobs', `jobrigh
 
 test('connect Jobright once in Settings; added jobs link the employer posting and fetch it', async ({ app, mock }) => {
   const shell = new Shell(app.window)
-  await shell.goTo('explore')
-  const explore = new ExplorePage(app.window)
+  const explore = new DiscoverTab(app.window)
+  await explore.open()
   await expect(explore.heading).toBeVisible()
   await expect.poll(() => explore.listedTitles()).toHaveLength(3)
 
@@ -42,7 +42,7 @@ test('connect Jobright once in Settings; added jobs link the employer posting an
   await expect.poll(() => win.isClosed()).toBe(true)
 
   // Adding from Explore now saves the employer's posting as the link; the Jobright page stays the board link.
-  await shell.goTo('explore')
+  await explore.open()
   await expect(explore.heading).toBeVisible()
   await expect(explore.connectHint).toHaveCount(0)
   await explore.addButton('Software Engineer, New Grad').click()
@@ -71,7 +71,7 @@ test('connect Jobright once in Settings; added jobs link the employer posting an
   await settings.jobrightButton('Check sign-in').click()
   await expect(settings.jobrightStatus('Not connected')).toBeVisible({ timeout: 30_000 })
   await expect(app.window.getByText(/Checked just now/)).toBeVisible()
-  await shell.goTo('explore')
+  await explore.open()
   await expect(explore.connectHint).toBeVisible()
   await explore.addButton('Backend Engineer I').click()
   await expect(explore.addedButton('Backend Engineer I')).toBeVisible()
@@ -91,8 +91,8 @@ test("an employer page that is only an application form falls back to Jobright's
   await expect(settings.jobrightStatus('Connected')).toBeVisible({ timeout: 30_000 })
 
   // Contoso's employer link is an ATS apply step: the form and nothing else.
-  await shell.goTo('explore')
-  const explore = new ExplorePage(app.window)
+  const explore = new DiscoverTab(app.window)
+  await explore.open()
   await explore.addButton('Embedded Software Engineer').click()
   await expect(explore.addedButton('Embedded Software Engineer')).toBeVisible({ timeout: 30_000 })
   const file = join(app.workspace!, '.huntgry/jobs', 'jobright-e2e0000000000000000000a3.json')

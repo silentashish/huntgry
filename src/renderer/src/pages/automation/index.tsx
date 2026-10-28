@@ -182,7 +182,7 @@ function Candidates({ state, candidates }: { state: AutomationState | null; cand
           tone="neutral"
           icon={<IconRobot size={32} stroke={1.5} />}
           title={state ? 'No candidates yet' : 'Loading'}
-          description="Press Run now, or turn on the run window: Automation picks from your saved jobs and the Explore list."
+          description="Press Run now, or turn on the run window: Automation picks from your saved jobs and the Discover list."
         />
       ) : (
         <Table.ScrollContainer minWidth={760}>
