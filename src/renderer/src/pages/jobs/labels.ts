@@ -1,17 +1,32 @@
 import { seniorityOf, sponsorshipOf, workplaceOf } from '@shared/job-filters'
-import type { JobScore } from '@shared/job-relevance'
 import type { Job, JobSourceId } from '@shared/jobs-types'
 import type { QueueItemStatus } from '@shared/queue-types'
+import type { RowScore } from '@shared/explore-score'
 import { scoreLabel, scoreTone, type UiTone } from '../../components/ui'
 
 /**
- * How a Scent score reads on a row and in the drawer. A job Relevant leaves out (dismissed, or "no
- * sponsorship" for a profile that needs it) keeps its number but loses the colour, and says why.
+ * How a match score (#149) reads in the drawer and on a Board card (#189: the one score of a job): "Strong match" and
+ * its tone, or a neutral "Title-only estimate" for a job with no description to match (#150).
  */
-export function scentDisplay(score: JobScore): { tone: UiTone; label: string; excluded: string | null } {
-  if (score.excluded) return { tone: 'neutral', label: 'Left out of Relevant', excluded: score.excluded }
-  return { tone: scoreTone(score.score), label: scoreLabel(score.score), excluded: null }
+export function matchDisplay(match: RowScore): { tone: UiTone; label: string } {
+  if (match.kind === 'estimate') return { tone: 'neutral', label: 'Title-only estimate' }
+  return { tone: scoreTone(match.score), label: scoreLabel(match.score) }
 }
+
+/** What a match score is made of, one line each: the skills the profile has and lacks, and the failed gates. */
+export function matchNotes(match: RowScore): string[] {
+  if (match.kind === 'estimate') return ['No qualifications to match: scored on title, seniority and location', ...match.reasons]
+  const names = (skills: readonly { skill: string }[]) => skills.map((s) => s.skill).join(', ')
+  return [
+    ...(match.matched.length > 0 ? [`You have: ${names(match.matched)}`] : []),
+    ...(match.missing.length > 0 ? [`Missing: ${names(match.missing)}`] : []),
+    ...(match.matched.length === 0 && match.missing.length === 0 ? ['The posting names no skill Huntgry can read.'] : []),
+    ...match.gates.map((g) => `✕ ${g.reason}`)
+  ]
+}
+
+/** What a row and the drawer say before why Relevant leaves a job out (dismissed, or "no sponsorship" when needed). */
+export const RELEVANT_LEFT_OUT = 'Left out of Relevant'
 
 export const SOURCE_LABEL: Record<JobSourceId, string> = {
   'hiring.cafe': 'hiring.cafe',

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_FILTERS } from '@shared/job-filters'
 import { relevantJobs, scoreJob, type ProfileSignals, type ScoredJob } from '@shared/job-relevance'
 import type { Job } from '@shared/jobs-types'
-import { defaultShow, scentView, visibleJobs } from './view'
+import { jobMatch, scoreRow, toJob } from '@shared/explore-score'
+import type { ExploreJob } from '@shared/explore-types'
+import { defaultShow, relevanceView, visibleJobs } from './view'
 
 const NOW = new Date('2026-10-06T12:00:00Z')
 
@@ -71,7 +73,7 @@ describe('Jobs page view', () => {
       job('url:gone', { title: 'Backend Engineer', description: 'Go', remote: true, postedAt: at('5'), dismissed: true }),
       job('url:other', { title: 'Sales Manager', postedAt: at('5') })
     ]
-    const { scores, relevant } = scentView(saved, signals, NOW)
+    const { scores, relevant, matches } = relevanceView(saved, signals, NOW)
     expect(relevant).toEqual(relevantJobs(saved, signals, NOW))
     expect(relevant.map((r) => r.job.id)).toEqual(['url:pg', 'url:go2', 'url:go'])
     // Every saved job has a score, including the ones Relevant leaves out, and Relevant reuses them.
@@ -79,7 +81,35 @@ describe('Jobs page view', () => {
     for (const j of saved) expect(scores.get(j.id)).toEqual(scoreJob(j, signals, NOW))
     for (const r of relevant) expect(r.score).toBe(scores.get(r.job.id))
     expect(scores.get('url:novisa')?.excluded).toBe('Says it does not sponsor visas')
-    expect(scentView(saved, { ...signals, titles: [] })).toEqual({ scores: new Map(), relevant: [] })
-    expect(scentView(saved, null)).toEqual({ scores: new Map(), relevant: [] })
+    // The number a row shows is the match score (#189), not the relevance: url:go has half its skills.
+    expect([...matches.keys()]).toEqual(saved.map((j) => j.id))
+    expect(matches.get('url:go')).toMatchObject({ kind: 'exact', score: scoreJob(saved[0], signals, NOW).match.score })
+    expect(matches.get('url:go')?.score).not.toBe(scores.get('url:go')?.score)
+    expect(matches.get('url:other')).toEqual(jobMatch(saved[5], signals, undefined, NOW))
+    // Without a title to rank on, Relevant is empty but every row still shows its match score.
+    const untitled = relevanceView(saved, { ...signals, titles: [] }, NOW)
+    expect(untitled.scores).toEqual(new Map())
+    expect(untitled.relevant).toEqual([])
+    expect(untitled.matches.get('url:pg')?.score).toBe(matches.get('url:pg')?.score)
+    expect(relevanceView(saved, null)).toEqual({ scores: new Map(), relevant: [], matches: new Map() })
+  })
+
+  it('shows a saved job with the match score its Discover row showed (#189)', () => {
+    const signals: ProfileSignals = { titles: ['Software Engineer'], skills: ['Python', 'Go'], location: '', remote: false, needsSponsorship: false, years: 0 }
+    const row: ExploreJob = {
+      id: 'northwind1',
+      company: 'Northwind Labs',
+      companyUrl: null,
+      title: 'Software Engineer, New Grad',
+      url: 'https://jobright.ai/jobs/info/northwind1',
+      location: 'Seattle, WA',
+      workModel: 'Hybrid',
+      postedAt: '2026-10-05',
+      qualifications: '1. Python or Go. 2. Kubernetes and Terraform. 3. React.'
+    }
+    const saved = toJob(row, NOW)
+    const { matches, scores } = relevanceView([saved], signals, NOW)
+    expect(matches.get(saved.id)).toEqual(scoreRow(row, signals, NOW))
+    expect(matches.get(saved.id)?.score).not.toBe(scores.get(saved.id)?.score)
   })
 })

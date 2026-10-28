@@ -1,3 +1,4 @@
+import { jobMatch, type RowScore } from '@shared/explore-score'
 import { matchesFilters, type JobFilters } from '@shared/job-filters'
 import {
   hasRelevanceSignals,
@@ -10,18 +11,27 @@ import {
 import type { Job } from '@shared/jobs-types'
 
 /**
- * One scoring pass over the saved jobs: the Scent score of every job by id (the relevance score of #73,
- * shown on each row and in the drawer), and the Relevant list ranked from those same scores (what
- * `relevantJobs` gives). Both empty when the profile has nothing to match on.
+ * One scoring pass over the saved jobs: the relevance of every job by id (#73: it ranks the Relevant list and says
+ * why a job fits, or why Relevant leaves it out), the Relevant list ranked from those same scores (what
+ * `relevantJobs` gives), and the match score of every job (#149), the one number a row and the drawer show (#189),
+ * the same Discover shows for the row it was saved from. Relevance is empty when the profile has nothing to rank
+ * on; matches are empty only while the profile is loading.
  */
-export function scentView(
+export function relevanceView(
   jobs: readonly Job[],
   signals: ProfileSignals | null,
   now = new Date()
-): { scores: Map<string, JobScore>; relevant: ScoredJob[] } {
-  if (!signals || !hasRelevanceSignals(signals)) return { scores: new Map(), relevant: [] }
+): { scores: Map<string, JobScore>; relevant: ScoredJob[]; matches: Map<string, RowScore> } {
+  if (!signals) return { scores: new Map(), relevant: [], matches: new Map() }
+  if (!hasRelevanceSignals(signals)) {
+    return { scores: new Map(), relevant: [], matches: new Map(jobs.map((job) => [job.id, jobMatch(job, signals, undefined, now)])) }
+  }
   const scored = jobs.map((job) => ({ job, score: scoreJob(job, signals, now) }))
-  return { scores: new Map(scored.map((s) => [s.job.id, s.score])), relevant: rankRelevant(scored) }
+  return {
+    scores: new Map(scored.map((s) => [s.job.id, s.score])),
+    relevant: rankRelevant(scored),
+    matches: new Map(scored.map((s) => [s.job.id, jobMatch(s.job, signals, s.score, now)]))
+  }
 }
 
 /** Segments of the saved-job list. */

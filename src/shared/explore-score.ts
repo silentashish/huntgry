@@ -1,5 +1,5 @@
 import { savedJobId, type ExploreJob } from './explore-types'
-import { scoreJob, titleEstimate, type ProfileSignals } from './job-relevance'
+import { scoreJob, titleEstimate, type JobScore, type ProfileSignals } from './job-relevance'
 import type { Job, WorkplaceType } from './jobs-types'
 import type { MatchGate, MatchSkill } from './match-score'
 
@@ -64,14 +64,28 @@ export type RowScore =
 /** Whether a row has qualifications to score from. */
 export const hasQualifications = (row: Pick<ExploreJob, 'qualifications'>): boolean => !!row.qualifications?.trim()
 
-/** The score of one row against the profile's signals. `now` only stamps the job, it never changes the score. */
-export function scoreRow(row: ExploreJob, s: ProfileSignals, now = new Date()): RowScore {
-  const job = toJob(row, now)
-  if (hasQualifications(row)) {
-    const { score, matched, missing, gates } = scoreJob(job, s, now).match
+/** Whether a saved job has a description to match (a row saved from the GitHub README has none, #150). */
+export const hasDescription = (job: Pick<Job, 'description'>): boolean => !!job.description.trim()
+
+/**
+ * The match score of a saved job (#189: the one number both Jobs tabs, the drawer and the Board show): `exact`
+ * from its description, or the title-only `estimate` (≈) when it has none, the way its Discover row was scored.
+ * `scored` reuses a `scoreJob` result the caller already has (the Saved tab scores every job once for Relevant).
+ */
+export function jobMatch(job: Job, s: ProfileSignals, scored?: JobScore, now = new Date()): RowScore {
+  if (hasDescription(job)) {
+    const { score, matched, missing, gates } = (scored ?? scoreJob(job, s, now)).match
     return { kind: 'exact', score, matched, missing, gates }
   }
   return { kind: 'estimate', ...titleEstimate(job, s) }
+}
+
+/**
+ * The score of one row against the profile's signals: the `jobMatch` of the job it is saved as, so a row and its
+ * saved job show the same number. `now` only stamps the job, it never changes the score.
+ */
+export function scoreRow(row: ExploreJob, s: ProfileSignals, now = new Date()): RowScore {
+  return jobMatch(toJob(row, now), s, undefined, now)
 }
 
 /** Every row's score by id: computed once per list and profile (the page memoizes it on both). */

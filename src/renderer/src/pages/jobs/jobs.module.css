@@ -307,7 +307,7 @@
   padding: 16px 24px 24px;
 }
 
-.scent {
+.matchBox {
   display: flex;
   align-items: center;
   gap: 14px;
@@ -317,37 +317,37 @@
   background-color: var(--tone-soft);
 }
 
-.scent[data-tone='neutral'] {
+.matchBox[data-tone='neutral'] {
   border-color: var(--hg-border-subtle);
   background-color: var(--hg-bg-surface-sunken);
 }
 
-.scentText {
+.matchText {
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-width: 0;
 }
 
-.scentLabel {
+.matchLabel {
   font-size: 14px;
   line-height: 20px;
   font-weight: 600;
   color: var(--tone-fg);
 }
 
-.scent[data-tone='neutral'] .scentLabel {
+.matchBox[data-tone='neutral'] .matchLabel {
   color: var(--hg-text-primary);
 }
 
-.scentReasons {
+.matchReasons {
   margin: 0;
   font-size: 12px;
   line-height: 16px;
   color: var(--hg-text-secondary);
 }
 
-.scentExcluded {
+.matchExcluded {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -407,7 +407,7 @@
   gap: 6px;
 }
 
-/* ---------- Modals (Paste a job, Tailor all) ---------- */
+/* ---------- Modals (Add job, Tailor all) ---------- */
 
 .modalHeader {
   gap: 10px;

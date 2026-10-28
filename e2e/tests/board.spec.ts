@@ -108,10 +108,10 @@ test.describe('board columns', () => {
     await expect(page.card(ARCHIVED.old.title)).toHaveCount(0)
     await expect(page.column('archived')).toContainText('Cards leave the board 7 days after they are archived. 1 older not shown.')
 
-    // Each card carries the Scent ring (#110): the job's score against the profile, or a check for a result with no saved job.
+    // Each card carries the match ring (#110, #189): the job's match score, or a check for a result with no saved job.
     // The saved job is from an earlier week, so its card is compact (#160) until hovered.
     await page.card(DEMO.savedJob).hover()
-    await expect(page.card(DEMO.savedJob).getByRole('img', { name: /^Scent \d+ of 100$/ })).toBeVisible()
+    await expect(page.card(DEMO.savedJob).getByRole('img', { name: /^Match / })).toBeVisible()
     await expect(page.card(DEMO.umbrella).getByRole('img', { name: 'Tailored' })).toBeVisible()
 
     // Each column header counts its cards.
