@@ -12,9 +12,10 @@ test.describe('app shell', () => {
     const shell = new Shell(app.window)
     await shell.expectVisible(app.workspace!)
     await shell.expectActive('dashboard')
-    // 10 entries: the Knowledge graph moved into Profile (#108); Explore was added after Jobs (#142), Automation after Review (#154).
+    // 9 entries: the Knowledge graph moved into Profile (#108), Explore into Jobs as its Discover tab (#189).
     await expect(shell.navbar.getByRole('button', { name: /^Knowledge graph/ })).toHaveCount(0)
     await expect(shell.navbar.getByRole('button', { name: /^Master profile/ })).toHaveCount(0)
+    await expect(shell.navbar.getByRole('button', { name: /^Explore/ })).toHaveCount(0)
 
     for (const name of Object.keys(SHELL_PAGES) as ShellPage[]) {
       await shell.goTo(name)
@@ -31,6 +32,28 @@ test.describe('app shell', () => {
           break
       }
     }
+  })
+
+  test('the sidebar follows the hunt, in groups announced by name and never focused (#189)', async ({ app }) => {
+    const shell = new Shell(app.window)
+    await shell.expectActive('dashboard')
+    const entries = await shell.navbar
+      .getByRole('button', { name: new RegExp(`^(${Object.values(SHELL_PAGES).map((p) => p.label).join('|')})\\b`) })
+      .evaluateAll((bs) => bs.map((b) => (b.textContent ?? '').trim().replace(/\d+$/, '')))
+    expect(entries).toEqual(Object.values(SHELL_PAGES).map((p) => p.label))
+    expect(entries).toEqual(['Dashboard', 'Board', 'Jobs', 'Tailor', 'Review', 'Browser', 'Automation', 'Profile', 'Settings'])
+    const names = async (label: 'Hunt' | 'Setup') =>
+      shell.navGroup(label).getByRole('button').evaluateAll((bs) => bs.map((b) => (b.textContent ?? '').trim().replace(/\d+$/, '')))
+    expect(await names('Hunt')).toEqual(['Jobs', 'Tailor', 'Review', 'Browser', 'Automation'])
+    expect(await names('Setup')).toEqual(['Profile', 'Settings'])
+    // The group label is shown but is neither a button nor a tab stop.
+    await expect(shell.navGroup('Hunt').getByText('Hunt', { exact: true })).toBeVisible()
+    await expect(shell.navbar.getByRole('button', { name: 'Hunt' })).toHaveCount(0)
+    // ⌘K's Go to lists the pages in the same order.
+    await shell.openPalette()
+    const goTo = await shell.paletteGroup('Go to').getByRole('option').evaluateAll((os) => os.map((o) => (o.textContent ?? '').trim()))
+    expect(goTo).toHaveLength(entries.length)
+    goTo.forEach((title, i) => expect(title.startsWith(entries[i])).toBe(true))
   })
 
   test('the dashboard counts the demo applications', async ({ app }) => {
@@ -102,7 +125,7 @@ test.describe('command palette (⌘K)', () => {
 
     await shell.openPalette('keyboard')
     // Before typing: the pages to go to and the general actions.
-    await expect(shell.paletteGroup('Go to').getByRole('option')).toHaveCount(10)
+    await expect(shell.paletteGroup('Go to').getByRole('option')).toHaveCount(9)
     await expect(shell.paletteOption('New tailored resume')).toBeVisible()
     await app.window.keyboard.press('Escape')
     await expect(shell.palette).toBeHidden()

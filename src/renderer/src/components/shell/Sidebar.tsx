@@ -2,7 +2,6 @@ import { ActionIcon, Kbd, Tooltip, VisuallyHidden } from '@mantine/core'
 import {
   IconBriefcase,
   IconClipboardCheck,
-  IconCompass,
   IconCpu,
   IconDeviceDesktop,
   IconFolder,
@@ -19,12 +18,12 @@ import {
   IconWorld,
   type Icon
 } from '@tabler/icons-react'
-import { PAGE_LABEL, PAGES, type NavPage } from '../../navigation'
+import { NAV_GROUPS, PAGE_LABEL, type NavPage } from '../../navigation'
 import { THEME_PREFERENCE_LABELS, THEME_PREFERENCES, useThemePreference, type ThemePreference } from '../../theme'
 import { useAutomationState } from '../automation/useAutomation'
 import { automationBadge } from '../../pages/automation/view'
 import { usePipeline } from '../queue/usePipeline'
-import { PawLogo, ProgressBar, StatusPill } from '../ui'
+import { MonoLabel, PawLogo, ProgressBar, StatusPill } from '../ui'
 import { CoffeeLink } from './CoffeeLink'
 import { pipelineMini } from './pipelineMini'
 import { tailorBadge } from './counts'
@@ -36,7 +35,6 @@ const NAV_ICON: Record<NavPage, Icon> = {
   dashboard: IconLayoutDashboard,
   board: IconLayoutKanban,
   jobs: IconBriefcase,
-  explore: IconCompass,
   browser: IconWorld,
   tailor: IconSparkles,
   review: IconClipboardCheck,
@@ -60,7 +58,8 @@ interface Props {
 
 /**
  * The sidebar (Figma 5:3): paw and version, the "Sniff anything…" button that opens the ⌘K palette, the
- * 10 pages with counts on Tailor, Review and Automation (#154: ready to submit, warning when a job needs you), the unattended pipeline while one runs,
+ * 9 pages in the hunt's groups (#189: Dashboard and Board, then Hunt, then Setup) with counts on Tailor, Review and
+ * Automation (#154: ready to submit, warning when a job needs you), the unattended pipeline while one runs,
  * "Buy me a coffee" (#185), the System / Light / Dark toggle and the workspace with its switch.
  */
 export function Sidebar({ current, onNavigate, onOpenPipeline, onOpenPalette, mod, workspacePath, onSwitchWorkspace }: Props) {
@@ -97,30 +96,45 @@ export function Sidebar({ current, onNavigate, onOpenPipeline, onOpenPalette, mo
       </button>
 
       <div className={classes.nav}>
-        {PAGES.map((page) => {
-          const PageIcon = NAV_ICON[page]
-          const active = current === page
-          const badge = badges[page]
-          return (
-            <button
-              key={page}
-              type="button"
-              className={classes.navItem}
-              data-active={active ? 'true' : undefined}
-              aria-current={active ? 'page' : undefined}
-              onClick={() => onNavigate(page)}
-            >
-              <PageIcon size={18} stroke={1.6} className={classes.navIcon} aria-hidden />
-              <span className={classes.navLabel}>{PAGE_LABEL[page]}</span>
-              {badge && (
-                <>
-                  <span className={classes.count} data-tone={badge.tone} aria-hidden title={badge.label}>
-                    {badge.count}
-                  </span>
-                  <VisuallyHidden> ({badge.label})</VisuallyHidden>
-                </>
-              )}
-            </button>
+        {NAV_GROUPS.map((group) => {
+          const entries = group.pages.map((page) => {
+            const PageIcon = NAV_ICON[page]
+            const active = current === page
+            const badge = badges[page]
+            return (
+              <button
+                key={page}
+                type="button"
+                className={classes.navItem}
+                data-active={active ? 'true' : undefined}
+                aria-current={active ? 'page' : undefined}
+                onClick={() => onNavigate(page)}
+              >
+                <PageIcon size={18} stroke={1.6} className={classes.navIcon} aria-hidden />
+                <span className={classes.navLabel}>{PAGE_LABEL[page]}</span>
+                {badge && (
+                  <>
+                    <span className={classes.count} data-tone={badge.tone} aria-hidden title={badge.label}>
+                      {badge.count}
+                    </span>
+                    <VisuallyHidden> ({badge.label})</VisuallyHidden>
+                  </>
+                )}
+              </button>
+            )
+          })
+          // A labelled group is announced by its name ("Hunt"); the label itself is not read twice or focusable.
+          return group.label ? (
+            <div key={group.label} className={classes.navGroup} role="group" aria-label={group.label}>
+              <MonoLabel size="xs" component="div" className={classes.navGroupLabel}>
+                <span aria-hidden>{group.label}</span>
+              </MonoLabel>
+              {entries}
+            </div>
+          ) : (
+            <div key="top" className={classes.navGroup}>
+              {entries}
+            </div>
           )
         })}
       </div>

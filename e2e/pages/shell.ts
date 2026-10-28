@@ -1,18 +1,17 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 
 /**
- * Sidebar entries in order, with the label of each and how its page announces itself. 10 entries: the
- * Knowledge graph is a view of Profile (#108), opened with `Shell.openGraph()`; Explore follows Jobs (#142);
- * Automation follows Review (#154).
+ * Sidebar entries in order, with the label of each and how its page announces itself. 9 entries in the hunt's order
+ * (#189): Dashboard and Board, then Hunt (Jobs … Automation), then Setup. The Knowledge graph is a view of Profile
+ * (#108), opened with `Shell.openGraph()`; Explore is the Discover tab of Jobs (#189).
  */
 export const SHELL_PAGES = {
   dashboard: { label: 'Dashboard', heading: 'Dashboard' },
   board: { label: 'Board', heading: 'Board' },
   jobs: { label: 'Jobs', heading: 'Jobs' },
-  explore: { label: 'Explore', heading: 'Explore' },
-  browser: { label: 'Browser', heading: null },
   tailor: { label: 'Tailor', heading: 'Tailor' },
   review: { label: 'Review', heading: null },
+  browser: { label: 'Browser', heading: null },
   automation: { label: 'Automation', heading: 'Automation' },
   profile: { label: 'Profile', heading: null },
   settings: { label: 'Settings', heading: 'Settings' }
@@ -48,6 +47,11 @@ export class Shell {
   /** A sidebar entry: a button named by its label (then the count badge's text, if any). */
   navLink(name: ShellPage): Locator {
     return this.navbar.getByRole('button', { name: new RegExp(`^${SHELL_PAGES[name].label}\\b`) })
+  }
+
+  /** A labelled group of sidebar entries (#189: "Hunt", "Setup"). */
+  navGroup(label: 'Hunt' | 'Setup'): Locator {
+    return this.navbar.getByRole('group', { name: label, exact: true })
   }
 
   /** A theme toggle option at the bottom of the sidebar. */

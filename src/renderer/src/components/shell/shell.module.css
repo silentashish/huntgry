@@ -91,6 +91,23 @@
   flex: 0 1 auto;
 }
 
+/* A run of entries (#189): Dashboard and Board, then Hunt and Setup under their labels. */
+.navGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.navGroup + .navGroup {
+  margin-top: 12px;
+}
+
+.navGroupLabel {
+  padding: 0 10px 2px;
+  text-transform: uppercase;
+  user-select: none;
+}
+
 .navItem {
   display: flex;
   align-items: center;

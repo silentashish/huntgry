@@ -17,11 +17,15 @@ export interface PageParams {
    */
   board: { column?: BoardColumnId; applicationId?: string } | undefined
   /**
-   * `reload` (any new value) draws the page afresh, e.g. after the palette's "Paste a job" saved one;
-   * `openId` opens that saved job's drawer (Explore's "Added", #142).
+   * Jobs (#189): the Discover tab (Jobright's daily new-grad list, the old Explore page, #142) and the Saved tab
+   * (the jobs you keep). `tab` picks one (see `jobsTab`); `openId` opens that saved job's drawer on Saved (Discover's
+   * "Saved ✓"); `reload` (any new value) draws the page afresh, e.g. after the palette's "Add job" saved one.
    */
-  jobs: { reload?: number; openId?: string } | undefined
-  /** Jobright's daily new-grad list, grouped by posted day; rows are added to Jobs (#142). */
+  jobs: { reload?: number; tab?: JobsTab; openId?: string } | undefined
+  /**
+   * Explore is the Discover tab of Jobs now (#189). Kept so callers can still `navigate('explore')`: `redirect`
+   * turns it into `jobs` with `{ tab: 'discover' }`, so no location is ever on `explore`.
+   */
   explore: undefined
   /** Opens `url` in an in-app browser tab (or shows the open tabs when absent). */
   browser: { url?: string } | undefined
@@ -68,6 +72,9 @@ export interface PageParams {
 
 export type Page = keyof PageParams
 
+/** Tabs of the Jobs page (#189). */
+export type JobsTab = 'discover' | 'saved'
+
 /** Views of the Profile page. */
 export type ProfileView = 'editor' | 'graph' | 'skills'
 
@@ -99,29 +106,33 @@ export type ProfileSection =
 /** Where the app is: a page and the parameters it was opened with. */
 export type Location = { [P in Page]: { page: P; params: PageParams[P] } }[Page]
 
-/** Pages with an entry in the sidebar; `graph` is a view of Profile (#95). */
-export type NavPage = Exclude<Page, 'graph'>
+/** Pages with an entry in the sidebar; `graph` is a view of Profile (#95), `explore` a tab of Jobs (#189). */
+export type NavPage = Exclude<Page, 'graph' | 'explore'>
 
-/** Navbar order: 10 entries (the Knowledge graph moved into Profile; Explore follows Jobs, #142; Automation follows Review, #154). */
-export const PAGES: readonly NavPage[] = [
-  'dashboard',
-  'board',
-  'jobs',
-  'explore',
-  'browser',
-  'tailor',
-  'review',
-  'automation',
-  'profile',
-  'settings'
+/** A run of sidebar entries; `label` is the small heading above it (none for the first group). */
+export interface NavGroup {
+  label: string | null
+  pages: readonly NavPage[]
+}
+
+/**
+ * The sidebar in the order of the hunt (#189): the overview, then finding and applying (Hunt), then what it all
+ * runs on (Setup). The only place the order is written: `PAGES` and the ⌘K palette's Go to follow it.
+ */
+export const NAV_GROUPS: readonly NavGroup[] = [
+  { label: null, pages: ['dashboard', 'board'] },
+  { label: 'Hunt', pages: ['jobs', 'tailor', 'review', 'browser', 'automation'] },
+  { label: 'Setup', pages: ['profile', 'settings'] }
 ]
+
+/** Navbar order: 9 entries, the groups' pages in a row (the Knowledge graph is in Profile, Explore in Jobs). */
+export const PAGES: readonly NavPage[] = NAV_GROUPS.flatMap((g) => g.pages)
 
 /** Sidebar and palette label of each page (#108: "Master profile" is now "Profile"). */
 export const PAGE_LABEL: Record<NavPage, string> = {
   dashboard: 'Dashboard',
   board: 'Board',
   jobs: 'Jobs',
-  explore: 'Explore',
   browser: 'Browser',
   tailor: 'Tailor',
   review: 'Review',
@@ -154,9 +165,11 @@ export const DEFAULT_LOCATION: Location = { page: 'dashboard', params: undefined
 
 /**
  * Where a location really opens: `graph` (the old Knowledge graph page) becomes Profile's graph view,
- * keeping the selected node. Every other location is returned as is.
+ * keeping the selected node; `explore` (the old Explore page) becomes the Jobs page's Discover tab (#189).
+ * Every other location is returned as is.
  */
 export function redirect(location: Location): Location {
+  if (location.page === 'explore') return { page: 'jobs', params: { tab: 'discover' } }
   if (location.page !== 'graph') return location
   const nodeId = location.params?.nodeId
   return { page: 'profile', params: nodeId ? { view: 'graph', nodeId } : { view: 'graph' } }

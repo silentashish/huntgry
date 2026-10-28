@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { tailorPrefillFor, type Job } from '@shared/jobs-types'
-import { DEFAULT_LOCATION, FULL_BLEED, locationOf, PAGES, paramsFor, redirect, WIDE, type Location } from './navigation'
+import { DEFAULT_LOCATION, FULL_BLEED, locationOf, NAV_GROUPS, PAGE_LABEL, PAGES, paramsFor, redirect, WIDE, type Location } from './navigation'
 
 describe('navigation', () => {
   it('starts on the dashboard and lists every page once', () => {
@@ -9,9 +9,26 @@ describe('navigation', () => {
     expect(PAGES).toContain('profile')
   })
 
-  it('has 10 sidebar entries: the Knowledge graph is a view of Profile (#108), Automation follows Review (#154)', () => {
-    expect(PAGES).toEqual(['dashboard', 'board', 'jobs', 'explore', 'browser', 'tailor', 'review', 'automation', 'profile', 'settings'])
+  it('has 9 sidebar entries in hunt order: the Knowledge graph is a view of Profile (#108), Explore a tab of Jobs (#189)', () => {
+    expect(PAGES).toEqual(['dashboard', 'board', 'jobs', 'tailor', 'review', 'browser', 'automation', 'profile', 'settings'])
     expect(PAGES as readonly string[]).not.toContain('graph')
+    expect(PAGES as readonly string[]).not.toContain('explore')
+    expect(Object.keys(PAGE_LABEL)).not.toContain('explore')
+  })
+
+  it('groups the sidebar as the hunt goes, and PAGES is the groups in a row (#189)', () => {
+    expect(NAV_GROUPS.map((g) => [g.label, [...g.pages]])).toEqual([
+      [null, ['dashboard', 'board']],
+      ['Hunt', ['jobs', 'tailor', 'review', 'browser', 'automation']],
+      ['Setup', ['profile', 'settings']]
+    ])
+    expect(PAGES).toEqual(NAV_GROUPS.flatMap((g) => g.pages))
+  })
+
+  it('opens the old Explore page as the Jobs page on Discover (#189)', () => {
+    expect(locationOf('explore')).toEqual({ page: 'jobs', params: { tab: 'discover' } })
+    expect(redirect({ page: 'explore', params: undefined })).toEqual({ page: 'jobs', params: { tab: 'discover' } })
+    expect(paramsFor(locationOf('explore'), 'explore')).toBeUndefined()
   })
 
   it('opens the graph page as the Profile graph view, keeping the node (#108)', () => {
@@ -68,8 +85,8 @@ describe('navigation', () => {
     for (const page of WIDE) expect(FULL_BLEED.has(page)).toBe(false)
   })
 
-  it('lists Automation right after Review and opens it on a candidate (#154)', () => {
-    expect(PAGES.indexOf('automation')).toBe(PAGES.indexOf('review') + 1)
+  it('lists Automation last in Hunt and opens it on a candidate (#154, #189)', () => {
+    expect(PAGES.indexOf('profile')).toBe(PAGES.indexOf('automation') + 1)
     expect(paramsFor(locationOf('automation', { key: 'jobright:a3' }), 'automation')?.key).toBe('jobright:a3')
     expect(locationOf('automation')).toEqual({ page: 'automation', params: undefined })
   })
@@ -87,15 +104,14 @@ describe('navigation', () => {
     expect(paramsFor(locationOf('profile', { view: 'skills' }), 'profile')?.view).toBe('skills')
   })
 
-  it('has Explore between Jobs and Browser, and Jobs opens a saved job (#142)', () => {
-    expect(PAGES.indexOf('explore')).toBe(PAGES.indexOf('jobs') + 1)
-    expect(PAGES.indexOf('browser')).toBe(PAGES.indexOf('explore') + 1)
+  it('opens Jobs on a tab or on a saved job (#142, #189)', () => {
     expect(paramsFor(locationOf('jobs', { reload: 1, openId: 'jobright:abc123' }), 'jobs')?.openId).toBe('jobright:abc123')
+    expect(paramsFor(locationOf('jobs', { tab: 'saved' }), 'jobs')?.tab).toBe('saved')
   })
 
-  it('has a full-bleed Browser page between Explore and Tailor that takes a URL', () => {
-    expect(PAGES.indexOf('browser')).toBe(PAGES.indexOf('explore') + 1)
-    expect(PAGES.indexOf('tailor')).toBe(PAGES.indexOf('browser') + 1)
+  it('has a full-bleed Browser page between Review and Automation that takes a URL', () => {
+    expect(PAGES.indexOf('browser')).toBe(PAGES.indexOf('review') + 1)
+    expect(PAGES.indexOf('automation')).toBe(PAGES.indexOf('browser') + 1)
     expect(FULL_BLEED.has('browser')).toBe(true)
     expect(FULL_BLEED.has('dashboard')).toBe(false)
     const loc = locationOf('browser', { url: 'https://jobs.example.com/1' })
