@@ -375,4 +375,17 @@ describe('A saved row (#189)', () => {
     const badges = [...container.querySelectorAll('[aria-label="Jobright jobs"] li [role="img"]')].map((b) => b.getAttribute('aria-label'))
     expect(badges[0]).toBe('Match 50 of 100')
   })
+
+  it('filters and sorts by that score, not the cached row score (Match ≥ 80 hides the 50)', async () => {
+    const strong = job('Backend Engineer I', '1. Experience with Go and Python.')
+    page.saved = [{ ...toJob(strong, new Date()), description: 'Go, Python, Java and Kotlin.' }]
+    rerender()
+    await settle(() => calls.list[0].d.resolve({ ...list, jobs: [strong, job('Platform Engineer', '1. Experience with Go, Python and Java.')] }))
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Min. match"]')!
+    await settle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '60')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(titles()).toEqual(['Platform Engineer at Northwind'])
+  })
 })

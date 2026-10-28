@@ -10,7 +10,7 @@ import {
   IconRefresh,
   IconSearch
 } from '@tabler/icons-react'
-import { jobMatch, scoreRows } from '@shared/explore-score'
+import { scoreRows, type RowScore } from '@shared/explore-score'
 import { WORK_MODELS, type ExploreJob, type ExploreList, type JobrightAccount } from '@shared/explore-types'
 import { profileSignals, type ProfileSignals } from '@shared/job-relevance'
 import type { Job } from '@shared/jobs-types'
@@ -28,6 +28,7 @@ import {
   dayGroups,
   dayLabel,
   defaultDay,
+  effectiveScores,
   EARLIER_STORAGE_KEY,
   effectiveFilters,
   matchRows,
@@ -198,10 +199,13 @@ export function DiscoverTab({ saved, onSaved, onOpenSaved, header }: Props) {
   const day = pickedDay && groups.some((g) => g.day === pickedDay) ? pickedDay : defaultDay(groups, new Date(now))
   const applied = effectiveFilters(filters, shownList?.source)
   // Once per list and profile, never per render: filtering, sorting and the day picker reuse it.
-  const scores = useMemo(() => (signals ? scoreRows(jobs, signals) : new Map()), [jobs, signals])
+  const rowScores = useMemo(() => (signals ? scoreRows(jobs, signals) : new Map<string, RowScore>()), [jobs, signals])
+  const added = useMemo(() => addedJobs(saved), [saved])
+  // A saved row shows, filters and sorts by its saved job's score, the number on Saved (#189), also once its full
+  // posting is fetched.
+  const scores = useMemo(() => effectiveScores(rowScores, added, signals), [rowScores, added, signals])
   const dayRows = useMemo(() => visibleRows(jobs, { day, ...applied }), [jobs, day, applied.text, applied.workModel, applied.h1b, applied.minSalary])
   const rows = useMemo(() => matchRows(dayRows, scores, { sort, minMatch }), [dayRows, scores, sort, minMatch])
-  const added = useMemo(() => addedJobs(saved), [saved])
   const nowDate = new Date(now)
   // A picked older day stays in view while "Earlier" is folded.
   const showOlder = earlierOpen || older.some((g) => g.day === day)
@@ -396,8 +400,7 @@ export function DiscoverTab({ saved, onSaved, onOpenSaved, header }: Props) {
             <ul className={classes.list} aria-label="Jobright jobs">
               {rows.map((r) => {
                 const savedJob = added.get(r.id)
-                // A saved row shows its saved job's score, the number on Saved (#189), also once its full posting is fetched.
-                const score = savedJob && signals ? jobMatch(savedJob, signals) : scores.get(r.id)
+                const score = scores.get(r.id)
                 return (
                   <li key={r.id} className={classes.job} aria-label={`${r.title} at ${r.company}`}>
                     {score ? <MatchBadge score={score} /> : <CompanyAvatar name={r.company} />}

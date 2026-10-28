@@ -7,8 +7,9 @@ import {
   type ExploreList,
   type WorkModel
 } from '@shared/explore-types'
-import type { RowScore } from '@shared/explore-score'
+import { jobMatch, type RowScore } from '@shared/explore-score'
 import { salaryRange } from '@shared/job-filters'
+import type { ProfileSignals } from '@shared/job-relevance'
 import type { Job } from '@shared/jobs-types'
 
 /** One posted day of the list: `YYYY-MM-DD` and how many jobs went up that day. */
@@ -185,6 +186,21 @@ export function addedJobs(saved: readonly Job[]): Map<string, Job> {
       if (id.startsWith('jobright:')) out.set(id.slice('jobright:'.length), j)
     }
   }
+  return out
+}
+
+/**
+ * The score each row is shown, filtered and sorted by: a saved row takes its saved job's match score (#189: the number
+ * the Saved tab shows, which follows the full posting once fetched), every other row its own.
+ */
+export function effectiveScores(
+  rowScores: ReadonlyMap<string, RowScore>,
+  added: ReadonlyMap<string, Job>,
+  signals: ProfileSignals | null
+): Map<string, RowScore> {
+  const out = new Map(rowScores)
+  if (!signals) return out
+  for (const [rowId, job] of added) if (out.has(rowId)) out.set(rowId, jobMatch(job, signals))
   return out
 }
 
