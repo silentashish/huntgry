@@ -83,19 +83,22 @@ function salaryOf(p: Obj): string {
   return range ? `${range}${unit ? ` / ${unit}` : ''}` : ''
 }
 
-/** Stable id for a URL-based job: a hash of the URL without its query noise. */
-export function urlJobId(url: string): string {
-  let key = url
+/** `url` without its query noise (tracking parameters) and fragment; as is when it does not parse. */
+export function withoutTracking(url: string): string {
   try {
     const u = new URL(url)
     for (const p of [...u.searchParams.keys()])
       if (/^(utm_|ref|source|src|gh_src|trk|tk)$|^utm_/i.test(p)) u.searchParams.delete(p)
     u.hash = ''
-    key = u.toString()
+    return u.toString()
   } catch {
-    // keep as is
+    return url
   }
-  return createHash('sha256').update(key).digest('hex').slice(0, 16)
+}
+
+/** Stable id for a URL-based job: a hash of the URL without its query noise. */
+export function urlJobId(url: string): string {
+  return createHash('sha256').update(withoutTracking(url)).digest('hex').slice(0, 16)
 }
 
 /** ISO string for a parseable date, else `null` (some pages publish "Posted 3 days ago"). */

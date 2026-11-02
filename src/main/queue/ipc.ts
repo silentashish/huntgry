@@ -6,7 +6,7 @@ import { contextForRun, defaultAgent, onRunChange, manager, startTailorRun } fro
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
 import { addByUrl, addPasted, fetchDetails, updateJob } from '../jobs/service'
-import { loadAndExtract } from '../jobs/loader'
+import { loadAndExtract, publicJson } from '../jobs/loader'
 import { findCanonical } from '../jobs/store'
 import { requireAgent, requireConcurrency, requireEnqueueInput, requireItemId, TailorQueue } from './queue'
 import { tailorJob } from './tailor-job'
@@ -15,7 +15,7 @@ import { tailorJob } from './tailor-job'
 export const queue = new TailorQueue({
   workspace: async () => (await requireCurrentWorkspace()).path,
   findJob: findCanonical,
-  fetchDetails: (ws, id) => fetchDetails(ws, id, loadAndExtract),
+  fetchDetails: (ws, id) => fetchDetails(ws, id, loadAndExtract, publicJson()),
   markTailored: (ws, id) => updateJob(ws, id, { tailored: true }),
   start: (params, agent, workspace) => startTailorRun({ ...params, agent }, workspace),
   stopRun: (runId, workspace) => manager.stopAny(workspace, runId),
@@ -72,7 +72,7 @@ export function registerQueueIpc(): void {
         workspace: async () => (await requireCurrentWorkspace()).path,
         findJob: findCanonical,
         addPasted,
-        addByUrl: (ws, url) => addByUrl(ws, url, loadAndExtract),
+        addByUrl: (ws, url) => addByUrl(ws, url, loadAndExtract, publicJson()),
         enqueue: (i, ws) => queue.enqueue(i, ws),
         defaultAgent
       },

@@ -1,0 +1,56 @@
+{
+  "items": [
+    {
+      "Id": "26014651",
+      "Title": "Senior AI Engineer II - Forward Deployed Engineer - Enterprise AI Platforms",
+      "Category": "Technology",
+      "RequisitionId": 300002114617728,
+      "ExternalPostedStartDate": "2026-10-28T11:17:46+00:00",
+      "ExternalPostedEndDate": "2026-11-03T06:00:00+00:00",
+      "JobSchedule": "Full time",
+      "ContentLocale": "en",
+      "PrimaryLocation": "New York, NY, United States",
+      "PrimaryLocationCountry": "US",
+      "WorkplaceTypeCode": null,
+      "WorkplaceType": "",
+      "JobFunction": "Engineering & Architecture",
+      "LegalEmployer": null,
+      "HiringManager": null,
+      "ExternalContactName": null,
+      "ExternalContactEmail": null,
+      "ExternalDescriptionStr": "<p><strong>Why Join American Express</strong></p><p>Joining Amex Tech means discovering and shaping your contribution to something big. Here, you can work alongside talented tech teams and build a unique career with the Powerful Backing of American Express. With a range of opportunities to work with the latest technologies, and a commitment to back the broader engineering community through open source, our mission is to power your success. Because Amex Tech is powered by our technology, our culture, and our colleagues.&nbsp;</p><p>The Technology organization enables and accelerates the company’s growth strategies, delivering global capabilities and services in support of Amex’s customers and colleagues, while maintaining 24/7 servicing and availability to ensure uninterrupted, high-quality customer experience. Technology provides the foundation for everything we do in the company while driving differentiation through building and leveraging innovative technology and data insights.</p><p>The Enterprise AI Platform organization partners with business and technology teams to shape the Enterprise AI strategy, bring emerging technologies to the forefront, and build scalable, reusable AI platforms. This team plays a pivotal role in enabling American Express to operate as an AI-powered enterprise by equipping teams with the skills, platforms, and seamless deployment capabilities needed to accelerate responsible AI innovation, enhance decision-making, and drive customer impact with speed and scale.</p>",
+      "ExternalResponsibilitiesStr": "<p><strong>Opportunity discovery and transformation</strong></p><ul style=\"list-style-type: disc;\"><li>Build trusted relationships and develop a deep understanding of business priorities, user needs, operational workflows, and sources of friction.</li><li>Challenge existing assumptions, map processes as systems, and identify the technical, operational, and organizational changes most likely to improve them.</li><li>Lead discovery sessions that translate business needs into clear use cases, value propositions, measurable success criteria, and solution direction.</li><li>Assess opportunities based on business value, technical feasibility, user impact, risk, and readiness for adoption.</li><li>Define a longer-term vision and identify the smallest useful intervention that can validate the opportunity while preserving a path to broader transformation.</li></ul>",
+      "ExternalQualificationsStr": "<ul style=\"list-style-type: disc;\"><li>5 or more years of experience delivering software, technical solutions, or digital products in an engineering, architecture, or technical consulting capacity.</li><li>Demonstrated ability to take an ambiguous business or user problem through discovery, implementation, and measurable validation.</li><li><span>&nbsp;</span>Experience using coding agents in a structured engineering workflow, including specification-driven development, context management, iterative implementation, and reusable knowledge repositories.</li><li>Software engineering fluency and the ability to contribute directly to applications, integrations, services, or technical prototypes.</li><li>Experience in at least one relevant domain, such as mobile, web, backend services, APIs, distributed systems, platform engineering, workflow orchestration, or cloud-native development.</li><li>Ability to reason about systems end to end, identify constraints and leverage points, and connect technical decisions to business outcomes.</li><li>Strong communication and stakeholder-partnership skills, including the ability to explain technical concepts, challenge existing approaches constructively, and influence without direct authority.</li><li>Ability to define a longer-term direction and sequence incremental solutions that build toward it.</li><li>Bachelor’s degree in computer science, engineering, or a related field, or equivalent practical experience.</li><li>Employment eligibility to work with American Express in the United States is required as the company will not pursue visa sponsorship for these positions.<br>&nbsp;</li></ul>",
+      "CorporateDescriptionStr": "<p style=\"margin:0px; padding-bottom:10px !important\">At American Express, our culture is built on a 175-year history of innovation,&nbsp;<a href=\"https://www.americanexpress.com/en-us/company/who-we-are/\" target=\"_blank\" rel=\"nofollow\">shared values&nbsp;</a>and Leadership Behaviors, and an unwavering commitment to back our customers, communities, and colleagues. From delivering differentiated products to providing world-class customer service, we operate with a strong risk mindset, ensuring we continue to uphold our brand promise of trust, security, and service.</p>",
+      "secondaryLocations": [
+        {
+          "Name": "Sunnyvale, CA, United States",
+          "CountryCode": "US"
+        },
+        {
+          "Name": "Phoenix, AZ, United States",
+          "CountryCode": "US"
+        }
+      ],
+      "requisitionFlexFields": [
+        {
+          "Prompt": "Salary Range",
+          "Value": "$123000 - $215250 annually + bonus + benefits",
+          "ControlType": "TextArea",
+          "SequenceNumber": 4
+        },
+        {
+          "Prompt": "Career Area",
+          "Value": "Technology",
+          "ControlType": "SingleChoiceList",
+          "SequenceNumber": 9
+        }
+      ],
+      "skills": []
+    }
+  ],
+  "count": 1,
+  "hasMore": false,
+  "limit": 499,
+  "offset": 0
+}

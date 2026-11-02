@@ -4,7 +4,7 @@ import { JOB_ID_PATTERN, JOBS_CHANNELS } from '@shared/jobs-types'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { linkDeps } from '../explore/deps'
 import { resolveJobrightCopies } from '../explore/employer-link'
-import { loadAndExtract } from './loader'
+import { loadAndExtract, publicJson } from './loader'
 import { readPrefs, updatePrefs } from './prefs'
 import { addByUrl, addPasted, fetchDetails, listJobs, updateJob } from './service'
 
@@ -25,11 +25,11 @@ export function registerJobsIpc(): void {
     // description comes from there.
     const link = linkDeps()
     if (await link.connected()) await resolveJobrightCopies(ws, jobId, link)
-    return fetchDetails(ws, jobId, loadAndExtract)
+    return fetchDetails(ws, jobId, loadAndExtract, publicJson())
   })
   ipcMain.handle(JOBS_CHANNELS.addByUrl, async (_e, url: unknown) => {
     if (typeof url !== 'string' || url.length > 2000) throw new Error('Enter a job posting URL.')
-    return addByUrl(await workspace(), url.trim(), loadAndExtract)
+    return addByUrl(await workspace(), url.trim(), loadAndExtract, publicJson())
   })
   ipcMain.handle(JOBS_CHANNELS.addPasted, async (_e, input: unknown) => addPasted(await workspace(), input))
   ipcMain.handle(JOBS_CHANNELS.update, async (_e, id: unknown, patch: unknown) => {
