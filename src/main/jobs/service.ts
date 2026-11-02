@@ -135,13 +135,18 @@ export async function fetchDetails(workspace: string, id: string, load: Loader, 
     }
   }
   if (!posting) throw new Error(failure)
+  // A structured workplace type (Oracle's requisition API, #191) is a fact; a text guess at "remote" is not.
+  const workplace =
+    posting.workplaceType && !job.workplaceType ? { workplaceType: posting.workplaceType, remote: posting.remote } : {}
   await saveJob(workspace, {
     ...((await readJob(workspace, job.id)) ?? job),
     description: posting.description,
     descriptionComplete: posting.descriptionComplete,
     descriptionSource: source,
     salary: job.salary || posting.salary,
-    location: job.location || posting.location
+    location: job.location || posting.location,
+    postedAt: job.postedAt ?? posting.postedAt,
+    ...workplace
   })
   return (await findCanonical(workspace, job.id)) ?? job
 }

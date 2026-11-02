@@ -248,12 +248,17 @@ describe('adding an Oracle Candidate Experience posting by URL', () => {
     const down = jsonStub({})
     const partial = await addByUrl(ws, AMEX, load, down.json)
     expect(partial.descriptionComplete).toBe(false)
-    const up = jsonStub({ [API]: { status: 'ok', data: JSON.parse(await fixture('oracle-ce-requisition.json')) } })
+    const data = JSON.parse(await fixture('oracle-ce-requisition.json'))
+    Object.assign(data.items[0], { WorkplaceTypeCode: 'ORA_REMOTE', WorkplaceType: 'Remote' })
+    const up = jsonStub({ [API]: { status: 'ok', data } })
     const full = await fetchDetails(ws, partial.id, load, up.json)
     expect(up.calls).toEqual([API])
     expect(full.descriptionComplete).toBe(true)
     expect(full.description).toContain('## Qualifications')
     expect(full.location).toMatch(/^New York, NY/)
+    // The API's facts are kept too, not only the description: a complete job is not fetched again.
+    expect(full).toMatchObject({ postedAt: '2026-10-28T11:17:46.000Z', remote: true, workplaceType: 'Remote' })
+    expect(await readJob(ws, partial.id)).toMatchObject({ postedAt: '2026-10-28T11:17:46.000Z', remote: true, workplaceType: 'Remote' })
   })
 })
 
