@@ -11,7 +11,7 @@ import { defaultAgent, manager, onRunChange, venvDir } from '../cli/start'
 import { requireCurrentWorkspace } from '../current-workspace'
 import { emit } from '../events'
 import { fetchDetails } from '../jobs/service'
-import { loadAndExtract } from '../jobs/loader'
+import { loadAndExtract, publicJson } from '../jobs/loader'
 import { findCanonical } from '../jobs/store'
 import { queue } from '../queue/ipc'
 import { notify, setBadge } from './notify'
@@ -40,7 +40,7 @@ export const pipeline = new Pipeline({
   queue,
   workspace,
   findJob: findCanonical,
-  fetchDetails: (ws, id) => fetchDetails(ws, id, loadAndExtract),
+  fetchDetails: (ws, id) => fetchDetails(ws, id, loadAndExtract, publicJson()),
   tailoredJobIds: async (ws) => new Set((await scanApplications(ws)).applications.map((a) => a.jobId)),
   environment: async () => {
     const env = await checkEnvironment({ venvDir: venvDir(), workspace: await workspace().catch(() => null), defaultAgent: await defaultAgent() })

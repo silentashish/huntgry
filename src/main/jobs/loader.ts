@@ -1,8 +1,10 @@
 import { app, BrowserWindow, session } from 'electron'
 import { localUrlsAllowed, loopbackOnly } from '../cli/dev-urls'
 import { createRequestGuard, GUARDED_URLS } from '../cli/public-host'
+import { pinnedFetch } from '../cli/public-url'
 import { refusalFor } from '../browser/url'
 import { isBlockedPage } from './blocked'
+import { getPublicJson, type JsonFetcher } from './public-json'
 
 /**
  * Loads a job posting page in a hidden browser window and reads data from it.
@@ -139,4 +141,16 @@ async function load(url: string, extract: string, timeoutMs: number): Promise<Lo
   } finally {
     if (!win.isDestroyed()) win.destroy()
   }
+}
+
+/**
+ * The app's JSON API reader for postings whose job comes from an API (Oracle Candidate Experience, #191): the same
+ * public-host rule as the loader, with the dev builds' loopback allowance and the e2e harness's restriction.
+ */
+export function publicJson(): JsonFetcher {
+  const allowLoopback = localUrlsAllowed(app.isPackaged)
+  const json: JsonFetcher = (url) =>
+    getPublicJson(url, { fetcher: pinnedFetch, allowLoopback, loopbackOnly: loopbackOnly(app.isPackaged) })
+  json.allowLoopback = allowLoopback
+  return json
 }

@@ -21,7 +21,7 @@ import { linkDeps, exploreDeps } from '../explore/deps'
 import { exploreSource } from '../explore/source'
 import { resolveJobrightCopies } from '../explore/employer-link'
 import { addExplore, readCache, toJob } from '../explore/service'
-import { loadAndExtract } from '../jobs/loader'
+import { loadAndExtract, publicJson } from '../jobs/loader'
 import type { Loader } from '../jobs/service'
 import { readPrefs } from '../jobs/prefs'
 import { fetchDetails, updateJob } from '../jobs/service'
@@ -117,7 +117,7 @@ export const automation = new Automation({
   fetchDetails: async (ws, id, pages) => {
     const budget = watched(pages)
     try {
-      return await fetchDetails(ws, id, counted(budget))
+      return await fetchDetails(ws, id, counted(budget), publicJson())
     } catch (err) {
       // fetchDetails reports a refused page as a load that failed; it is the allowance.
       if (budget.refused) throw new PageBoundError()

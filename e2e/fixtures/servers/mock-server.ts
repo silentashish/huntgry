@@ -9,6 +9,7 @@ import {
   jobrightSignInPage
 } from '../../../scripts/mock-ats/jobright.mjs'
 import { createMockAts, sendHtml, type MockAts } from '../../../scripts/mock-ats/server.mjs'
+import { ORACLE_API_PATH, oracleRequisition, oracleShell } from './oracle'
 import { EMPLOYER_POSTINGS, postingPage } from './pages'
 
 /**
@@ -18,6 +19,8 @@ import { EMPLOYER_POSTINGS, postingPage } from './pages'
  * - `/postings/employer/:id`, `/postings/lever-style`, `/postings/ashby-style`  posting pages; `/postings/apply-only`
  *   an application form alone (#148)
  * - `/bot-wall`            a 403 "Just a moment…" human check
+ * - `/en/sites/:site/job/:id` an Oracle Candidate Experience shell, and `/hcmRestApi/…/recruitingCEJobRequisitionDetails`
+ *   the requisition API its base tag points at (#191, `./oracle.ts`)
  * - `/page/one`, `/page/two`, `/hang`  plain pages for the browser's history and Stop
  * - `/redirect/lever`      302 to the Lever form on the *other* loopback origin (a second 127.0.0.1 port)
  * - `POST /jobright/swan/mini-sites/list?position=&count=`  the newgrad-jobs API (#169), dated relative to today;
@@ -159,6 +162,12 @@ export async function startMockServer(submissionFile: string): Promise<MockServe
       hanging.add(res)
       res.on('close', () => hanging.delete(res))
       return
+    }
+    // A mock Oracle Candidate Experience site (#191): the app's shell, and the requisition API its base tag names.
+    if (/^\/en\/sites\/[\w-]+\/job\/\d+\/?$/.test(url.pathname)) return sendHtml(res, 200, oracleShell(origin))
+    if (url.pathname === ORACLE_API_PATH) {
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+      return void res.end(JSON.stringify(oracleRequisition(url.searchParams.get('finder') ?? '')))
     }
     if (url.pathname === '/redirect/lever') return sendHtml(res, 302, '', { location: `${altOrigin}/lever/` })
     if (ats.handle(req, res)) return

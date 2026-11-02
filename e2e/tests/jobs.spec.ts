@@ -2,6 +2,7 @@ import { chmod, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawnedChildren } from '../fixtures/app'
 import { expect, test } from '../fixtures/servers/fixture'
+import { ORACLE_API_PATH, ORACLE_JOB_ID } from '../fixtures/servers/oracle'
 import { BrowserPage } from '../pages/browser'
 import { JobsPage } from '../pages/jobs'
 import { Shell } from '../pages/shell'
@@ -124,6 +125,33 @@ test.describe('adding jobs', () => {
     const ashby = added.find((j) => j.url === `${mock.origin}/postings/ashby-style`)
     expect(ashby).toMatchObject({ source: 'url', title: 'Data Platform Engineer', descriptionComplete: true })
     await expect(app.window.getByText('4 of 4 saved jobs')).toBeVisible()
+  })
+
+  test('add by URL reads an Oracle Candidate Experience posting from its requisition API (#191)', async ({ app, mock }) => {
+    const jobs = await openJobs(app)
+    await jobs.addByUrl(`${mock.origin}/en/sites/CX_1/job/${ORACLE_JOB_ID}/?utm_medium=career+site&utm_source=job+alert`)
+    await expect(jobs.drawer.getByText('Staff Platform Engineer - Payments', { exact: true }).first()).toBeVisible()
+    await expect(jobs.drawer).toContainText('Initech · Austin, TX, United States')
+    await expect(jobs.drawer).toContainText('Own the settlement pipeline end to end.')
+    await jobs.closeDrawer()
+    // The page named the API host; the job came from the API, called on it.
+    expect(mock.requests).toContain(`${ORACLE_API_PATH}?expand=all&onlyData=true&finder=ById;Id=%22${ORACLE_JOB_ID}%22,siteNumber=CX_1`)
+    const oracle = (await readJobs(app.workspace!, 'url-')).find((j) => j.title === 'Staff Platform Engineer - Payments')
+    expect(oracle).toMatchObject({
+      url: `${mock.origin}/en/sites/CX_1/job/${ORACLE_JOB_ID}/`,
+      company: 'Initech',
+      salary: '$180000 - $230000 annually',
+      workplaceType: 'Hybrid',
+      descriptionComplete: true
+    })
+    expect(oracle.description).toContain('## Qualifications')
+
+    // A job the API no longer has: the error says so and offers Paste; nothing is saved.
+    await jobs.addByUrl(`${mock.origin}/en/sites/CX_1/job/1`)
+    await expect(jobs.error.filter({ hasText: 'no longer posted' })).toContainText(
+      'This job is no longer posted on Initech: it has probably closed. Paste the job description instead.'
+    )
+    expect(await jobFiles(app.workspace!, 'url-')).toHaveLength(2)
   })
 
   test('"Add job" saves a pasted description from the same box as a link (#189)', async ({ app }) => {

@@ -13,7 +13,7 @@ import { defaultAgent } from '../cli/start'
 import { resolveRemoteFile } from './notes-file'
 import { requireCurrentWorkspace, settingsFile } from '../current-workspace'
 import { emit, onEvent } from '../events'
-import { loadAndExtract } from '../jobs/loader'
+import { loadAndExtract, publicJson } from '../jobs/loader'
 import { addByUrl, listJobs } from '../jobs/service'
 import { pipelineForRemote } from '../pipeline/ipc'
 import { invalidateUnreviewed, reviewForRemote } from '../review/ipc'
@@ -303,7 +303,7 @@ async function init(): Promise<void> {
     defaultAgent,
     queue: queueForRemote,
     runs: runsForRemote,
-    jobs: { list: listJobs, addUrl: (ws, url) => addByUrl(ws, url, loadAndExtract) },
+    jobs: { list: listJobs, addUrl: (ws, url) => addByUrl(ws, url, loadAndExtract, publicJson()) },
     files: { resolve: resolveRemoteFile },
     pipeline: pipelineForRemote,
     review: reviewForRemote,

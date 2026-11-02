@@ -1,20 +1,36 @@
 import { createHash } from 'node:crypto'
 import type { Job } from '@shared/jobs-types'
 import type { LoadResult } from './loader'
+import type { JsonFetcher } from './public-json'
 import { JOBRIGHT_POSTING_EXTRACT, jobrightSummaryOf } from './sources/jobright'
-import { findJobPosting, parsePosting, POSTING_EXTRACT, type PageData } from './sources/posting'
+import { oracleRef, readOraclePosting } from './sources/oracle'
+import { findJobPosting, parsePosting, POSTING_EXTRACT, withoutTracking, type PageData } from './sources/posting'
 import { findCanonical, listJobs, readJob, saveJob, writeJobFile } from './store'
 
 /** What Fetch full description says when jobright.ai shows the hidden window a human check (#142). */
 export const JOBRIGHT_HUMAN_CHECK =
   'Jobright shows full job descriptions only after a human check. Open the posting and paste the description.'
 
+/** What Fetch full description says when an Oracle Candidate Experience job service does not answer (#191). */
+export const ORACLE_UNREACHABLE =
+  "The careers site's job service could not be reached. Open the posting to read it, or paste the description."
+
 /** Loads a page and reads data from it; the hidden-window loader in the app, a stub in tests. */
 export type Loader = (url: string, extract: string) => Promise<LoadResult>
 
-/** Fetches a posting page and saves it as a job. */
-export async function addByUrl(workspace: string, url: string, load: Loader): Promise<Job> {
+/**
+ * Fetches a posting page and saves it as a job. An Oracle Candidate Experience posting's job comes from its
+ * requisition API through `json` (#191); without `json`, only its page's Open Graph tags.
+ */
+export async function addByUrl(workspace: string, url: string, load: Loader, json?: JsonFetcher): Promise<Job> {
   if (!/^https?:\/\//i.test(url)) throw new Error('The URL must start with http:// or https://.')
+  const oracle = oracleRef(url)
+  if (oracle) {
+    const job = await readOraclePosting(url, oracle, { source: 'url', load, json })
+    if (!job) throw new Error('No job posting was found on that page. Paste the description instead.')
+    // Saved under the URL without its tracking parameters (job alerts add utm_*).
+    return saveJob(workspace, { ...job, url: withoutTracking(url) })
+  }
   const res = await load(url, POSTING_EXTRACT)
   if (res.status === 'blocked') throw new Error(`${res.message} Paste the job description instead.`)
   if (res.status === 'error') throw new Error(res.message)
@@ -32,7 +48,7 @@ export async function addByUrl(workspace: string, url: string, load: Loader): Pr
  * summary is used, marked `descriptionSource: 'jobright-summary'` (#148). The
  * description is saved to the canonical record.
  */
-export async function fetchDetails(workspace: string, id: string, load: Loader): Promise<Job> {
+export async function fetchDetails(workspace: string, id: string, load: Loader, json?: JsonFetcher): Promise<Job> {
   const job = await findCanonical(workspace, id)
   if (!job) throw new Error('This job is no longer saved.')
   // Jobright's summary is tried again: the employer's page may have the posting by now.
@@ -54,31 +70,48 @@ export async function fetchDetails(workspace: string, id: string, load: Loader):
   const read = new Set<string>()
   let failure = ''
   for (const copy of fetchable) {
-    let res: LoadResult
     if (onJobright(copy)) read.add(copy.url)
-    try {
-      res = await load(copy.url, onJobright(copy) ? JOBRIGHT_POSTING_EXTRACT : POSTING_EXTRACT)
-    } catch (err) {
-      // Keep going: a later copy may load, and a partial description found so far is still saved.
-      failure = `${err instanceof Error ? err.message : String(err)} The summary from the job board is kept; open the posting to read it all.`
-      continue
-    }
-    if (res.status === 'blocked' && onJobright(copy)) {
-      // Like Indeed's job pages: a human check the hidden window cannot pass (#142). Not once the link is the
-      // employer's posting (#146): that site's own human check gets the generic message.
-      failure = JOBRIGHT_HUMAN_CHECK
-      continue
-    }
-    if (res.status !== 'ok') {
-      failure = `${res.message} The summary from the job board is kept; open the posting to read it all.`
-      continue
-    }
-    const data = res.data as PageData
-    let parsed = parsePosting(data, copy.source)
-    if (onJobright(copy)) {
-      summary = summary || jobrightSummaryOf(res.data)
-      // Without JSON-LD, the page text is Jobright's rendering of its own summary: the fields read better.
-      if (summary && !findJobPosting(Array.isArray(data.ld) ? data.ld : [])) parsed = null
+    // An Oracle Candidate Experience posting (#191): its job comes from the requisition API, not the page.
+    const oracle = onJobright(copy) ? null : oracleRef(copy.url)
+    let parsed: Job | null
+    if (oracle) {
+      try {
+        parsed = await readOraclePosting(copy.url, oracle, { source: copy.source, load, json })
+      } catch (err) {
+        failure = err instanceof Error ? err.message : String(err)
+        continue
+      }
+      // Only the page's Open Graph summary: the job service did not answer, and that is what to say.
+      if (parsed && !parsed.descriptionComplete) {
+        failure = ORACLE_UNREACHABLE
+        continue
+      }
+    } else {
+      let res: LoadResult
+      try {
+        res = await load(copy.url, onJobright(copy) ? JOBRIGHT_POSTING_EXTRACT : POSTING_EXTRACT)
+      } catch (err) {
+        // Keep going: a later copy may load, and a partial description found so far is still saved.
+        failure = `${err instanceof Error ? err.message : String(err)} The summary from the job board is kept; open the posting to read it all.`
+        continue
+      }
+      if (res.status === 'blocked' && onJobright(copy)) {
+        // Like Indeed's job pages: a human check the hidden window cannot pass (#142). Not once the link is the
+        // employer's posting (#146): that site's own human check gets the generic message.
+        failure = JOBRIGHT_HUMAN_CHECK
+        continue
+      }
+      if (res.status !== 'ok') {
+        failure = `${res.message} The summary from the job board is kept; open the posting to read it all.`
+        continue
+      }
+      const data = res.data as PageData
+      parsed = parsePosting(data, copy.source)
+      if (onJobright(copy)) {
+        summary = summary || jobrightSummaryOf(res.data)
+        // Without JSON-LD, the page text is Jobright's rendering of its own summary: the fields read better.
+        if (summary && !findJobPosting(Array.isArray(data.ld) ? data.ld : [])) parsed = null
+      }
     }
     if (parsed?.descriptionComplete) {
       posting = parsed
@@ -102,13 +135,18 @@ export async function fetchDetails(workspace: string, id: string, load: Loader):
     }
   }
   if (!posting) throw new Error(failure)
+  // A structured workplace type (Oracle's requisition API, #191) is a fact; a text guess at "remote" is not.
+  const workplace =
+    posting.workplaceType && !job.workplaceType ? { workplaceType: posting.workplaceType, remote: posting.remote } : {}
   await saveJob(workspace, {
     ...((await readJob(workspace, job.id)) ?? job),
     description: posting.description,
     descriptionComplete: posting.descriptionComplete,
     descriptionSource: source,
     salary: job.salary || posting.salary,
-    location: job.location || posting.location
+    location: job.location || posting.location,
+    postedAt: job.postedAt ?? posting.postedAt,
+    ...workplace
   })
   return (await findCanonical(workspace, job.id)) ?? job
 }
