@@ -57,15 +57,23 @@ export async function getPublicJson(url: string, deps: PublicJsonDeps): Promise<
   } catch {
     return { status: 'error', message: 'Not a valid URL.' }
   }
-  let addresses: string[]
-  try {
-    addresses = await addressesFor(url, deps)
-  } catch (err) {
-    return { status: 'error', message: err instanceof Error ? err.message : String(err) }
-  }
+  // One deadline for the whole call: the lookup of a host a page named, the connection and the body.
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), deps.timeoutMs ?? JSON_TIMEOUT_MS)
+  const late = { status: 'error', message: `${host} did not answer in time.` } as const
+  const deadline = new Promise<never>((_resolve, reject) =>
+    ctrl.signal.addEventListener('abort', () => reject(new Error(late.message)), { once: true })
+  )
+  deadline.catch(() => undefined)
   try {
+    let addresses: string[]
+    try {
+      addresses = await Promise.race([addressesFor(url, deps), deadline])
+    } catch (err) {
+      return { status: 'error', message: err instanceof Error ? err.message : String(err) }
+    }
+    // A lookup that settled as the deadline passed must not start a request.
+    if (ctrl.signal.aborted) return late
     let res: Response
     try {
       res = await deps.fetcher(url, { signal: ctrl.signal, headers: HEADERS, addresses })

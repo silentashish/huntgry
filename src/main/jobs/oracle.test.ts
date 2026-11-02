@@ -328,6 +328,23 @@ describe('getPublicJson', () => {
       new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted'))))
     expect(await getPublicJson(API, { fetcher: hang, resolve: PUBLIC, timeoutMs: 20 })).toMatchObject({ status: 'error' })
   })
+
+  it('bounds the DNS lookup by the same deadline, and starts no request after it', async () => {
+    let called = false
+    const fetcher: Fetcher = async () => {
+      called = true
+      return new Response('{}')
+    }
+    const stuck = () => new Promise<string[]>(() => undefined)
+    expect(await getPublicJson(API, { fetcher, resolve: stuck, timeoutMs: 10 })).toEqual({
+      status: 'error',
+      message: 'egug.fa.us2.oraclecloud.com did not answer in time.'
+    })
+    const slow = () => new Promise<string[]>((r) => setTimeout(() => r(['203.0.113.10']), 40))
+    expect(await getPublicJson(API, { fetcher, resolve: slow, timeoutMs: 10 })).toMatchObject({ message: /did not answer in time/ })
+    await new Promise((r) => setTimeout(r, 60))
+    expect(called).toBe(false)
+  })
 })
 
 it('keeps a saved Oracle job, and says why, when Fetch full description finds the job service still down', async () => {
